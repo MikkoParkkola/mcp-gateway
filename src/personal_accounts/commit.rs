@@ -20,8 +20,8 @@ use super::{
 };
 #[cfg(unix)]
 use crate::personal_accounts::{
-    AccountError, AccountKey, Authority, AuthorityEntry, FenceOutcome, GrantRecord, GrantState,
-    GrantVersion, RefreshOutcome, StoreConfig,
+    AccountError, AccountKey, Authority, AuthorityEntry, FenceOutcome, ForceClaim, GrantRecord,
+    GrantState, GrantVersion, RefreshOutcome, StoreConfig,
 };
 #[cfg(unix)]
 #[cfg(unix)]
@@ -629,9 +629,63 @@ pub(in crate::personal_accounts) fn fence_expected_version(
 
 #[cfg(not(unix))]
 use crate::personal_accounts::{
-    AccountError, AccountKey, Authority, FenceOutcome, GrantRecord, GrantVersion, RefreshOutcome,
-    StoreConfig,
+    AccountError, AccountKey, Authority, FenceOutcome, ForceClaim, GrantRecord, GrantVersion,
+    RefreshOutcome, StoreConfig,
 };
+
+/// Mark the exact live grant force-tried after an upstream 401 (A11-d).
+///
+/// A compare-and-swap on the whole expected version, like the fence, and a
+/// field-only write: the version fields, the state and the record pointer are
+/// untouched, so a concurrent refresh or fence still sees the version it
+/// expects. `publish` writes a fresh entry with `forced_revision: None`, so a
+/// natural rotation or a reconnect clears the mark by construction.
+#[cfg(unix)]
+pub(in crate::personal_accounts) fn claim_forced_refresh(
+    config: &StoreConfig,
+    slot: &mut Option<Authority>,
+    account: &AccountKey,
+    expected: &GrantVersion,
+) -> Result<ForceClaim, AccountError> {
+    let digest = account.digest()?;
+    let authority = slot.as_ref().ok_or(AccountError::StorageUnavailable)?;
+    let Some(entry) = authority.entries.get(&digest) else {
+        return Ok(ForceClaim::Superseded);
+    };
+    let holds = matches!(entry.state, GrantState::Connected)
+        && entry.generation == expected.generation
+        && entry.token_revision == expected.token_revision
+        && entry.authorization_epoch == expected.authorization_epoch
+        && entry.descriptor_revision == expected.descriptor_revision;
+    if !holds {
+        return Ok(ForceClaim::Superseded);
+    }
+    if entry.forced_revision == Some(expected.token_revision) {
+        return Ok(ForceClaim::AlreadyForced);
+    }
+    let mut next = authority.clone();
+    next.commit_revision = next
+        .commit_revision
+        .checked_add(1)
+        .ok_or(AccountError::StorageUnavailable)?;
+    next.entries
+        .get_mut(&digest)
+        .ok_or(AccountError::StorageUnavailable)?
+        .forced_revision = Some(expected.token_revision);
+    let encoded = seal_authority(config, &next).map_err(|e| refusal_as_fault(&e))?;
+    write_manifest(config, slot, &encoded, next).map_err(|e| refusal_as_fault(&e))?;
+    Ok(ForceClaim::Claimed)
+}
+
+#[cfg(not(unix))]
+pub(in crate::personal_accounts) fn claim_forced_refresh(
+    _config: &StoreConfig,
+    _slot: &mut Option<Authority>,
+    _account: &AccountKey,
+    _expected: &GrantVersion,
+) -> Result<ForceClaim, AccountError> {
+    Err(AccountError::InvalidConfiguration)
+}
 
 #[cfg(not(unix))]
 pub(in crate::personal_accounts) fn fence_expected_version(

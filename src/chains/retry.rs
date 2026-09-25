@@ -177,6 +177,14 @@ fn jittered(bound: Duration) -> Duration {
 /// Transient network and I/O errors are retryable; protocol/config errors
 /// signal a permanent failure that retrying will not fix.
 fn is_retryable(error: &Error) -> bool {
+    // A typed credential refusal (401, 403) repeats with the same credential,
+    // exactly as in the backend retry policy (A11-g).
+    if let Error::Http(e) = error
+        && e.status()
+            .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal)
+    {
+        return false;
+    }
     // `TransportPermanent` is deliberately absent: it is the transport saying
     // the configuration cannot work, and a retry loop is the wrong answer to
     // that. Plain `Transport` stays retryable, because it means "failed, cause

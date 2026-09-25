@@ -126,6 +126,17 @@ pub(crate) enum FenceOutcome {
     Superseded,
 }
 
+/// Whether a 401 may force a refresh of this exact grant version (A11-d).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ForceClaim {
+    /// Durably marked force-tried; the caller may ask the provider once.
+    Claimed,
+    /// This revision was already force-tried, so nobody is asked again.
+    AlreadyForced,
+    /// The expected version is no longer the live, connected one.
+    Superseded,
+}
+
 /// Already-resolved private store configuration; environment lookup stays outside.
 #[derive(Clone)]
 pub(crate) struct StoreConfig {
@@ -213,8 +224,10 @@ struct AuthorityEntry {
     state: GrantState,
     legacy_migration: Option<String>,
     /// A11-d: the token revision a 401 already forced a refresh for.
-    /// Absent in pre-A11 files, which read as never force-tried.
-    #[serde(default)]
+    /// Absent in pre-A11 files, which read as never force-tried, and never
+    /// written while `None`, so a never-forced entry stays readable by a
+    /// pre-A11 binary, whose copy of this struct denies undeclared fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     forced_revision: Option<u64>,
 }
 
@@ -392,6 +405,18 @@ impl PersonalAccountStore {
         storage::commit::fence_expected_version(&self.config, &mut authority, account, expected)
     }
 
+    /// Mark the expected grant version force-tried, once (A11-d). Written
+    /// BEFORE the provider is asked, so an unavailable provider cannot buy a
+    /// second forced refresh, and durable, so a restart cannot either.
+    pub(crate) fn claim_forced_refresh(
+        &self,
+        account: &AccountKey,
+        expected: &GrantVersion,
+    ) -> Result<ForceClaim, AccountError> {
+        let mut authority = self.lock_authority();
+        storage::commit::claim_forced_refresh(&self.config, &mut authority, account, expected)
+    }
+
     /// Fence a grant whose descriptor revision moved.
     #[cfg_attr(
         not(test),
@@ -438,10 +463,13 @@ impl PersonalAccountStore {
 /// is `VaultStrategy::recheck`, the real custody release, which needs the lease
 /// this dispatch's credential came from. A lease is a binding, never authority.
 pub(crate) use service::CredentialLease;
+/// What a forced refresh after an upstream 401 did; read by the one mapping
+/// to the caller's answer in `refusal::mark_rejection` (A11-c′).
+pub(crate) use service::RejectionOutcome;
 #[cfg(test)]
 pub(crate) use service::{
     ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
-    RejectionOutcome, ReleasedCredentials, TokenRefresh,
+    ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use storage::journey::JourneyReason;
@@ -464,7 +492,7 @@ pub use offline_migration::{
     MigratedCredential, OfflineMigrationError, migrate_legacy_credential_offline,
 };
 pub(crate) use revoke::{AccountRevocation, ProviderOutcome};
-pub(crate) use vault::{AccountCustody, VaultStrategy};
+pub(crate) use vault::{AccountCustody, ManagedLease, VaultStrategy};
 
 /// The one refresh provider a gateway runs: the real policy over the real
 /// transport, the system clock, and the gateway's own environment overlay.

@@ -35,8 +35,8 @@ use crate::protocol::{
     parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    RedirectEvidence, SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
-    safe_request_error_for,
+    RedirectEvidence, SESSION_EXPIRED_MARKER, is_deterministic_refusal, safe_http_status_error,
+    safe_request_error, safe_request_error_for,
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -1512,17 +1512,14 @@ impl HttpTransport {
 
         let status = response.status();
         if !status.is_success() {
+            // A11-b/g: a deterministic refusal is typed by its STATUS alone.
+            let typed = response.error_for_status_ref().err();
             let body = response.text().await.unwrap_or_default();
-            // Several deployed servers refuse a protocol version they do not
-            // speak with a status rather than a JSON-RPC error object.
-            // Flattening that to a transport string here is what made the
-            // negotiation below unreachable for them: the body carrying the
-            // supported-version list was dropped before anyone could read it.
-            // Three signals together, because this parser was written for
-            // JSON-RPC error payloads and now sees every non-2xx body: the
-            // status a version refusal actually uses, the phrasing the in-band
-            // branch keys on, and a parseable list. A proxy error page that
-            // merely contains a date must not provoke a second handshake.
+            // Some servers refuse a protocol version with a status, not a
+            // JSON-RPC error, so the body with the supported versions is read
+            // first. Three signals together, because this parser sees every
+            // non-2xx body: the status a version refusal uses, the in-band
+            // phrasing, and a parseable list; a proxy page with a date is none.
             if matches!(
                 status,
                 reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UPGRADE_REQUIRED
@@ -1534,7 +1531,10 @@ impl HttpTransport {
             if let Some(refusal) = peer_refusal(&body, &request.id, status) {
                 return Err(refusal);
             }
-            return Err(safe_http_status_error(status, &body));
+            return Err(match typed {
+                Some(e) if is_deterministic_refusal(status) => Error::Http(e.without_url()),
+                _ => safe_http_status_error(status, &body),
+            });
         }
 
         // Check Content-Type to determine response format

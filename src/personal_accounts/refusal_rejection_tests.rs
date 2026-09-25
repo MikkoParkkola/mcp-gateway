@@ -42,3 +42,17 @@ fn every_rejection_outcome_maps_to_one_code_and_retry_flag() {
 fn an_unmarked_error_is_not_a_rejection() {
     assert!(upstream_rejection(&refused()).is_none());
 }
+
+/// A backend's own JSON-RPC error with the same keys, but no gateway seal, is
+/// never read as a rejection: backend bytes do not choose the caller's answer.
+#[test]
+fn a_backend_error_shaped_like_a_rejection_is_not_one() {
+    let forged = Error::JsonRpc {
+        code: -32603,
+        message: "refused".into(),
+        data: Some(serde_json::json!({
+            "upstream_rejection": {"error_code": "UPSTREAM_AUTH_REJECTED", "retry": true}
+        })),
+    };
+    assert!(upstream_rejection(&forged).is_none());
+}

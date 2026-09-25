@@ -42,7 +42,7 @@ use super::AccountKey;
 use super::identity::{AccountDescriptor, Principal, account_key};
 use super::service::{
     AccountServiceError, CredentialLease, CredentialReleaseObserver, RefreshProvider,
-    ReleasedCredentials,
+    RejectionOutcome, ReleasedCredentials,
 };
 use super::worker::{CustodyError, CustodyHandle};
 
@@ -99,6 +99,12 @@ pub(crate) trait AccountCustody: Send + Sync {
 
     /// Recheck the lease against current state and release the credential.
     async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError>;
+
+    /// A11-c: at most one forced refresh after the backend refused `lease`.
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<RejectionOutcome, CustodyError>;
 }
 
 #[async_trait::async_trait]
@@ -116,6 +122,13 @@ where
 
     async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError> {
         CustodyHandle::release(self, lease).await
+    }
+
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<RejectionOutcome, CustodyError> {
+        CustodyHandle::refresh_after_rejection(self, lease).await
     }
 }
 
@@ -301,6 +314,77 @@ impl VaultStrategy {
             refusal("managed account credential is no longer releasable", &error)
         })?;
         Ok(())
+    }
+}
+
+/// One managed credential's custody handle: the vault that released it and
+/// the lease it was released under (A11-e′).
+///
+/// Only [`VaultStrategy::prepare_held`] builds one, so no other strategy can
+/// hand a dispatch site a forced refresh. The lease is a non-secret binding:
+/// holding it is not holding a token.
+pub(crate) struct ManagedLease {
+    strategy: Arc<VaultStrategy>,
+    lease: CredentialLease,
+}
+
+impl ManagedLease {
+    /// The real custody release for this lease, refused unless `installed` is
+    /// still the very vault that released it: a descriptor re-installed
+    /// against different custody cannot be rechecked with the previous one.
+    pub(crate) async fn recheck(
+        &self,
+        installed: &Arc<VaultStrategy>,
+    ) -> Result<(), PropagationError> {
+        if !Arc::ptr_eq(installed, &self.strategy) {
+            return Err(PropagationError::Refuse(
+                "the managed custody backing it was replaced after the credential was minted"
+                    .to_string(),
+            ));
+        }
+        self.strategy.recheck(&self.lease).await
+    }
+
+    /// A11-c: the backend answered this dispatch with HTTP 401. At most one
+    /// forced refresh, then the caller's answer: a reconnect refusal when the
+    /// provider killed the grant, otherwise the rejection mark. A custody
+    /// refusal that connecting cannot fix (busy, shut down, a store fault)
+    /// leaves `refused` as it was.
+    pub(crate) async fn after_upstream_401(&self, refused: crate::Error) -> crate::Error {
+        match self.strategy.custody.refresh_after_rejection(&self.lease).await {
+            Ok(outcome) => super::refusal::mark_rejection(outcome, refused),
+            Err(error) => {
+                let cause = refusal("the backend refused the account's token", &error);
+                if matches!(cause, PropagationError::AccountReconnectRequired(_)) {
+                    super::refusal::mark(
+                        crate::Error::Config(cause.to_string()),
+                        &cause,
+                        Some(&self.strategy.descriptor.descriptor_id),
+                    )
+                } else {
+                    refused
+                }
+            }
+        }
+    }
+}
+
+impl VaultStrategy {
+    /// [`Self::prepare`], keeping the custody handle with the lease so a 401
+    /// seen after dispatch can force a refresh of exactly this grant.
+    pub(crate) async fn prepare_held(
+        self: &Arc<Self>,
+        principal: Principal<'_>,
+        backend: &BackendDescriptor,
+    ) -> Result<(PropagatedCredential, ManagedLease), PropagationError> {
+        let (credential, lease) = self.prepare(principal, backend).await?;
+        Ok((
+            credential,
+            ManagedLease {
+                strategy: Arc::clone(self),
+                lease,
+            },
+        ))
     }
 }
 

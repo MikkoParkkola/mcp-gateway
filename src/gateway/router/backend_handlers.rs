@@ -706,6 +706,8 @@ async fn backend_handler_inner(
     // default session bucket — passthrough forwards the caller's own credential
     // inline and is gated to trusted internals).
     let mut identity_key: Option<String> = None;
+    // A11-e′: the managed lease the headers were released under, for the 401 site.
+    let mut managed = None;
     let mut typed = None;
     let propagated_headers: Vec<(String, String)> = if isolation_guarded {
         // Fetched once so both the passthrough-vs-minting branch below and the
@@ -744,12 +746,13 @@ async fn backend_handler_inner(
         } else {
             match state
                 .meta_mcp
-                .resolve_propagation_credential(&name, verified_identity.as_ref())
+                .resolve_propagation_credential_held(&name, verified_identity.as_ref())
                 .await
             {
-                Ok((headers, binding)) => {
+                Ok((headers, binding, held)) => {
                     // Bind the upstream session bucket to this caller (MIK-6784).
                     identity_key = binding;
+                    managed = held;
                     Ok(headers)
                 }
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
@@ -973,18 +976,18 @@ async fn backend_handler_inner(
                         settle_direct_idempotency(idem_reservation.as_mut(), &response);
                         build_http_response(&response, StatusCode::OK)
                     }
+                    // Settled as terminal unless raised before dispatch
+                    // (ADR-012 consequence 1; see `settle_direct_failure`).
                     Err(e) => {
-                        record_client_failure(&state, client.as_ref());
-                        error!(backend = %name, error = %e, "Backend request failed");
-                        let response =
-                            JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        // Dispatched failures settle as terminal: a transport
-                        // failure after the backend acted is indistinguishable
-                        // from one before it (ADR-012 consequence 1). A failure
-                        // the gateway raised before dispatch is the exception —
-                        // see `settle_direct_failure`.
-                        settle_direct_failure(idem_reservation.as_mut(), &e, &response);
-                        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+                        let failed = DirectFailure {
+                            state: &state,
+                            name: &name,
+                            id,
+                            client: client.as_ref(),
+                            identity: verified_identity.as_ref(),
+                            managed: managed.as_ref(),
+                        };
+                        failed.answer(idem_reservation.as_mut(), e).await
                     }
                 };
             }
@@ -1046,15 +1049,18 @@ async fn backend_handler_inner(
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             build_http_response(&response, StatusCode::OK)
         }
+        // Settled, never dropped: an unsettled reservation releases the key and
+        // lets a retry re-execute a side effect (ADR-012 consequence 1).
         Err(e) => {
-            record_client_failure(&state, client.as_ref());
-            error!(backend = %name, error = %e, "Backend request failed");
-            let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-            // Without this the reservation is dropped unsettled, which releases
-            // the key and lets a retry re-execute a side effect the backend may
-            // already have performed (ADR-012 consequence 1).
-            settle_direct_failure(idem_reservation.as_mut(), &e, &response);
-            build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+            let failed = DirectFailure {
+                state: &state,
+                name: &name,
+                id,
+                client: client.as_ref(),
+                identity: verified_identity.as_ref(),
+                managed: managed.as_ref(),
+            };
+            failed.answer(idem_reservation.as_mut(), e).await
         }
     }
 }
@@ -1329,7 +1335,9 @@ pub(super) async fn costs_handler(
 }
 
 mod direct_audit;
+mod direct_failure;
 mod direct_list;
+use direct_failure::DirectFailure;
 
 #[cfg(test)]
 mod tests;

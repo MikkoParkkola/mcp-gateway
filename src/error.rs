@@ -330,6 +330,15 @@ impl Error {
             // the internal-error code it has always reported, so the arm is
             // guarded rather than moved wholesale.
             Self::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => -32000,
+            // A11-b: a typed credential refusal (401, 403) was `Transport`
+            // (-32000) until it was typed; it keeps that code, since the backend
+            // refused and the gateway is healthy.
+            Self::Http(e)
+                if e.status()
+                    .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal) =>
+            {
+                -32000
+            }
             _ => -32603, // Internal error
         }
     }

@@ -30,6 +30,7 @@ use crate::protocol::LoggingLevel;
 use crate::protocol::mrtr::{InputRequired, Refusal};
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
+use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::security::validate_tool_name;
 use crate::transport::notification_sink::emit_log;
 use crate::{Error, Result};
@@ -59,7 +60,19 @@ struct CallerCredential {
     /// Collision-safe user+audience cache binding. `Some` → mix into cache keys
     /// so per-user results stay isolated (IDP.8); `None` → shared key is safe.
     cache_binding: Option<String>,
+    /// A11-e′: the managed custody handle and the lease the headers were
+    /// released under, kept to the post-dispatch 401 site. Only a vault mint
+    /// produces one; every other strategy leaves it `None`.
+    managed: Option<crate::personal_accounts::ManagedLease>,
 }
+
+/// Headers, cache binding and, for a managed account, the lease they were
+/// released under (A11-e′).
+pub(crate) type HeldCredential = (
+    Vec<(String, String)>,
+    Option<String>,
+    Option<crate::personal_accounts::ManagedLease>,
+);
 
 impl std::fmt::Debug for CallerCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,6 +81,7 @@ impl std::fmt::Debug for CallerCredential {
         f.debug_struct("CallerCredential")
             .field("headers", &format_args!("{header_names:?} = <redacted>"))
             .field("cache_binding", &self.cache_binding)
+            .field("managed", &self.managed.is_some())
             .finish()
     }
 }
@@ -2082,6 +2096,23 @@ impl MetaMcp {
                 }
             }
             Err(e) => {
+                // A11-c: a 401 on a managed credential forces at most one
+                // refresh, then either asks the user to reconnect (an offer,
+                // returned as the refusal it is) or tells the caller whether a
+                // retry can help (the recovery hint below).
+                let e = match caller_credential.managed.as_ref() {
+                    Some(managed) if is_upstream_unauthorized(&e) => {
+                        managed.after_upstream_401(e).await
+                    }
+                    _ => e,
+                };
+                if crate::personal_accounts::refusal::marked(&e).is_some() {
+                    // Settled like every dispatched failure (ADR-012).
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&withheld_side_effect());
+                    }
+                    return self.with_connect_offer(Err(e), verified_identity).await;
+                }
                 // ADR-012 consequence 1: a reservation may be released only
                 // when the backend cannot have acted, because a released key
                 // readmits the retry that would execute the side effect a
@@ -2109,7 +2140,7 @@ impl MetaMcp {
                 // protocol error, which gives the LLM actionable recovery
                 // guidance without breaking the MCP framing.
                 let (category, detail) = classify_dispatch_error(&e);
-                let hint = recovery_for(
+                let mut hint = recovery_for(
                     category,
                     RecoveryContext {
                         tool: Some(tool),
@@ -2118,6 +2149,10 @@ impl MetaMcp {
                         ..Default::default()
                     },
                 );
+                if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(&e) {
+                    hint.error_code = rejection.error_code.to_owned();
+                    hint.retry = rejection.retry;
+                }
                 // Still record the error budget failure (already done above via
                 // `record_error_budget`).  The idempotency reservation is left
                 // for the commit below unless the refusal was pre-dispatch.
@@ -2837,18 +2872,30 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
+        self.resolve_propagation_credential_held(server, verified_identity)
+            .await
+            .map(|(headers, cache_binding, _)| (headers, cache_binding))
+    }
+
+    /// [`Self::resolve_propagation_credential`], keeping the managed lease for
+    /// the direct route's post-dispatch 401 site (A11-e′).
+    pub(crate) async fn resolve_propagation_credential_held(
+        &self,
+        server: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<HeldCredential> {
         let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         else {
             self.refuse_unbound_account_backend(server)?;
-            return Ok((Vec::new(), None));
+            return Ok((Vec::new(), None, None));
         };
         let cred = self
             .resolve_caller_credential(server, &idp_cfg, verified_identity)
             .await?;
-        Ok((cred.headers, cred.cache_binding))
+        Ok((cred.headers, cred.cache_binding, cred.managed))
     }
 
     /// Fail closed for a backend that names an `accounts.descriptors` entry but
@@ -2993,8 +3040,28 @@ impl MetaMcp {
             token_exchange_endpoint: idp_cfg.token_exchange_endpoint.clone(),
             token_exchange_scope: idp_cfg.token_exchange_scope.clone(),
         };
-        match strategy.propagate(identity, &descriptor).await {
-            Ok(cred) => {
+        // A11-e′: a managed descriptor mints through its typed vault, the SAME
+        // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
+        // whose `propagate` is `prepare` minus the lease. Keeping the lease is
+        // the only difference: headers, binding, refusals and audit are unchanged.
+        let managed_vault = self
+            .backends
+            .get(server)
+            .and_then(|backend| backend.account_descriptor_id().map(str::to_owned))
+            .and_then(|id| self.account_strategies.installed(&id))
+            .and_then(|installed| installed.managed.clone());
+        let minted = match managed_vault {
+            Some(vault) => vault
+                .prepare_held(
+                    crate::personal_accounts::identity::Principal::Verified(identity),
+                    &descriptor,
+                )
+                .await
+                .map(|(cred, managed)| (cred, Some(managed))),
+            None => strategy.propagate(identity, &descriptor).await.map(|cred| (cred, None)),
+        };
+        match minted {
+            Ok((cred, managed)) => {
                 // Validate every header parses BEFORE dispatch, so an invalid
                 // minted credential fails closed rather than silently letting the
                 // static Authorization through (MIK-6734 review carry-forward).
@@ -3020,6 +3087,7 @@ impl MetaMcp {
                 Ok(CallerCredential {
                     headers: cred.headers,
                     cache_binding: Some(cred.cache_binding),
+                    managed,
                 })
             }
             Err(e) => refuse(format!("credential minting failed: {e}")).map_err(|refused| {

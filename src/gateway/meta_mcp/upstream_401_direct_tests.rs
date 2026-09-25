@@ -29,6 +29,19 @@ struct Direct {
     custody: Custody,
     dispatches: Arc<Dispatches>,
     _store: tempfile::TempDir,
+    _audit: tempfile::NamedTempFile,
+}
+
+/// The direct route refuses to mint for a required backend (a managed one
+/// always is) without an audit sink, so the router state needs one.
+fn route_audit(file: &tempfile::NamedTempFile) -> Arc<crate::security::TransparencyLogger> {
+    let config = crate::security::TransparencyLogConfig {
+        enabled: true,
+        path: file.path().to_string_lossy().to_string(),
+        key_id: "a11-direct".to_string(),
+        shared_secret: String::new(),
+    };
+    Arc::new(crate::security::TransparencyLogger::open(Arc::new(config)).expect("logger opens"))
 }
 
 async fn direct(steps: &[ProviderStep]) -> Direct {
@@ -49,11 +62,14 @@ async fn direct(steps: &[ProviderStep]) -> Direct {
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = Arc::clone(&meta.backends);
     state_mut.meta_mcp = Arc::new(meta);
+    let audit = tempfile::NamedTempFile::new().expect("audit file");
+    state_mut.transparency_log = Some(route_audit(&audit));
     Direct {
         router: create_router(state),
         custody,
         dispatches,
         _store: store,
+        _audit: audit,
     }
 }
 

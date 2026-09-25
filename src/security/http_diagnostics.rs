@@ -104,6 +104,21 @@ pub fn safe_http_status_error(status: StatusCode, body: &str) -> Error {
     Error::Transport(safe_status_text(status, body))
 }
 
+/// A11-g: a credential refusal the backend answers the same way however often
+/// it is asked, so it is typed and never retried. Not 400 or 404: the HTTP
+/// transport reads an expired MCP session from their `Error::Transport` text
+/// (`transport::http::is_session_expired_error`), and typing them would stop
+/// the session from being re-initialized.
+pub(crate) const fn is_deterministic_refusal(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// A11-b: the backend refused the presented credential. Read from the typed
+/// status only, never from body text (ADR-008, `personal_accounts/refusal.rs`).
+pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {
+    matches!(error, Error::Http(e) if e.status() == Some(StatusCode::UNAUTHORIZED))
+}
+
 /// OAuth token-endpoint / registration failure. Status stays; body does not.
 #[must_use]
 pub fn safe_oauth_http_error(context: &str, status: StatusCode, body: &str) -> String {

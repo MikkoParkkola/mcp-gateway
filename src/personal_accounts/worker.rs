@@ -42,7 +42,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use super::revoke::RevocationMaterial;
 use super::service::{
     AccountService, AccountServiceError, ConsentExpectation, CredentialLease,
-    CredentialReleaseObserver, RefreshProvider, ReleasedCredentials,
+    CredentialReleaseObserver, RefreshProvider, RejectionOutcome, ReleasedCredentials,
 };
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig};
 
@@ -211,6 +211,25 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             runtime.block_on(service.refresh_if_expired(&account))
+        })
+        .await
+        .expect("custody blocking worker")
+        .map_err(CustodyError::from)
+    }
+
+    /// A11-c: a 401 against `lease`. Admitted and run on a blocking worker
+    /// exactly like [`Self::refresh_if_expired`], because it can hold the same
+    /// flight lock across the same provider round trip.
+    pub(crate) async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<RejectionOutcome, CustodyError> {
+        let Admission { service, permit } = self.admit()?;
+        let lease = lease.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            runtime.block_on(service.refresh_after_rejection(&lease))
         })
         .await
         .expect("custody blocking worker")
