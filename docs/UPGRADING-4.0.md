@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35 or 37 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 or 39 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34 and 37 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 and 38 refuse the gateway's start (item 37 only above one declared replica; item 38 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 and 39 refuse the gateway's start (item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -55,6 +55,7 @@ upgrading a running deployment.
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
+| 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -792,7 +793,7 @@ reaches one pod, and a task created on one pod is not found on another.
   the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
   per-process state".
 
-## 38. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
+## 39. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
 
 In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
 backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
