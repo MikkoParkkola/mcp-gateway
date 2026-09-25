@@ -265,7 +265,9 @@ impl MessageSigningConfig {
             crate::config::secret_ref::SecretRef::Literal(text) => {
                 crate::config::secret_ref::expand_template(text, overlay).map_err(|_| missing())?
             }
-            reference => reference.resolve(field, overlay).map_err(|_| missing())?,
+            reference @ crate::config::secret_ref::SecretRef::Env(_) => {
+                reference.resolve(field, overlay).map_err(|_| missing())?
+            }
         };
         if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
             return Err(Self::signing_config_error(

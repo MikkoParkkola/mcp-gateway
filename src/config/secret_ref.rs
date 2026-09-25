@@ -118,6 +118,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("s.env");
         std::fs::write(&path, body).expect("write");
+        // 0600, or the C2 file-mode rule skips the fixture before it is read.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("chmod");
+        }
         let overlay = EnvOverlay::from_paths(&[path]);
         (dir, overlay)
     }

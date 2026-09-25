@@ -1147,7 +1147,7 @@ impl Config {
             for agent in &self.agent_auth.agents {
                 if let Some(secret) = agent.hs256_secret.as_deref() {
                     Self::validate_env_reference(
-                        "agent_auth.agents[].hs256_secret",
+                        &format!("agent_auth.agents['{}'].hs256_secret", agent.client_id),
                         secret,
                         overlay,
                     )?;
