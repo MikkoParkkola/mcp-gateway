@@ -252,7 +252,6 @@ impl BackendRegistry {
         let name = backend.name.clone();
         self.backends.insert(name.clone(), backend);
         drop(stopping);
-        self.announce_change(&name);
         true
     }
 
