@@ -673,7 +673,7 @@ providers:
             Some("session-1"),
             &allow_all_ctx_named(
                 Some("alice"),
-                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
             ),
         )
         .await;
@@ -707,7 +707,7 @@ async fn personal_capability_accepts_propagated_identity_before_schema_validatio
     let grant = IdentityGrant {
         grant_id: "grant-user-123-calendar".to_string(),
         subject: subject.clone(),
-        agent: GrantAgent::Exact("agent-1".to_string()),
+        agent: GrantAgent::Exact(crate::identity_grants::GrantAgentKey { source: crate::security::ProofSource::MutualTls, id: "agent-1".to_string() }),
         capability: "calendar_read".to_string(),
         tool: Some("calendar_read".to_string()),
         scope: GrantScope::Execute,
@@ -787,7 +787,7 @@ providers:
                     protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
-                    agent_id: Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                    agent_id: Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
                     agent_declared: None,
                     grant_subject: Some(subject),
                     verified_identity: None,
@@ -845,7 +845,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
             Some("session-1"),
             &allow_all_ctx_named(
                 Some("alice"),
-                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
             ),
         )
         .await
@@ -2634,7 +2634,7 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
         verified_identity: Some(&NAMED_CALLER),
         ..allow_all_ctx_named(
             Some("alice"),
-            Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
         )
     };
     let result = meta
@@ -2756,7 +2756,7 @@ async fn an_enforced_transform_does_not_invent_a_continuation_handle() {
             Some("session-1"),
             &allow_all_ctx_named(
                 Some("alice"),
-                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
             ),
         )
         .await
@@ -2837,7 +2837,7 @@ async fn an_enforced_transform_carries_an_unrecognized_result_type() {
             Some("session-1"),
             &allow_all_ctx_named(
                 Some("alice"),
-                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
             ),
         )
         .await
@@ -2919,7 +2919,7 @@ async fn an_enforced_transform_carries_an_empty_result_type() {
             Some("session-1"),
             &allow_all_ctx_named(
                 Some("alice"),
-                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
             ),
         )
         .await
@@ -3012,7 +3012,7 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
                 Some("session-1"),
                 &allow_all_ctx_named(
                     Some("alice"),
-                    Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                    Some(crate::security::ProvenAgentId::for_test("agent-1", crate::security::ProofSource::MutualTls)),
                 ),
             )
             .await
@@ -4028,7 +4028,7 @@ async fn meta_with_staged_cache_entry(dir: &tempfile::TempDir) -> (MetaMcp, Stri
     let grant = IdentityGrant {
         grant_id: "grant-user-123-calendar".to_string(),
         subject: subject.clone(),
-        agent: GrantAgent::Exact("agent-1".to_string()),
+        agent: GrantAgent::Exact(crate::identity_grants::GrantAgentKey { source: crate::security::ProofSource::MutualTls, id: "agent-1".to_string() }),
         capability: "calendar_read".to_string(),
         tool: Some("calendar_read".to_string()),
         scope: GrantScope::Execute,
@@ -4131,7 +4131,7 @@ providers:
 
 fn grant_ctx(agent_id: &'static str) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
-        agent_id: Some(crate::security::ProvenAgentId::for_test(agent_id)),
+        agent_id: Some(crate::security::ProvenAgentId::for_test(agent_id, crate::security::ProofSource::MutualTls)),
         agent_declared: None,
         grant_subject: Some(crate::identity_grants::GrantSubject::new(
             "cloudflare_access",
