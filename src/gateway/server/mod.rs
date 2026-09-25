@@ -976,6 +976,7 @@ impl Gateway {
         }
 
         meta_mcp_builder.set_idempotency_config(self.config.idempotency.clone());
+        meta_mcp_builder.set_idempotency_key_mode(self.config.server.idempotency_key);
 
         // ── Per-action attestation (MIK-5223 / MIK-6163, B1-IDENT) ────────────
         // Wire the attestation validator from operator config (env-driven).

@@ -276,7 +276,26 @@ impl Fixture {
         .await
     }
 
-    async fn start_with(config_for: fn(&str, bool) -> Config, require_nonce: bool) -> Self {
+    /// `server.idempotency_key` under test (F10), on either target shape.
+    pub(super) async fn start_keyed_mode(
+        target: Target,
+        mode: crate::config::IdempotencyKeyMode,
+    ) -> Self {
+        Self::start_with(
+            |url, require_nonce| {
+                let mut config = signing_config_for(url, require_nonce, target);
+                config.server.idempotency_key = mode;
+                config
+            },
+            false,
+        )
+        .await
+    }
+
+    async fn start_with(
+        config_for: impl FnOnce(&str, bool) -> Config,
+        require_nonce: bool,
+    ) -> Self {
         let backend = EchoBackend::start().await;
         let config = config_for(&backend.url, require_nonce);
         let gateway = Gateway::new(config)
@@ -338,12 +357,10 @@ pub(super) fn nested_arguments(target_bytes: usize) -> Value {
 /// where a client puts it.
 ///
 /// NO idempotency key travels here, and that is the supported shape for this
-/// adapter rather than an omission. Two runs established it: without a key,
-/// modern admission refused with `-32602 An explicit idempotency key is
-/// required`; WITH one it refused harder, `-32003 A verified execution
-/// principal is required`, because stdio carries no authenticated identity for
-/// a keyed operation to belong to. The configured exact read-only target in
-/// `signing_config` takes the unkeyed branch of `admit_operation` instead.
+/// adapter rather than an omission. Under `server.idempotency_key: required`
+/// an un-keyed modern call to a mutating target is refused -32602 (F10); the
+/// configured exact read-only target in `signing_config` takes the unkeyed
+/// branch of `admit_operation` in either mode.
 ///
 /// The replay test depends on an ORDER, so it is stated rather than left
 /// implicit: `prepare_signing_invocation` runs before `admit_meta_sync`, so a

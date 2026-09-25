@@ -18,6 +18,8 @@ mod signing_nonce_allocations_support;
 mod signing_stdio_routing;
 
 mod dispatcher_admission_arms;
+#[cfg(feature = "metrics")]
+mod unkeyed_admission;
 
 mod stdout_death_admission;
 
