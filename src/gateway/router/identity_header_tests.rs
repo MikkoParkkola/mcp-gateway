@@ -19,11 +19,11 @@ use telemetry_metrics::{
 
 use super::*;
 use crate::config::{
-    CallerIdentityConfig, CallerIdentityMode, CloudflareAccessConfig, KeyServerConfig,
-    KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig,
+    KeyServerConfig, KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig,
 };
 use crate::gateway::oauth::{GatewayKeyPair, jwks_handler};
 use crate::key_server::oidc::cloudflare_access_provider;
+use crate::security::caller_identity::CloudflareAccessConfig;
 
 const TEAM: &str = "acme.cloudflareaccess.com";
 const AUD: &str = "aud-tag-1";

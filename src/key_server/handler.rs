@@ -189,7 +189,7 @@ async fn exchange_token(
 
     // Build OIDC config for verification
     let oidc_config = KeyServerOidcConfig {
-        token_age: crate::config::TokenAgeCap::MaxIat(ks.config.max_oidc_token_age_secs),
+        token_age: crate::key_server::TokenAgeCap::MaxIat(ks.config.max_oidc_token_age_secs),
     };
 
     // Verify OIDC token

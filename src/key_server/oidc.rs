@@ -45,7 +45,8 @@ use jsonwebtoken::{
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::config::{KeyServerOidcConfig, KeyServerProviderConfig, TokenAgeCap};
+use crate::config::{KeyServerOidcConfig, KeyServerProviderConfig};
+use crate::key_server::TokenAgeCap;
 
 /// Error variants for OIDC verification failures.
 #[derive(Debug, thiserror::Error)]
@@ -338,7 +339,9 @@ impl OidcVerifier {
     /// A verifier for Cloudflare Access assertions: one provider whose issuer
     /// is `https://<team_domain>` and whose keys are the team's certs.
     #[must_use]
-    pub fn cloudflare_access(config: &crate::config::CloudflareAccessConfig) -> Self {
+    pub fn cloudflare_access(
+        config: &crate::security::caller_identity::CloudflareAccessConfig,
+    ) -> Self {
         Self::new(vec![cloudflare_access_provider(config)])
     }
 
@@ -537,7 +540,7 @@ fn find_key_in_jwks(jwks: &JwkSet, kid: &str) -> Option<DecodingKey> {
 /// path and issuer shape are Cloudflare's published ones; `team_domain` is a
 /// bare host by config validation.
 pub(crate) fn cloudflare_access_provider(
-    config: &crate::config::CloudflareAccessConfig,
+    config: &crate::security::caller_identity::CloudflareAccessConfig,
 ) -> KeyServerProviderConfig {
     let issuer = format!("https://{}", config.team_domain);
     KeyServerProviderConfig {

@@ -21,8 +21,7 @@ use axum::http::{Request, StatusCode};
 use mcp_gateway::backend::{Backend, BackendRegistry};
 use mcp_gateway::cache::ResponseCache;
 use mcp_gateway::config::{
-    ApiKeyConfig, AuthConfig, BackendConfig, CallerIdentityConfig, CallerIdentityMode, Config,
-    FailsafeConfig, TransportConfig,
+    ApiKeyConfig, AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig,
 };
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{
@@ -35,6 +34,7 @@ use mcp_gateway::gateway::test_helpers::{
 };
 use mcp_gateway::mtls::{CertIdentity, MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
+use mcp_gateway::security::caller_identity::{CallerIdentityConfig, CallerIdentityMode};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use telemetry_metrics::{
