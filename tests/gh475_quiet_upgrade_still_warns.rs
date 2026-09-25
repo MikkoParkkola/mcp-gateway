@@ -19,7 +19,11 @@ use std::process::Command;
 fn upgrade_from_2_x(extra_args: &[&str]) -> (String, String) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("version.stamp"), "2.0.0").expect("stamp");
-    std::fs::write(dir.path().join("gateway.yaml"), "auth:\n  enabled: false\n").expect("config");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        dir.path().join("gateway.yaml"),
+        "auth:\n  enabled: false\n",
+    )
+    .expect("config");
 
     let out = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
         .arg("upgrade")

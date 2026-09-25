@@ -815,12 +815,15 @@ on a list.
 
 Config files are created `0600` now, but one written by an earlier version may
 still be readable by other local accounts — and it can hold a bearer token or
-API keys. The gateway reports it at startup rather than changing a file you own:
+API keys. On Unix the gateway refuses to load a config or env file that other
+users can read or change, and names the fix:
 
 ```
-CONFIG READABLE BY OTHER LOCAL USERS: it holds this gateway's credentials.
-Fix with: chmod 600 <path>
+Refusing to load config file <path>: mode 0644 lets other users read it, and it
+can hold credentials. Fix: chmod 600 <path> ...
 ```
+
+See UPGRADING-4.0 item 31 for the full rule, including the group-read case.
 
 ### Inbound webhooks
 

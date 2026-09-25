@@ -69,7 +69,8 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
     let yaml =
         serde_yaml::to_string(&config).expect("the gateway's own config type serializes to YAML");
     let path = root.join(fixture.name);
-    std::fs::write(&path, yaml).expect("the config is written inside the test's own temp root");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml)
+        .expect("the config is written inside the test's own temp root");
     path
 }
 

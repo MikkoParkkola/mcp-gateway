@@ -36,6 +36,9 @@ spec:
         # as non-root, so the pod is refused (CreateContainerConfigError)
         # unless the UID is numeric here. 1001 is the image's gateway user.
         runAsUser: 1001
+        # The config projection is root-owned; the gateway reads it through
+        # this group, and refuses it when a world bit is set (CONFIG.2).
+        fsGroup: {{ .Values.podSecurityContext.fsGroup }}
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -123,6 +126,7 @@ spec:
         - name: config
           configMap:
             name: {{ include "mcp-gateway.fullname" . }}-config
+            defaultMode: {{ .Values.configVolume.defaultMode }}
         # Pod-lifetime state under HOME: it survives a container restart, and a
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
         - name: state

@@ -113,6 +113,7 @@ pub fn write_authenticated_config(
 
     let path = root.join(name);
     let rendered = serde_yaml::to_string(&config).expect("the amended config serializes");
-    std::fs::write(&path, rendered).expect("the config is written inside the test's own temp root");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, rendered)
+        .expect("the config is written inside the test's own temp root");
     path
 }

@@ -328,7 +328,7 @@ fn rollback_restores_backup_to_original_config_path() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("client.json");
     let original = r#"{"mcpServers":{"gateway":{"url":"http://old:1234/mcp"}}}"#;
-    std::fs::write(&path, original).unwrap();
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, original).unwrap();
 
     let entry = json!({"url": "http://127.0.0.1:39400/mcp"});
     let backup_path = merge_into_config_with_safety(&path, "mcpServers", "gateway", &entry)
