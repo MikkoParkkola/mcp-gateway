@@ -118,9 +118,15 @@ async fn surfaced_task_enforce_carries_meta_token() {
             "the backend received the key: {text}"
         );
     }
+}
 
-    // A token that expires while the task is held before dispatch fails the
-    // task: the carried token is re-validated at dispatch, not only at create.
+/// A surfaced task whose token expires while it is held before dispatch
+/// fails -32002: the carried token is re-validated at dispatch, not only at
+/// create, and the backend is never called.
+#[tokio::test]
+async fn surfaced_task_enforce_rechecks_token_at_dispatch() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = surfaced_enforced(&mock).await;
     let (observer, mut hold) = observe_dispatched(&state);
     let short = token(chrono::TimeDelta::seconds(2));
     let created = post(
@@ -145,5 +151,5 @@ async fn surfaced_task_enforce_carries_meta_token() {
         Some(-32002),
         "{settled}"
     );
-    assert_eq!(mock.calls(), 1, "the expired task must not dispatch");
+    assert_eq!(mock.calls(), 0, "the expired task must not dispatch");
 }
