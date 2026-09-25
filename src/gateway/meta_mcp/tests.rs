@@ -218,7 +218,7 @@ fn tools_list_wiring_records_real_cache_scope_inputs() {
         None,
         None,
         true,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     );
     assert!(global_shadow_count(request_filtered) > before_private);
 }
@@ -1084,7 +1084,16 @@ async fn tools_resolve_omits_oauth_isolated_backend_on_multi_user_gateway() {
 
     let params = json!({ "name": "recall" });
     let id = RequestId::Number(2);
-    let resp = meta.handle_tools_resolve(id, Some(&params), None).await;
+    let resp = meta
+        .handle_tools_resolve(
+            id,
+            Some(&params),
+            None,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(
+                crate::gateway::router::CallerStanding::Admin,
+            ),
+        )
+        .await;
 
     assert!(
         resp.error.is_some(),
@@ -1229,6 +1238,9 @@ fn initialize_with_profile_in_params_binds_session() {
         Some("session-42"),
         None,
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     // THEN: session is bound to "coding"
     let active = mm
@@ -1250,6 +1262,9 @@ fn initialize_with_header_profile_takes_precedence_over_params() {
         Some("session-99"),
         Some("coding"),
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     // THEN: header wins — session bound to "coding"
     let active = mm
@@ -1271,6 +1286,9 @@ fn initialize_with_unknown_profile_does_not_bind_session() {
         Some("session-77"),
         None,
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     // THEN: session is NOT bound (default remains "research")
     let active = mm
@@ -1294,6 +1312,9 @@ fn initialize_without_profile_does_not_change_session() {
         Some("session-5"),
         None,
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     // THEN: existing binding is preserved
     let active = mm
@@ -1315,6 +1336,9 @@ fn initialize_without_session_id_succeeds_without_panic() {
         None,
         None,
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     // Response should be a success (not an error)
     let v = serde_json::to_value(resp).unwrap();
@@ -2267,7 +2291,7 @@ fn ac_order_2_set_profile_is_refused_without_a_session() {
     let args = json!({ "profile": "coding" });
 
     // WHEN: it tries to switch profile
-    let result = mm.set_profile(&args, Some(""));
+    let result = mm.set_profile(&args, Some(""), true);
 
     // THEN: the call is refused and nothing is written
     assert!(
@@ -2294,7 +2318,7 @@ fn ac_order_2_get_profile_is_refused_without_a_session() {
     let mm = make_meta_mcp_with_profiles();
 
     // WHEN: it asks which profile is active
-    let result = mm.get_profile(Some(""));
+    let result = mm.get_profile(Some(""), true);
 
     // THEN: the call is refused
     assert!(
@@ -2324,6 +2348,9 @@ fn ac_order_2_initialize_binds_no_profile_without_a_session() {
             Some(""),
             header,
             crate::protocol::meta::Era::Modern,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(
+                crate::gateway::router::CallerStanding::Admin,
+            ),
         );
 
         // THEN: no profile was bound to the shared key
@@ -4260,7 +4287,7 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
     let before = tools_list_names(&meta.handle_tools_list_for_session(
         RequestId::Number(1),
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     let invoked = meta
@@ -4278,7 +4305,7 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
     let after = tools_list_names(&meta.handle_tools_list_for_session(
         RequestId::Number(2),
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     assert_eq!(
@@ -4456,13 +4483,13 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
         RequestId::Number(1),
         "echo",
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     let bystander = tools_list_names(&meta.handle_tools_list_filtered(
         RequestId::Number(2),
         "echo",
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     assert_eq!(
@@ -4493,7 +4520,7 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
         RequestId::Number(3),
         "echo",
         LEGACY,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         legacy_list.iter().any(|name| name == "echo"),
@@ -5030,6 +5057,9 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         legacy_a,
         Some(NARROW_PROFILE),
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     meta.handle_initialize(
         RequestId::Number(2),
@@ -5037,16 +5067,19 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         legacy_b,
         None,
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     let legacy_a_tools = tools_list_set(&meta.handle_tools_list_for_session(
         RequestId::Number(3),
         legacy_a,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     let legacy_b_tools = tools_list_set(&meta.handle_tools_list_for_session(
         RequestId::Number(4),
         legacy_b,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         legacy_a_tools.len() < legacy_b_tools.len()
@@ -5061,6 +5094,9 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         MODERN_SESSIONLESS,
         Some(NARROW_PROFILE),
         crate::protocol::meta::Era::Modern,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     meta.handle_initialize(
         RequestId::Number(6),
@@ -5068,17 +5104,20 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         MODERN_SESSIONLESS,
         None,
         crate::protocol::meta::Era::Modern,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
 
     let a = tools_list_set(&meta.handle_tools_list_for_session(
         RequestId::Number(7),
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     let b = tools_list_set(&meta.handle_tools_list_for_session(
         RequestId::Number(8),
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     assert_eq!(
@@ -5107,7 +5146,7 @@ async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
     let before = tools_list_set(&meta.handle_tools_list_for_session(
         RequestId::Number(1),
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     let set = Box::pin(meta.handle_tools_call(
@@ -5132,7 +5171,7 @@ async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
     let after = tools_list_set(&meta.handle_tools_list_for_session(
         RequestId::Number(3),
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     assert_eq!(
@@ -5173,6 +5212,9 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         legacy_a,
         Some(NARROW_PROFILE),
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     meta.handle_initialize(
         RequestId::Number(2),
@@ -5180,18 +5222,21 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         legacy_b,
         None,
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     let legacy_a_tools = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(3),
         MATCH_ALL_QUERY,
         legacy_a,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     let unnarrowed_tools = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(4),
         MATCH_ALL_QUERY,
         legacy_b,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         legacy_a_tools.len() < unnarrowed_tools.len()
@@ -5206,6 +5251,9 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         MODERN_SESSIONLESS,
         Some(NARROW_PROFILE),
         crate::protocol::meta::Era::Modern,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
     meta.handle_initialize(
         RequestId::Number(6),
@@ -5213,19 +5261,22 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         MODERN_SESSIONLESS,
         None,
         crate::protocol::meta::Era::Modern,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
 
     let a = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(7),
         MATCH_ALL_QUERY,
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     let b = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(8),
         MATCH_ALL_QUERY,
         MODERN_SESSIONLESS,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
 
     assert_eq!(

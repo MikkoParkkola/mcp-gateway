@@ -400,7 +400,7 @@ pub(crate) fn build_get_profile_tool() -> Tool {
         name: "gateway_get_profile".to_string(),
         title: Some("Get Routing Profile".to_string()),
         description: Some(
-            "Show the active routing profile for this session and what it allows or denies."
+            "Show the active routing profile's name and description; admins also see its allow/deny patterns."
                 .to_string(),
         ),
         input_schema: json!({

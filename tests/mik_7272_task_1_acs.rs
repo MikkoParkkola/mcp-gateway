@@ -243,7 +243,7 @@ mod capabilities {
     use std::sync::Arc;
 
     use mcp_gateway::backend::BackendRegistry;
-    use mcp_gateway::gateway::test_helpers::MetaMcp;
+    use mcp_gateway::gateway::test_helpers::{CallerStanding, InvokeScope, MetaMcp};
     use mcp_gateway::protocol::RequestId;
     use mcp_gateway::protocol::extensions::ExtensionSet;
     use mcp_gateway::protocol::meta::{Era, classify_and_observe};
@@ -253,6 +253,10 @@ mod capabilities {
 
     fn meta() -> MetaMcp {
         MetaMcp::new(Arc::new(BackendRegistry::new()))
+    }
+    fn init(params: &Value, era: Era) -> mcp_gateway::protocol::JsonRpcResponse {
+        let admin = InvokeScope::unscoped(CallerStanding::Admin);
+        meta().handle_initialize(RequestId::Number(1), Some(params), None, None, era, admin)
     }
 
     /// `initialize` serves the extension to a peer that declared the 2026 era.
@@ -289,9 +293,7 @@ mod capabilities {
              hands to `handle_initialize`"
         );
 
-        let response =
-            meta().handle_initialize(RequestId::Number(1), Some(&params), None, None, Era::Modern);
-        let result = response.result.unwrap_or(Value::Null);
+        let result = init(&params, Era::Modern).result.unwrap_or(Value::Null);
 
         assert_eq!(
             result.pointer(&format!(
@@ -327,9 +329,7 @@ mod capabilities {
              hands to `handle_initialize`"
         );
 
-        let response =
-            meta().handle_initialize(RequestId::Number(1), Some(&params), None, None, Era::Legacy);
-        let result = response.result.unwrap_or(Value::Null);
+        let result = init(&params, Era::Legacy).result.unwrap_or(Value::Null);
 
         assert_eq!(
             result.pointer("/capabilities/extensions"),

@@ -95,6 +95,9 @@ mod support;
 mod surfaced;
 mod task_confirmation;
 pub(crate) mod upstream;
+mod visibility;
+
+pub use visibility::InvokeScope;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
 pub(crate) use support::Authentication;
@@ -247,6 +250,18 @@ pub struct MetaMcpCallerContext<'a> {
 }
 
 impl<'a> MetaMcpCallerContext<'a> {
+    /// The fields the chokepoint reads, as the view discovery is judged by.
+    #[must_use]
+    pub fn scope(&self) -> InvokeScope<'_> {
+        InvokeScope {
+            authorizer: self.authorizer,
+            is_admin: self.is_admin,
+            api_key_name: self.api_key_name,
+            agent_id: self.agent_id,
+            grant_subject: self.grant_subject.as_ref(),
+        }
+    }
+
     /// The same caller, presenting different multi-round-trip fields.
     ///
     /// A chain runs its steps as one caller, and only the step that was
@@ -1467,7 +1482,7 @@ impl MetaMcp {
     pub(super) fn promoted_tools_for_session(
         &self,
         session_id: Option<&str>,
-    ) -> Vec<crate::protocol::Tool> {
+    ) -> Vec<(String, crate::protocol::Tool)> {
         let Some(sid) = session_key(session_id) else {
             return Vec::new();
         };
@@ -1484,7 +1499,7 @@ impl MetaMcp {
                 if self.meta_route_isolation_refused(&backend) {
                     return None;
                 }
-                backend.get_cached_tool(tool)
+                Some((server.to_string(), backend.get_cached_tool(tool)?))
             })
             .collect()
     }
@@ -1639,6 +1654,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         header_profile: Option<&str>,
         era: crate::protocol::meta::Era,
+        scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
@@ -1675,7 +1691,7 @@ impl MetaMcp {
             }
         }
 
-        let instructions = self.build_instructions();
+        let instructions = self.build_instructions(scope, session_id);
         // `era` is threaded from the dispatcher rather than re-derived from
         // `params` here: the dispatcher reads the mirrored header as well as
         // `_meta`, and a second derivation is the two-predicate defect
@@ -1684,22 +1700,26 @@ impl MetaMcp {
         JsonRpcResponse::success_serialized(id, result)
     }
 
-    fn build_instructions(&self) -> String {
-        let backends = self.backends.all();
-        let mut tool_total = tool_total(&backends);
-        let mut server_count = backends.len();
-
-        if let Some(cap) = self.get_capabilities() {
-            // Capabilities are always enumerated, so they only widen the floor.
-            tool_total = tool_total.plus(cap.get_tools().len());
-            server_count += 1;
-        }
-
+    /// The initialize instructions as this caller may read them: counts over
+    /// what it could invoke, and a guide naming only those capabilities (A3).
+    fn build_instructions(&self, scope: InvokeScope<'_>, session_id: Option<&str>) -> String {
+        let (tool_total, server_count) = self.admitted_counts(scope, session_id);
         let mut instructions =
             build_discovery_preamble(tool_total, server_count, &self.meta_tool_exposure);
 
-        if let Some(cap) = self.get_capabilities() {
-            let caps = cap.list_capabilities();
+        if let Some(cap) = self.get_capabilities()
+            && self.admits_backend(&cap.name, scope, session_id)
+        {
+            let mut caps = cap.list_capabilities();
+            caps.retain(|c| {
+                self.may_invoke(&cap.name, &c.name, scope, session_id)
+                    .is_ok()
+            });
+            for c in &mut caps {
+                c.metadata
+                    .chains_with
+                    .retain(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok());
+            }
             let routing = build_routing_instructions(&caps, &cap.name);
             if !routing.is_empty() {
                 instructions.push_str(&routing);
@@ -1730,7 +1750,7 @@ impl MetaMcp {
         // "what is the whole meta surface" question the surface-count gates
         // ask, so lowering it here would shrink a documented count without any
         // caller's disclosure actually changing.
-        self.handle_tools_list_for_session(id, None, CallerStanding::Admin)
+        self.handle_tools_list_for_session(id, None, InvokeScope::unscoped(CallerStanding::Admin))
     }
 
     fn shadow_tools_list_assembly(
@@ -1753,11 +1773,9 @@ impl MetaMcp {
         let session = false;
         crate::protocol_revision_telemetry::observe_tools_list(
             crate::protocol_revision_telemetry::ListFilters {
-                // No principal filter shapes this list. `multi_user` guards
-                // dispatch of a gateway-held token (ADR-008 INV-2); it does
-                // not remove a tool from the answer, so the constant is what
-                // the assembly did, not an assumption about the transport.
-                principal: false,
+                // The caller's invoke predicate shapes the surfaced tools (A3),
+                // so it shapes this list exactly when there are any to shape.
+                principal: !self.surfaced_tools.is_empty(),
                 profile,
                 session,
                 request: request_variant,
@@ -1772,11 +1790,18 @@ impl MetaMcp {
     /// builds its answer here, and the gateway-owned guides are projected
     /// through the same set (`resources::try_serve_guide`) so no served text
     /// can name a tool the same caller's catalogue withholds.
-    pub(super) fn meta_tools_for(&self, standing: CallerStanding) -> Vec<crate::protocol::Tool> {
+    ///
+    /// `counts` feed the descriptions: `tools/list` passes the caller's
+    /// admitted counts; the guide projection reads names only.
+    pub(super) fn meta_tools_for(
+        &self,
+        standing: CallerStanding,
+        counts: (ToolTotal, usize),
+    ) -> Vec<crate::protocol::Tool> {
         let mut tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
-            let (tool_count, server_count) = self.backend_counts();
+            let (tool_count, server_count) = counts;
             build_meta_tools_filtered(
                 MetaToolGates {
                     // The collector is always attached, so its presence was
@@ -1817,17 +1842,18 @@ impl MetaMcp {
         &self,
         id: RequestId,
         session_id: Option<&str>,
-        standing: CallerStanding,
+        scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
-        let tools = self.meta_tools_for(standing);
+        let standing = CallerStanding::from(scope);
+        let tools = self.meta_tools_for(standing, self.admitted_counts(scope, session_id));
         let mut tool_descriptors =
             project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
         // Append surfaced tools (skip in Code Mode — it uses a fixed 2-tool schema).
         if !self.code_mode_enabled {
             for surfaced in &self.surfaced_tools {
-                if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id) {
+                if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id, scope) {
                     let server_id = if self.backends.get(&surfaced.server).is_some() {
                         format!("backend:{}", surfaced.server)
                     } else {
@@ -1848,7 +1874,13 @@ impl MetaMcp {
         #[cfg(feature = "spec-preview")]
         if !self.code_mode_enabled {
             let promoted = self.promoted_tools_for_session(session_id);
-            for tool in promoted {
+            for (server, tool) in promoted {
+                if self
+                    .may_invoke(&server, &tool.name, scope, session_id)
+                    .is_err()
+                {
+                    continue;
+                }
                 let already_present = tool_descriptors
                     .iter()
                     .any(|t| t.get("name").and_then(Value::as_str) == Some(tool.name.as_str()));
@@ -1875,13 +1907,13 @@ impl MetaMcp {
         id: RequestId,
         #[cfg_attr(not(feature = "spec-preview"), allow(unused_variables))] params: Option<&Value>,
         session_id: Option<&str>,
-        standing: CallerStanding,
+        scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
         #[cfg(feature = "spec-preview")]
         if let Some(q) = params.and_then(|p| p.get("query")).and_then(Value::as_str) {
-            return self.handle_tools_list_filtered(id, q, session_id, standing);
+            return self.handle_tools_list_filtered(id, q, session_id, scope);
         }
-        self.handle_tools_list_for_session(id, session_id, standing)
+        self.handle_tools_list_for_session(id, session_id, scope)
     }
 
     /// Variant of [`handle_tools_list_with_params`] that accepts a per-request
@@ -1901,7 +1933,7 @@ impl MetaMcp {
         params: Option<&Value>,
         session_id: Option<&str>,
         url_override: bool,
-        standing: CallerStanding,
+        scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
@@ -1915,7 +1947,7 @@ impl MetaMcp {
             // Still filtered - a URL parameter must not widen what the
             // operator exposed.
             let mut tools = self.meta_tool_exposure.filter(build_code_mode_tools());
-            tools.retain(|tool| standing.permits(&tool.name));
+            tools.retain(|tool| CallerStanding::from(scope).permits(&tool.name));
             let tool_descriptors =
                 project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
             return JsonRpcResponse::success(
@@ -1924,7 +1956,7 @@ impl MetaMcp {
             );
         }
         // No override (or static config already handles it): follow normal path.
-        self.handle_tools_list_with_params(id, params, session_id, standing)
+        self.handle_tools_list_with_params(id, params, session_id, scope)
     }
 
     /// Route a call that names a backend tool directly, or `None` when the
@@ -1952,6 +1984,12 @@ impl MetaMcp {
                     id,
                     &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
                 ));
+            }
+            // Nor a surfaced tool this caller could not invoke (A3).
+            if let Some(absent) =
+                self.withheld_surfaced(&server_name, tool_name, caller, session_id)
+            {
+                return Some(error_response_preserving_status(id, &absent));
             }
             return Some(
                 self.invoke_named_backend_tool(
@@ -2275,7 +2313,7 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers().await,
+            "gateway_list_servers" => self.list_servers(caller.scope(), session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
@@ -2285,11 +2323,13 @@ impl MetaMcp {
             "gateway_run_playbook" => self.run_playbook(&arguments, caller).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
-            "gateway_list_disabled_capabilities" => self.list_disabled_capabilities(),
-            "gateway_set_profile" => self.set_profile(&arguments, session_id),
-            "gateway_get_profile" => self.get_profile(session_id),
+            "gateway_list_disabled_capabilities" => {
+                self.list_disabled_capabilities(caller.scope(), session_id)
+            }
+            "gateway_set_profile" => self.set_profile(&arguments, session_id, caller.is_admin),
+            "gateway_get_profile" => self.get_profile(session_id, caller.is_admin),
             "gateway_list_profiles" => self.list_profiles(),
-            "gateway_set_state" => self.set_state(&arguments, session_id),
+            "gateway_set_state" => self.set_state(&arguments, session_id, caller.scope()),
             "gateway_reload_config" => self.reload_config().await,
             "gateway_reload_capabilities" => self.reload_capabilities().await,
             _ => {
@@ -2326,6 +2366,8 @@ impl MetaMcp {
                     .iter()
                     .copied()
                     .filter(|name| self.meta_tool_exposure.is_exposed(name))
+                    // Nor a tool this caller's standing withholds (A3).
+                    .filter(|name| CallerStanding::from(caller.scope()).permits(name))
                     .collect();
                 let suggestion = did_you_mean(tool_name, &exposed, 3, 3);
                 let msg = match suggestion {
@@ -2417,7 +2459,12 @@ impl MetaMcp {
     ///
     /// Returns the previous state, the new state, and the number of capability
     /// tools visible in the new state (across all capability backends).
-    fn set_state(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+    fn set_state(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        scope: InvokeScope<'_>,
+    ) -> Result<Value> {
         // Refused rather than filtered, and refused HERE rather than inside
         // `SessionStateStore`: the write is the whole point of this call, so a
         // store that quietly dropped it would turn a refusal the caller can see
@@ -2431,10 +2478,16 @@ impl MetaMcp {
         let new_state = extract_required_str(args, "state")?;
         let previous = self.session_state.set_state(sid, new_state);
 
-        // Count visible capability tools in the new state for the response payload.
-        let visible_tools = self
-            .get_capabilities()
-            .map_or(0, |cap| cap.get_tools_for_state(new_state).len());
+        // Count the visible capability tools this caller could invoke (A3).
+        let visible_tools = self.get_capabilities().map_or(0, |cap| {
+            cap.get_tools_for_state(new_state)
+                .iter()
+                .filter(|t| {
+                    self.may_invoke(&cap.name, &t.name, scope, session_id)
+                        .is_ok()
+                })
+                .count()
+        });
 
         debug!(
             session_id = sid,
@@ -2457,8 +2510,18 @@ impl MetaMcp {
 // Routing profile meta-tools
 // ============================================================================
 
+/// A profile as a caller may see it. The allow/deny patterns name backends and
+/// tools a non-admin may not reach, so only an admin is shown them (A3).
+fn described(profile: &crate::routing_profile::RoutingProfile, is_admin: bool) -> Value {
+    if is_admin {
+        profile.describe()
+    } else {
+        json!({ "name": profile.name, "description": profile.description })
+    }
+}
+
 impl MetaMcp {
-    fn set_profile(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+    fn set_profile(&self, args: &Value, session_id: Option<&str>, is_admin: bool) -> Result<Value> {
         let Some(sid) = session_key(session_id) else {
             return Err(Error::Protocol(NO_SESSION_FOR_PROFILE.to_string()));
         };
@@ -2482,12 +2545,12 @@ impl MetaMcp {
         Ok(json!({
             "profile": profile_name,
             "session_id": sid,
-            "description": profile.describe(),
+            "description": described(&profile, is_admin),
             "message": format!("Routing profile set to '{profile_name}'")
         }))
     }
 
-    fn get_profile(&self, session_id: Option<&str>) -> Result<Value> {
+    fn get_profile(&self, session_id: Option<&str>, is_admin: bool) -> Result<Value> {
         let Some(sid) = session_key(session_id) else {
             return Err(Error::Protocol(NO_SESSION_FOR_PROFILE.to_string()));
         };
@@ -2495,7 +2558,7 @@ impl MetaMcp {
         Ok(json!({
             "profile": profile.name,
             "session_id": sid,
-            "description": profile.describe(),
+            "description": described(&profile, is_admin),
             "available_profiles": self.profile_registry.profile_names(),
         }))
     }

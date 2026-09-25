@@ -460,8 +460,11 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         ]);
 
     // --- Disclosure: tools/list ---
-    let listed =
-        meta.handle_tools_list_for_session(RequestId::Number(1), None, CallerStanding::Admin);
+    let listed = meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        None,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
+    );
     let tools = listed
         .result
         .expect("tools/list must return a result")
@@ -798,7 +801,7 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
     let standard = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(1),
         None,
-        CallerStanding::Standard,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Standard),
     ));
     assert!(
         !standard.contains(&"gateway_kill_server".to_string()),
@@ -812,7 +815,7 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
     let admin = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(2),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         admin.contains(&"gateway_kill_server".to_string()),
@@ -873,7 +876,7 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
     let listed = listed_names(&unconfigured.handle_tools_list_for_session(
         RequestId::Number(1),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         !listed.contains(&"gateway_get_stats".to_string()),
@@ -884,7 +887,7 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         "gateway_get_stats",
         json!({}),
         None,
-        ctx(&AllowAll),
+        admin_ctx(&AllowAll), // admin-only since A3; the refusal is the feature's
     ))
     .await;
     let err = refused
@@ -908,7 +911,7 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
     let listed = listed_names(&configured.handle_tools_list_for_session(
         RequestId::Number(3),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         listed.contains(&"gateway_get_stats".to_string()),
@@ -919,7 +922,7 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         "gateway_get_stats",
         json!({}),
         None,
-        ctx(&AllowAll),
+        admin_ctx(&AllowAll),
     ))
     .await;
     assert!(
@@ -980,7 +983,7 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
     let listed = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(2),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     for name in &named {
         assert!(
@@ -1003,7 +1006,7 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
     let standard_listed = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(3),
         None,
-        CallerStanding::Standard,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Standard),
     ));
     for name in &standard_named {
         assert!(
@@ -1022,7 +1025,7 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
     let narrowed_listed = listed_names(&narrowed.handle_tools_list_for_session(
         RequestId::Number(4),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     for name in &narrowed_named {
         assert!(
@@ -1149,7 +1152,7 @@ async fn mik_7332_discovery_1_invalid_schema_tool_withheld_backend_survives() {
     let listed = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(1),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         listed.contains(&"healthy_cap".to_string()),
@@ -1221,7 +1224,7 @@ async fn mik_7332_discovery_1_invalid_schema_backend_tool_withheld_siblings_surv
     let listed = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(1),
         None,
-        CallerStanding::Admin,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
     ));
     assert!(
         listed.contains(&"healthy_wire".to_string()),

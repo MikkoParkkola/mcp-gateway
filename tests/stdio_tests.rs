@@ -11,7 +11,7 @@
 
 use mcp_gateway::config::Config;
 use mcp_gateway::gateway::Gateway;
-use mcp_gateway::gateway::test_helpers::CallerStanding;
+use mcp_gateway::gateway::test_helpers::{CallerStanding, InvokeScope};
 use mcp_gateway::protocol::RequestId;
 use serde_json::json;
 
@@ -157,6 +157,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         Some("stdio-test"),
         None,
         mcp_gateway::protocol::meta::Era::Legacy,
+        InvokeScope::unscoped(CallerStanding::Admin),
     );
 
     // Response should be a success with a result (not an error)
@@ -193,8 +194,12 @@ async fn test_stdio_tools_list_returns_meta_tools() {
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
 
     let id = RequestId::Number(2);
-    let response =
-        meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"), CallerStanding::Admin);
+    let response = meta_mcp.handle_tools_list_with_params(
+        id,
+        None,
+        Some("stdio-test"),
+        InvokeScope::unscoped(CallerStanding::Admin),
+    );
 
     let serialized = serde_json::to_value(&response).expect("serialize");
     assert!(
@@ -348,6 +353,7 @@ async fn test_stdio_unknown_method_contract_is_method_not_found() {
         Some("test"),
         None,
         mcp_gateway::protocol::meta::Era::Legacy,
+        InvokeScope::unscoped(CallerStanding::Admin),
     );
     let serialized = serde_json::to_value(&response).unwrap();
 

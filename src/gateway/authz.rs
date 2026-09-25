@@ -135,9 +135,17 @@ impl Transport {
 /// identity: HTTP has a client, a certificate and an agent identity; stdio has
 /// none of them and only a global tool policy to apply.
 pub trait ToolAuthorizer {
-    /// # Errors
-    /// Returns the refusal when the caller may not invoke this target.
-    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError>;
+    /// The verdict for `target`, with any audit record deferred.
+    ///
+    /// Side-effect free: a decision records nothing until [`Authorize`]
+    /// emits it. Discovery asks this and discards the record, so listing a
+    /// catalogue writes no invocation audit trail.
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a>;
+
+    /// Whether the backend itself is reachable for this caller: the
+    /// backend-level half of `decide`, asked where a backend name is disclosed
+    /// with no tool in hand (a server list, a cold cache).
+    fn admits_backend(&self, server: &str) -> bool;
 
     /// The transport this authorizer speaks for, used only for audit.
     fn transport(&self) -> Transport;
@@ -148,6 +156,70 @@ pub trait ToolAuthorizer {
     /// Validated quota authority, never a client-selected name or session ID.
     /// Each transport and wrapper must explicitly preserve or omit authority.
     fn quota_principal(&self) -> Option<&QuotaPrincipal>;
+}
+
+/// Whether a decision writes its audit record. An enum rather than a `bool`
+/// because it selects behaviour, and the silent direction must be explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emit {
+    /// The invocation path: write the record, as every call always has.
+    Audit,
+    /// Discovery: the same verdict, no record.
+    Silent,
+}
+
+/// A verdict and the audit record [`Authorize::authorize`] writes for it.
+pub struct Decision<'a> {
+    pub verdict: Result<(), AuthorizationError>,
+    record: Option<Box<dyn FnOnce() + 'a>>,
+}
+
+impl<'a> Decision<'a> {
+    /// A verdict that records nothing.
+    pub(crate) fn of(verdict: Result<(), AuthorizationError>) -> Self {
+        Self {
+            verdict,
+            record: None,
+        }
+    }
+
+    /// A verdict whose audit record runs only when emitted.
+    pub(crate) fn recorded(
+        verdict: Result<(), AuthorizationError>,
+        record: impl FnOnce() + 'a,
+    ) -> Self {
+        Self {
+            verdict,
+            record: Some(Box::new(record)),
+        }
+    }
+
+    /// The verdict, writing the record first under [`Emit::Audit`].
+    ///
+    /// # Errors
+    /// Returns the refusal when the verdict is one.
+    pub(crate) fn emit(self, emit: Emit) -> Result<(), AuthorizationError> {
+        if emit == Emit::Audit
+            && let Some(record) = self.record
+        {
+            record();
+        }
+        self.verdict
+    }
+}
+
+/// `decide` plus its audit record. A blanket implementation, so no authorizer
+/// can override it and skip the record.
+pub trait Authorize {
+    /// # Errors
+    /// Returns the refusal when the caller may not invoke this target.
+    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError>;
+}
+
+impl<T: ToolAuthorizer + ?Sized> Authorize for T {
+    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+        self.decide(target).emit(Emit::Audit)
+    }
 }
 
 /// Emits the audit line for a refusal.
@@ -186,8 +258,11 @@ impl ToolAuthorizer for AllowAll {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
-    fn authorize(&self, _target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
-        Ok(())
+    fn decide<'a>(&'a self, _target: ToolTarget<'a>) -> Decision<'a> {
+        Decision::of(Ok(()))
+    }
+    fn admits_backend(&self, _server: &str) -> bool {
+        true
     }
     fn transport(&self) -> Transport {
         Transport::Test
@@ -207,14 +282,17 @@ impl ToolAuthorizer for DenyAll {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
-    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
-        Err(AuthorizationError::forbidden(
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
+        Decision::of(Err(AuthorizationError::forbidden(
             -32003,
             format!(
                 "denied by test authorizer: '{}' on '{}'",
                 target.tool, target.server
             ),
-        ))
+        )))
+    }
+    fn admits_backend(&self, _server: &str) -> bool {
+        false
     }
     fn transport(&self) -> Transport {
         Transport::Test
@@ -239,14 +317,17 @@ impl ToolAuthorizer for DenyOne {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
-    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.tool == self.tool {
-            return Err(AuthorizationError::forbidden(
+            return Decision::of(Err(AuthorizationError::forbidden(
                 -32003,
                 format!("denied by test authorizer: '{}'", target.tool),
-            ));
+            )));
         }
-        Ok(())
+        Decision::of(Ok(()))
+    }
+    fn admits_backend(&self, _server: &str) -> bool {
+        true
     }
     fn transport(&self) -> Transport {
         Transport::Test
@@ -292,14 +373,17 @@ impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         self.inner.quota_principal()
     }
-    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         *self
             .counts
             .lock()
             .expect("counting authorizer mutex poisoned")
             .entry(format!("{}:{}", target.server, target.tool))
             .or_insert(0) += 1;
-        self.inner.authorize(target)
+        self.inner.decide(target)
+    }
+    fn admits_backend(&self, server: &str) -> bool {
+        self.inner.admits_backend(server)
     }
     fn transport(&self) -> Transport {
         self.inner.transport()
@@ -328,15 +412,24 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
-    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.server.is_empty() || target.tool.is_empty() {
-            return Ok(());
+            return Decision::of(Ok(()));
         }
-        crate::security::validate_tool_name(target.tool)
-            .map_err(|e| AuthorizationError::forbidden(-32600, e.clone()))?;
-        self.tool_policy
-            .check(target.server, target.tool)
-            .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()))
+        Decision::of(
+            crate::security::validate_tool_name(target.tool)
+                .map_err(|e| AuthorizationError::forbidden(-32600, e.clone()))
+                .and_then(|()| {
+                    self.tool_policy
+                        .check(target.server, target.tool)
+                        .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()))
+                }),
+        )
+    }
+
+    /// stdio carries no per-caller backend scope.
+    fn admits_backend(&self, _server: &str) -> bool {
+        true
     }
 
     fn transport(&self) -> Transport {

@@ -23,7 +23,11 @@ async fn list_servers_marks_a_backend_whose_tools_were_never_enumerated() {
     );
     let meta = MetaMcp::new(registry);
 
-    let result = meta.list_servers().await.expect("list_servers succeeds");
+    let scope = super::InvokeScope::allow_all(crate::gateway::router::CallerStanding::Admin);
+    let result = meta
+        .list_servers(scope, None)
+        .await
+        .expect("list_servers succeeds");
     let servers = result["servers"].as_array().expect("servers is an array");
     let row = servers
         .iter()

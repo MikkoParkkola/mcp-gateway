@@ -446,6 +446,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Discovery now matches invocation; nothing callable was removed** (GitHub #555).
+  A caller is shown a tool, a backend or a count only if it could invoke it.
+  Before, `tools/list`, `gateway_search_tools`, `gateway_search`,
+  `gateway_list_tools`, `gateway_list_servers`, the `initialize` guide and its
+  counts, the meta-tool descriptions, `tools/resolve`, did-you-mean hints,
+  `predicted_next`, `_cost_suggestion`, `gateway_list_disabled_capabilities`
+  and `gateway_set_state` were decided by the admin bit and the routing
+  profile only, so a key scoped to one backend was shown another's tool
+  names and schemas, and a tool denied by the global `tool_policy` was listed
+  to every caller and then refused. Each surface now keeps an entry only if
+  the silent form of the invocation checks admits it: routing profile, the
+  transport's authorizer (backend scope, tool policy, per-key tool scope,
+  mTLS, agent-auth scope), the admin-capability rule and identity grants.
+  Discovery writes no invocation audit record. A withheld backend or tool is
+  answered exactly as an absent one (`BackendNotFound`, `-32601 Unknown tool`).
+  `gateway_get_stats` and `gateway_webhook_status` are admin-only, profile
+  filter patterns are shown to admins only, a non-admin `/health` carries
+  `status` and `version` only, and the direct route `POST /mcp/{name}`
+  `tools/list` drains up to 32 upstream pages and answers the filtered
+  `{tools}` with no cursor (`-32005` past the cap). See
+  [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md) §15.
+
 - **Webhook notifications reach only callers scoped to the capability backend,
   and are off unless a webhook opts in.** A webhook with `notify` enabled was
   sent to every connected session, so on a gateway shared by several API keys

@@ -35,6 +35,7 @@ upgrading a running deployment.
 | 12 | `auth.api_keys[].name` must be non-empty and unique | Name every key, once |
 | 13 | Identity grants match on `authority` and `subject`; `write` scope is gone | Rewrite `write` grants as `execute` |
 | 14 | Cached and idempotent results are kept per caller | None; expect per-key cache hit rates and a one-TTL idempotency gap |
+| 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -220,6 +221,54 @@ No configuration changes. What to expect:
   `mcp_cache_bypass_total` or `mcp_idempotency_guard_skipped_total` with
   `reason="unresolved_principal"` ever counts, report it. Both carry a `route` label (`meta` or
   `direct`).
+
+## 15. Discovery shows a caller only what it could invoke
+
+In 3.x, invocation was checked per caller but most discovery was not. A key scoped to one backend
+was shown every other backend's tool names, schemas and counts, and a tool denied by the global
+`tool_policy` was listed to every caller, anonymous ones included, and then refused when called.
+
+Discovery now matches invocation, and nothing callable was removed. A tool, backend, count or
+suggestion reaches a caller only if the same checks a call faces would admit it: the routing
+profile, the transport's authorizer (backend scope, `tool_policy`, the key's `allowed_tools` /
+`denied_tools`, mTLS policy, agent-auth scopes), the admin-only capability rule and identity grants.
+This covers `tools/list`, `tools/list?query=`, `tools/resolve`, `gateway_search_tools`,
+`gateway_search`, `gateway_list_tools`, `gateway_list_servers` (and its `tools_count`), the
+`initialize` instructions and their counts, the meta-tool descriptions, did-you-mean hints,
+`predicted_next`, `_cost_suggestion`, `gateway_list_disabled_capabilities` and the
+`gateway_set_state` count. There is no opt-out: an opt-out would be a disclosure switch.
+
+What changes for callers:
+
+- **Scoped keys, OIDC users and anonymous callers see fewer tools, smaller counts and a shorter
+  routing guide.** Tools denied by `tool_policy` disappear from every listing.
+- **A withheld item answers like an absent one.** `gateway_list_tools(server=X)` for a backend the
+  caller may not reach returns `Backend not found: X`, where 3.x returned a "not available in the
+  routing profile" message. A direct-name call of a surfaced tool the caller may not invoke answers
+  `-32601 Unknown tool` instead of a 403 that named the backend.
+- **`gateway_get_stats` and `gateway_webhook_status` are admin-only.** Their data describes every
+  caller's traffic. A non-admin no longer sees them in `tools/list` and is refused by name. The
+  `mcp-gateway stats` command sends no credential, so against a gateway where it is not an admin
+  it is now refused; call the tool with an admin key instead.
+- **`gateway_get_profile` and `gateway_set_profile` show non-admins a profile's name and
+  description only**, not its allow/deny patterns.
+- **A non-admin `/health` returns `status` and `version` only.** The backend count is admin-only.
+  Probes should read `/livez` and `/readyz` (§10) or `status`.
+- **A refused playbook step reads `step not permitted for this caller`** in `step_errors`, instead
+  of a refusal naming the target.
+- **The direct route `POST /mcp/{name}` `tools/list`** now follows the upstream `nextCursor` for up
+  to 32 pages, drops entries it cannot parse, keeps only tools that route's `tools/call` admits,
+  and answers `{ "tools": [...] }` with no `nextCursor` and no other upstream key. An inbound
+  `cursor` is ignored. A catalogue longer than 32 pages is refused with JSON-RPC `-32005`
+  (`data.reason = "direct_list_page_cap"`) and counted in
+  `mcp_direct_tools_list_page_cap_exceeded_total{backend}`, never truncated.
+- **The quickstart guide's "Cost tracking" section is split** into "Cost report" and
+  "Statistics", so a non-admin keeps the `gateway_cost_report` docs.
+
+Embedders calling `MetaMcp` directly: `handle_initialize`, `handle_tools_list_for_session`,
+`handle_tools_list_with_params`, `handle_tools_list_with_url_override` and `handle_tools_resolve`
+take an `InvokeScope` in place of a `CallerStanding`. `InvokeScope::unscoped(standing)` gives the
+operator's unfiltered view.
 
 ## After upgrading
 
