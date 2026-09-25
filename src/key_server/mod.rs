@@ -241,4 +241,26 @@ mod tests {
             "oidc:24:https://issuer-a.example:21:subject-without-email"
         );
     }
+
+    #[tokio::test]
+    async fn oidc_token_with_empty_backends_reaches_none() {
+        // BACKENDGRANT.1: the token's scopes are copied as-is, and an empty
+        // backend list means none, never "all".
+        let ks = KeyServer::new(KeyServerConfig::default());
+        let token = TemporaryToken {
+            jti: "jti-empty".to_string(),
+            token: "mcpgw_empty_backends".to_string(),
+            identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
+            scopes: store::TokenScopes::default(),
+            iat: 0,
+            exp: u64::MAX,
+            client_ip: None,
+        };
+        ks.store.insert(token).await;
+        let (client, _) = ks
+            .validate_token("mcpgw_empty_backends")
+            .await
+            .expect("token is live");
+        assert!(!client.can_access_backend("x"));
+    }
 }

@@ -276,7 +276,7 @@ pub fn api_key(key: &str, rate_limit: u32, allowed: Option<Vec<String>>) -> ApiK
         key: key.to_string(),
         name: "client".to_string(),
         rate_limit,
-        backends: Vec::new(),
+        backends: vec!["*".to_string()],
         allowed_tools: allowed,
         denied_tools: None,
         admin: false,

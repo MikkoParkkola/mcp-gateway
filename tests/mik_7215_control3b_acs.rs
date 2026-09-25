@@ -74,7 +74,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
             key: API_KEY.to_string(),
             name: "control-3b-client".to_string(),
             rate_limit: 0,
-            backends: Vec::new(),
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,

@@ -199,6 +199,7 @@ fn keys() -> Vec<ApiKeyConfig> {
         denying("nohidden-key", &["cap_hidden"]),
         denying("nocapopen-key", &["cap_open"]),
         key("open-key", &["*"]),
+        key("bare-key", &[]),
         key("u1", &["*"]),
         key("u2", &["*"]),
         ApiKeyConfig {

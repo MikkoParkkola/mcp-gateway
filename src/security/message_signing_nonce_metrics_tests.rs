@@ -417,7 +417,7 @@ fn authenticated_client_debug_redacts_the_nested_quota_principal() {
     let client = AuthenticatedClient {
         name: "fixture-client".to_string(),
         rate_limit: 0,
-        backends: Vec::new(),
+        backends: vec!["*".to_string()],
         allowed_tools: None,
         denied_tools: None,
         admin: false,
