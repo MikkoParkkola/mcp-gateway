@@ -643,11 +643,15 @@
     },
     {
       "id": "MIK-7570.CONFIG.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/config/strict_keys.rs",
+        "tests/c1_unrecognised_config_keys.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-25 (C1, PR #877, UPGRADING-4.0 item 29). Green: CI run 36120450581 at 941341b7 (Tests, Clippy pedantic, Helm render, K8s kind apply+upgrade+rollback, first-use smoke all green). Red first: run 36108312886 (tests only, on 9d352d38), 7 failures, each refusal row because the config loaded; mixed-transport row red alone in run 36114729629; the row for a key after a value only the loader accepts (a repeated mapping key) red alone in run 36120471377, its load control green. Delete-the-branch: skipping the strict pass (run 36110029341) turns 7 red; dropping only the backends.<name> hand check (run 36110025707) turns 4 red (flattened, all-together, both retired rows). The pass runs serde_ignored over the figment value the extract read and reports only paths the file spells; backend keys are checked by hand against KNOWN_BACKEND_KEYS and the selected transport, guarded by known_backend_keys_match_struct. Shipped configs: every examples/*.yaml gateway config, Helm credential and mesh renders, enterprise-alpha configmap; init output via first-use smoke. Unchecked by design: MCP_GATEWAY_* env vars."
     },
     {
       "id": "MIK-7570.BACKENDGRANT.1",
