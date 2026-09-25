@@ -70,7 +70,7 @@ audit:
   sizeLimit: 1Gi
   rotation:
     maxSegmentBytes: 67108864   # 64Mi; 1048576..134217728
-    retainSegments: 12
+    retainSegments: 16
     onDiskFull: expire_oldest   # or: refuse
     # maxSegmentAgeSecs: 0      # optional, rendered only when set
 
