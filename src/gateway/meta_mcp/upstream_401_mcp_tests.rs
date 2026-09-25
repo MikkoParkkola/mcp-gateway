@@ -12,8 +12,8 @@
 use crate::personal_accounts::refusal::marked;
 
 use super::super::account_resolver_fixture::{
-    ALICE_WORK_TOKEN, Bind, Descriptors, ProviderStep, ROTATED_TOKEN, WORK, account_key,
-    custody_with_steps, execute, external_cfg, gateway, grant, identity, slots,
+    ALICE_WORK_TOKEN, Answer, Bind, Descriptors, ProviderStep, ROTATED_TOKEN, WORK, account_key,
+    custody_with_steps, execute, execute_bridged, external_cfg, gateway, grant, identity, slots,
 };
 
 const FRESH: u64 = u64::MAX;
@@ -127,4 +127,50 @@ async fn rate_limited_429_is_still_retried() {
         .await
         .expect("the retry after a 429 succeeds");
     assert_eq!(dispatches.count(), 2, "a 429 is retried once, then succeeds");
+}
+
+/// T17: a 401 on an elicitation continuation. The first dispatch asks a
+/// question, the bridge answers it for this legacy client, and the re-dispatch
+/// is refused with 401: the continuation forces the one refresh too and
+/// answers with the reconnect refusal, not the generic bridged-exchange -32003
+/// (RECONNECT.1 names no route).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bridged_continuation_401_forces_the_refresh() {
+    let custody = custody_with_steps(
+        &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
+        ROTATED_TOKEN,
+        &[ProviderStep::InvalidGrant],
+    );
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+    dispatches.script(&[
+        Answer::Result(serde_json::json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which folder?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-a11"
+        })),
+        Answer::Status(401),
+    ]);
+
+    let error = Box::pin(execute_bridged(&meta, "mail", Some(&identity("alice"))))
+        .await
+        .expect_err("a revoked grant on the continuation must refuse");
+    assert_ne!(
+        error.to_rpc_code(),
+        -32003,
+        "the reconnect refusal, not the generic bridged-exchange refusal: {error}"
+    );
+    assert!(marked(&error).is_none(), "passed through with_connect_offer: {error}");
+    assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
+    assert_eq!(dispatches.count(), 2, "the first call and the one continuation");
 }

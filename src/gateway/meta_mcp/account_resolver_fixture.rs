@@ -492,10 +492,18 @@ impl Dispatch {
 #[derive(Default)]
 pub(super) struct Dispatches {
     calls: Mutex<Vec<Dispatch>>,
-    /// A11: HTTP statuses the backend answers the next dispatches with, in
-    /// order, as the typed `Error::Http` the transport produces (A11-b). Empty
-    /// means today's success, which is what every pre-A11 case relies on.
-    answers: Mutex<std::collections::VecDeque<u16>>,
+    /// A11: what the backend answers the next dispatches with, in order.
+    /// Empty means today's success, which is what every pre-A11 case relies on.
+    answers: Mutex<std::collections::VecDeque<Answer>>,
+}
+
+/// One scripted backend answer (A11 cells).
+#[derive(Clone, Debug)]
+pub(super) enum Answer {
+    /// The typed `Error::Http` the HTTP transport produces for this status.
+    Status(u16),
+    /// A successful JSON-RPC result, e.g. an `input_required` interim result.
+    Result(Value),
 }
 
 /// The typed error the HTTP transport returns for a non-2xx `status` (A11-b):
@@ -514,7 +522,13 @@ fn http_status_error(status: u16) -> crate::Error {
 impl Dispatches {
     /// Answer the next dispatches with these HTTP statuses (A11 cells).
     pub(super) fn answer_with(&self, statuses: &[u16]) {
-        self.answers.lock().extend(statuses.iter().copied());
+        let answers = statuses.iter().copied().map(Answer::Status);
+        self.answers.lock().extend(answers);
+    }
+
+    /// Answer the next dispatches with this script (A11 cells).
+    pub(super) fn script(&self, answers: &[Answer]) {
+        self.answers.lock().extend(answers.iter().cloned());
     }
 
     pub(super) fn count(&self) -> usize {
@@ -569,8 +583,15 @@ impl crate::transport::Transport for CapturingTransport {
             headers: extra_headers.to_vec(),
             identity_key: identity_key.map(str::to_string),
         });
-        if let Some(status) = self.dispatches.answers.lock().pop_front() {
-            return Err(http_status_error(status));
+        match self.dispatches.answers.lock().pop_front() {
+            Some(Answer::Status(status)) => return Err(http_status_error(status)),
+            Some(Answer::Result(result)) => {
+                return Ok(crate::protocol::JsonRpcResponse::success(
+                    crate::protocol::RequestId::Number(1),
+                    result,
+                ));
+            }
+            None => {}
         }
         Ok(crate::protocol::JsonRpcResponse::success(
             crate::protocol::RequestId::Number(1),
@@ -591,4 +612,6 @@ impl crate::transport::Transport for CapturingTransport {
 
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
-pub(super) use gateway::{Bind, Descriptors, execute, external_cfg, gateway, slots};
+pub(super) use gateway::{
+    Bind, Descriptors, execute, execute_bridged, external_cfg, gateway, slots,
+};

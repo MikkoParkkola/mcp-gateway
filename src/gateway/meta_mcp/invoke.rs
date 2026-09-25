@@ -898,6 +898,13 @@ struct BridgeDispatcher<'a> {
     protocol_revision: Option<&'a str>,
     routing_profile: &'a str,
     scope: super::InvokeScope<'a>,
+    /// A11: the managed lease the headers were released under, if any.
+    managed: Option<&'a crate::personal_accounts::ManagedLease>,
+    /// A11: a round's 401 turned into a reconnect refusal or a rejection mark.
+    /// A side slot, not a `BridgeError` variant, because that enum is public:
+    /// the bridge sees today's `BackendFailed`, and the call site answers with
+    /// this instead of the generic bridged-exchange refusal.
+    account_refusal: &'a parking_lot::Mutex<Option<Error>>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -978,7 +985,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 .map(str::to_owned),
             input_responses: retry_params.get("inputResponses").cloned(),
         };
-        self.meta
+        let dispatched = self
+            .meta
             .accounted_dispatch(
                 self.server,
                 self.tool,
@@ -1000,8 +1008,25 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.routing_profile,
                 self.scope,
             )
-            .await
-            .map_err(|e| classify_bridged_dispatch_error(&e))
+            .await;
+        let error = match dispatched {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        // A11-c: a 401 on a managed credential forces at most one refresh.
+        let error = match self.managed {
+            Some(managed) if is_upstream_unauthorized(&error) => {
+                managed.after_upstream_401(error).await
+            }
+            _ => error,
+        };
+        let classified = classify_bridged_dispatch_error(&error);
+        if crate::personal_accounts::refusal::marked(&error).is_some()
+            || crate::personal_accounts::refusal::upstream_rejection(&error).is_some()
+        {
+            *self.account_refusal.lock() = Some(error);
+        }
+        Err(classified)
     }
 }
 
@@ -2254,6 +2279,7 @@ impl MetaMcp {
             // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
+            let account_refusal = parking_lot::Mutex::new(None);
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
                     meta: self,
@@ -2275,6 +2301,8 @@ impl MetaMcp {
                     protocol_revision,
                     routing_profile: &profile.name,
                     scope: caller.scope(),
+                    managed: caller_credential.managed.as_ref(),
+                    account_refusal: &account_refusal,
                 },
                 caller.channel,
                 session,
@@ -2365,6 +2393,39 @@ impl MetaMcp {
                         "Bridged challenge refused by the response firewall"
                     );
                     return Err(Error::ResponseFirewallRefused);
+                }
+                // A11-c: a round's 401 on a managed account answers with the
+                // reconnect refusal or the rejection, not the generic refusal.
+                // Settled like any round that reached the backend.
+                Err(_) if account_refusal.lock().is_some() => {
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&uncertain_side_effect());
+                    }
+                    let refused = account_refusal.lock().take().expect("checked above");
+                    let Some(rejection) =
+                        crate::personal_accounts::refusal::upstream_rejection(&refused)
+                    else {
+                        return self.with_connect_offer(Err(refused), verified_identity).await;
+                    };
+                    // The same answer as an unbridged 401 (the dispatch Err arm):
+                    // a tool result whose hint says whether a retry can help.
+                    let mut hint = recovery_for(
+                        ErrorCategory::BackendError,
+                        RecoveryContext {
+                            tool: Some(tool),
+                            backend: Some(server),
+                            ..Default::default()
+                        },
+                    );
+                    hint.error_code = rejection.error_code.to_owned();
+                    hint.retry = rejection.retry;
+                    return Ok(attach_recovery(
+                        json!({
+                            "isError": true,
+                            "content": [{"type": "text", "text": refused.to_string()}],
+                        }),
+                        hint,
+                    ));
                 }
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
