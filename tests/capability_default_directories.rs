@@ -10,6 +10,8 @@
 //! unsafe in edition 2024, the library forbids unsafe, and this is the only
 //! test in the process, so no other thread reads the environment meanwhile.
 
+#![allow(unsafe_code)] // set_var is unsafe in edition 2024
+
 use mcp_gateway::config::CapabilityConfig;
 
 #[test]
