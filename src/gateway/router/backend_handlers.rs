@@ -63,7 +63,8 @@ fn apply_backend_tool_call_security(
     auth: BackendAuthContext<'_>,
     params: Option<&Value>,
     id: &RequestId,
-    sanitize: bool,
+    backend: &crate::backend::Backend,
+    identity_key: Option<&str>,
 ) -> BackendSecurityResult {
     let params = params?;
     let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
@@ -132,7 +133,17 @@ fn apply_backend_tool_call_security(
         }
     }
 
-    if !sanitize {
+    // MIK-7570.SCHEMA.1 (R2): above the passthrough return, so a passthrough
+    // backend is checked too. A tool result, not a 403, so a model can correct
+    // the call; the early return drops the idempotency reservation unsettled.
+    let call_arguments = params.get("arguments").unwrap_or(&Value::Null);
+    if let Some(text) = backend.undeclared_key_refusal(identity_key, tool_name, call_arguments) {
+        let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
+        let response = JsonRpcResponse::success(id.clone(), result);
+        return Some(Err(build_http_response(&response, StatusCode::OK)));
+    }
+
+    if backend.passthrough() {
         return Some(Ok(None));
     }
 
@@ -929,7 +940,8 @@ pub(super) async fn backend_handler(
             },
             params.as_ref(),
             &id,
-            !backend.passthrough(),
+            &backend,
+            identity_key.as_deref(),
         ) {
             Some(Ok(Some(sanitized_params))) => {
                 // Forward the sanitized params to the backend

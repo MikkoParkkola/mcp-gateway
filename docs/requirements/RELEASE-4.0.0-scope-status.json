@@ -635,11 +635,17 @@
     },
     {
       "id": "MIK-7570.SCHEMA.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/r2_input_keys_tests.rs",
+        "src/gateway/router/r2_identity_keys_tests.rs",
+        "src/gateway/server/tests/r2_stdio_keys.rs",
+        "src/trust/schema_bounds/closed_keys/tests.rs",
+        "tests/mik_6865_nested_key_probe.rs"
+      ],
+      "note": "Graded 2026-09-25 on PR #909 (R2), green run 36128282183 at e950a4fd. A tool call carrying a nested or top-level argument key the tool's schema does not declare is refused with isError: true before dispatch on /mcp (gateway_invoke, code-mode chain, stdio) and on /mcp/{name} (passthrough included): meta_invoke_refuses_nested_invented_key, direct_route_refuses_nested_invented_key, stdio_tools_call_refuses_nested_invented_key, code_mode_chain_step_refuses_invented_key, undeclared_key_at_depth_two_is_refused. Discrimination: red run 36116225764; one delete-the-branch run per design clause (36117692035, 36117697710, 36117703410, 36118624427, 36117718131, 36119844951, 36117731106, 36117737389, 36117742366). Design section D (list-side binding equals call-side identity key) proven for a per-user propagating backend by the per_identity_* rows, green on the real code and red with the call forwarded when the call side reads the shared slot (run 36126701548). RESIDUAL: a call made before any list or search for that caller is forwarded unchecked and counted as input_schema_unknown; fetch-on-miss is follow-up F13."
     },
     {
       "id": "MIK-7570.CONFIG.1",

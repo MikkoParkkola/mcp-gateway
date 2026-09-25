@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30 and 32 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27 and 30-32 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -619,6 +619,31 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
 - **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
   `GATEWAY_ATTESTATION_MODE=observe`. Deleting the variable turns attestation off.
+
+## 31. Tool calls with undeclared argument keys are refused
+
+A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at the top
+level or nested inside objects and arrays, now returns `isError: true` and never reaches the
+backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
+
+- **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
+  `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
+  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
+  unchecked and counted as `input_schema_unknown`.
+- **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
+  now honoured, which relaxes 3.x behaviour.
+- An object schema that lists `properties` (at least one) or `patternProperties` without stating
+  `additionalProperties` counts as closed. `{"type": "object"}` and `properties: {}` alone stay
+  free maps.
+
+For a backend whose tools rely on JSON Schema's open default, set
+`input_schema_enforcement: standard` on that backend. To disable the check, set `off`. A boolean
+value is a config error.
+
+A `gateway_execute` chain now stops at the first step whose result carries `isError: true`,
+backend tool errors included, and reports that step's index as a failed step. Before, the chain
+ran the remaining steps. This matches the chain's documented contract, "stops at the first
+error".
 
 ## 32. An API key or key-server rule with no `backends` reaches no backend
 

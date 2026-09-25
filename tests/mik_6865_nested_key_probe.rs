@@ -56,10 +56,8 @@ fn invented_cases() -> Vec<(&'static str, serde_json::Value)> {
     ]
 }
 
-// Ignored by default: this is the MIK-6865 GATE and is RED until the fix at
-// origin/fix/mik-6865-schema-key-invention (f14f2eb3) lands. Run via probe/run.sh.
+// R2-T1 (MIK-7570.SCHEMA.1): the MIK-6865 gate, now a standing test.
 #[test]
-#[ignore = "MIK-6865 gate: RED until f14f2eb3 lands"]
 fn undeclared_key_at_depth_two_is_refused() {
     let schema = schema();
     let mut accepted = Vec::new();
