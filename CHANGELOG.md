@@ -518,8 +518,9 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
   **The tasks extension is advertised on the 2026-07-28 surface.**
   `server/discover` lists `io.modelcontextprotocol/tasks` in its capabilities, so a
-  modern client can run a long `tools/call` as a task and poll it with `tasks/get`,
-  `tasks/update` and `tasks/cancel`. A task belongs to the caller that created it,
+  modern client can run a long `tools/call` as a task, poll it with `tasks/get`,
+  and stop it with `tasks/cancel`; `tasks/update` is answered, but a task takes no
+  input responses in 4.0.0. A task belongs to the caller that created it,
   and a returned handle still resolves after a restart within its retention window.
   The legacy `initialize` result does not carry the extension. The task model is
   knowingly short of the full extension specification in 4.0.0; MIK-7311 owns
