@@ -295,3 +295,134 @@ fn ordinary_failure_does_not_increment_the_suppressed_counter() {
         "an ordinary failure sample must not appear under the suppression counter: {text}"
     );
 }
+
+// ── F23: a gateway rate-limit refusal is not a backend failure ────────────────
+
+/// A backend transport that answers every call successfully: whatever is
+/// refused in these rows was refused by the gateway, never by the backend.
+struct OkTransport;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for OkTransport {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// One backend, rate limited to 1 rps with a burst of 2, breaker at defaults.
+fn rate_limited_meta() -> (MetaMcp, Arc<crate::backend::Backend>) {
+    let mut failsafe = crate::config::FailsafeConfig::default();
+    failsafe.rate_limit.enabled = true;
+    failsafe.rate_limit.requests_per_second = 1;
+    failsafe.rate_limit.burst_size = 2;
+    let backend = Arc::new(crate::backend::Backend::new(
+        "srv",
+        crate::config::BackendConfig::default(),
+        &failsafe,
+        std::time::Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(OkTransport));
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(Arc::clone(&backend));
+    (MetaMcp::new(registry), backend)
+}
+
+fn caller(name: &'static str) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        api_key_name: Some(name),
+        ..crate::gateway::meta_mcp::test_callers::anonymous_caller()
+    }
+}
+
+fn call() -> Value {
+    json!({"server": "srv", "tool": "read", "arguments": {}})
+}
+
+/// The text a caller sees for an outcome, whether it arrived as `Err` or as
+/// an `isError` tool result.
+fn refusal_text(outcome: &crate::Result<Value>) -> Option<String> {
+    match outcome {
+        Err(e) => Some(e.to_string()),
+        Ok(v) if v.get("isError").and_then(Value::as_bool) == Some(true) => Some(v.to_string()),
+        Ok(_) => None,
+    }
+}
+
+/// F23 T1. Caller A bursts past the backend's rate limit. The refusals are the
+/// gateway throttling A, not the backend failing, so they must not reach the
+/// error budgets: caller B, arriving once a token has refilled, is served and
+/// the capability stays enabled. At base each refusal was "Circuit breaker
+/// open" and a budget `Failure`, so A's burst disabled the tool for B.
+#[tokio::test]
+async fn one_callers_burst_does_not_disable_the_capability_for_another() {
+    let (meta, _backend) = rate_limited_meta();
+    let a = caller("tenant-a");
+    let mut refused = Vec::new();
+    for _ in 0..12 {
+        if let Some(text) = refusal_text(&meta.invoke_tool(&call(), None, &a).await) {
+            refused.push(text);
+        }
+    }
+    assert!(
+        refused.len() >= 8,
+        "a burst of 12 against burst 2 at 1 rps must be throttled; refused {refused:?}"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let b = meta.invoke_tool(&call(), None, &caller("tenant-b")).await;
+    assert_eq!(
+        refusal_text(&b),
+        None,
+        "tenant B must be served after A's burst: {b:?}"
+    );
+    assert!(
+        !meta.kill_switch.is_capability_disabled("srv", "read"),
+        "A's throttled burst disabled the capability for every caller"
+    );
+    assert!(!meta.kill_switch.is_killed("srv"), "A's throttled burst killed the backend");
+    assert_eq!(
+        meta.kill_switch.capability_window_counts("srv", "read").1,
+        0,
+        "a gateway rate-limit refusal is not a capability failure sample"
+    );
+    assert!(
+        refused.iter().all(|t| !t.contains("Circuit breaker open")),
+        "a rate-limit refusal must not claim the breaker is open: {:?}",
+        refused.first()
+    );
+}
+
+/// F23 T2, the control. A genuinely open breaker still reports itself as open
+/// and still counts as a failure, so T1 cannot pass by exempting everything.
+#[tokio::test]
+async fn an_open_breaker_still_reports_circuit_open_and_counts() {
+    let (meta, backend) = rate_limited_meta();
+    backend.trip_circuit_breaker_for_test();
+    let outcome = meta.invoke_tool(&call(), None, &caller("tenant-a")).await;
+    let text = refusal_text(&outcome).expect("an open breaker refuses the call");
+    assert!(
+        text.contains("Circuit breaker open"),
+        "an open breaker must say so: {text}"
+    );
+    assert_eq!(
+        meta.kill_switch.capability_window_counts("srv", "read"),
+        (0, 1),
+        "an open breaker is still a failure sample"
+    );
+}
