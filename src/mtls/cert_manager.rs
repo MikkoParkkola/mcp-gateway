@@ -123,6 +123,7 @@ pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
 /// Returns an error if the file cannot be read, contains no private key, or
 /// the key format is unsupported.
 pub fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
+    let _ = crate::config::CheckedFile::TlsKey;
     let pem_data = fs::read(path).map_err(|e| Error::Config(e.to_string()))?;
     let key = PrivateKeyDer::from_pem_slice(pem_data.as_slice()).map_err(|e| {
         // NoItemsFound maps to the "no key" case; all other errors are parse failures.
