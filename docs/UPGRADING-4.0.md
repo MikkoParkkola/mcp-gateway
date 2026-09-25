@@ -310,6 +310,7 @@ Embedders: `MetaMcp::with_trusted_identity_headers(bool)` and
 `MetaMcp::trust_caller_identity_headers()` are replaced by
 `with_caller_identity(CallerIdentityConfig)`, and `KeyServerOidcConfig.max_token_age_secs` by
 `token_age: TokenAgeCap` (`MaxIat(secs)` keeps the old behaviour).
+
 ## 21. The Helm chart and enterprise-alpha manifests start
 
 The chart has never been able to start, from its introduction (#292, which already had
