@@ -51,6 +51,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
+- **Breaking:** a `control_plane.role_mapping` rule with `role: admin` now makes its
+  SSO identity a gateway admin on every admin surface (admin meta-tools, `/ui/api/*`),
+  not only the control plane. The mapping is read per request, so a reload revokes
+  admin at once. A `role: admin` rule whose only condition is `domain` fails to load,
+  and each admin rule logs a warning at load. Header identities never confer admin.
+  See `docs/UPGRADING-4.0.md` item 51 (E1, MIK-7570.ADMINSSO.1).
+
+### Fixed
+
+- **A modern-era stdio caller is handed a continuation instead of `-32003`.**
+  When a backend asks for input over stdio and the call declared the capability
+  in its own `_meta`, the gateway now answers with an `InputRequiredResult` whose
+  `requestState` the client can retry with, and the retry completes. The
+  continuation is bound to a nonce drawn once per stdio process, so a second
+  process sharing the keyring cannot redeem it. The input bridge stays legacy-only,
+  and HTTP callers with no verified identity are still refused `-32003`
+  (MIK-7570.STDIO.1).
+
+- **An open circuit breaker now degrades `/health` (breaking for `/health` monitors).** The
+  breaker reported `"open"` and every consumer compared against `"Open"`, so `/health`, the
+  admin panel and the redacted `/ui/api/status` never saw an open breaker. `BackendStatus.circuit_state`
+  is now the typed `CircuitState`, serialised as the same `closed` / `open` / `half_open` strings.
+  `/health` answers 503 `degraded` while a breaker is open, the admin panel shows the backend
+  `Down` and `Blocked`, and `/livez` / `/readyz` stay backend-blind. See item 45 in
+  [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). (MIK-7570.BREAKER.1)
 
 - **Attestation `enforce` enforces (breaking).** It refuses, with -32002, a
   call whose token is missing or invalid: `gateway_invoke` (the `attestation`
@@ -59,8 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Playbooks and code-mode plans are refused under enforce. Enforce without
   `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
   `docs/UPGRADING-4.0.md` item 46.
-
-### Fixed
 
 - **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each
   webhook endpoint now gets its own per-minute budget and answers `429` past it; the
