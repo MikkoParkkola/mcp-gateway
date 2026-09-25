@@ -9,7 +9,7 @@ items 1-4, 6, 11 and 23 below, then stamps the new version. The notice is printe
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
-6-8 are decided per request or per backend, so there is no single moment at startup at which
+7 and 8 are decided per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
