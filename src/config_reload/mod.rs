@@ -368,6 +368,10 @@ mod account_reload_tests;
 mod account_reload_guard_tests;
 
 #[cfg(test)]
+#[path = "replica_restart_tests.rs"]
+mod replica_restart_tests;
+
+#[cfg(test)]
 mod restart_required_tests {
     use super::LiveConfig;
     use crate::config::Config;

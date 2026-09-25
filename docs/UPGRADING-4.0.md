@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34 or 35 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35 or 37 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30-34 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34 and 37 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34 and 35 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 and 38 refuse the gateway's start (item 37 only above one declared replica; item 38 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -53,6 +53,7 @@ upgrading a running deployment.
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
+| 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -388,12 +389,9 @@ Task records live in the `state` volume. An `emptyDir` survives a container rest
 that is replaced (rollout, eviction, reschedule) starts empty. This release has no
 chart setting for a persistent volume.
 
-Each pod has its own `state` volume, and both shipped defaults run two pods: `replicaCount: 2`
-in the chart's `values.yaml` and `replicas: 2` in the enterprise-alpha `base/deployment.yaml`.
-The Service has no session affinity. A task created on one pod is unknown to the other, so a
-poll, cancel or result request routed to the other pod answers as if the task did not exist.
-If your clients use the task API, set `replicaCount: 1` (or `replicas: 1`) until shared task
-storage exists.
+Each pod has its own `state` volume, so a task created on one pod is unknown to another. Both
+shipped defaults now run one pod, and more than one is refused while the task surface is on
+(item 37).
 
 The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
@@ -747,6 +745,34 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   written by an older release, or copied into place, may need the `chmod`.
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
+
+## 37. More than one replica is refused while per-process state is on
+
+Key-server tokens, managed accounts custody and task records each live in one process. Behind
+a Service with no session affinity, a token minted on one pod is a 401 on another, a revoke
+reaches one pod, and a task created on one pod is not found on another.
+
+- **New `server.replicas`, default 1, is declared, not observed.** Above 1, startup refuses
+  with a reason per feature: `key_server.enabled` (the `InMemoryTokenStore`), enabled
+  `accounts` (`single_process` custody), and `server.modern_protocol`, on by default, which
+  serves the tasks extension. Set `replicas: 1`, or turn the modern protocol off with the
+  key server and accounts off.
+- **Helm chart:** `replicaCount` now defaults to 1 (it was 2). The chart writes
+  `server.replicas` from it, fails the render on the same rules, and fails when a
+  `config.server.replicas` you set disagrees. A `helm upgrade` that carried `replicaCount: 2`
+  now fails until you pick one of the remedies above.
+- **Without the chart, set `server.replicas` to the number of processes you run.** The
+  default of 1 is a declaration made on your behalf, not a detection: a hand-written
+  multi-replica deployment that leaves it at 1 is never refused.
+- **Recreate:** while any of the three is on, the modern protocol included (so a default
+  install), the chart renders `strategy: Recreate`, and so does the enterprise-alpha
+  manifest. An upgrade has a short outage. With all three off the chart keeps
+  `RollingUpdate`.
+- **enterprise-alpha:** `base/deployment.yaml` runs one replica and `base/configmap.yaml`
+  declares `server.replicas: 1`. Change both together.
+- **`kubectl scale` and an HPA bypass this check**, because they change the pod count without
+  the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
+  per-process state".
 
 ## 38. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
 

@@ -657,6 +657,55 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     ))
 }
 
+/// Every refusal `Gateway::run` asks before it binds, in the order it asks
+/// them. A reload's "restart required" advice asks this same function, so it
+/// cannot promise a restart that the start path would refuse.
+pub fn start_refusal(config: &Config) -> Option<String> {
+    network_bind_refusal(config).or_else(|| replica_state_refusal(config))
+}
+
+/// Per-process state under more than one declared replica (UPGRADING-4.0 §37).
+///
+/// `server.replicas` is a declaration the Helm chart keeps equal to
+/// `replicaCount`; the gateway cannot observe its replica count. Each holder
+/// has its own reason so an operator sees which feature forces one replica.
+/// The task surface is reachable only on the modern protocol, so turning that
+/// off is the second remedy for the task store.
+pub fn replica_state_refusal(config: &Config) -> Option<String> {
+    let replicas = config.server.replicas;
+    if replicas <= 1 {
+        return None;
+    }
+    let mut reasons = Vec::new();
+    if config.key_server.enabled {
+        reasons.push(
+            "key_server is enabled, and issued tokens and revocations live in one \
+             process's InMemoryTokenStore: a token minted on one replica is a 401 on \
+             another, and a revoke reaches one replica. Set replicas: 1.",
+        );
+    }
+    if config.accounts.as_ref().is_some_and(|a| a.enabled) {
+        reasons.push(
+            "accounts.enabled is set, and managed custody (accounts.deployment: \
+             single_process, the only mode) holds one process's store and keys. \
+             Set replicas: 1.",
+        );
+    }
+    if config.server.modern_protocol {
+        reasons.push(
+            "server.modern_protocol serves the tasks extension, and each process \
+             has its own task store: a task created on one replica is not found on \
+             another. Set replicas: 1, or server.modern_protocol: false.",
+        );
+    }
+    (!reasons.is_empty()).then(|| {
+        format!(
+            "refusing to start with server.replicas: {replicas}: {}",
+            reasons.join(" ")
+        )
+    })
+}
+
 /// The refusal a config reload must answer: [`network_bind_refusal`] applied to
 /// the configuration that will be IN FORCE if this reload publishes.
 ///
