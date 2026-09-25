@@ -137,6 +137,7 @@ impl OwnedCallerContext {
                 .map(crate::security::OwnedProvenAgentId::as_proven),
             agent_declared: None,
             grant_subject: self.grant_subject.clone(),
+            stdio_nonce: None,
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
