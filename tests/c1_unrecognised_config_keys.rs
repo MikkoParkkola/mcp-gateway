@@ -98,6 +98,23 @@ fn merge_key_refused_under_a_backend() {
     );
 }
 
+/// `projection_mode: 0` names the enum's first variant by index. The gateway's
+/// loader accepts that; a bare YAML deserializer rejects it. The check must
+/// judge keys with the loader's own type rules, or every key after such a
+/// value goes unchecked.
+const INDEXED_ENUM: &str = "meta_mcp:\n  projection_mode: 0\n";
+
+#[test]
+fn value_the_loader_accepts_loads() {
+    let (_dir, _path, result) = load(INDEXED_ENUM);
+    result.expect("an enum given by index loads");
+}
+
+#[test]
+fn unrecognised_key_after_a_loader_coerced_value_refused() {
+    refusal(&format!("{INDEXED_ENUM}serverr: {{}}\n"), &["serverr"]);
+}
+
 #[test]
 fn all_unrecognised_keys_reported_together() {
     refusal(
