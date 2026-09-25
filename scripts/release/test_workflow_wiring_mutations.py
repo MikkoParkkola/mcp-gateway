@@ -93,6 +93,22 @@ CASES = [
         CAUGHT,
     ),
     (
+        "verify-step-timeout-raised-to-hours",
+        "ci.yml",
+        "        timeout-minutes: 10\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        "        timeout-minutes: 360\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        CAUGHT,
+    ),
+    (
+        "verify-attestation-stderr-dropped-too",
+        "ci.yml",
+        '              "${IMAGE}@${d}" > /dev/null\n'
+        "          done\n",
+        '              "${IMAGE}@${d}" > /dev/null 2>&1\n'
+        "          done\n",
+        CAUGHT,
+    ),
+    (
         "gate-behind-an-exit-on-the-line-above",
         "docker.yml",
         "        run: python3 scripts/release/check_tag_manifest.py",
