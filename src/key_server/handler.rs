@@ -50,6 +50,7 @@ use tracing::warn;
 use super::{
     KeyServer,
     audit::{self, AuditEvent},
+    oidc::VerifiedIdentity,
     policy::RequestedScopes,
     store::{InMemoryTokenStore, TemporaryToken},
 };
@@ -112,9 +113,13 @@ impl std::fmt::Debug for TokenExchangeResponse {
     }
 }
 
-/// Query params for bulk revocation.
+/// Query params for bulk revocation. The identity is `(issuer, subject)`;
+/// `issuer` is optional here only so its absence can be answered with 400.
 #[derive(Debug, Deserialize)]
 pub struct RevokeBySubjectQuery {
+    /// OIDC issuer of the identity to revoke. Required.
+    #[serde(default)]
+    pub issuer: Option<String>,
     /// OIDC subject to revoke all tokens for.
     pub subject: String,
 }
@@ -226,27 +231,8 @@ async fn exchange_token(
     };
 
     // Enforce max tokens per identity
-    let active_count = ks.store.count_for_subject(&identity.subject).await;
-    if active_count >= ks.config.max_tokens_per_identity as usize {
-        warn!(
-            subject = %identity.subject,
-            active = active_count,
-            max = ks.config.max_tokens_per_identity,
-            "Max tokens per identity exceeded"
-        );
-        let ev = AuditEvent::denied(
-            format!(
-                "max tokens per identity ({}) exceeded",
-                ks.config.max_tokens_per_identity
-            ),
-            client_ip,
-        );
-        audit::emit(&ev);
-        return error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too_many_tokens",
-            "Maximum number of active tokens for this identity exceeded",
-        );
+    if let Some(refusal) = token_cap_refusal(&ks, &identity, client_ip).await {
+        return refusal;
     }
 
     // Issue token
@@ -307,7 +293,8 @@ async fn revoke_token(
     }
 }
 
-/// `DELETE /auth/tokens?subject=<subject>` — Revoke all tokens for a subject.
+/// `DELETE /auth/tokens?issuer=<issuer>&subject=<subject>` — Revoke all
+/// tokens for one `(issuer, subject)` identity. A missing issuer is 400.
 ///
 /// Requires admin authorization.
 async fn revoke_tokens_by_subject(
@@ -319,15 +306,65 @@ async fn revoke_tokens_by_subject(
         return response;
     }
 
-    let count = ks.store.revoke_by_subject(&params.subject).await;
-    let ev = AuditEvent::revoked(&format!("bulk:{}", params.subject), None);
+    let Some(issuer) = params.issuer.filter(|i| !i.trim().is_empty()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "issuer is required: an OIDC identity is (issuer, subject)",
+        );
+    };
+    let count = ks.store.revoke_by_subject(&issuer, &params.subject).await;
+    let actor = VerifiedIdentity {
+        subject: params.subject.clone(),
+        email: String::new(),
+        name: None,
+        groups: Vec::new(),
+        issuer: issuer.clone(),
+    };
+    let ev = AuditEvent::revoked(&format!("bulk:{}", actor.stable_actor_id()), None);
     audit::emit(&ev);
 
     (
         StatusCode::OK,
-        Json(json!({"revoked": count, "subject": params.subject})),
+        Json(json!({"revoked": count, "issuer": issuer, "subject": params.subject})),
     )
         .into_response()
+}
+
+/// The 429 response when `(issuer, subject)` already holds the configured
+/// maximum of active tokens; `None` while it is under the cap.
+async fn token_cap_refusal(
+    ks: &KeyServer,
+    identity: &VerifiedIdentity,
+    client_ip: Option<IpAddr>,
+) -> Option<axum::response::Response> {
+    let active_count = ks
+        .store
+        .count_for_subject(&identity.issuer, &identity.subject)
+        .await;
+    if active_count < ks.config.max_tokens_per_identity as usize {
+        return None;
+    }
+    warn!(
+        issuer = %identity.issuer,
+        subject = %identity.subject,
+        active = active_count,
+        max = ks.config.max_tokens_per_identity,
+        "Max tokens per identity exceeded"
+    );
+    let ev = AuditEvent::denied(
+        format!(
+            "max tokens per identity ({}) exceeded",
+            ks.config.max_tokens_per_identity
+        ),
+        client_ip,
+    );
+    audit::emit(&ev);
+    Some(error_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too_many_tokens",
+        "Maximum number of active tokens for this identity exceeded",
+    ))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

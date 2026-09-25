@@ -11,16 +11,19 @@
 //!
 //! ## Match criteria
 //!
-//! Each rule's `match` block may contain any combination of:
+//! Each rule's `match` block names an `issuer` and may add any combination of
+//! the other fields:
 //!
 //! | Field | Meaning |
 //! |-------|---------|
-//! | `domain` | Email domain suffix (e.g., `"company.com"`) |
-//! | `issuer` | Exact OIDC issuer URL |
-//! | `email` | Exact email address |
+//! | `issuer` | Exact OIDC issuer URL. **Required**, and must be a configured provider |
+//! | `domain` | Exact email domain, ASCII case-insensitive (`"company.com"`; subdomains need their own rule) |
+//! | `email` | Exact email address, ASCII case-insensitive |
 //! | `group` | Any group in the identity's `groups` list |
 //!
-//! All non-`None` fields must match for the rule to fire.
+//! All present fields must match for the rule to fire. `email` and `domain`
+//! only ever see a verified address: the OIDC verifier drops an email whose
+//! `email_verified` claim is not true.
 //!
 //! ## Scope intersection
 //!
@@ -34,7 +37,7 @@ use tracing::debug;
 
 use crate::config::KeyServerPolicyConfig;
 
-use super::oidc::VerifiedIdentity;
+use super::oidc::{VerifiedIdentity, email_domain};
 use super::store::TokenScopes;
 
 /// The access policy engine.
@@ -100,22 +103,19 @@ pub struct RequestedScopes {
 
 /// Evaluate whether an identity matches the rule's match criteria.
 fn matches_rule(criteria: &MatchCriteria, identity: &VerifiedIdentity) -> bool {
-    // All non-None criteria must match.
-    if let Some(ref domain) = criteria.domain {
-        let email_domain = identity.email.split('@').next_back().unwrap_or("");
-        if email_domain != domain {
-            return false;
-        }
+    // The issuer always applies; every other present criterion must match.
+    if identity.issuer != criteria.issuer {
+        return false;
     }
 
-    if let Some(ref issuer) = criteria.issuer
-        && &identity.issuer != issuer
+    if let Some(ref domain) = criteria.domain
+        && !email_domain(&identity.email).is_some_and(|d| d.eq_ignore_ascii_case(domain))
     {
         return false;
     }
 
     if let Some(ref email) = criteria.email
-        && &identity.email != email
+        && (identity.email.is_empty() || !identity.email.eq_ignore_ascii_case(email))
     {
         return false;
     }
@@ -196,15 +196,14 @@ fn scope_matches(policy_item: &str, request_item: &str) -> bool {
 
 /// Match criteria for a policy rule.
 ///
-/// All non-`None` fields must match.
+/// The issuer and every non-`None` field must match.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MatchCriteria {
-    /// Email domain (e.g., `"company.com"`)
+    /// Exact email domain (e.g., `"company.com"`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
     /// OIDC issuer URL
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub issuer: Option<String>,
+    pub issuer: String,
     /// Exact email address
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
@@ -253,7 +252,7 @@ mod tests {
         KeyServerPolicyConfig {
             match_criteria: PolicyMatchConfig {
                 domain: Some("company.com".to_string()),
-                issuer: None,
+                issuer: "https://accounts.google.com".to_string(),
                 email: None,
                 group: None,
             },
@@ -269,7 +268,7 @@ mod tests {
         KeyServerPolicyConfig {
             match_criteria: PolicyMatchConfig {
                 domain: None,
-                issuer: Some("https://token.actions.githubusercontent.com".to_string()),
+                issuer: "https://token.actions.githubusercontent.com".to_string(),
                 email: None,
                 group: None,
             },
@@ -319,8 +318,10 @@ mod tests {
 
     #[test]
     fn resolve_scopes_first_match_wins() {
-        // GIVEN: engine with two rules; company rule is first
-        let engine = make_engine(vec![company_rule(), github_actions_rule()]);
+        // GIVEN: engine with two rules for the same issuer; company rule is first
+        let mut company = company_rule();
+        company.match_criteria.issuer = "https://token.actions.githubusercontent.com".to_string();
+        let engine = make_engine(vec![company, github_actions_rule()]);
         let identity = make_identity(
             "alice@company.com",
             "https://token.actions.githubusercontent.com",
@@ -355,7 +356,7 @@ mod tests {
             match_criteria: PolicyMatchConfig {
                 email: Some("admin@company.com".to_string()),
                 domain: None,
-                issuer: None,
+                issuer: "https://accounts.google.com".to_string(),
                 group: None,
             },
             scopes: PolicyScopesConfig {
@@ -382,7 +383,7 @@ mod tests {
             match_criteria: PolicyMatchConfig {
                 group: Some("ml-engineers".to_string()),
                 domain: None,
-                issuer: None,
+                issuer: "https://accounts.google.com".to_string(),
                 email: None,
             },
             scopes: PolicyScopesConfig {

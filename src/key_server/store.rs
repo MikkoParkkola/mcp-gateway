@@ -103,11 +103,13 @@ pub trait TokenStore: Send + Sync + 'static {
     /// Returns `true` if the token existed and was removed.
     async fn revoke_by_jti(&self, jti: &str) -> bool;
 
-    /// Revoke all tokens for a given OIDC subject (e.g., on offboarding).
-    async fn revoke_by_subject(&self, subject: &str) -> usize;
+    /// Revoke all tokens for one OIDC identity, `(issuer, subject)` (e.g., on
+    /// offboarding). The same `sub` at another issuer is another identity.
+    async fn revoke_by_subject(&self, issuer: &str, subject: &str) -> usize;
 
-    /// Count active (non-expired) tokens for a given OIDC subject.
-    async fn count_for_subject(&self, subject: &str) -> usize;
+    /// Count active (non-expired) tokens for one OIDC identity,
+    /// `(issuer, subject)`.
+    async fn count_for_subject(&self, issuer: &str, subject: &str) -> usize;
 
     /// Remove all expired tokens. Called periodically by the background reaper.
     async fn reap_expired(&self) -> usize;
@@ -196,11 +198,12 @@ impl TokenStore for InMemoryTokenStore {
         }
     }
 
-    async fn revoke_by_subject(&self, subject: &str) -> usize {
+    async fn revoke_by_subject(&self, issuer: &str, subject: &str) -> usize {
         let mut jtis_to_revoke = Vec::new();
 
         for entry in &self.by_bearer {
-            if entry.value().identity.subject == subject {
+            let identity = &entry.value().identity;
+            if identity.issuer == issuer && identity.subject == subject {
                 jtis_to_revoke.push(entry.value().jti.clone());
             }
         }
@@ -212,10 +215,13 @@ impl TokenStore for InMemoryTokenStore {
         count
     }
 
-    async fn count_for_subject(&self, subject: &str) -> usize {
+    async fn count_for_subject(&self, issuer: &str, subject: &str) -> usize {
         self.by_bearer
             .iter()
-            .filter(|e| e.value().identity.subject == subject && !e.value().is_expired())
+            .filter(|e| {
+                let identity = &e.value().identity;
+                identity.issuer == issuer && identity.subject == subject && !e.value().is_expired()
+            })
             .count()
     }
 
@@ -412,7 +418,9 @@ mod tests {
         store.insert(t3).await;
 
         // WHEN: revoke all for alice
-        let count = store.revoke_by_subject("alice-sub").await;
+        let count = store
+            .revoke_by_subject("https://accounts.google.com", "alice-sub")
+            .await;
 
         // THEN: 2 removed, bob's token untouched
         assert_eq!(count, 2);
@@ -432,10 +440,39 @@ mod tests {
         store.insert(t_expired).await;
 
         // WHEN: count active tokens for alice
-        let count = store.count_for_subject("alice-sub").await;
+        let count = store
+            .count_for_subject("https://accounts.google.com", "alice-sub")
+            .await;
 
         // THEN: only 2 active tokens (expired one not counted)
         assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn revoke_and_count_are_scoped_to_issuer() {
+        // GIVEN: sub "123" at two issuers
+        let store = InMemoryTokenStore::new();
+        let at_a = make_token("123", "", 3600);
+        let mut at_b = make_token("123", "", 3600);
+        at_b.identity.issuer = "https://idp-b.example".to_string();
+        let bearer_b = at_b.token.clone();
+        store.insert(at_a).await;
+        store.insert(at_b).await;
+
+        // THEN: each issuer counts and revokes only its own identity
+        assert_eq!(
+            store
+                .count_for_subject("https://idp-b.example", "123")
+                .await,
+            1
+        );
+        assert_eq!(
+            store
+                .revoke_by_subject("https://accounts.google.com", "123")
+                .await,
+            1
+        );
+        assert!(store.get(&bearer_b).await.is_some());
     }
 
     #[tokio::test]

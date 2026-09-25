@@ -37,6 +37,7 @@ upgrading a running deployment.
 | 14 | Cached and idempotent results are kept per caller | None; expect per-key cache hit rates and a one-TTL idempotency gap |
 | 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
 | 16 | `trust_caller_identity_headers` is replaced by `security.caller_identity` | Choose a mode; list your proxies and an authority, or configure Cloudflare Access |
+| 17 | Key-server rules need an issuer and a verified email; revocation needs an issuer | Add `issuer` to every `key_server.policies[].match`; pass `issuer` to `DELETE /auth/tokens` |
 | 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
 
@@ -310,6 +311,43 @@ Embedders: `MetaMcp::with_trusted_identity_headers(bool)` and
 `MetaMcp::trust_caller_identity_headers()` are replaced by
 `with_caller_identity(CallerIdentityConfig)`, and `KeyServerOidcConfig.max_token_age_secs` by
 `token_age: TokenAgeCap` (`MaxIat(secs)` keeps the old behaviour).
+
+## 17. Key-server OIDC rules need an issuer and a verified email
+
+Before 4.0 an email or domain rule matched the raw `email` claim, whether or not the identity
+provider had verified it. On a self-service or multi-tenant IdP anyone could set their address
+to `ceo@corp.com` and match. Rules also needed no issuer, so a token from a second configured
+IdP could satisfy a rule written for the first.
+
+- **Every `key_server.policies[].match` needs an `issuer`** equal to a configured
+  `key_server.oidc[].issuer`. A rule with no issuer, a blank or unconfigured issuer, or a blank
+  `email`/`domain`/`group` fails to load, and the error names the rule index. `match: {}` no
+  longer parses.
+- **Issuer-only rules on `https://accounts.google.com` or
+  `https://token.actions.githubusercontent.com` fail to load** (with or without the scheme or a
+  trailing slash). Such a rule admits every Google account, or every GitHub workflow, that gets a
+  token for your audience. Add a `domain`, `email` or `group` condition. Any other multi-tenant
+  issuer behaves the same way; the gateway only recognises these two.
+- **Email and domain rules and `allowed_domains` need `email_verified: true`.** The verifier
+  keeps `email` only when the claim is JSON `true` or the string `"true"`, and otherwise treats
+  the token as having no email. Microsoft Entra ID omits the claim by default, so Entra users lose
+  email and domain matches: move them to issuer-only rules (the issuer pins the tenant) or group
+  rules before upgrading, or they get 403 at token exchange. Okta and Auth0 send it when the
+  `email` scope is granted; Keycloak only with the client's `email verified` mapper on.
+- **Matching is ASCII case-insensitive and `domain` is exact.** `Alice@Corp.COM` matches
+  `alice@corp.com` and `corp.com`. `domain: corp.com` does not match `eu.corp.com`; give each
+  subdomain its own rule. An address without exactly one `@` has no domain.
+- **`DELETE /auth/tokens` requires `issuer`** as well as `subject`, and returns 400 without it.
+  The per-identity token cap also counts `(issuer, subject)`, so the same `sub` at two IdPs no
+  longer shares a cap or a revocation. The token store is in memory, so the upgrade restart drops
+  every issued key-server token; clients exchange again.
+- **Control-plane role mapping** gets the same verified-email and case-insensitive matching with
+  no config change.
+- **Identity propagation** stops carrying an unverified email: the gateway-signed assertion's
+  `email` claim is empty for such users. A backend keyed on the propagated email must key on
+  `sub` plus `tenant` instead. The assertion carries no `email_verified` claim, so when
+  `/auth/token` exchanges the gateway's own assertion (the `token-exchange-live` example), match
+  it with an issuer-only rule on the `mcp-gateway` issuer, not an email or domain rule.
 
 ## 21. The Helm chart and enterprise-alpha manifests start
 
