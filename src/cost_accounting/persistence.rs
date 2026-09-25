@@ -14,25 +14,26 @@ use serde::{Deserialize, Serialize};
 
 // ── PersistedCosts ────────────────────────────────────────────────────────────
 
-/// All-time cumulative cost data persisted across restarts.
+/// Today's spend (UTC) as of `saved_at`, persisted so a restart keeps the
+/// daily budgets. Reloaded only on the same UTC day it was saved.
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PersistedCosts {
     /// Unix timestamp (seconds) of the last save.
     pub saved_at: u64,
-    /// Per-tool cumulative totals (for historical display in the UI).
+    /// Per-tool spend for the day of `saved_at`.
     pub tool_totals: HashMap<String, ToolTotal>,
-    /// Per-API-key cumulative cost totals.
+    /// Per-API-key spend for the day of `saved_at`.
     pub key_totals: HashMap<String, f64>,
 }
 
-/// Cumulative cost data for a single tool (all-time).
+/// Spend for a single tool on the day of `saved_at`.
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolTotal {
     /// Total invocations recorded.
     pub call_count: u64,
-    /// Total cost in USD (all-time).
+    /// Spend in USD on the day of `saved_at`.
     pub total_cost_usd: f64,
     /// Average cost per call (updated on each save).
     pub avg_cost_usd: f64,
@@ -70,8 +71,13 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     }
     let json = serde_json::to_string_pretty(costs)
         .map_err(|e| crate::Error::Config(format!("Failed to serialize costs: {e}")))?;
-    std::fs::write(path, json)
+    // Write then rename, so a crash mid-write leaves the previous file, not a
+    // truncated one that fails to parse and restarts the budgets at zero.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)
         .map_err(|e| crate::Error::Config(format!("Failed to write costs: {e}")))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| crate::Error::Config(format!("Failed to replace costs: {e}")))?;
     tracing::info!(path = %path.display(), "Saved cost data");
     Ok(())
 }
@@ -145,6 +151,10 @@ mod tests {
         costs.key_totals.insert("dev_key".to_string(), 2.50);
 
         save(&path, &costs).unwrap();
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "the temp file is renamed away"
+        );
         let loaded = load(&path).unwrap();
 
         assert_eq!(loaded.saved_at, 1_700_000_000);

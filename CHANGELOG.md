@@ -79,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
+  discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
+  is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
+  A budget that has blocked stays blocked across a restart until UTC midnight.
+
 - **The default capability directories no longer include a checkout under `HOME`.**
   `capabilities.directories` defaulted to `capabilities` plus
   a private capability checkout under `$HOME/github` whenever it existed, so a
