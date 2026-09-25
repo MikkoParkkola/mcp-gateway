@@ -55,7 +55,9 @@ metadata:
     app.kubernetes.io/name: mcp-gateway
     mcp-gateway.io/license-tier: enterprise
 spec:
-  replicas: 2
+  # One: task records, key-server tokens and accounts custody are per process
+  # (UPGRADING-4.0 item 37).
+  replicas: 1
   service:
     port: 39400
   runtimeProfileRef: default-kubernetes

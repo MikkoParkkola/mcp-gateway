@@ -51,4 +51,18 @@ data:
     {{- if not $cfg.server.public_url }}
     {{- $_ := set $cfg.server "public_url" (printf "http://%s.%s.svc.cluster.local:%v" (include "mcp-gateway.fullname" .) .Release.Namespace .Values.service.port) }}
     {{- end }}
+    {{- /* UPGRADING-4.0 §37. server.replicas is the declaration the gateway's
+           startup refusal reads; it cannot observe its replica count, so the
+           chart writes it from replicaCount and refuses a disagreeing value
+           rather than pick one. The same check runs here so a wrong install
+           fails at render instead of as a crash-looping pod. */}}
+    {{- $replicas := int .Values.replicaCount }}
+    {{- if and (hasKey $cfg.server "replicas") (ne (int $cfg.server.replicas) $replicas) }}
+    {{- fail (printf "config.server.replicas (%v) disagrees with replicaCount (%d). The chart writes server.replicas from replicaCount; remove config.server.replicas." $cfg.server.replicas $replicas) }}
+    {{- end }}
+    {{- $_ := set $cfg.server "replicas" $replicas }}
+    {{- $reasons := include "mcp-gateway.perProcessState" . }}
+    {{- if and (gt $replicas 1) $reasons }}
+    {{- fail (printf "replicaCount is %d, and per-process state cannot be shared between pods: %s" $replicas $reasons) }}
+    {{- end }}
     {{- toYaml $cfg | nindent 4 }}
