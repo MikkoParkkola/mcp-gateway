@@ -247,7 +247,7 @@ async fn verified_email_matches() {
 async fn role_mapping_ignores_unverified_email() {
     let h = Harness::start(&config_yaml("[]", "")).await;
     let mapping: ControlPlaneRoleMappingConfig = serde_yaml::from_str(&format!(
-        "rules:\n  - {{ issuer: \"{ISS_A}\", domain: \"corp.com\", role: admin }}\n"
+        "rules:\n  - {{ issuer: \"{ISS_A}\", domain: \"corp.com\", role: auditor }}\n"
     ))
     .expect("mapping parses");
     mapping.validate().expect("mapping is valid");
