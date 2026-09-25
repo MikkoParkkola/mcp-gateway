@@ -104,6 +104,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **API keys are configured as sha256 digests, with an optional expiry
+  (breaking).** `auth.api_keys[].key` is refused at load; set `key_sha256` to the
+  output of the new offline `mcp-gateway hash-key` (key on stdin, `--verify`
+  checks one). An `env:` variable must hold the digest, not the key. The
+  optional `expires_at` refuses a matching key with 401 after that instant.
+  Clients keep their keys, and principals are unchanged. See
+  `docs/UPGRADING-4.0.md` item 39.
+
 - **A config key the gateway does not read fails the load (breaking).** A
   misspelt key such as `key_server: {enabeld: true}` used to load in silence
   and leave the setting at its default. The config file is now checked after

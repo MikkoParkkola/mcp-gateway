@@ -792,6 +792,31 @@ auth:
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
 
+### API keys
+
+Each `auth.api_keys[]` entry names a client and holds the **sha256 digest** of its key, never
+the key itself:
+
+| Field | Meaning |
+|---|---|
+| `name` | Required, unique, unpadded. The key's identity-grant subject (`api_key:<name>`) |
+| `key_sha256` | `sha256:` followed by 64 lowercase hex characters, or `env:VAR` whose value has that form |
+| `expires_at` | Optional RFC 3339 instant. After it the key is refused with 401; startup only warns |
+| `backends` | Backends the key reaches. `["*"]` is all; empty or absent is none |
+| `allowed_tools` / `denied_tools` | Optional glob allowlist and blocklist |
+| `rate_limit` | Requests per minute; 0 is unlimited |
+| `admin` | Admin UI and management tools |
+
+```bash
+printf %s "$KEY" | mcp-gateway hash-key                       # prints sha256:<hex>
+printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>  # exit 0 match, 1 mismatch, 2 malformed
+```
+
+`hash-key` reads the key from stdin, strips one trailing newline, and reads no config. A
+plaintext `key` field, or an `env:` variable that holds a key rather than a digest, fails the
+load with an error that names the entry or variable but never the value. See
+[UPGRADING-4.0.md](UPGRADING-4.0.md) item 39.
+
 A gateway whose tools already require a native credential is not refused, even
 with `auth.enabled = false`: mTLS with `require_client_cert`, mTLS with a
 non-empty policy — which denies any call arriving without a verified identity —

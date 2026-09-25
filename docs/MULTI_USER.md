@@ -360,6 +360,8 @@ only raise it.
   gate, and a public `/mcp` makes the gate optional.
 - Static `auth.bearer_token` / `auth.api_keys` inventoried; the master bearer
   stays operator-only.
+- `auth.api_keys` hold `key_sha256` digests from `mcp-gateway hash-key`, never the
+  keys, and a key handed to someone temporary carries `expires_at`.
 - `mtls` or a TLS terminator in front. Bearer tokens on plain HTTP are readable
   by anything on the path, and the gateway refuses backend URLs that carry
   credentials over plain HTTP for the same reason.

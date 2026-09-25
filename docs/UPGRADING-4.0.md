@@ -54,6 +54,7 @@ upgrading a running deployment.
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
+| 39 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -773,6 +774,42 @@ reaches one pod, and a task created on one pod is not found on another.
 - **`kubectl scale` and an HPA bypass this check**, because they change the pod count without
   the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
   per-process state".
+
+## 39. API keys are configured as sha256 digests, with optional expiry
+
+In 3.x `auth.api_keys[].key` held the key itself, or `env:VAR` whose value was the key. Anyone
+who could read the config, the environment or a debug log could replay it. The gateway only
+ever needs the key's hash, so 4.0 stores the digest instead.
+
+- **A plaintext `key` fails the load.** The error names the key and says to run
+  `mcp-gateway hash-key`. It says the same for `key: env:VAR`, and the variable is not read.
+  Setting both `key` and `key_sha256`, or neither, also fails the load. The file is not
+  rewritten for you: a rewrite would drop comments, and an `env:` key lives outside the file.
+- **Migrate each key.** Run `printf %s "$KEY" | mcp-gateway hash-key` and put the output in
+  `key_sha256`:
+
+  ```yaml
+  auth:
+    api_keys:
+      - name: laptop
+        key_sha256: "sha256:<64 lowercase hex>"
+  ```
+
+  The key is read from stdin, never an argument, so it stays out of shell history. One trailing
+  newline is stripped, so `echo "$KEY" |` gives the same digest. Check a digest with
+  `printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>` (exit 0 match, 1 mismatch,
+  2 malformed).
+- **For `env:` keys, store the digest in the variable or secret instead of the key.** A
+  variable that still holds the key fails the load, and the error names the variable, never
+  its value. Nothing is silently hashed.
+- **Clients keep the same key.** Only the config changes. `principal` values, session owners
+  and log lines are unchanged: the principal is the first 12 hex characters of the digest,
+  which is what 3.x derived from the key.
+- **Optional `expires_at`** (RFC 3339, for example `"2027-01-01T00:00:00Z"`). After it, a
+  matching key is refused with 401 and a `warn` naming the key. An expired key does not stop
+  the gateway from starting; it logs a `warn` at startup instead. Omitting `expires_at` keeps
+  the 3.x behaviour. Removing or renewing a key still needs a config edit and a restart.
+- `auth.bearer_token` and `key_server.admin_token` are unchanged and still plaintext.
 
 ## After upgrading
 
