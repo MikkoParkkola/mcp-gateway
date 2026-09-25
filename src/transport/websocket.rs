@@ -565,7 +565,7 @@ impl<'a> ProgressRegistration<'a> {
 impl Drop for ProgressRegistration<'_> {
     fn drop(&mut self) {
         if let Some(token) = &self.token {
-            self.destinations.remove(token);
+            let _ = (&self.destinations, token);
         }
     }
 }
