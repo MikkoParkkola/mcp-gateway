@@ -39,19 +39,28 @@ service:
   type: ClusterIP
   port: 39400
 
-# These two work as one pair. The gateway refuses a config file that other
-# users can read (UPGRADING-4.0 item 35), and the configMap projection is
-# root-owned. With fsGroup the kubelet makes it root:<fsGroup>, and a 0440 mode
-# lets the gateway read it through that group while no world bit is set.
-# fsGroup must be a group the gateway's UID is in: 1001 is the image's user.
-# Override both if you run another UID, or a mesh injects its own group.
+# The pod's identity. The image's gateway user and group are both 1001, and the
+# chart refuses to render any other value, root (0) included: a different UID
+# cannot write HOME, and a different GID or fsGroup cannot read what the
+# image's group owns. fsGroup is also how the gateway reads its config: the
+# configMap projection is root-owned, the kubelet makes it root:<fsGroup>, and
+# configVolume.defaultMode 0440 lets the gateway read it through that group
+# with no world bit set (UPGRADING-4.0 item 35). A mesh that injects its own
+# group is not supported by this chart.
 podSecurityContext:
+  runAsUser: 1001
+  runAsGroup: 1001
   fsGroup: 1001
 
 configVolume:
   # Decimal, because `--set` and some YAML readers do not take octal: 288 is
   # 0440. Any world bit, or group write, is refused at startup.
   defaultMode: 288
+
+# The `state` emptyDir holds HOME (task store, npm/uv caches). Past this size
+# the kubelet evicts the pod instead of letting it fill the node's disk.
+stateVolume:
+  sizeLimit: 1Gi
 
 resources:
   requests:

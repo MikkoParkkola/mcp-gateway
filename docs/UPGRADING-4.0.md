@@ -53,6 +53,7 @@ upgrading a running deployment.
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
+| 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 
 ## 1. OAuth credentials are stored per issuer
@@ -728,8 +729,10 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   commands that do not serve print a warning and skip the file.
 - **Helm:** the chart now sets `podSecurityContext.fsGroup: 1001` and
   `configVolume.defaultMode: 288` (octal `0440`), so the projected config is `root:1001 0440`.
-  Without them the projection is `root:root 0644` and is refused. If you run another UID, or a mesh
-  injects its own group, override both values together.
+  Without them the projection is `root:root 0644` and is refused. `fsGroup` renders only as 1001,
+  the image's group: any other value, root included, fails `helm template` (item 36), so a mesh
+  that injects its own group is not supported. Keep `defaultMode` at `288`: the gateway reads
+  the root-owned file through group read, and a world bit is refused.
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
 - **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
   container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
@@ -745,6 +748,21 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   written by an older release, or copied into place, may need the `chmod`.
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
+
+## 36. The Helm chart pins its pod identity and caps its `state` volume
+
+- **`podSecurityContext.runAsUser`, `runAsGroup` and `fsGroup` accept only 1001**, the image's
+  UID/GID. The values schema refuses any other value, root included, so `helm lint` and
+  `helm template` fail; a template guard refuses it again when schema validation is skipped.
+  Item 35's config read relies on that `fsGroup`. **Remove any `fsGroup` or `runAsUser`
+  override** you set for item 35 or an earlier chart; a mesh that injects its own group is not
+  supported.
+- **The `state` emptyDir under HOME has a `sizeLimit` of `1Gi`.** A pod whose task store and
+  npm/uv caches outgrow it is evicted and restarts empty. Raise it with
+  `--set stateVolume.sizeLimit=4Gi`; the value is required. enterprise-alpha's
+  `base/deployment.yaml` carries the same `1Gi`.
+- **enterprise-alpha stops mounting a service account token.** The gateway never calls the
+  Kubernetes API; run `mcp-gateway kubernetes` from a place that has kubectl credentials.
 
 ## 37. More than one replica is refused while per-process state is on
 

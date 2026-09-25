@@ -48,6 +48,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/* runAsUser/runAsGroup/fsGroup. The image's gateway user and group are both
+1001: any other value runs the pod as root (0) or as an identity that does not
+own HOME, so it is refused at render time instead of failing in the cluster. */}}
+{{- define "mcp-gateway.podIdentity" -}}
+{{- range $k := list "runAsUser" "runAsGroup" "fsGroup" }}
+{{- $v := index $.Values.podSecurityContext $k }}
+{{- if ne (toString $v) "1001" }}
+{{- fail (printf "podSecurityContext.%s must be 1001, the image's non-root gateway UID/GID; got %v%s" $k $v (ternary " (root)" "" (eq (toString $v) "0"))) }}
+{{- end }}
+{{ $k }}: 1001
+{{- end }}
+{{- end -}}
+
 {{/* Per-process state (UPGRADING-4.0 §37): one sentence per holder that is on,
      or empty. The render guard (configmap.yaml) fails on it above one replica
      and the Deployment picks Recreate on it, so the two cannot disagree. The
