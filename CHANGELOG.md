@@ -48,6 +48,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`);
 > no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
 
+### Highlights
+
+The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
+stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
+caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
+one replica while it is on. For teams, each caller now sees and invokes only what it was granted,
+and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
+rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
+with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
+with an enforced expiry, `/metrics` has its own token, and unknown keys, readable config files,
+unresolved secrets and, with auth on, cleartext HTTP on a network bind stop the start. The Helm chart starts
+with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+
 ### Added
 
 - **With auth on, the tool-call audit log is required and fails closed
