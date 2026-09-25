@@ -96,7 +96,7 @@ pub use verify::{
     verify_log, verify_log_signed,
 };
 
-use crate::security::audit::{AuditEnvelope, AuditWho};
+use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -316,9 +316,6 @@ impl TransparencyLogger {
     /// - `sig` (when a non-empty `shared_secret` is configured) is
     ///   `hmac_sha256(shared_secret, raw_entry_hash_bytes)`.
     ///
-    /// Failures are non-fatal: the caller should `warn!` but must not abort
-    /// the tool invocation.
-    ///
     /// # Errors
     ///
     /// Returns `io::Error` if serialisation or the file write fails.
@@ -337,8 +334,7 @@ impl TransparencyLogger {
                 source: CorrelationSource::SessionId,
             },
             &AuditEnvelope::ok(AuditWho::from_actor_id(caller)),
-            server,
-            tool,
+            InvocationTarget::meta(server, tool),
             request_hash,
             Some(response_hash),
         )
@@ -354,8 +350,7 @@ impl TransparencyLogger {
         &self,
         key: CorrelationKey<'_>,
         envelope: &AuditEnvelope,
-        server: &str,
-        tool: &str,
+        target: InvocationTarget<'_>,
         request_hash: &str,
         response_hash: Option<&str>,
     ) -> io::Result<()> {
@@ -372,10 +367,13 @@ impl TransparencyLogger {
         if let Some(response_hash) = response_hash {
             fields.insert("response_hash".into(), response_hash.into());
         }
-        fields.insert("server".into(), server.into());
+        fields.insert("route".into(), target.route.as_str().into());
+        fields.insert("server".into(), target.server.into());
         fields.insert("session_id".into(), key.id.into());
         fields.insert("timestamp".into(), timestamp.into());
-        fields.insert("tool".into(), tool.into());
+        if let Some(tool) = target.tool {
+            fields.insert("tool".into(), tool.into());
+        }
 
         self.append_core(fields, envelope, false).map(|_| ())
     }
