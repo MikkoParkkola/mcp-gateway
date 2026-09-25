@@ -17,6 +17,8 @@ server:
   request_timeout: 30s            # Per-request timeout
   shutdown_timeout: 30s           # Graceful shutdown timeout
   max_body_size: 10485760         # Max request body size in bytes (10 MB)
+  replicas: 1                     # Declared process count, not observed. Above 1, startup refuses with
+                                  # key_server, accounts or modern_protocol on (UPGRADING-4.0 item 37)
 
 # --- Authentication ---
 
