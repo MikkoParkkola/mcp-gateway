@@ -793,9 +793,9 @@ mod tests {
         write_stamp(&stamp_path(dir.path()), "0.1.0").unwrap();
         // WHEN: check_upgrade is called
         check_upgrade(dir.path()).unwrap();
-        // THEN: stamp is updated to current version (no migrations, so direct update)
+        let triple = format!("{}", SemVer::parse(env!("CARGO_PKG_VERSION")).unwrap());
         let v = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(v, env!("CARGO_PKG_VERSION"));
+        assert_eq!(v, triple, "the migration engine stamps the bare triple");
     }
 
     #[test]
@@ -856,10 +856,10 @@ mod tests {
         write_stamp(&stamp_path(dir.path()), "0.1.0").unwrap();
         // WHEN: upgrade runs (quiet so no stdout noise in test)
         let code = run_upgrade_command(false, true, Some(dir.path()));
-        // THEN: stamp updated, exit SUCCESS
+        let triple = format!("{}", SemVer::parse(env!("CARGO_PKG_VERSION")).unwrap());
         assert_eq!(code, ExitCode::SUCCESS);
         let v = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(v, env!("CARGO_PKG_VERSION"));
+        assert_eq!(v, triple, "the migration engine stamps the bare triple");
     }
 
     #[test]
@@ -1196,7 +1196,7 @@ mod tests {
         let stamp_after_first = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
         // GH475.MIG.2: pinned to the literal so a future version bump cannot
         // silently stop testing the 4.0.0 behaviour this case was written for.
-        assert_eq!(SemVer::parse(&stamp_after_first), SemVer::parse("4.0.0"));
+        assert_eq!(stamp_after_first, "4.0.0");
         let content_after_first = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_first, original);
 
@@ -1208,7 +1208,7 @@ mod tests {
         // branch (idempotency guaranteed by the version stamp, not by the
         // migration's own logic).
         let stamp_after_second = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(SemVer::parse(&stamp_after_second), SemVer::parse("4.0.0"));
+        assert_eq!(stamp_after_second, "4.0.0");
         let content_after_second = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_second, original);
     }
@@ -1230,15 +1230,15 @@ mod tests {
         // so it would keep passing after a version bump while no longer
         // proving anything about the 4.0.0 upgrade this case exists to cover.
         assert_eq!(
-            SemVer::parse(&read_stamp(&stamp_path(dir.path())).unwrap().unwrap()),
-            SemVer::parse("4.0.0")
+            read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
+            "4.0.0"
         );
         assert_eq!(std::fs::read_to_string(&yaml).unwrap(), original);
 
         check_upgrade(dir.path()).unwrap();
         assert_eq!(
-            SemVer::parse(&read_stamp(&stamp_path(dir.path())).unwrap().unwrap()),
-            SemVer::parse("4.0.0")
+            read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
+            "4.0.0"
         );
         assert_eq!(
             std::fs::read_to_string(&yaml).unwrap(),

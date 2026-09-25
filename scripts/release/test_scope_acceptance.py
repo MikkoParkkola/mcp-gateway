@@ -956,6 +956,38 @@ class PublishCheckTests(unittest.TestCase):
             1,
         )
 
+    def test_rc_tag_and_manifest_pending_publish_is_consistency_only(self):
+        self._write_manifest("4.0.0-rc.1")
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0-rc.1",
+            ),
+            0,
+            self.last.stderr,
+        )
+
+    def test_final_manifest_under_a_beta_tag_still_requires_acceptance(self):
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0-beta.1",
+            ),
+            1,
+        )
+
+    def test_other_prerelease_suffixes_still_require_acceptance(self):
+        for version in ("4.0.0-hotfix", "4.0.0-alpha.1", "4.0.0-beta.1+build.7"):
+            with self.subTest(version=version):
+                self._write_manifest(version)
+                self.assertEqual(
+                    self._publish_check(
+                        GITHUB_EVENT_NAME="push",
+                        GITHUB_REF=f"refs/tags/v{version}",
+                    ),
+                    1,
+                )
+
     def test_beta_publish_still_rejects_an_invalid_contract(self):
         self._write_manifest("4.0.0-beta.1")
         self._write_contract(pending=False, waived=True)
