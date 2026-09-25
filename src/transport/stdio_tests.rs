@@ -10,6 +10,10 @@
 use super::*;
 use std::collections::HashMap;
 
+#[cfg(windows)]
+#[path = "stdio_windows_env_tests.rs"]
+mod windows_env;
+
 #[cfg(unix)]
 const CHILD_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_CHILD_ENV_SCENARIO";
 #[cfg(unix)]
