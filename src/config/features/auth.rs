@@ -192,7 +192,10 @@ impl AuthConfig {
     /// # Errors
     ///
     /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
-    pub fn resolve_bearer_token(&self) -> Result<Option<String>> {
+    pub fn resolve_bearer_token(
+        &self,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Option<String>> {
         self.bearer_token.as_ref().map_or(Ok(None), |token| {
             if token == "auto" {
                 use rand::RngExt;
@@ -206,7 +209,7 @@ impl AuthConfig {
                 )))
             } else {
                 crate::config::secret_ref::SecretRef::parse(token)
-                    .resolve("auth.bearer_token", &crate::config::EnvOverlay::none())
+                    .resolve("auth.bearer_token", overlay)
                     .map(Some)
             }
         })
@@ -247,11 +250,9 @@ impl ApiKeyConfig {
     /// # Errors
     ///
     /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
-    pub fn resolve_key(&self) -> Result<String> {
-        crate::config::secret_ref::SecretRef::parse(&self.key).resolve(
-            &format!("auth.api_keys['{}'].key", self.name),
-            &crate::config::EnvOverlay::none(),
-        )
+    pub fn resolve_key(&self, overlay: &crate::config::EnvOverlay) -> Result<String> {
+        crate::config::secret_ref::SecretRef::parse(&self.key)
+            .resolve(&format!("auth.api_keys['{}'].key", self.name), overlay)
     }
 }
 
@@ -342,12 +343,15 @@ impl AgentDefinitionConfig {
     /// # Errors
     ///
     /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
-    pub fn resolved_hs256_secret(&self) -> Result<Option<String>> {
+    pub fn resolved_hs256_secret(
+        &self,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Option<String>> {
         self.hs256_secret.as_ref().map_or(Ok(None), |s| {
             crate::config::secret_ref::SecretRef::parse(s)
                 .resolve(
-                    "agent_auth.agents[].hs256_secret",
-                    &crate::config::EnvOverlay::none(),
+                    &format!("agent_auth.agents['{}'].hs256_secret", self.client_id),
+                    overlay,
                 )
                 .map(Some)
         })

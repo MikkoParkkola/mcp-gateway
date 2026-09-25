@@ -2761,9 +2761,11 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         home.finish_startup();
 
         // The holder, built once at startup, exactly as the gateway builds it.
-        let holder =
-            crate::gateway::auth::ResolvedAuthConfig::try_from_config(&startup.config.auth)
-                .unwrap();
+        let holder = crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+            &startup.config.auth,
+            &startup.overlay,
+        )
+        .unwrap();
 
         // WHEN: only the env file's value changes. The config file is rewritten
         // BYTE-IDENTICALLY, so the tracked-section reporting that already exists
