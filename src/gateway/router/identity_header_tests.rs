@@ -120,14 +120,15 @@ impl AccessIdp {
     }
 
     fn sign(&self, claims: &serde_json::Value) -> String {
-        sign_with(&self.key, claims)
+        sign_with(&self.key, &self.key.key_info().kid, claims)
     }
 }
 
-fn sign_with(key: &GatewayKeyPair, claims: &serde_json::Value) -> String {
+/// Sign with `key` but name `kid`, so a forged token can claim a trusted key id.
+fn sign_with(key: &GatewayKeyPair, kid: &str, claims: &serde_json::Value) -> String {
     let info = key.key_info();
     let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some(info.kid);
+    header.kid = Some(kid.to_string());
     let encoding = EncodingKey::from_ec_pem(info.private_key_pem.as_bytes()).unwrap();
     jsonwebtoken::encode(&header, claims, &encoding).unwrap()
 }
@@ -434,7 +435,9 @@ async fn cf_assertion_wrong_aud_or_signature_is_refused() {
     let verifier = idp.verifier();
     let stranger = GatewayKeyPair::generate().unwrap();
     let foreign_aud = idp.sign(&access_claims("u1", "other-app", 10, 3600));
-    let foreign_key = sign_with(&stranger, &access_claims("u1", AUD, 10, 3600));
+    // The forgery names the team's own kid, so only the signature check stops it.
+    let team_kid = idp.key.key_info().kid;
+    let foreign_key = sign_with(&stranger, &team_kid, &access_claims("u1", AUD, 10, 3600));
     for (case, jwt) in [("aud", foreign_aud), ("key", foreign_key)] {
         let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
         let result = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
