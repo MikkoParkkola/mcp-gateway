@@ -256,7 +256,9 @@ fn verify_passes_after_disk_full_drains_every_sealed_segment() {
     assert_eq!(r.segments_expired, 1);
 }
 
-/// Altering a middle segment's seal breaks the next file's link.
+/// Altering a middle segment's seal, then re-chaining every entry hash after
+/// it, leaves one thing wrong: the next file's `prev_segment_final_hash`
+/// still names the old seal. Only the seam rule can see that.
 #[test]
 fn verify_fails_on_altered_middle_seal() {
     let dir = tempfile::tempdir().unwrap();
@@ -264,13 +266,32 @@ fn verify_fails_on_altered_middle_seal() {
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 3);
     drop(l);
+    let rechain = |file: &std::path::Path, from: usize, mut prev: serde_json::Value| {
+        for i in from..lines(file).len() {
+            rewrite_line(file, i, |v| v["prev_entry_hash"] = prev.clone());
+            prev = lines(file)[i]["entry_hash"].clone();
+        }
+        prev
+    };
     let middle = sealed_path(&path, 1);
     let last = lines(&middle).len() - 1;
-    rewrite_line(&middle, last, |v| v["next_segment_seq"] = 2.into());
     rewrite_line(&middle, last, |v| {
         v["timestamp"] = "1970-01-01T00:00:00Z".into();
     });
-    assert!(!verify(&path, false).ok);
+    let altered = lines(&middle)[last]["entry_hash"].clone();
+    // Segment 2 re-links its entry chain to the altered seal, not its seam.
+    let tail = rechain(&sealed_path(&path, 2), 0, altered);
+    rewrite_line(&path, 0, |v| {
+        v["prev_entry_hash"] = tail.clone();
+        v["prev_segment_final_hash"] = tail.clone();
+    });
+    let head = lines(&path)[0]["entry_hash"].clone();
+    rechain(&path, 1, head);
+    std::fs::remove_file(segments::sibling(&path, "hwm")).unwrap();
+    let r = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Archive).unwrap();
+    assert!(!r.ok);
+    let msg = r.error_message.unwrap();
+    assert!(msg.contains("prev_segment_final_hash"), "{msg}");
 }
 
 /// Every boundary checks its own named link, not only `prev_entry_hash`: an
@@ -391,4 +412,23 @@ fn verify_retries_when_a_listed_file_vanishes() {
     });
     let r = verify(&path, false);
     assert!(r.ok, "{:?}", r.error_message);
+}
+
+/// The other side of the disk-full fix: sealed segments deleted by hand, with
+/// no `audit_segment_expired` record, still fail although the active file's
+/// open record now names its own segment.
+#[test]
+fn verify_fails_when_every_sealed_segment_is_deleted_by_hand() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 2);
+    drop(l);
+    for s in list_segments(&path).unwrap() {
+        std::fs::remove_file(s.path).unwrap();
+    }
+    for mode in [VerifyMode::Live, VerifyMode::Archive] {
+        let r = verify_segments(&path, &cfg(&path, 12, false), mode).unwrap();
+        assert!(!r.ok, "{mode:?}: a hand-deleted history passed");
+    }
 }
