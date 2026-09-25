@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
+- **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
+  token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
+  read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
+  collections may be read by others but not changed by them. `config export` writes the client
+  config it edits as `0600`. UPGRADING-4.0 item 35. (F18)
 
 ### Added
 
