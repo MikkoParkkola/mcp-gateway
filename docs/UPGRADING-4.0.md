@@ -514,6 +514,25 @@ a DN fragment such as `mtls:CN=runner` are refused.
 `security.agent_identity.known_agents` rejects a bare string and names the sources it may use.
 A `source: declared` entry refuses load when `agent_identity.enabled` is true and
 `allow_unverified_agent_identity` is false; with agent identity disabled it loads with a warning.
+## 28. Tool calls with undeclared argument keys are refused
+
+A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at the top
+level or nested inside objects and arrays, now returns `isError: true` and never reaches the
+backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
+
+- **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
+  `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
+  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
+  unchecked and counted as `input_schema_unknown`.
+- **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
+  now honoured, which relaxes 3.x behaviour.
+- An object schema that lists `properties` (at least one) or `patternProperties` without stating
+  `additionalProperties` counts as closed. `{"type": "object"}` and `properties: {}` alone stay
+  free maps.
+
+For a backend whose tools rely on JSON Schema's open default, set
+`input_schema_enforcement: standard` on that backend. To disable the check, set `off`. A boolean
+value is a config error.
 
 ## 28. A modern `tools/call` without an idempotency key is admitted, unprotected
 
