@@ -81,9 +81,9 @@ control_plane:
   starts, serves governance read-only, logs a WARN naming the path, reports
   `mutation_disabled_reason: store_unavailable`, and answers mutations with 503
   `CONTROL_STORE_UNAVAILABLE` and a reason naming the path.
-- **Set**: `~` is expanded, and the result must be absolute. A relative value,
-  or a directory the gateway cannot create and write, refuses start with the
-  path and the OS error.
+- **Set**: `~` is expanded, and the result must be absolute; a relative value
+  refuses start. With auth on, a directory the gateway cannot create and write
+  also refuses start, with the path and the OS error.
 - The store takes no lease. Run one gateway process per `store_dir`.
 - Changing `store_dir` takes a restart. A reload reports `control_plane` as
   restart-required and the running process keeps its directory.
