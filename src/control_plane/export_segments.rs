@@ -111,8 +111,7 @@ impl LogExporter {
                 let expected = match running_prev.take() {
                     // The first line scanned from the start of the log.
                     Some(g) if g == "genesis" && scan.batch.is_empty() && prev != "genesis" => {
-                        opened_link(&entry)
-                            .filter(|link| *link == prev)
+                        Some(prev.clone())
                             .ok_or_else(|| {
                                 ExportError::VerificationFailed(format!(
                                     "chain break: first entry's prev_entry_hash {prev} is not \
