@@ -29,6 +29,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[path = "upgrade_backend_grant_notice.rs"]
+mod backend_grant_notice;
 #[path = "upgrade_webhook_notice.rs"]
 mod webhook_notice;
 
@@ -293,10 +295,7 @@ then personal capabilities fail closed. `identity grants grant --agent` takes \
     "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set: an unset mode no longer \
 writes `attestation_observe_reject` audit lines (set `observe` to keep them), and `enforce` or \
 any unrecognised value now FAILS STARTUP instead of falling back to observe.",
-    "An API key or key-server policy rule with no `backends` (omitted or empty) now reaches \
-NO backend; 3.x treated it as all. Add `backends: [\"*\"]` to keep that, or list the \
-backends it needs. The gateway warns once per such key at startup, and the key server \
-refuses to issue a token for such a rule (403 `no_backends_granted`).",
+    backend_grant_notice::ITEM,
 ];
 
 /// Emit the one-time 4.0.0 notice.
