@@ -90,6 +90,7 @@ async fn unsigned_requests_do_not_spend_a_signed_endpoints_budget() {
     definition.signature_header = Some("X-Signature".to_string());
     let mut state = super::tests::make_handler_state(make_multiplexer(), definition);
     state.env = env;
+    let state_stats = Arc::clone(&state.stats);
     state.limiter = Some(Arc::new(governor::RateLimiter::direct(
         governor::Quota::per_minute(std::num::NonZeroU32::MIN),
     )));
@@ -115,6 +116,8 @@ async fn unsigned_requests_do_not_spend_a_signed_endpoints_budget() {
             .parse()
             .expect("header"),
     );
+    let signed_headers = headers.clone();
+    let state_again = state.clone();
     let response =
         super::webhook_handler(State(state), headers, axum::body::Bytes::from_static(body))
             .await
@@ -124,6 +127,21 @@ async fn unsigned_requests_do_not_spend_a_signed_endpoints_budget() {
         StatusCode::OK,
         "the one signed request in the minute must get the budget"
     );
+    assert_eq!(
+        state_stats.snapshot().rate_limited,
+        0,
+        "unsigned refusals are not rate-limit refusals"
+    );
+
+    let again = super::webhook_handler(
+        State(state_again),
+        signed_headers,
+        axum::body::Bytes::from_static(body),
+    )
+    .await
+    .into_response();
+    assert_eq!(again.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(state_stats.snapshot().rate_limited, 1);
 }
 
 #[tokio::test]

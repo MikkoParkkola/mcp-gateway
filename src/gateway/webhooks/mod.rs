@@ -51,6 +51,8 @@ pub struct EndpointStats {
     pub signature_failures: AtomicU64,
     /// Events that failed payload transformation
     pub transform_failures: AtomicU64,
+    /// Signed events refused because the endpoint's `rate_limit` was spent
+    pub rate_limited: AtomicU64,
     /// Unix timestamp (seconds) of the most recent received event
     pub last_received_at: AtomicU64,
 }
@@ -65,6 +67,7 @@ impl EndpointStats {
             delivered: self.delivered.load(Ordering::Relaxed),
             signature_failures: self.signature_failures.load(Ordering::Relaxed),
             transform_failures: self.transform_failures.load(Ordering::Relaxed),
+            rate_limited: self.rate_limited.load(Ordering::Relaxed),
             last_received_at: if last_ts > 0 { Some(last_ts) } else { None },
         }
     }
@@ -90,6 +93,9 @@ pub struct EndpointStatsSnapshot {
     pub signature_failures: u64,
     /// Payload transformation failures
     pub transform_failures: u64,
+    /// Events refused by the endpoint's `rate_limit`
+    #[serde(default)]
+    pub rate_limited: u64,
     /// Unix timestamp of last received event (`None` if never received)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_received_at: Option<u64>,
@@ -444,6 +450,7 @@ async fn webhook_handler(
     if let Some(limiter) = &state.limiter
         && limiter.check().is_err()
     {
+        state.stats.rate_limited.fetch_add(1, Ordering::Relaxed);
         warn!(
             request_id = %request_id,
             capability = %state.capability_name,
