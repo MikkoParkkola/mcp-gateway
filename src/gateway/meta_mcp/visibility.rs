@@ -158,7 +158,10 @@ impl MetaMcp {
                     .count()
             })
             .sum();
-        let mut total = if known == backends.len() {
+        // A truncated drain is still "known" (enumerated), but its count is a
+        // lower bound, never exact (MIK 7570 PAGING.1 design D).
+        let truncated = backends.iter().any(|b| b.cached_tools_truncated());
+        let mut total = if known == backends.len() && !truncated {
             ToolTotal::Exact(admitted)
         } else if known == 0 {
             ToolTotal::Unknown

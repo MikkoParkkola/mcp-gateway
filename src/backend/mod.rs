@@ -12,6 +12,12 @@ use tokio::sync::Semaphore;
 use crate::config::BackendConfig;
 use crate::runtime::RuntimePlan;
 
+/// Pages drained from one backend's paginated `*/list` fill before the drain
+/// stops and marks the slot truncated (MIK 7570 PAGING.1, design §2.C).
+/// The direct route's `DIRECT_LIST_MAX_PAGES` is defined from this constant
+/// so the two independent drains share one cap.
+pub(crate) const LIST_MAX_PAGES: usize = 32;
+
 mod annotations;
 mod cached_metadata;
 mod era;

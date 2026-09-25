@@ -5,7 +5,7 @@
 //! pool slots.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parking_lot::RwLock;
@@ -99,6 +99,11 @@ pub(crate) struct PooledEntry {
     /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
     /// every resend, which is the safe direction.
     pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
+    /// Set when the last tools-cache drain (MIK 7570 PAGING.1) stopped before
+    /// the upstream catalogue was exhausted (page cap, repeated cursor, or the
+    /// fill budget). Cleared by the next fill that drains to completion.
+    /// Tools only — the other three families keep their pages either way.
+    pub(crate) tools_truncated: AtomicBool,
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
@@ -184,6 +189,7 @@ impl PooledEntry {
             failsafe: Failsafe::new(name, failsafe_config),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
+            tools_truncated: AtomicBool::new(false),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
