@@ -637,6 +637,9 @@ async fn tool_completions(
 }
 
 #[cfg(test)]
+mod tls_ca_key_tests;
+
+#[cfg(test)]
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config, generate_admin_token};
 

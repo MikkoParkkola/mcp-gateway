@@ -598,7 +598,7 @@ mod tests {
         })
         .unwrap();
         let path = dir.path().join("ca.crt");
-        fs::write(&path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, &ca.cert_pem).unwrap();
 
         let certs = load_certs(path.to_str().unwrap()).unwrap();
         assert_eq!(certs.len(), 1);
@@ -613,7 +613,7 @@ mod tests {
         })
         .unwrap();
         let path = dir.path().join("ca.key");
-        fs::write(&path, &ca.key_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, &ca.key_pem).unwrap();
 
         let key = load_private_key(path.to_str().unwrap()).unwrap();
         // Key should be non-empty (exact type varies by rcgen algorithm)
@@ -654,7 +654,7 @@ mod tests {
         })
         .unwrap();
         let path = dir.path().join("cert_only.pem");
-        fs::write(&path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, &ca.cert_pem).unwrap();
 
         let result = load_private_key(path.to_str().unwrap());
         assert!(result.is_err());
@@ -687,9 +687,9 @@ mod tests {
         let cert_path = dir.join("server.crt");
         let key_path = dir.join("server.key");
 
-        fs::write(&ca_path, &ca.cert_pem).unwrap();
-        fs::write(&cert_path, &leaf.cert_pem).unwrap();
-        fs::write(&key_path, &leaf.key_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&ca_path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&cert_path, &leaf.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&key_path, &leaf.key_pem).unwrap();
 
         (
             ca_path.to_str().unwrap().to_string(),
@@ -798,9 +798,9 @@ mod tests {
         // Deliberately use leaf_b's key with leaf_a's cert
         let key_path = dir.path().join("server.key");
 
-        fs::write(&ca_path, &ca.cert_pem).unwrap();
-        fs::write(&cert_path, &leaf_a.cert_pem).unwrap();
-        fs::write(&key_path, &leaf_b.key_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&ca_path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&cert_path, &leaf_a.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&key_path, &leaf_b.key_pem).unwrap();
 
         let config = MtlsConfig {
             enabled: true,

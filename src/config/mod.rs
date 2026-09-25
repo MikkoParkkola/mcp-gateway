@@ -11,7 +11,6 @@ mod config_file;
 mod env_overlay;
 mod features;
 mod input_schema;
-#[cfg(unix)]
 mod secret_file;
 mod secret_ref;
 mod strict_keys;
@@ -38,6 +37,10 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
+
+// New items (F18), not widened ones: the one mode-checked read for files
+// outside `config`.
+pub(crate) use secret_file::{CheckedFile, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{

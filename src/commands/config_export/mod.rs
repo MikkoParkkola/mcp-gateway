@@ -29,6 +29,8 @@
 mod watch;
 
 #[cfg(test)]
+mod mode_tests;
+#[cfg(test)]
 mod tests;
 
 use std::path::{Path, PathBuf};
@@ -687,4 +689,15 @@ fn export_one_detailed(
             Err(e) => (ExportAction::Failed(e), None),
         }
     }
+}
+
+/// The one stderr line `merge_into_config` prints when it tightened the file's
+/// mode, or `None` when the file was already 0600 or did not exist.
+fn tightening_notice(path: &Path, old_mode: Option<u32>) -> Option<String> {
+    old_mode.filter(|mode| *mode != 0o600).map(|old| {
+        format!(
+            "Note: {} is now mode 0600 (it holds other servers' secrets); it was {old:04o}.",
+            path.display()
+        )
+    })
 }
