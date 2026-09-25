@@ -466,6 +466,26 @@ Existing rows in `store/grants.json` and `store/policies.json` are no longer sho
 disk: 4.1 will bring them back as unenforced drafts that need re-approval. **Do not delete or
 hand-edit them.**
 
+## 28. Tool calls with undeclared argument keys are refused
+
+A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at the top
+level or nested inside objects and arrays, now returns `isError: true` and never reaches the
+backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
+
+- **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
+  `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
+  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
+  unchecked and counted as `input_schema_unknown`.
+- **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
+  now honoured, which relaxes 3.x behaviour.
+- An object schema that lists `properties` (at least one) or `patternProperties` without stating
+  `additionalProperties` counts as closed. `{"type": "object"}` and `properties: {}` alone stay
+  free maps.
+
+For a backend whose tools rely on JSON Schema's open default, set
+`input_schema_enforcement: standard` on that backend. To disable the check, set `off`. A boolean
+value is a config error.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

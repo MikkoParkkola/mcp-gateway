@@ -27,7 +27,6 @@ pub mod provenance_eval;
 pub mod result_extractor;
 mod result_provenance;
 mod schema_bounds;
-
 pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,
     TrustAssistantPromptKind, TrustCardAssistant, TrustCardAssistantPlan,

@@ -202,6 +202,22 @@ See [`examples/gateway-full.yaml`](../examples/gateway-full.yaml) for the full
 set of backend fields, including timeouts, idle hibernation, secret injection,
 and `passthrough` mode.
 
+## Undeclared argument keys
+
+A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at any
+depth, is refused with `isError: true` before it reaches the backend. That applies on `/mcp` and on
+the direct `/mcp/{name}` route, `passthrough` backends included. The schema is the one the
+caller's own `tools/list` returned. A tool the gateway has not listed for that caller yet is
+forwarded unchecked.
+
+`input_schema_enforcement` sets the rule per backend:
+
+| Value | Behaviour |
+|---|---|
+| `closed` (default) | An object level that lists `properties` or `patternProperties` without stating `additionalProperties` is closed. `{"type": "object"}` and `properties: {}` stay free maps. |
+| `standard` | JSON Schema's default: only `additionalProperties: false` closes a level. |
+| `off` | No check. |
+
 ## First-time OAuth interactive authorization
 
 The first time an OAuth backend is exercised, the gateway opens a browser tab

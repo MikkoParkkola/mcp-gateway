@@ -231,16 +231,15 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries nine changes an operator can be surprised by, none of which a
-// config edit can pre-empt: two need an action (re-authenticate, fix an env
-// file), one removes an advertised protocol version, one changes what the
-// error budgets count, one stops caching unidentified revisions, one makes
-// webhook notifications opt-in, one makes `logging/setLevel` admin-only, one
-// scopes `tools/list_changed` from backend edits, and one refuses admin-panel
-// grant and policy writes that were never enforced.
+// v4.0.0 carries ten changes an operator can be surprised by: two need an
+// action (re-authenticate, fix an env file), one removes a protocol version,
+// one changes what error budgets count, one stops caching unidentified
+// revisions, one makes webhooks opt-in, one makes `logging/setLevel`
+// admin-only, one scopes backend-edit `tools/list_changed`, one refuses
+// unenforced admin-panel writes, one refuses undeclared argument keys.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The nine 4.0.0 changes, in the order they are printed.
+/// The ten 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -285,15 +284,16 @@ session is told, as before. `subscriptions/listen` is unchanged.",
 now return HTTP 409, because nothing enforced that store. Change grants with \
 `mcp-gateway identity grants` and policies with `security.sanitize_input` / \
 `security.ssrf_protection`. Keep the old store files: 4.1 re-imports them as drafts.",
+    "A tool call carrying an argument key its schema does not declare, at any depth, \
+is now refused with `isError: true`. To relax it per backend, set \
+`input_schema_enforcement: standard` (JSON Schema's open default) or `off`.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Reads nothing, because none of the nine items depends on what the config
-/// says. It marks the webhook item as delivered so a later start does not
-/// repeat it.
-///
-/// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
+/// Reads nothing: no item depends on the config. It marks the webhook item as
+/// delivered so a later start does not repeat it. The `Result` is dictated by
+/// `Migration::apply`, not by anything this can fail at.
 #[allow(clippy::unnecessary_wraps)]
 fn migrate_4_0_0_release_notice(data_dir: &Path) -> std::io::Result<()> {
     let body = NOTICE_4_0_0_ITEMS

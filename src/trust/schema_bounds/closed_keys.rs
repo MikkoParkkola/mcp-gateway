@@ -76,7 +76,6 @@ pub(crate) fn undeclared_keys(
         return Vec::new();
     }
     let mut walk = Walk {
-        root: schema,
         standard: mode == InputSchemaEnforcement::Standard,
         visits: 0,
         limit: None,
@@ -115,7 +114,6 @@ enum Verdict<'a> {
 }
 
 struct Walk<'a> {
-    root: &'a Value,
     standard: bool,
     visits: usize,
     limit: Option<KeyFault>,
