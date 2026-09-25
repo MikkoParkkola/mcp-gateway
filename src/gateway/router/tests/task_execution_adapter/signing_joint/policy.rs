@@ -10,17 +10,13 @@
 use super::*;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
-use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,
 };
-use crate::gateway::task_service::{CommitObserver, CommitStage};
 
 const ATTESTATION_KEY: &[u8] = b"joint-d-attestation-key-at-least-32b";
 const AUDIT_CAPACITY: usize = 8;
@@ -67,64 +63,6 @@ async fn attested_state(
     app.meta_mcp =
         Arc::new(meta.with_attestation(Arc::clone(&validator), AttestationMode::Enforce));
     (Arc::new(app), store, validator, signer)
-}
-
-struct HoldObserver {
-    hold: AtomicBool,
-    arrived: tokio::sync::mpsc::UnboundedSender<()>,
-    release: Arc<Semaphore>,
-}
-
-struct Hold {
-    arrived: tokio::sync::mpsc::UnboundedReceiver<()>,
-    release: Arc<Semaphore>,
-}
-
-impl Drop for Hold {
-    fn drop(&mut self) {
-        self.release.add_permits(1);
-    }
-}
-
-impl Hold {
-    fn disarm_and_release(&self, observer: &HoldObserver) {
-        observer.hold.store(false, Ordering::SeqCst);
-        self.release.add_permits(1);
-    }
-}
-
-#[async_trait]
-impl CommitObserver for HoldObserver {
-    async fn reached(&self, stage: CommitStage, _task_id: &str) {
-        if stage == CommitStage::Dispatched && self.hold.load(Ordering::SeqCst) {
-            let _ = self.arrived.send(());
-            self.release
-                .acquire()
-                .await
-                .expect("hold semaphore stays open")
-                .forget();
-        }
-    }
-}
-
-fn observe_dispatched(state: &Arc<AppState>) -> (Arc<HoldObserver>, Hold) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let release = Arc::new(Semaphore::new(0));
-    let observer = Arc::new(HoldObserver {
-        hold: AtomicBool::new(true),
-        arrived: tx,
-        release: Arc::clone(&release),
-    });
-    state
-        .task_executor
-        .observe_commits(Arc::clone(&observer) as Arc<dyn CommitObserver>);
-    (
-        observer,
-        Hold {
-            arrived: rx,
-            release,
-        },
-    )
 }
 
 /// D1 — unchanged valid attestation still signs a real modern task.

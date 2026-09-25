@@ -173,6 +173,7 @@ async fn direct_route_enforce_list_needs_only_an_authentic_token() {
     for method in [
         "tools/list",
         "resources/list",
+        "resources/templates/list",
         "prompts/list",
         "completion/complete",
     ] {

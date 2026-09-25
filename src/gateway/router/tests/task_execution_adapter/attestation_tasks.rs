@@ -118,4 +118,32 @@ async fn surfaced_task_enforce_carries_meta_token() {
             "the backend received the key: {text}"
         );
     }
+
+    // A token that expires while the task is held before dispatch fails the
+    // task: the carried token is re-validated at dispatch, not only at create.
+    let (observer, mut hold) = observe_dispatched(&state);
+    let short = token(chrono::TimeDelta::seconds(2));
+    let created = post(
+        &state,
+        "key-a",
+        surfaced_task(803, "surfaced-expiring", Some(&short)),
+    )
+    .await;
+    let id = task_id(&created);
+    tokio::time::timeout(std::time::Duration::from_secs(10), hold.arrived.recv())
+        .await
+        .expect("the worker reaches Dispatched in time")
+        .expect("the worker reaches Dispatched");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    hold.disarm_and_release(&observer);
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    assert_eq!(status_of(&settled), "failed", "{settled}");
+    assert_eq!(
+        settled
+            .pointer("/result/error/code")
+            .and_then(Value::as_i64),
+        Some(-32002),
+        "{settled}"
+    );
+    assert_eq!(mock.calls(), 1, "the expired task must not dispatch");
 }
