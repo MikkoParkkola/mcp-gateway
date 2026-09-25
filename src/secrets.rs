@@ -98,6 +98,12 @@ impl SecretResolver {
             let var_name = &caps[1];
             let placeholder = &caps[0];
 
+            // `{env.X:-}` allows empty on purpose, as `${VAR:-}` does in config.
+            if let Some(name) = var_name.strip_suffix(":-") {
+                let value = env.resolve(name).unwrap_or_default();
+                result = result.replace(placeholder, &value);
+                continue;
+            }
             // Empty is refused like unset, as `SecretRef::resolve` does (C4).
             let value = env
                 .resolve(var_name)

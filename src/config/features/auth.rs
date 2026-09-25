@@ -191,7 +191,8 @@ impl AuthConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    /// Returns an error if the value is an empty literal, or an `env:VAR_NAME`
+    /// reference whose variable is unset or empty in `overlay` (C4).
     pub fn resolve_bearer_token(
         &self,
         overlay: &crate::config::EnvOverlay,
@@ -249,7 +250,8 @@ impl ApiKeyConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    /// Returns an error if the value is an empty literal, or an `env:VAR_NAME`
+    /// reference whose variable is unset or empty in `overlay` (C4).
     pub fn resolve_key(&self, overlay: &crate::config::EnvOverlay) -> Result<String> {
         crate::config::secret_ref::SecretRef::parse(&self.key)
             .resolve(&format!("auth.api_keys['{}'].key", self.name), overlay)
@@ -342,7 +344,8 @@ impl AgentDefinitionConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    /// Returns an error if the value is an empty literal, or an `env:VAR_NAME`
+    /// reference whose variable is unset or empty in `overlay` (C4).
     pub fn resolved_hs256_secret(
         &self,
         overlay: &crate::config::EnvOverlay,

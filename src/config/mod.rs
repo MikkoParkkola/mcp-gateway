@@ -633,11 +633,10 @@ impl Config {
             expand(format!("capabilities.directories[{i}]"), dir);
         }
         if !unresolved.is_empty() {
-            return Err(Error::ConfigValidation(format!(
-                "{}{}",
-                unresolved.join("\n"),
-                overlay.absent_files_hint()
-            )));
+            // The env: secrets are checked later, in validation; report them
+            // here too so one load names every unresolved reference.
+            unresolved.extend(self.required_reference_errors(overlay));
+            return Err(Self::unresolved_error(&unresolved, overlay));
         }
 
         Ok(self.resolve_secret_refs(overlay))
@@ -798,11 +797,11 @@ impl Config {
     /// The gateway authentication credentials AS CONFIGURED, for the adapter
     /// separation checks.
     ///
-    /// Borrowed spec text, never a resolved value: `resolve_bearer_token` and
-    /// `resolve_key` read `std::env` directly rather than the overlay this load
-    /// was evaluated against, and the `auto` bearer mints a fresh random token
-    /// per call. Handing over the configured text lets the checks resolve
-    /// through the overlay and skip `auto` deliberately.
+    /// Borrowed spec text, never a resolved value: the `auto` bearer mints a
+    /// fresh random token on every `resolve_bearer_token` call, so a resolved
+    /// value would compare against a token nobody holds. Handing over the
+    /// configured text lets the checks resolve through the overlay themselves
+    /// and skip `auto` deliberately.
     fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
         use crate::personal_accounts::config::GatewayCredential;
 
@@ -1136,45 +1135,12 @@ impl Config {
     }
 
     fn validate_required_env_references(&self, overlay: &EnvOverlay) -> Result<()> {
-        if self.auth.enabled {
-            if let Some(token) = self.auth.bearer_token.as_deref() {
-                Self::validate_env_reference("auth.bearer_token", token, overlay)?;
-            }
-            for key in &self.auth.api_keys {
-                Self::validate_env_reference(
-                    &format!("auth.api_keys['{}'].key", key.name),
-                    &key.key,
-                    overlay,
-                )?;
-            }
+        let errors = self.required_reference_errors(overlay);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Self::unresolved_error(&errors, overlay))
         }
-
-        if self.agent_auth.enabled {
-            for agent in &self.agent_auth.agents {
-                if let Some(secret) = agent.hs256_secret.as_deref() {
-                    Self::validate_env_reference(
-                        &format!("agent_auth.agents['{}'].hs256_secret", agent.client_id),
-                        secret,
-                        overlay,
-                    )?;
-                }
-            }
-        }
-
-        if self.key_server.enabled
-            && let Some(token) = self.key_server.admin_token.as_deref()
-        {
-            Self::validate_env_reference("key_server.admin_token", token, overlay)?;
-        }
-
-        Ok(())
-    }
-
-    /// A secret that resolves to nothing is refused, whether it is an
-    /// unresolvable reference or an empty literal (C4); `SecretRef::resolve`
-    /// holds the rule.
-    fn validate_env_reference(field: &str, value: &str, overlay: &EnvOverlay) -> Result<()> {
-        SecretRef::parse(value).resolve(field, overlay).map(drop)
     }
 
     fn validate_backend_runtime_profiles(&self) -> Result<()> {

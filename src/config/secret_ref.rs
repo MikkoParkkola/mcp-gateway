@@ -71,30 +71,59 @@ static TEMPLATE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("constant template pattern")
 });
 
+/// Why a template did not expand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Unresolved {
+    /// `${NAME}` whose variable is unset or empty, with no default.
+    Unset(String),
+    /// A `${` that is not a `${NAME}` reference. Carries the name only when it
+    /// is identifier-like, so a literal secret containing `${` is not echoed.
+    Malformed(Option<String>),
+}
+
+/// A `${` in text the pattern did not consume is a reference that cannot
+/// resolve, such as a lowercase `${github_token}`; it is refused rather than
+/// sent upstream verbatim.
+fn refuse_stray(segment: &str) -> std::result::Result<(), Unresolved> {
+    let Some(at) = segment.find("${") else {
+        return Ok(());
+    };
+    let rest = &segment[at + 2..];
+    let name = rest.split('}').next().filter(|n| {
+        rest.contains('}')
+            && !n.is_empty()
+            && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    Err(Unresolved::Malformed(name.map(str::to_owned)))
+}
+
 /// Expands every `${VAR}` in `text`. As in POSIX `${VAR:-default}`, a variable
 /// that is unset or empty takes the default; with no default it is refused.
 /// `${VAR:-}` is the explicit way to allow empty.
 ///
 /// # Errors
 ///
-/// The name of the first variable that is unset or empty with no default.
+/// The first variable that is unset or empty with no default, or the first
+/// `${` that is not a `${NAME}` reference.
 pub(crate) fn expand_template(
     text: &str,
     overlay: &EnvOverlay,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<String, Unresolved> {
     let mut out = String::with_capacity(text.len());
     let mut end = 0;
     for caps in TEMPLATE.captures_iter(text) {
         let whole = caps.get(0).expect("group 0 always matches");
+        refuse_stray(&text[end..whole.start()])?;
         out.push_str(&text[end..whole.start()]);
         let value = overlay
             .resolve(&caps[1])
             .filter(|value| !value.is_empty())
             .or_else(|| caps.get(2).map(|d| d.as_str().to_owned()))
-            .ok_or_else(|| caps[1].to_owned())?;
+            .ok_or_else(|| Unresolved::Unset(caps[1].to_owned()))?;
         out.push_str(&value);
         end = whole.end();
     }
+    refuse_stray(&text[end..])?;
     out.push_str(&text[end..]);
     Ok(out)
 }
@@ -111,12 +140,68 @@ pub(crate) fn expand_field(
     text: &str,
     overlay: &EnvOverlay,
 ) -> std::result::Result<String, String> {
-    expand_template(text, overlay).map_err(|var| {
-        format!(
+    expand_template(text, overlay).map_err(|why| match why {
+        Unresolved::Unset(var) => format!(
             "{field} references ${{{var}}}, which is not set (or is empty) and has no default. \
              Set it, or write ${{{var}:-}} to allow empty."
-        )
+        ),
+        Unresolved::Malformed(Some(name)) => format!(
+            "{field} contains ${{{name}}}, which is not a variable reference: names are \
+             uppercase letters, digits and '_', starting with a letter or '_'."
+        ),
+        Unresolved::Malformed(None) => {
+            format!("{field} contains a '${{' that is not a ${{NAME}} variable reference.")
+        }
     })
+}
+
+impl super::Config {
+    /// Every required secret that resolves to nothing (an unresolvable `env:`
+    /// reference or an empty literal), one message each, so the operator fixes
+    /// them in one pass. `SecretRef::resolve` holds the rule (C4).
+    pub(super) fn required_reference_errors(&self, overlay: &EnvOverlay) -> Vec<String> {
+        let mut slots: Vec<(String, &str)> = Vec::new();
+        if self.auth.enabled {
+            if let Some(token) = self.auth.bearer_token.as_deref() {
+                slots.push(("auth.bearer_token".into(), token));
+            }
+            for key in &self.auth.api_keys {
+                slots.push((format!("auth.api_keys['{}'].key", key.name), &key.key));
+            }
+        }
+        if self.agent_auth.enabled {
+            for agent in &self.agent_auth.agents {
+                if let Some(secret) = agent.hs256_secret.as_deref() {
+                    let field = format!("agent_auth.agents['{}'].hs256_secret", agent.client_id);
+                    slots.push((field, secret));
+                }
+            }
+        }
+        if self.key_server.enabled
+            && let Some(token) = self.key_server.admin_token.as_deref()
+        {
+            slots.push(("key_server.admin_token".into(), token));
+        }
+        slots
+            .iter()
+            .filter_map(|(field, value)| SecretRef::parse(value).resolve(field, overlay).err())
+            .map(|error| match error {
+                Error::ConfigValidation(message) => message,
+                other => other.to_string(),
+            })
+            .collect()
+    }
+
+    /// One error for many unresolved references, with the absent-env-files
+    /// hint once rather than on every line.
+    pub(super) fn unresolved_error(messages: &[String], overlay: &EnvOverlay) -> Error {
+        let hint = overlay.absent_files_hint();
+        let lines: Vec<&str> = messages
+            .iter()
+            .map(|m| m.strip_suffix(hint.as_str()).unwrap_or(m))
+            .collect();
+        Error::ConfigValidation(format!("{}{hint}", lines.join("\n")))
+    }
 }
 
 #[cfg(test)]
@@ -170,7 +255,15 @@ mod tests {
         assert_eq!(expand_template("${SR_UNSET_C4:-}", &o).unwrap(), "");
         assert_eq!(
             expand_template("x${SR_UNSET_C4}", &o).unwrap_err(),
-            "SR_UNSET_C4"
+            Unresolved::Unset("SR_UNSET_C4".into())
+        );
+        assert_eq!(
+            expand_template("Bearer ${lower}", &o).unwrap_err(),
+            Unresolved::Malformed(Some("lower".into()))
+        );
+        assert_eq!(
+            expand_template("x${", &o).unwrap_err(),
+            Unresolved::Malformed(None)
         );
     }
 }

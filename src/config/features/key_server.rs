@@ -130,7 +130,8 @@ impl KeyServerConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    /// Returns an error if the value is an empty literal, or an `env:VAR_NAME`
+    /// reference whose variable is unset or empty in `overlay` (C4).
     pub fn resolve_admin_token(
         &self,
         overlay: &crate::config::EnvOverlay,

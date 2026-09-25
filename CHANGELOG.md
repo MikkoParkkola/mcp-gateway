@@ -159,8 +159,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   POSIX does, and `${VAR:-}` allows empty on purpose. A disabled backend keeps
   its text unexpanded. An `env:` secret that is unset or empty, and an empty
   literal bearer token, API key, agent HS256 secret or key-server admin token,
-  are refused. `{env.X}` templates error at call time when `X` is unset or
-  empty instead of sending `""`. Errors name listed env files that were not
+  are refused. `{env.X}` templates and capability `auth.key` values error at
+  call time when `X` is unset or empty instead of sending `""`; `{env.X:-}`
+  allows empty on purpose. A `${...}` that is not a `${NAME}` reference is
+  refused. Errors name listed env files that were not
   found. See `docs/UPGRADING-4.0.md` item 38.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
