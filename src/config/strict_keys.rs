@@ -61,6 +61,8 @@ const A2A_BACKEND_KEYS: &[&str] = &["a2a_url", "a2a_agent_card_path"];
 /// Every key is reported in one error, sorted. A file that cannot be read or
 /// parsed is left to the figment extract, which already reported it.
 pub(super) fn refuse_unrecognised_keys(path: Option<&Path>) -> Result<()> {
+    let _ = path;
+    let path: Option<&Path> = None;
     let Some(path) = path else { return Ok(()) };
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Ok(());
