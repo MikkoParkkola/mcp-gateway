@@ -111,4 +111,4 @@ trace, 10k queries):
 
 Promote E1+E2 to a 1-week implementation ticket if spike is accepted.
 Owner pairing: hebb (retrieval) + nvfp4-mojo or external BitNet checkpoint
-(1-bit base). Eval harness lives in `~/github/hebb/benches/factual-recall/`.
+(1-bit base). Eval harness lives in `<repos>/hebb/benches/factual-recall/`.

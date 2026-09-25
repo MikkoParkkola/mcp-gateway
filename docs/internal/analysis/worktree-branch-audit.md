@@ -42,7 +42,7 @@ per tree before removal.
 
 ## Two corrections to earlier reporting
 
-- `~/github/.worktrees/hebb` is a **symlink to `~/github/hebb`**, confirmed by
+- `<worktrees>/hebb` is a **symlink to `<repos>/hebb`**, confirmed by
   `ls -ld`. It never entered this audit — enumeration came from
   `git worktree list --porcelain` inside `mcp-gateway`, which cannot see a
   sibling repository's checkout — but the hazard is real and is recorded here.

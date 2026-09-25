@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
   A budget that has blocked stays blocked across a restart until UTC midnight.
 
+- **The default capability directories no longer include a checkout under `HOME`.**
+  `capabilities.directories` defaulted to `capabilities` plus
+  a private capability checkout under `$HOME/github` whenever it existed, so a
+  gateway loaded capabilities from a path no configuration named. The default is now
+  `capabilities` alone; list any other directory explicitly.
+
 - **`server.max_body_size` is enforced on every route (breaking).** It was read
   nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
   webhooks included, used the framework's 2 MiB default. An oversize body now

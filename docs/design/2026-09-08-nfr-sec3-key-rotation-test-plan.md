@@ -7,7 +7,7 @@ Status: plan, for review. Design: `2026-09-06-nfr-sec3-key-rotation.md`.
 
 **Review disclosure.** Both legs returned SHIP-WITH-FIXES against commit `e45102a7`
 (gpt-review; kimi-review, run
-`~/.claude/data/reviews/runs/synthetic-20260908T150120Z-18792.md`). Everything after
+`<review-archive>/runs/synthetic-20260908T150120Z-18792.md`). Everything after
 that — `5c4bb2ee`, `9ceaeb54`, `3ec5e0fa` — applies what the two legs specified and has
 been read by neither. That is the confirmation pass, not a third round: no finding was
 answered with a design change, and the two findings that died at source (`.4`'s
@@ -144,7 +144,7 @@ shared store — all four excluded by the design's own scope statement. No wire 
 `VERSION` stays 1, so there is no protocol-compatibility row (C14). T1c is N/A: the
 envelope is symmetric AES-256-GCM, and the DoR's T1c reads *"FAST-PATH: symmetric-only
 (HMAC,AES,ChaCha)=auto-PASS"*
-(`/Users/mikko/github/claude-elite-live/rules-source/workflows/quality-gates-dor.md`).
+(`<private-rules>/workflows/quality-gates-dor.md`).
 
 ## DoD §4 commitments this plan takes on
 

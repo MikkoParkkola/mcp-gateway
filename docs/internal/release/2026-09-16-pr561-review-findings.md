@@ -4,9 +4,9 @@ Reviewed 2026-09-16 against `3fa31ccd` (branch `work/v4-audit-adjudication`
 after merging `origin/main`). Scope declared to the reviewers: the production
 code and tests in the PR, excluding its documentation.
 
-Reviewers: gpt (`~/.claude/data/reviews/runs/gpt-20260916T122058Z-21802.md`,
+Reviewers: gpt (`<review-archive>/runs/gpt-20260916T122058Z-21802.md`,
 VERDICT SHIP-WITH-FIXES) and kimi
-(`~/.claude/data/reviews/runs/synthetic-20260916T122133Z-25999.md`,
+(`<review-archive>/runs/synthetic-20260916T122133Z-25999.md`,
 VERDICT SHIP-WITH-FIXES). grok and glm were unavailable: grok 1.0.30 refuses to
 start because its sandbox cannot resolve the symlinked `/var/run/docker.sock`,
 and the glm endpoint answers 404 for its configured model.

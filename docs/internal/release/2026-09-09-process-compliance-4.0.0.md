@@ -104,7 +104,7 @@ under that tag, none of them a test.
 **Gap 3 — the verdict record cannot be joined to the work it reviewed.**
 `docs/internal/release/v4.0.0-merge-queue-state.md` §"Review verdicts" is the process
 authority, and it establishes that a verdict is a labelled run file plus its exit
-status. The review ledger rows under `~/.claude/data/` carry `label: null`, so no
+status. The review ledger rows under `<review-archive>/` carry `label: null`, so no
 ledger row can be tied to a cluster. Attribution by timestamp was attempted, was
 wrong — it produced a `DO-NOT-SHIP` belonging to unrelated work — and has been
 withdrawn. Consequently "None found" in the verdict column above is a statement
@@ -114,7 +114,7 @@ belong to that increment.
 
 **Gap 4 — verdict artifacts live outside the repository.**
 Every run file cited by the merge-queue document is a path under
-`~/.claude/data/reviews/runs/`. Nothing under that path is in the tree, in CI, or
+`<review-archive>/runs/`. Nothing under that path is in the tree, in CI, or
 reachable by anyone auditing from a clone. The release's only merge-authorising
 evidence is unverifiable from the repository.
 

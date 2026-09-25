@@ -373,7 +373,7 @@ Ruled with it: **one rehearsal now on current HEAD, explicitly non-evidence, the
 
 ## R20 — a toolchain newer than the pinned one is not a void
 
-Spark has rustc 1.98.1; the contract's environment table pins 1.98.0. `perf-baseline` flagged it as drift it would record rather than paper over — right instinct, wrong severity.
+bench-host has rustc 1.98.1; the contract's environment table pins 1.98.0. `perf-baseline` flagged it as drift it would record rather than paper over — right instinct, wrong severity.
 
 Void condition 5 is **arm-to-arm**: "the two builds do not use the same feature list and toolchain". It says nothing about matching the environment table. The table's own gloss states why 1.98.0 is written there — "above the `rust-version = "1.95"` both arms require" — and 1.98.1 is also above it. Both arms building on 1.98.1 satisfies the condition exactly.
 

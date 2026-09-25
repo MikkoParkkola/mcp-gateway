@@ -639,8 +639,8 @@ This was verified by reading, not by running. Running it is the first task of th
 
 Two independent non-Claude reviewers read this document at the design stage, before any
 code existed. Both returned **SHIP-WITH-FIXES**. Run records:
-`~/.claude/data/reviews/runs/gpt-20260920T234342Z-73753.md` and
-`~/.claude/data/reviews/runs/grok-20260920T234342Z-73879.md`.
+`<review-archive>/runs/gpt-20260920T234342Z-73753.md` and
+`<review-archive>/runs/grok-20260920T234342Z-73879.md`.
 
 They converged independently on four of the six blockers, which is the signal worth
 recording: the overlap is not two readings of one prose slip but two readings of the same
@@ -701,7 +701,7 @@ than assumed.
 Verdict **SHIP-WITH-FIXES**: *"DECISION 7.3 is not reflected in the `known_agents` config
 surface or the validation-site inventory, so the round-1 namespace finding is not closed."*
 Four blockers and five improvements. Record at
-`~/.claude/data/reviews/runs/grok-20260920T235914Z-54577.md`. Every claim below was checked
+`<review-archive>/runs/grok-20260920T235914Z-54577.md`. Every claim below was checked
 against source before it was accepted or rejected; the reviewer's word is not the evidence.
 
 | # | Finding | Verified? | Disposition |

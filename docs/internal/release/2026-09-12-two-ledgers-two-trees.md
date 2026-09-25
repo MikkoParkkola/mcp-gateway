@@ -33,7 +33,7 @@ line. The "56 -> 46 open" figure is withdrawn.
 
 - `NFR.PERF.1` — PARTIAL on both trees. `session_sandbox/check_tool_denied`
   regressed +6.07% against the >5% P50 bound (criterion's own interval
-  `[+5.05%, +7.11%]`), measured on `spark` 2026-09-03.
+  `[+5.05%, +7.11%]`), measured on `bench-host` 2026-09-03.
 - 24 of the 31 supplemental scope criteria — pending on the branch, and
   ungradeable on main because the code they grade is not there.
 

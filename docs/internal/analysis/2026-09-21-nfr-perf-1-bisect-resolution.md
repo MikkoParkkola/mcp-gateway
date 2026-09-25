@@ -1,7 +1,7 @@
 # NFR.PERF.1 — the bisect cannot resolve the question it is being asked
 
 Status: **finding, measured at source 2026-09-21.** Applies to the running bisect at
-`spark:~/perf-workload/results/bisect-2026-09-21/`.
+`bench-host:<bench-dir>/results/bisect-2026-09-21/`.
 
 ## The claim
 
@@ -19,7 +19,7 @@ The run will still emit a "first bad commit". That commit will be an artefact.
 ## How the bisect decides
 
 `bisect_step.sh` builds the candidate, runs it interleaved against a **fixed prebuilt
-baseline binary** (`B_BIN=~/perf-workload/arms/B/target/release/mcp-gateway`, `:18`),
+baseline binary** (`B_BIN=<bench-dir>/arms/B/target/release/mcp-gateway`, `:18`),
 three reps each, and compares p50: `ratio = median(cand) / median(baseline)`, budget
 `1.05`, `ratio <= 1.05` is GOOD (`:142-168`). The workload itself is driven from a fixed
 `$HARNESS` directory through a pinned k6 image, **not** from the checked-out tree — so the

@@ -4,7 +4,7 @@
 # NFR.SEC.7 cutover preparation, 2026-09-21
 
 Steps 1c-4 of `docs/runbooks/nfr-sec-7-cutover.md` are complete. Steps 5-7 restart
-`com.claude.mcp-gateway` under `launchd` and interrupt every connected MCP client;
+`com.example.mcp-gateway` under `launchd` and interrupt every connected MCP client;
 the runbook reserves them for the operator and this record does not take them.
 
 ## Artefact

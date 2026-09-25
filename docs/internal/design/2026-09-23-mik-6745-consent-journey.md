@@ -14,7 +14,7 @@ scope. Nothing is waived.
 ### 1.1 What the criterion requires
 
 `docs/requirements/RELEASE-4.0.0-scope-tests.md:43` names six elements for Open WebUI
-on Spark → gateway → Google Workspace:
+on bench-host → gateway → Google Workspace:
 
 1. **connect**: a user who has no account gets a working consent flow.
 2. **use**: that user's tool calls carry that user's Google token and nobody else's.
@@ -44,7 +44,7 @@ consent table), plus live runs L01–L04 (same file, "Live acceptance").
 | expired/replayed | No state, expiry or consumption exists for personal consent. The legacy loopback listener keeps state in memory with no TTL. | `src/oauth/callback.rs:66-69`, `:254` |
 | revoke | No production entry point. The whole chain is `expect(dead_code)`. | `src/personal_accounts/worker.rs:241-245`, `src/personal_accounts/service.rs:326-329`, `src/personal_accounts/mod.rs:355-360`, `src/personal_accounts/commit.rs:484-505` |
 | revoke | The provider revocation endpoint is validated and pinned, but nothing calls it. | `src/personal_accounts/provider.rs:469-473` |
-| use / refresh | Wired to production. They only need the feature configured, which it is not on Spark. | `src/personal_accounts/vault.rs:215-272`, `src/personal_accounts/service.rs:261-285`, `src/config/mod.rs:123` |
+| use / refresh | Wired to production. They only need the feature configured, which it is not on bench-host. | `src/personal_accounts/vault.rs:215-272`, `src/personal_accounts/service.rs:261-285`, `src/config/mod.rs:123` |
 
 The last row matters. USE and REFRESH already work in production code, so this
 increment adds only the missing four elements. Taking those four live is also what
@@ -193,7 +193,7 @@ The browser routes are served on the **Open WebUI origin**.
 
 **Reference deployment.** Add a Cloudflare tunnel ingress rule, ordered before
 Open WebUI's catch-all:
-- `hostname: chat.raxor.ai`
+- `hostname: chat.example.com`
 - `path: ^/accounts/v1/`
 - `service: http://localhost:<gateway port>`
 
@@ -252,7 +252,7 @@ per configured adapter that has a `session` block (§10). The steps run in order
    - **Fixture (review L7).** The upstream v0.9.6 model sets `'id': user.id`, and
      the OWUI user model's `id` is a string (a UUID). I inferred that from the
      upstream source and have not observed it on the wire. The `SessionUser`
-     fixture must be a real `GET /api/v1/auths/` body captured from Spark's
+     fixture must be a real `GET /api/v1/auths/` body captured from bench-host's
      pinned image, with `token`, `email` and `name` values replaced by synthetic
      ones, before the bridge tests are finalised. `id` is typed `String`, and a
      numeric `id` would be refused. That behaviour is correct if the capture
@@ -800,7 +800,7 @@ requires: the newest generation wins.
    - Without the path condition, `/mcp` would become reachable on the Open WebUI
      origin.
    - `origin_allowed` gets the same path-scoped addition. Same-origin `DELETE`
-     from the completion page then carries `Origin: https://chat.raxor.ai` and is
+     from the completion page then carries `Origin: https://chat.example.com` and is
      accepted.
 2. **Callback navigation exemption.** The `Sec-Fetch-Site` refusal (`:362-374`)
    is skipped only when **all** of these hold:
@@ -983,7 +983,7 @@ same-origin static script `GET /accounts/v1/assets/complete.js`, which issues
 `fetch(url, {method: "DELETE", credentials: "same-origin"})`. A plain HTML form
 cannot send DELETE, which is why the script exists. The page is linked from
 every connect result and reachable directly at
-`https://chat.raxor.ai/accounts/v1/complete`.
+`https://chat.example.com/accounts/v1/complete`.
 
 ## 9. Connect offer on refusals (decisions 6, 10; BC-1)
 
@@ -1024,7 +1024,7 @@ At the three **dispatch** refusal sites, each typed variant becomes
  "error":{"code":"account_not_connected|reconnect_required","message":"…","retryable":false,
           "correlation_id":"…"},
  "account_id":"google-workspace",
- "connect_url":"https://chat.raxor.ai/accounts/v1/journeys/<id>/start"}
+ "connect_url":"https://chat.example.com/accounts/v1/journeys/<id>/start"}
 ```
 
 **JSON-RPC codes.**
@@ -1197,7 +1197,7 @@ to today's.
 accounts:
   # ...existing fields unchanged...
   hosted:                                   # new, optional
-    public_origin: "https://chat.raxor.ai"  # https, origin only (no path/query/userinfo)
+    public_origin: "https://chat.example.com"  # https, origin only (no path/query/userinfo)
     return_paths: ["/"]                     # nonempty, absolute paths, exact match
   limits:                                   # AccountsLimits gains the three names the
     journeys_total: 1024                    # design's table already fixes (config.rs:306-312
@@ -1206,7 +1206,7 @@ accounts:
     journeys_created_per_minute: 120        # new global creation-rate cap (review H3)
   adapters:
     - kind: openwebui_signed_header         # existing fields unchanged
-      installation_id: spark-owui
+      installation_id: bench-owui
       # ...
       session:                              # new, optional: enables the browser bridge
         user_endpoint: "http://127.0.0.1:8090/api/v1/auths/"   # https, or http on loopback literal
@@ -1222,7 +1222,7 @@ accounts:
       revocation_endpoint: "https://oauth2.googleapis.com/revoke"
       client_id: "<web client id>"
       client_secret_ref: "env:GOOGLE_OAUTH_CLIENT_SECRET"
-      redirect_uri: "https://chat.raxor.ai/accounts/v1/callback"
+      redirect_uri: "https://chat.example.com/accounts/v1/callback"
       scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
       send_resource_parameter: false
       authorize_extra: { access_type: offline, prompt: consent }   # new, closed enum map
@@ -1373,7 +1373,7 @@ Each row gives:
 | T-OFFER | Unconnected A calls `gateway_invoke`, the direct `/mcp/{backend}`, and a capability tool | Refusal with no `data` | Each error carries `data.error.code == "account_not_connected"`, `connect_url` starting with `public_origin`, and the URL in `message`. At most one journey is created (reused). | Offer minted in `resolve_propagation_credential` (T-BC1 then fails) |
 | T-OFFER2 | Same, but with an OIDC-verified principal, and with `accounts.hosted` absent | Refusal, no data | No `connect_url`. With hosted absent, the message is byte-identical to today's text. | Predicate B dropped |
 | T-BC1 | Unconnected A calls every catalogue method: `gateway_search_tools`, `gateway_list_tools` (single and all), `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `resources/read`, `prompts/get`, `logging/setLevel`, the spec preview, surfaced tools | n/a | Zero journeys created (store probe). No response contains `accounts/v1`. | Offer attached at any of the 16 sites |
-| T-GUARD | Realistic Google-callback headers (review L9): no `Origin`, `Host: chat.raxor.ai` (= `public_origin`), `Sec-Fetch-Site: cross-site`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, on `GET /accounts/v1/callback?…`. Variants: `Mode: cors`; `Dest: iframe`; POST to the same path; `Origin: null`. Also `/mcp` with `Host: chat.raxor.ai`. | Callback 403; `/mcp` 403 | Only the first request reaches the handler. Every variant stays 403, and so does `/mcp` on the hosted host. The existing `Origin: null` test stays green. | Exemption by prefix. `Dest` not checked. Host allowed globally. |
+| T-GUARD | Realistic Google-callback headers (review L9): no `Origin`, `Host: chat.example.com` (= `public_origin`), `Sec-Fetch-Site: cross-site`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, on `GET /accounts/v1/callback?…`. Variants: `Mode: cors`; `Dest: iframe`; POST to the same path; `Origin: null`. Also `/mcp` with `Host: chat.example.com`. | Callback 403; `/mcp` 403 | Only the first request reaches the handler. Every variant stays 403, and so does `/mcp` on the hosted host. The existing `Origin: null` test stays green. | Exemption by prefix. `Dest` not checked. Host allowed globally. |
 | T-GUARD2 | The callback outcome page is the landing step. Send a `cross-site` navigate callback. Separately, send a direct `cross-site` request to `/accounts/v1/complete`. | n/a | The callback returns 200 with the outcome HTML and **no** 3xx. The direct `/accounts/v1/complete` request is still 403. | Callback 303s to `/complete` (the guard refuses the second hop) |
 | T-LEAK | `tracing` capture layer across T-C01 and T-REV | n/a | No captured event contains the Open WebUI token, code, state, verifier, access or refresh token, or `email` | Default `TraceLayer` applied to `/accounts/v1` |
 | T-OFFER3 | A's journey is `started`, with the fake Google step pending. A makes a second refused dispatch for the same account, then the in-flight callback arrives (review H1). | 404 | The refused dispatch returns the **same** `journey_id`/`connect_url`. Status, `state_digest`, `binding_digest`, verifier and `callback_by` are byte-identical before and after. The callback then connects. | `offer_for` supersedes or re-arms a started journey |
@@ -1418,13 +1418,13 @@ The C05a design is deliberate. Revoke does not cancel journeys, so the fence is 
 only barrier that can make the test pass. Swapping `commit_grant_if` for
 `commit_grant` must turn it red.
 
-### 11.4 Live run on Spark (L01–L04)
+### 11.4 Live run on bench-host (L01–L04)
 
 **Operator prerequisites.** Only the operator can supply these.
 
 1. **Google Cloud OAuth client.**
    - Type: "Web application".
-   - Authorized redirect URI: exactly `https://chat.raxor.ai/accounts/v1/callback`.
+   - Authorized redirect URI: exactly `https://chat.example.com/accounts/v1/callback`.
    - Consent screen: in "Testing" status, listing the two test accounts as test
      users.
    - Record the project ID and the client revision.
@@ -1442,7 +1442,7 @@ only barrier that can make the test pass. Swapping `commit_grant_if` for
    - the store key variable named in `accounts.keys`
    - the adapter HMAC variable, which must match Open WebUI's
      `FORWARD_USER_INFO_HEADER_JWT_SECRET`
-6. **Store directories.** Run `mcp-gateway accounts init-store` once on Spark
+6. **Store directories.** Run `mcp-gateway accounts init-store` once on bench-host
    (`src/commands/accounts.rs:184`).
 7. **Google caveats.** These are inferred, not verified; the operator should check
    them against current Google documentation before recording.
@@ -1453,24 +1453,24 @@ only barrier that can make the test pass. Swapping `commit_grant_if` for
    - `gmail.readonly` is a restricted scope. An unverified app shows Google's
      "unverified app" interstitial, which the driver must click through and record.
 
-**Cloudflare change.** Add this ingress rule before the `chat.raxor.ai` catch-all:
+**Cloudflare change.** Add this ingress rule before the `chat.example.com` catch-all:
 
 ```yaml
-- hostname: chat.raxor.ai
+- hostname: chat.example.com
   path: ^/accounts/v1/
   service: http://localhost:<gateway port>
 ```
 
-Leave `httpHostHeader` unset, so the gateway sees `Host: chat.raxor.ai`.
+Leave `httpHostHeader` unset, so the gateway sees `Host: chat.example.com`.
 
-The Spark tunnel is remotely managed: `cloudflared` runs with a connector token
+The bench-host tunnel is remotely managed: `cloudflared` runs with a connector token
 and takes its ingress from the Cloudflare dashboard, so editing
 `/etc/cloudflared/config.yml` changes nothing. Add the rule as a public hostname
 in Zero Trust → Networks → Tunnels (or through the tunnel configurations API),
-check it sits above the plain `chat.raxor.ai` row, and confirm the pushed
+check it sits above the plain `chat.example.com` row, and confirm the pushed
 version on the connector's metrics endpoint (`/config`). No restart is needed.
 
-`chat.raxor.ai` sits behind Cloudflare Access, so the test users' addresses
+`chat.example.com` sits behind Cloudflare Access, so the test users' addresses
 must be in the Access allow policy, and an anonymous request never reaches the
 gateway. Before you record anything, check the route from a browser signed in
 through Access (or with an Access service token that the application admits):
@@ -1609,11 +1609,11 @@ No existing item's visibility is widened by this design.
      the link.
    - This is decided only by L02-1. If the link is not visible, add URL-mode
      elicitation, which reopens the §9.4 deferral.
-2. **Is Open WebUI's `WEBUI_AUTH_COOKIE_SAME_SITE` set to `strict` on Spark?**
+2. **Is Open WebUI's `WEBUI_AUTH_COOKIE_SAME_SITE` set to `strict` on bench-host?**
    - If it is, the cookie is not sent when the user follows a link from a chat
-     message rendered in a new tab. Same-site navigation from chat.raxor.ai keeps
+     message rendered in a new tab. Same-site navigation from chat.example.com keeps
      `strict` cookies, so this is likely fine, but it must be observed in L02-2.
-3. **Which route does Spark's Google Workspace backend use?** It could be an MCP
+3. **Which route does bench-host's Google Workspace backend use?** It could be an MCP
    backend or a REST capability. This decides which of the three dispatch sites
    carries L02. All three are built.
 4. **Is `gmail.readonly` enough scope?** The Google scope set is an operator choice.
@@ -1650,7 +1650,7 @@ DELETE accepts only the API credential until slice 5 adds the bridge.
 | Journeys write contention on the authority mutex | Low | Latency on refusals | Offer reuse (§9.3). Rate limits. No IO in the closure beyond one small file write. |
 | Missing `journeys.json` treated as empty after tampering | Low | None beyond refusing callbacks | Fails closed. Stale-copy rollback is additionally fenced by `commit_grant_if` (§5.2). |
 | Provider revoke fails silently to the user | Medium | Grant still live at Google | `provider_revocation: failed` is shown on the page, with a link to the Google permissions page. The local tombstone blocks gateway use regardless. |
-| The captured OWUI `GET /api/v1/auths/` body differs from the upstream-source reading (for example, a non-string `id`) | Low | The bridge fixture is wrong, so tests pass against a fiction | Capture from Spark before bridge tests are finalised (§4.2 step 4, review L7) |
+| The captured OWUI `GET /api/v1/auths/` body differs from the upstream-source reading (for example, a non-string `id`) | Low | The bridge fixture is wrong, so tests pass against a fiction | Capture from bench-host before bridge tests are finalised (§4.2 step 4, review L7) |
 | A refused tool call supersedes a journey the user is completing | Removed by design | Consent silently lost | Read-only reuse (§9.3, review H1), covered by T-OFFER3 |
 | Terminal-record flood wedges the feature | Low | Callbacks refused | Terminal-first eviction, a derived byte cap and a global creation cap (§5.1, §5.3, review H3), covered by T-FLOOD |
 
