@@ -537,6 +537,21 @@ impl MetaMcp {
                 .invoke_tool(&invoke_args, session_id, &step_caller)
                 .await
             {
+                // A tool error in the success channel is still an error, and
+                // the contract above stops the chain at the first one: later
+                // steps were written assuming this one ran (MIK-7570.SCHEMA.1).
+                Ok(result) if result.get("isError").and_then(Value::as_bool) == Some(true) => {
+                    let detail: String = result["content"][0]["text"]
+                        .as_str()
+                        .map_or_else(|| result.to_string(), str::to_owned)
+                        .chars()
+                        .take(2048)
+                        .collect();
+                    Err(Error::json_rpc(
+                        -32603,
+                        format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
+                    ))
+                }
                 Ok(result) => Ok(result),
                 // A refusal stays a refusal. Flattening it into -32603 told
                 // the caller their chain hit an internal error when in fact

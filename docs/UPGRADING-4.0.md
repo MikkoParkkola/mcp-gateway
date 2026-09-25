@@ -638,6 +638,11 @@ For a backend whose tools rely on JSON Schema's open default, set
 `input_schema_enforcement: standard` on that backend. To disable the check, set `off`. A boolean
 value is a config error.
 
+A `gateway_execute` chain now stops at the first step whose result carries `isError: true`,
+backend tool errors included, and reports that step's index as a failed step. Before, the chain
+ran the remaining steps. This matches the chain's documented contract, "stops at the first
+error".
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
