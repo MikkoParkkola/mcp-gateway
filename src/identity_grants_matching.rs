@@ -52,15 +52,19 @@ impl GrantAgent {
 }
 
 /// Why a grants file failed its typed parse. `yaml_error` is the fallback
-/// parser's; a JSON file is re-read by `serde_json` so its own error, not
-/// YAML's view of JSON, is the one reported.
+/// parser's; a JSON file reports `serde_json`'s own `from_str` error instead
+/// of YAML's view of JSON. Both keep the line and column; the bare-row
+/// remainder, re-parsed from a value, has none and is only ever a suffix.
 pub(super) fn parse_refusal(
     path: &std::path::Path,
     content: &str,
     yaml_error: &serde_yaml::Error,
 ) -> String {
     bare_exact_refusal(path, content).unwrap_or_else(|| {
-        let error = remainder_error(content).unwrap_or_else(|| yaml_error.to_string());
+        let error = serde_json::from_str::<serde_json::Value>(content)
+            .ok()
+            .and_then(|_| serde_json::from_str::<super::IdentityGrantFile>(content).err())
+            .map_or_else(|| yaml_error.to_string(), ToString::to_string);
         format!(
             "failed to parse identity grants file {}: {error}",
             path.display()
