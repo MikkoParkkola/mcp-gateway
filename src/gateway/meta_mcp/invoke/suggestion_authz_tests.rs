@@ -189,6 +189,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         api_key_name: Some("test-caller"),
         agent_id: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,

@@ -169,6 +169,9 @@ pub struct MetaMcpCallerContext<'a> {
     /// `grant_subject`) so the backend-invoke boundary can propagate the real
     /// user to a backend that requires it (MIK-6704 / ADR-007 R2).
     pub verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    /// Set by the two stdio context builders only (no constructor outside
+    /// `gateway::server`); binds continuations to the stdio client.
+    pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
     /// Whether the caller holds admin. Carried here because meta-tools with
     /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
     /// `router::authorization`, which only knows whole tools.
@@ -210,12 +213,7 @@ pub struct MetaMcpCallerContext<'a> {
     /// No `Default`, for the same reason the authorizer has none — a defaulted
     /// era is a site that silently claims an era it never saw.
     ///
-    /// SCAFFOLD as of this commit: the reader is the MRTR.9 gate at
-    /// `meta_mcp::invoke` (`interim.undeclared(caller.input_capabilities)`),
-    /// which must merge the session declaration for `Legacy` and read only the
-    /// request's own `_meta` for `Modern`. That merge is `MIK-7212.WIRE.1`
-    /// through `WIRE.4` and lands next; until it does, nothing on the
-    /// production path reads this field.
+    /// Read by the input bridge, which serves `Legacy` callers only.
     pub era: crate::protocol::meta::Era,
     /// How this caller can be sent a request of the gateway's own — a bridged
     /// `sampling/createMessage` or `elicitation/create`.
@@ -269,6 +267,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             agent_declared: None,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
+            stdio_nonce: self.stdio_nonce,
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),

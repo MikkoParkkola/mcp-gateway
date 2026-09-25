@@ -163,6 +163,7 @@ fn resuming_ctx<'a>(
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: Some(who),
         is_admin: false,
         input_capabilities: *caps,

@@ -1609,6 +1609,7 @@ async fn meta_mcp_dispatch(
                 agent_id,
                 agent_declared,
                 grant_subject,
+                stdio_nonce: None,
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
                 input_capabilities: declared_capabilities,

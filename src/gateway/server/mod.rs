@@ -20,6 +20,8 @@ mod replica_state_tests;
 mod signing_allocation_tests;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_nonce;
+pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
@@ -2242,6 +2244,8 @@ impl Gateway {
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
         );
+        // Drawn before the first request, not inside one (MIK-7570.STDIO.1).
+        StdioNonce::process();
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
@@ -3150,6 +3154,8 @@ impl Gateway {
             agent_declared: None,
             grant_subject: None,
             verified_identity: None,
+            // The one client this process serves, for binding continuations.
+            stdio_nonce: Some(StdioNonce::process()),
             // Same `RequestShape` the `initialize` arm advertises against.
             era: request_shape.era(),
             // The serve loop's own channel: a stdio client reads the same
@@ -3664,6 +3670,7 @@ fn stdio_caller_context<'a>(
         agent_declared: None,
         grant_subject: None,
         verified_identity: None,
+        stdio_nonce: Some(StdioNonce::process()),
         // stdio speaks to one process over two pipes and
         // has no elicitation channel: there is no operator
         // this transport can reach, so a destructive call

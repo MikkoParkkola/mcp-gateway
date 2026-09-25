@@ -372,6 +372,25 @@ pub enum Refusal {
     UnrecognisedMode,
 }
 
+/// What a continuation binds a caller to.
+///
+/// A distinct input rather than a sentinel in a credential string: an HTTP
+/// `client.principal` is caller-influenced text, and a variant cannot be
+/// spelled by any text. The variant being public is not the control, though —
+/// the control is the caller-context field that selects it, which only the two
+/// stdio context builders set (`gateway::server`).
+#[derive(Debug, Clone, Copy)]
+pub enum PrincipalSource<'a> {
+    /// A caller bound by its verified identity, when it has one.
+    Credential(Option<&'a crate::key_server::oidc::VerifiedIdentity>),
+    /// The one client of this stdio process, named by a nonce drawn once per
+    /// process from the OS RNG. Never persisted, never logged.
+    Stdio {
+        /// The per-process nonce.
+        nonce: &'a [u8; 32],
+    },
+}
+
 /// The caller binding sealed into a continuation, or `None` when this caller
 /// cannot be bound at full strength.
 ///
@@ -383,28 +402,46 @@ pub enum Refusal {
 /// while binding nothing. An under-binding nobody can see is worse than a
 /// refusal everybody can.
 ///
-/// Only the verified-agent scheme is constructible today, which is why this
-/// takes an identity rather than a whole caller. The other two schemes the
-/// design names are not yet reachable at the mint site: the presented API key
-/// is not retained past validation, and only a truncated 48-bit digest of it
-/// survives — hashing that again does not restore the entropy the truncation
-/// dropped — and the client certificate's DER is read and dropped before the
-/// caller context is built. Both arrive with the credential plumbing that
-/// retains them, and until then their callers are refused rather than bound
-/// weakly.
+/// Two schemes are constructible. A verified agent binds by
+/// `VerifiedIdentity::stable_actor_id`. A stdio caller binds by its process
+/// nonce: the process serves exactly the one client that spawned it, so a
+/// principal unique to the process is a complete binding. A nonce rather than
+/// a constant, because continuations share a keyring across processes and a
+/// constant would be the one shared non-identity every stdio process on a
+/// config holds. The API-key and client-certificate schemes the design names
+/// are not yet reachable at the mint site: the presented API key is not
+/// retained past validation, and only a truncated 48-bit digest of it survives
+/// — hashing that again does not restore the entropy the truncation dropped —
+/// and the client certificate's DER is read and dropped before the caller
+/// context is built. Both arrive with the credential plumbing that retains
+/// them, and until then their callers are refused rather than bound weakly.
 ///
-/// Scheme-tagged so two schemes can never collide on one value, and derived
-/// from `VerifiedIdentity::stable_actor_id` rather than a second
-/// length-prefixed encoding of the same pair: a second spelling of an
+/// Scheme-tagged (`agent:`, `stdio:`) so two schemes can never collide on one
+/// value, and derived from `VerifiedIdentity::stable_actor_id` rather than a
+/// second length-prefixed encoding of the same pair: a second spelling of an
 /// unambiguous encoding is how one caller acquires two fingerprints.
+#[must_use]
+pub fn source_fingerprint(source: PrincipalSource<'_>) -> Option<String> {
+    match source {
+        PrincipalSource::Credential(identity) => Some(crate::hashing::sha256_hex(
+            format!("agent:{}", identity?.stable_actor_id()).as_bytes(),
+        )),
+        PrincipalSource::Stdio { nonce } => Some(crate::hashing::sha256_hex_chunks([
+            b"stdio:".as_slice(),
+            nonce.as_slice(),
+        ])),
+    }
+}
+
+/// [`source_fingerprint`] for a caller bound by its verified identity alone.
+///
+/// Kept as the identity-only spelling every non-stdio site uses; it is the
+/// same derivation, not a second one.
 #[must_use]
 pub fn principal_fingerprint(
     identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
 ) -> Option<String> {
-    let identity = identity?;
-    Some(crate::hashing::sha256_hex(
-        format!("agent:{}", identity.stable_actor_id()).as_bytes(),
-    ))
+    source_fingerprint(PrincipalSource::Credential(identity))
 }
 
 /// Which request a continuation continues.
@@ -487,5 +524,35 @@ impl Bridge {
             params.insert("inputResponses".to_string(), Value::Object(responses));
         }
         Value::Object(params)
+    }
+}
+
+#[cfg(test)]
+mod principal_tests {
+    use super::{PrincipalSource, principal_fingerprint, source_fingerprint};
+
+    /// R5-T4: the stdio scheme is its own preimage, `stdio:` then the nonce,
+    /// and no agent fingerprint can equal it.
+    #[test]
+    fn stdio_and_agent_fingerprints_never_collide() {
+        let nonce = [7u8; 32];
+        let mut preimage = b"stdio:".to_vec();
+        preimage.extend_from_slice(&nonce);
+        let stdio = source_fingerprint(PrincipalSource::Stdio { nonce: &nonce });
+        assert_eq!(stdio, Some(crate::hashing::sha256_hex(&preimage)));
+
+        // An identity whose actor id spells the stdio preimage's tail still
+        // hashes under `agent:`, so the two can only meet on a SHA-256 collision.
+        let identity = crate::key_server::oidc::VerifiedIdentity {
+            subject: String::from_utf8_lossy(&nonce).into_owned(),
+            email: String::new(),
+            name: None,
+            groups: Vec::new(),
+            issuer: "stdio".to_owned(),
+        };
+        let agent = principal_fingerprint(Some(&identity));
+        assert!(agent.is_some());
+        assert_ne!(agent, stdio);
+        assert_eq!(principal_fingerprint(None), None);
     }
 }

@@ -69,6 +69,7 @@ pub(in crate::gateway) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,

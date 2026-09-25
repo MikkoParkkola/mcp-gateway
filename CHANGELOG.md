@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A modern-era stdio caller is handed a continuation instead of `-32003`.**
+  When a backend asks for input over stdio and the call declared the capability
+  in its own `_meta`, the gateway now answers with an `InputRequiredResult` whose
+  `requestState` the client can retry with, and the retry completes. The
+  continuation is bound to a nonce drawn once per stdio process, so a second
+  process sharing the keyring cannot redeem it. The input bridge stays legacy-only,
+  and HTTP callers with no verified identity are still refused `-32003`
+  (MIK-7570.STDIO.1).
+
 ## [4.0.0-beta.1] - 2026-09-25
 
 > **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final
