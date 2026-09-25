@@ -31,7 +31,7 @@ webhooks:
   enabled: true                # Enable webhook receiver system
   base_path: /webhooks         # Base path for all webhook endpoints
   require_signature: true      # Require HMAC validation (recommended)
-  rate_limit: 100             # Parsed but not enforced yet
+  rate_limit: 100             # Requests per minute per endpoint; 0 = unlimited
 ```
 
 ### Capability Definition
@@ -250,7 +250,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 1. **Always use HMAC validation**: Set `require_signature: true` in production
 2. **Use environment variables for secrets**: Never commit secrets to version control
 3. **Use HTTPS in production**: Webhook payloads should be encrypted in transit
-4. **Rate limiting**: `webhooks.rate_limit` is not enforced yet; limit webhook traffic at your reverse proxy
+4. **Rate limiting**: `webhooks.rate_limit` caps each endpoint at that many requests per minute (burst up to the same number) and answers `429` beyond it. Set it above your provider's peak rate: most senders, GitHub included, do not retry a `429`, so the event is lost. It takes effect on restart
 5. **Validate payload structure**: Use the transform to extract only expected fields
 6. **Monitor webhook logs**: Check gateway logs for failed signature validations
 
@@ -316,7 +316,6 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 ## Limitations
 
 - Maximum payload size: Configured by `server.max_body_size` (default 10MB)
-- No rate limiting: `webhooks.rate_limit` is parsed but not enforced
 - Signature validation uses HMAC-SHA256 only (no other algorithms)
 - Template extraction uses simple dot-notation (not full JSONPath)
 
@@ -392,4 +391,4 @@ transform:
 | `enabled` | boolean | true | Enable webhook system |
 | `base_path` | string | "/webhooks" | Base URL path |
 | `require_signature` | boolean | true | Require HMAC validation |
-| `rate_limit` | number | 100 | Accepted but not enforced yet |
+| `rate_limit` | number | 100 | Requests per minute per endpoint, `429` beyond it; `0` = unlimited. Restart to change |

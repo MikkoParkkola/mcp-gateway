@@ -50,6 +50,7 @@ fn make_handler_state(
         stats: Arc::new(EndpointStats::default()),
         env: Arc::new(crate::config::LiveEnv::default()),
         backend: "capabilities".to_string(),
+        limiter: None,
     }
 }
 

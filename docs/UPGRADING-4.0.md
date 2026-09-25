@@ -55,6 +55,7 @@ upgrading a running deployment.
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
+| 41 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -791,6 +792,16 @@ reaches one pod, and a task created on one pod is not found on another.
 - **`kubectl scale` and an HPA bypass this check**, because they change the pod count without
   the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
   per-process state".
+
+## 41. `webhooks.rate_limit` is enforced
+
+Before 4.0 the key was parsed and ignored. Each webhook endpoint now accepts at most
+`rate_limit` requests per minute (burst up to the same number) and answers `429` beyond that,
+before the payload is parsed or its signature checked. The default is 100. `0` means no limit.
+
+A sender that bursts above the limit loses events: most providers, GitHub included, do not
+retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0`. The value is
+read at startup; a reload that changes `webhooks` needs a restart.
 
 ## After upgrading
 

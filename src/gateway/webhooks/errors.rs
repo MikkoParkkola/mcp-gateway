@@ -25,6 +25,14 @@ pub(super) fn invalid_signature(request_id: &str) -> (StatusCode, Json<Value>) {
     webhook_error(StatusCode::UNAUTHORIZED, "Invalid signature", request_id)
 }
 
+pub(super) fn rate_limited(request_id: &str) -> (StatusCode, Json<Value>) {
+    webhook_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "Webhook rate limit exceeded",
+        request_id,
+    )
+}
+
 pub(super) fn transformation_failed(request_id: &str) -> (StatusCode, Json<Value>) {
     webhook_error(
         StatusCode::INTERNAL_SERVER_ERROR,

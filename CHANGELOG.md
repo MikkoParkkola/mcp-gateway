@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each
+  webhook endpoint now gets its own per-minute budget and answers `429` past it; the
+  default is 100 per minute and `0` disables the limit. See `docs/UPGRADING-4.0.md` item 41.
+
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
   made write tools unusable from standard MCP clients, none of which send the
