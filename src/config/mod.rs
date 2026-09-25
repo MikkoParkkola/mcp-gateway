@@ -542,7 +542,7 @@ impl Config {
             .map_err(|e| Error::Config(e.to_string()))?;
         // Before any validation, so a misspelt key is reported rather than the
         // validation error its absence causes.
-        strict_keys::refuse_unrecognised_keys(path)?;
+        strict_keys::refuse_unrecognised_keys(path, &figment)?;
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and

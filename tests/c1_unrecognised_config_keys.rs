@@ -98,6 +98,28 @@ fn merge_key_refused_under_a_backend() {
     );
 }
 
+#[test]
+fn retired_backend_circuit_breaker_refused_with_explanation() {
+    let message = refusal(
+        "backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n",
+        &["backends.x.circuit_breaker"],
+    );
+    assert!(
+        message.contains("failsafe.circuit_breaker"),
+        "the refusal must point at the breaker that is read; got: {message}"
+    );
+}
+
+/// A non-string key under a backend cannot be matched against the key list;
+/// it is refused rather than skipped.
+#[test]
+fn non_string_backend_key_refused() {
+    refusal(
+        "backends:\n  x:\n    command: y\n    5: true\n",
+        &["backends.x.5"],
+    );
+}
+
 /// `projection_mode: 0` names the enum's first variant by index. The gateway's
 /// loader accepts that; a bare YAML deserializer rejects it. The check must
 /// judge keys with the loader's own type rules, or every key after such a

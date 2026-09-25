@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
+use figment::{Figment, value::Value};
 use serde_ignored::Path as KeyPath;
 
 use super::Config;
@@ -18,11 +19,18 @@ use crate::{Error, Result};
 
 /// Keys that were removed, with the reason. A retired key is refused like any
 /// other, with its explanation in place of "fix the spelling".
-const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[(
-    "idle_timeout",
-    "backend idle hibernation was never implemented, so the key never had an \
-     effect; use `stop_when_idle_for` on a `command` backend, or delete it",
-)];
+const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[
+    (
+        "idle_timeout",
+        "backend idle hibernation was never implemented, so the key never had an \
+         effect; use `stop_when_idle_for` on a `command` backend, or delete it",
+    ),
+    (
+        "circuit_breaker",
+        "a per-backend breaker was never read; every backend's breaker uses \
+         `failsafe.circuit_breaker`, so tune that and delete this block",
+    ),
+];
 
 /// Every key a `backends.<name>` mapping may carry.
 ///
@@ -75,14 +83,18 @@ type BackendFindings = BTreeMap<String, Option<&'static str>>;
 
 /// Refuse the config file at `path` if it carries a key nothing reads.
 ///
-/// Every key is reported in one error, sorted. A file that cannot be read or
-/// parsed is left to the figment extract, which already reported it.
-pub(super) fn refuse_unrecognised_keys(path: Option<&Path>) -> Result<()> {
+/// `loaded` is the figment the config was just extracted from. Every key is
+/// reported in one error, sorted. A file that cannot be read was already
+/// reported by that extract.
+pub(super) fn refuse_unrecognised_keys(path: Option<&Path>, loaded: &Figment) -> Result<()> {
     let Some(path) = path else { return Ok(()) };
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Ok(());
     };
-    let mut found = ignored_by_serde(&raw);
+    let file: Value = Config::yaml(Some(path))
+        .extract()
+        .map_err(|e| Error::Config(e.to_string()))?;
+    let mut found = ignored_by_serde(loaded, &file)?;
     let backend = unread_backend_keys(&raw);
     found.extend(backend.keys().cloned());
     if found.is_empty() {
@@ -91,17 +103,37 @@ pub(super) fn refuse_unrecognised_keys(path: Option<&Path>) -> Result<()> {
     Err(Error::ConfigValidation(refusal(path, &found, &backend)))
 }
 
-/// Paths `Config`'s own deserializer skipped.
+/// Paths `Config`'s own deserializer skipped that the file spells.
 ///
-/// Figment stays authoritative for type errors: a parse that fails here keeps
-/// the paths collected before the failure and drops the error.
-fn ignored_by_serde(raw: &str) -> BTreeSet<String> {
+/// Runs over the very value the extract read, so type acceptance is the
+/// extract's: a value only figment accepts (an enum given by index) cannot stop
+/// this pass early and leave the keys after it unchecked. That value also
+/// carries the env layer's `MCP_GATEWAY_*` keys, which are not the file's to
+/// answer for, so only paths present in `file` are reported.
+fn ignored_by_serde(loaded: &Figment, file: &Value) -> Result<BTreeSet<String>> {
+    let merged: Value = loaded.extract().map_err(|e| Error::Config(e.to_string()))?;
     let mut found = BTreeSet::new();
-    let _: std::result::Result<Config, _> =
-        serde_ignored::deserialize(serde_yaml::Deserializer::from_str(raw), |key| {
+    let parsed: std::result::Result<Config, _> = serde_ignored::deserialize(&merged, |key| {
+        if in_file(file, &key).is_some() {
             found.insert(dotted(&key));
-        });
-    found
+        }
+    });
+    // Unreachable while the extract above succeeded on the same value; a
+    // partial list is never reported as a clean file.
+    parsed.map_err(|e| Error::ConfigValidation(format!("could not check config keys: {e}")))?;
+    Ok(found)
+}
+
+/// The node `key` names in `file`, if the file spells it.
+fn in_file<'v>(file: &'v Value, key: &KeyPath<'_>) -> Option<&'v Value> {
+    match key {
+        KeyPath::Root => Some(file),
+        KeyPath::Map { parent, key } => in_file(file, parent)?.as_dict()?.get(key.as_str()),
+        KeyPath::Seq { parent, index } => in_file(file, parent)?.as_array()?.get(*index),
+        KeyPath::Some { parent }
+        | KeyPath::NewtypeStruct { parent }
+        | KeyPath::NewtypeVariant { parent } => in_file(file, parent),
+    }
 }
 
 /// `auth.api_keys[0].bakends`: dots between mapping keys, brackets for an index.
@@ -130,9 +162,18 @@ fn unread_backend_keys(raw: &str) -> BackendFindings {
     };
     let mut found = BackendFindings::new();
     for (name, fields) in backends {
-        let (Some(name), Some(fields)) = (name.as_str(), fields.as_mapping()) else {
+        let Some(name) = name.as_str() else {
+            // No backend name can be read from a non-string key without
+            // guessing how it would be spelled; refuse rather than skip.
+            found.insert(format!("backends.{}", rendered(name)), None);
             continue;
         };
+        let Some(fields) = fields.as_mapping() else {
+            continue;
+        };
+        for key in fields.keys().filter(|k| k.as_str().is_none()) {
+            found.insert(format!("backends.{name}.{}", rendered(key)), None);
+        }
         let keys: Vec<&str> = fields
             .keys()
             .filter_map(serde_yaml::Value::as_str)
@@ -154,6 +195,11 @@ fn unread_backend_keys(raw: &str) -> BackendFindings {
         }
     }
     found
+}
+
+/// A non-string mapping key as the file spells it.
+fn rendered(key: &serde_yaml::Value) -> String {
+    serde_yaml::to_string(key).map_or_else(|_| "?".to_owned(), |text| text.trim_end().to_owned())
 }
 
 fn is_backend_key(key: &str) -> bool {
