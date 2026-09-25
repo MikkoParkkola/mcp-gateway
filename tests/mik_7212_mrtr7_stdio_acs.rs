@@ -198,9 +198,13 @@ fn write_config(home: &Path, backend_url: &str) {
     );
     // The top-level config ignores keys it does not know, so a misnested
     // budget would load silently and bring the cascade back. Fail here instead.
-    let parsed: mcp_gateway::config::Config = serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
+    let parsed: mcp_gateway::config::Config =
+        serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
     assert_eq!(
-        (parsed.error_budget.min_samples, parsed.error_budget.capability.min_samples),
+        (
+            parsed.error_budget.min_samples,
+            parsed.error_budget.capability.min_samples
+        ),
         (Some(100_000), Some(100_000)),
         "the error budget did not bind where the child reads it"
     );
