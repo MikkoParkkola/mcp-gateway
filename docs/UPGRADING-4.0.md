@@ -411,8 +411,11 @@ user of the backend.
 
 The method now needs an admin key on both routes. Any other caller gets HTTP 403 with JSON-RPC error `-32600`,
 the same shape as an admin-only tool refusal, and the refusal is written to the audit log. Nothing
-is stored and nothing is forwarded. On an HTTP gateway with auth off nobody is admin, so the method
-is refused for every caller there. Stdio is unchanged.
+is stored and nothing is forwarded. With auth disabled, every HTTP caller is
+the same anonymous, non-admin client, so the method is refused to every HTTP caller. Stdio is
+unchanged. On such a gateway, set levels at start instead: the gateway's own level with
+`--log-level` or `MCP_GATEWAY_LOG_LEVEL` (see `docs/DEPLOYMENT.md`, environment variables), and a
+stdio backend's level through that backend's own `env:` entry or arguments in `gateway.yaml`.
 
 The 2026-07-28 protocol revision removed this method, so only older clients send it, usually right
 after `initialize`. To receive fewer log messages, declare a level per request in `_meta`; the
