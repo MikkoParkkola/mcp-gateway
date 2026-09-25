@@ -254,11 +254,7 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
         oauth: None,
         secrets: Vec::new(),
         passthrough: matches!(arm, ForwardArm::Fallback),
-        account: None,
-        allow_cleartext_credentials: false,
-        input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
-        runtime_profile: None,
-        identity_propagation: None,
+        ..BackendConfig::default()
     };
     Backend::new(name, config, &failsafe(), Duration::from_secs(300))
 }
