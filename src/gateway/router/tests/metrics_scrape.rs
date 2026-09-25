@@ -81,6 +81,50 @@ async fn metrics_admin_bearer_is_401() {
     assert_refused(&scrape(&router, Some(ADMIN)).await, "admin bearer");
 }
 
+/// `get` also routes HEAD; it must pass the same token check.
+#[tokio::test]
+async fn metrics_head_needs_the_token() {
+    let (router, _store) = router_with(with_token(Some(SCRAPE))).await;
+    let head = |bearer: Option<&str>| {
+        let mut request = axum::http::Request::builder()
+            .method("HEAD")
+            .uri("/metrics");
+        if let Some(bearer) = bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        router
+            .clone()
+            .oneshot(request.body(axum::body::Body::empty()).unwrap())
+    };
+    assert_refused(&head(None).await.unwrap(), "HEAD, no header");
+    assert_refused(&head(Some(ADMIN)).await.unwrap(), "HEAD, admin");
+    assert_eq!(head(Some(SCRAPE)).await.unwrap().status(), StatusCode::OK);
+}
+
+/// A trailing slash is not an unauthenticated alias for the scrape.
+#[tokio::test]
+async fn metrics_trailing_slash_serves_nothing() {
+    crate::metrics::install();
+    let (router, _store) = router_with(with_token(Some(SCRAPE))).await;
+    for bearer in [None, Some(ADMIN), Some(SCRAPE)] {
+        let mut request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/metrics/");
+        if let Some(bearer) = bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        let request = request.body(axum::body::Body::empty()).unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            !status.is_success() && !text.contains("# TYPE"),
+            "/metrics/ with {bearer:?} answered {status}: {text}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn metrics_unset_token_is_401() {
     let (router, _store) = router_with(with_token(None)).await;

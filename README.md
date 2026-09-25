@@ -427,7 +427,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | `/ui` | GET | Web dashboard |
 | `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
 | `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints on a loopback bind |
-| `/metrics` | GET | Prometheus metrics (with `--features metrics`) |
+| `/metrics` | GET | Prometheus metrics (with `--features metrics`); requires `Authorization: Bearer <server.metrics_token>`, the admin bearer is refused |
 
 ## Performance
 
