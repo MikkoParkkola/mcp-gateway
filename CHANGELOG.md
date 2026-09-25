@@ -95,7 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`logging/setLevel` over HTTP needs an admin key (breaking).** The meta route
   forwarded the level over the gateway's own credential to every shared backend,
   so any key, including one scoped to a single backend, could switch every
-  shared backend to `debug` for every user. Non-admin callers now get HTTP 403
+  shared backend to `debug` for every user; the direct route `POST /mcp/{name}`
+  did the same for one backend. Non-admin callers on both routes now get HTTP 403
   with JSON-RPC `-32600`, and the refusal is audited. With auth off nobody is
   admin, so the method is refused. Stdio is unchanged. See
   `docs/UPGRADING-4.0.md` item 23.
