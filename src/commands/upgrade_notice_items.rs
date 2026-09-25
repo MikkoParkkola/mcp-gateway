@@ -39,7 +39,7 @@ reaches your backends and the gateway's own rate limits now apply to calls that 
 previously never got that far. Nothing errors: the symptom is throughput and \
 backend load. Send the header on stateless requests, or complete `initialize` \
 and reuse the session.",
-    webhook_notice::ITEM,
+    super::webhook_notice::ITEM,
     "`logging/setLevel` over HTTP now needs an admin key, because it sets the \
 log level of every shared backend for every user. Other callers are refused \
 with HTTP 403, and with auth off nobody is admin, so it is refused for everyone. \
