@@ -71,7 +71,7 @@ impl AuditOutcome {
                 }
             }
             Err(Error::AuditUnavailable) => return None,
-            Err(Error::Forbidden { code, .. }) => Self::Denied(*code),
+            Err(Error::Forbidden { code, .. }) => Self::Error(*code),
             Err(Error::JsonRpc { code, .. }) if matches!(*code, -32004 | -32001) => {
                 Self::Denied(*code)
             }
