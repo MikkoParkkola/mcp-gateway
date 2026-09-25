@@ -1067,6 +1067,7 @@ impl MetaMcp {
         self.check_attestation(
             args,
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
+            "gateway_invoke",
         )?;
         self.active_profile(session_id)
             .check(server, tool)
@@ -1144,7 +1145,12 @@ impl MetaMcp {
     ///
     /// Returns a JSON-RPC -32002 error only in enforce mode when the token is
     /// missing or fails validation.
-    pub(super) fn check_attestation(&self, args: &Value, agent_id: Option<&str>) -> Result<()> {
+    pub(super) fn check_attestation(
+        &self,
+        args: &Value,
+        agent_id: Option<&str>,
+        _boundary: &str,
+    ) -> Result<()> {
         let Some(validator) = self.attestation_validator.as_ref() else {
             return Ok(());
         };
@@ -5350,6 +5356,7 @@ mod identity_propagation_enforcement_tests {
             request_state: None,
             idempotency_key: Some("key-1".to_string()),
             malformed: Vec::new(),
+            attestation: None,
         };
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
@@ -5432,6 +5439,7 @@ mod identity_propagation_enforcement_tests {
             request_state: None,
             idempotency_key: Some("key-1".to_string()),
             malformed: Vec::new(),
+            attestation: None,
         };
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,

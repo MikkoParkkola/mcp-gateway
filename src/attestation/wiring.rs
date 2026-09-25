@@ -154,26 +154,41 @@ mod tests {
         assert!(std::env::var(ATTESTATION_MODE_ENV).is_err());
     }
 
-    /// MIK-7570.ATTEST.1: the refusals hold on the env-file path too, not only
-    /// on the pure core, so an env file cannot turn `enforce` back into observe.
+    /// MIK-7570.ATTEST.1: the env-file path reaches every arm of the parse, so
+    /// an env file can select enforce, and cannot slip in a bad mode value or
+    /// enforce without a key.
     #[test]
-    fn an_env_file_mode_of_enforce_or_an_unknown_value_is_refused() {
+    fn an_env_file_selects_enforce_and_refuses_bad_settings() {
         let dir = tempfile::tempdir().unwrap();
-        for (raw, expect) in [
-            ("enforce", "not available in this build"),
-            ("enforcee", "enforcee"),
+        let overlay_of = |name: &str, body: String| {
+            let env_file = dir.path().join(name);
+            crate::gateway::test_helpers::write_owner_only(&env_file, body).unwrap();
+            crate::config::EnvOverlay::from_paths(&[env_file])
+        };
+        let enforce = overlay_of(
+            "enforce.env",
+            format!("{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}=k\n"),
+        );
+        assert_eq!(
+            attestation_wiring_from_overlay(&enforce).map(|w| w.map(|(_, mode)| mode)),
+            Ok(Some(AttestationMode::Enforce))
+        );
+        for (name, body, expect) in [
+            (
+                "bad-mode.env",
+                format!("{ATTESTATION_MODE_ENV}=enforcee\n"),
+                "enforcee",
+            ),
+            (
+                "keyless.env",
+                format!("{ATTESTATION_MODE_ENV}=enforce\n"),
+                ATTESTATION_SIGNING_KEY_ENV,
+            ),
         ] {
-            let env_file = dir.path().join(format!("{raw}.env"));
-            crate::gateway::test_helpers::write_owner_only(
-                &env_file,
-                format!("{ATTESTATION_MODE_ENV}={raw}\n"),
-            )
-            .unwrap();
-            let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
-            let err = attestation_wiring_from_overlay(&overlay)
+            let err = attestation_wiring_from_overlay(&overlay_of(name, body))
                 .map(|w| w.map(|(_, mode)| mode))
                 .expect_err("an env-file mode must be refused like a process one");
-            assert!(err.contains(expect), "{raw}: {err}");
+            assert!(err.contains(expect), "{name}: {err}");
         }
     }
 
@@ -212,8 +227,12 @@ mod tests {
         for raw in ["OFF", "  Off ", "\toff\n"] {
             assert_eq!(mode_of(Some(raw)), Ok(None), "{raw:?}");
         }
-        for raw in ["ENFORCE", " Enforce ", "\tenforce\n"] {
-            assert!(mode_of(Some(raw)).is_err(), "{raw:?} must be refused");
+        for raw in ["enforce", "ENFORCE", " Enforce ", "\tenforce\n"] {
+            assert_eq!(
+                mode_of(Some(raw)),
+                Ok(Some(AttestationMode::Enforce)),
+                "{raw:?}"
+            );
         }
     }
 
@@ -227,14 +246,25 @@ mod tests {
         ));
     }
 
-    /// `enforce` is not wired in this build, so it is refused at load rather
-    /// than downgraded to observe. The message says so and names the values
-    /// that do work.
+    /// MIK-7570.ATTEST.1: `enforce` resolves to Enforce, never a downgrade.
     #[test]
-    fn enforce_is_refused_at_load() {
-        let err = mode_of(Some("enforce")).expect_err("enforce must be a load error");
-        assert!(err.contains("not available in this build"), "{err}");
-        assert!(err.contains("observe") && err.contains("off"), "{err}");
+    fn enforce_value_resolves_to_enforce() {
+        let (_, mode) = resolve_attestation_wiring(Some("enforce"), Some(b"k"), Some("kid"))
+            .expect("enforce with a key must parse")
+            .expect("enforce must attach a validator");
+        assert_eq!(mode, AttestationMode::Enforce);
+    }
+
+    /// Enforce with no key would reject every call: an outage, not a posture.
+    /// Refused at load, naming the missing setting.
+    #[test]
+    fn enforce_without_key_is_refused() {
+        for key in [None, Some(&b""[..]), Some(&b"  "[..])] {
+            let err = resolve_attestation_wiring(Some("enforce"), key, None)
+                .map(|w| w.map(|(_, mode)| mode))
+                .expect_err("enforce without a key must be a load error");
+            assert!(err.contains(ATTESTATION_SIGNING_KEY_ENV), "{key:?}: {err}");
+        }
     }
 
     #[test]
@@ -242,8 +272,9 @@ mod tests {
         for raw in ["enforcee", "block", "true", "1"] {
             let err = mode_of(Some(raw)).expect_err("an unknown mode must be a load error");
             assert!(err.contains(raw), "error must name the value: {err}");
-            assert!(err.contains("observe") && err.contains("off"), "{err}");
-            assert!(!err.contains("not available in this build"), "{err}");
+            for legal in ["off", "observe", "enforce"] {
+                assert!(err.contains(legal), "must name `{legal}`: {err}");
+            }
         }
     }
 

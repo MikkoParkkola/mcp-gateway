@@ -37,6 +37,8 @@ use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targe
 mod meta_firewall_verdict;
 mod order2_fsm;
 mod task_execution_adapter;
+/// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
+mod attestation_routes;
 
 mod issue_555_listing_scope;
 /// C7: `/metrics` behind a dedicated scrape token (MIK 7570 METRICS.1).
