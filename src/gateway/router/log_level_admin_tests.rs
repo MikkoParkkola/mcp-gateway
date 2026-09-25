@@ -5,8 +5,9 @@
 //! Its own file because `router/tests.rs` is over the 800-line ceiling and the
 //! gate ratchets. The handler forwards the level to every shared backend over
 //! the gateway's own credential, so one non-admin key could switch every
-//! user's shared backend to `debug`. The router refuses non-admin callers
-//! before the handler runs; stdio calls the handler directly and stays open.
+//! user's shared backend to `debug`. The direct route `POST /mcp/{name}`
+//! forwards it to one backend, whose level is just as shared. Both routes
+//! refuse non-admin callers; stdio calls the handler directly and stays open.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,17 +60,22 @@ impl crate::transport::Transport for RecordingWire {
 
 const KEY: &str = "key-log-level";
 
-/// A gateway with auth on, one key (`admin` as given, every backend in
-/// scope) and one shared backend on a recording wire. Returns the reply to
-/// `logging/setLevel {"level":"debug"}` and whether the wire saw the forward.
-async fn set_level_as(admin: bool) -> (StatusCode, Value, bool) {
+/// The meta route and the direct route to the shared backend.
+const META: &str = "/mcp";
+const DIRECT: &str = "/mcp/shared";
+
+/// A gateway with auth on, one key (`admin` as given, scoped to the one
+/// backend) and one shared backend on a recording wire. Returns the reply to
+/// `logging/setLevel {"level":"debug"}` sent to `uri`, and whether the wire
+/// saw the forward.
+async fn set_level_as(admin: bool, uri: &str) -> (StatusCode, Value, bool) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
             key: KEY.to_string(),
             name: KEY.to_string(),
             rate_limit: 0,
-            backends: vec!["*".to_string()],
+            backends: vec!["shared".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin,
@@ -91,7 +97,7 @@ async fn set_level_as(admin: bool) -> (StatusCode, Value, bool) {
 
     let request = axum::http::Request::builder()
         .method("POST")
-        .uri("/mcp")
+        .uri(uri)
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
@@ -113,7 +119,7 @@ async fn set_level_as(admin: bool) -> (StatusCode, Value, bool) {
 
 #[tokio::test]
 async fn a_non_admin_key_cannot_set_the_gateway_log_level() {
-    let (status, body, forwarded) = set_level_as(false).await;
+    let (status, body, forwarded) = set_level_as(false, META).await;
 
     assert_eq!(
         body["error"]["code"], -32600,
@@ -130,7 +136,7 @@ async fn a_non_admin_key_cannot_set_the_gateway_log_level() {
 /// the refusal row above.
 #[tokio::test]
 async fn an_admin_key_still_sets_the_level_on_shared_backends() {
-    let (status, body, forwarded) = set_level_as(true).await;
+    let (status, body, forwarded) = set_level_as(true, META).await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.get("error").is_none(), "admin must succeed: {body}");
@@ -138,4 +144,31 @@ async fn an_admin_key_still_sets_the_level_on_shared_backends() {
         forwarded,
         "an admin's level never reached the shared backend"
     );
+}
+
+/// The direct route forwards to one backend, but that backend's level is
+/// shared by every user of it, so a scoped key may not set it either.
+#[tokio::test]
+async fn a_non_admin_key_cannot_set_a_shared_backend_level_on_the_direct_route() {
+    let (status, body, forwarded) = set_level_as(false, DIRECT).await;
+
+    assert_eq!(
+        body["error"]["code"], -32600,
+        "a non-admin key must be refused in the admin-denial shape: {body}"
+    );
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        !forwarded,
+        "a scoped non-admin key switched a shared backend's log level for every user"
+    );
+}
+
+/// Positive control for the direct-route refusal above.
+#[tokio::test]
+async fn an_admin_key_still_sets_the_level_on_the_direct_route() {
+    let (status, body, forwarded) = set_level_as(true, DIRECT).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("error").is_none(), "admin must succeed: {body}");
+    assert!(forwarded, "an admin's level never reached the backend");
 }
