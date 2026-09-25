@@ -74,6 +74,24 @@ fn deployment_defaults_are_ha_safe_probe_backed_and_restricted() {
         container["securityContext"]["readOnlyRootFilesystem"].as_bool(),
         Some(true)
     );
+
+    // A full HOME (task store, npm/uv caches) must evict the pod, not fill the
+    // node: every emptyDir is bounded, at the size the Helm chart ships.
+    let volumes = deployment["spec"]["template"]["spec"]["volumes"]
+        .as_sequence()
+        .expect("deployment declares volumes");
+    let empty_dirs: Vec<&Value> = volumes
+        .iter()
+        .filter_map(|v| v.get("emptyDir"))
+        .collect();
+    assert!(!empty_dirs.is_empty(), "the state emptyDir is missing");
+    for empty_dir in empty_dirs {
+        assert_eq!(
+            empty_dir["sizeLimit"].as_str(),
+            Some("1Gi"),
+            "emptyDir without the chart's sizeLimit: {empty_dir:?}"
+        );
+    }
 }
 
 #[test]

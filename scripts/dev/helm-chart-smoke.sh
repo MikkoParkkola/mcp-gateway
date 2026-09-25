@@ -176,9 +176,15 @@ for k in runAsUser runAsGroup fsGroup; do
   "$HELM" template t "$CHART" --set "podSecurityContext.$k=1001" >/dev/null 2>&1 \
     || fail "podSecurityContext.$k=1001 does not render"
   for bad in 0 1000; do
+    # The schema pins 1001, so lint and schema-only tools refuse it before any
+    # template runs; the template guard still holds when validation is skipped.
     err="$("$HELM" template t "$CHART" --set "podSecurityContext.$k=$bad" 2>&1 >/dev/null || true)"
+    { grep -q "specifications of the schema" <<<"$err" && grep -q "$k" <<<"$err"; } \
+      || fail "podSecurityContext.$k=$bad is not refused by the schema: ${err:-rendered}"
+    err="$("$HELM" template t "$CHART" --skip-schema-validation \
+      --set "podSecurityContext.$k=$bad" 2>&1 >/dev/null || true)"
     grep -q "podSecurityContext.$k must be 1001" <<<"$err" \
-      || fail "podSecurityContext.$k=$bad renders (or fails without the UID guard): ${err:-rendered}"
+      || fail "podSecurityContext.$k=$bad renders without schema validation: ${err:-rendered}"
   done
 done
 
