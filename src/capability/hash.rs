@@ -17,8 +17,8 @@
 //!
 //! ## Anchoring strategy
 //!
-//! The hash is computed over the **raw file contents with the `sha256:` line
-//! removed**. This is a deliberate choice:
+//! The hash is computed over the **file contents, CRLF read as LF, with the
+//! `sha256:` line removed**. This is a deliberate choice:
 //!
 //! - **Full file** binds every byte a human sees, including comments and
 //!   provider order — the exact thing a rug-pull would mutate.
@@ -31,8 +31,11 @@
 //! be reproduced from a shell with:
 //!
 //! ```bash
-//! grep -v '^sha256:' capability.yaml | sha256sum
+//! sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum
 //! ```
+//!
+//! CRLF line endings are hashed as LF (the `sed` above), so a pin survives a
+//! checkout or an editor that converts them. A lone CR is content and stays.
 
 use sha2::{Digest, Sha256};
 
@@ -54,13 +57,17 @@ pub fn strip_sha256_line(content: &str) -> String {
     out
 }
 
-/// Compute the canonical capability hash over the raw file contents,
+/// Compute the canonical capability hash over the file contents, CRLF read as LF,
 /// excluding the top-level `sha256:` field.
 ///
 /// Returns a lowercase hex-encoded SHA-256 digest.
 #[must_use]
 pub fn compute_capability_hash(file_content: &str) -> String {
-    let stripped = strip_sha256_line(file_content);
+    // CRLF is read as LF first. YAML treats the two as one line break, so a
+    // checkout or an editor that converts line endings has not changed the
+    // capability, and must not break its pin. A lone CR stays: that is content.
+    let normalised = file_content.replace("\r\n", "\n");
+    let stripped = strip_sha256_line(&normalised);
     let digest = Sha256::digest(stripped.as_bytes());
     hex::encode(digest)
 }
