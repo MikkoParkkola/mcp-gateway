@@ -475,6 +475,68 @@ async fn aged_unexpired_access_assertion_is_accepted() {
     assert_eq!(subject.unwrap().map(|s| s.subject).as_deref(), Some("u1"));
 }
 
+/// Access-shaped claims with Cloudflare's usual extra fields; `custom`
+/// carries `pad` bytes so the signed assertion reaches a realistic size.
+fn full_access_claims(iss: &str, pad: usize) -> serde_json::Value {
+    json!({
+        "iss": iss,
+        "sub": "7335d417-61da-459d-899c-0a01c76a2f94",
+        "aud": [AUD],
+        "email": "user@corp.example",
+        "email_verified": true,
+        "iat": now() - 60,
+        "nbf": now() - 60,
+        "exp": now() + 3600,
+        "type": "app",
+        "identity_nonce": "6ei69kawdKzMIAPF",
+        "country": "NL",
+        "custom": { "groups": "x".repeat(pad) },
+    })
+}
+
+/// A real Access assertion is well over 512 bytes; it must verify.
+#[tokio::test]
+async fn realistic_size_access_assertion_is_accepted() {
+    let idp = AccessIdp::start().await;
+    let verifier = idp.verifier();
+    let jwt = idp.sign(&full_access_claims(&format!("https://{TEAM}"), 1200));
+    assert!(
+        (1536..8192).contains(&jwt.len()),
+        "assertion is {} bytes",
+        jwt.len()
+    );
+    let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
+    let subject = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
+    assert_eq!(
+        subject.unwrap().map(|s| s.subject).as_deref(),
+        Some("7335d417-61da-459d-899c-0a01c76a2f94")
+    );
+}
+
+/// The assertion header still has a bound: over 8 KiB is refused unread.
+#[tokio::test]
+async fn oversized_access_assertion_is_refused() {
+    let idp = AccessIdp::start().await;
+    let verifier = idp.verifier();
+    let jwt = idp.sign(&full_access_claims(&format!("https://{TEAM}"), 9000));
+    assert!(jwt.len() > 8192);
+    let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
+    let result = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
+    assert_eq!(result, Err(IdentityHeaderRefusal::Malformed));
+}
+
+/// A token signed by the team key, naming its kid, but issued for another
+/// issuer is refused.
+#[tokio::test]
+async fn access_assertion_with_wrong_issuer_is_refused() {
+    let idp = AccessIdp::start().await;
+    let verifier = idp.verifier();
+    let jwt = idp.sign(&full_access_claims("https://other.cloudflareaccess.com", 0));
+    let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
+    let result = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
+    assert_eq!(result, Err(IdentityHeaderRefusal::AccessAssertion));
+}
+
 /// A8-T15: an assertion expired beyond the 60 s leeway is 401.
 #[tokio::test]
 async fn expired_access_assertion_is_refused() {
