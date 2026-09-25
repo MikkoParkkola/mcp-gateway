@@ -162,10 +162,7 @@ impl MetaMcp {
             // refusal protects nothing; it is admitted unprotected, as legacy
             // frames always were. `required` restores the refusal for
             // deployments whose modern clients all send keys (F10, ADR-012).
-            if is_modern
-                && !read_only
-                && *self.idempotency_key_mode.read() == crate::config::IdempotencyKeyMode::Required
-            {
+            if is_modern && !read_only {
                 return Err(Error::json_rpc(
                     -32602,
                     format!(
