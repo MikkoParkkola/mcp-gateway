@@ -91,6 +91,9 @@ pub(super) fn record(state: &AppState, server: &str, call: DirectCall, answer: A
     };
     let (status, Json(body)) = &answer;
     let outcome = direct_outcome(*status, body);
+    if outcome.error_code() == Some(-32005) {
+        return answer;
+    }
     // D1-d.1: a failed call has no response hash.
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // D2-f: the caller's W3C trace id, else a trace id; no session rung.
