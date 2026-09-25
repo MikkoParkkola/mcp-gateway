@@ -1772,11 +1772,12 @@ async fn meta_mcp_dispatch(
         }
         // F24: the gateway never delivers `resources/updated`, so a
         // subscription it accepted would wait forever. Refuse it outright.
-        "resources/subscribe" | "resources/unsubscribe" => JsonRpcResponse::error(
-            Some(id),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            format!("{method} is not supported: this gateway does not deliver resources/updated"),
-        ),
+        "resources/subscribe" | "resources/unsubscribe" => {
+            let standing = CallerStanding::of_client(scope);
+            let meta = &state.meta_mcp;
+            meta.handle_resources_read(id, params.as_ref(), standing, scope, identity)
+                .await
+        }
 
         // Prompts
         "prompts/list" => {
