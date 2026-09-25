@@ -254,7 +254,7 @@ fn one_variable_named_by_both_an_adapter_and_an_api_key_is_refused() {
             adapter("desk", "HMAC_ONE"),
             adapter("laptop", "SHARED_SECRET"),
         ],
-        &[GatewayCredential::ApiKey {
+        &[GatewayCredential::ApiKeyDigest {
             index: 1,
             name: "owui-gateway-key",
             spec: "env:SHARED_SECRET",
@@ -309,34 +309,10 @@ fn an_adapter_secret_equal_to_a_literal_bearer_token_is_refused() {
 }
 
 #[test]
-fn an_adapter_secret_equal_to_a_literal_api_key_is_refused() {
-    let literal = secret_32('k');
-    let overlay = FakeOverlay::new(&[("OPENWEBUI_HMAC", literal.as_str())]);
-
-    let error = validate_no_gateway_material_reuse(
-        &[adapter("desk", "OPENWEBUI_HMAC")],
-        &overlay,
-        &[GatewayCredential::ApiKey {
-            index: 0,
-            name: "owui-gateway-key",
-            spec: literal.as_str(),
-        }],
-    )
-    .expect_err("a literal api key is still gateway authentication material");
-
-    let credential = gateway_reuse_credential(&error, 0);
-    assert!(
-        credential.contains("auth.api_keys[0]") && credential.contains("owui-gateway-key"),
-        "refusal must name the api key by field path and operator label, got {credential}"
-    );
-    assert_no_material_leaked(&error, &[literal.as_str()]);
-}
-
-#[test]
 fn distinct_adapter_and_gateway_credentials_are_accepted_by_both_halves() {
     let adapter_secret = secret_32('a');
     let bearer = secret_32('b');
-    let api_key = secret_32('c');
+    let api_key = crate::config::api_key_digest_spec(secret_32('c').as_bytes());
     let overlay = FakeOverlay::new(&[
         ("OPENWEBUI_HMAC", adapter_secret.as_str()),
         ("GATEWAY_BEARER", bearer.as_str()),
@@ -344,7 +320,7 @@ fn distinct_adapter_and_gateway_credentials_are_accepted_by_both_halves() {
     let adapters = [adapter("desk", "OPENWEBUI_HMAC")];
     let credentials = [
         GatewayCredential::BearerToken("env:GATEWAY_BEARER"),
-        GatewayCredential::ApiKey {
+        GatewayCredential::ApiKeyDigest {
             index: 0,
             name: "owui-gateway-key",
             spec: api_key.as_str(),
@@ -371,4 +347,27 @@ fn an_auto_bearer_token_is_skipped_rather_than_compared_as_text() {
         .expect("`auto` is not an env: reference, so it aliases no variable");
     validate_no_gateway_material_reuse(&adapters, &overlay, &credentials)
         .expect("`auto` has no configured material to reuse");
+}
+
+// E4-T11: an API key is configured as its sha256 digest, so the material rule
+// hashes the adapter secret and compares that with the digest.
+#[test]
+fn adapter_secret_equal_to_api_key_is_refused() {
+    let key = secret_32('k');
+    let digest = format!("sha256:{}", crate::hashing::sha256_hex(key.as_bytes()));
+    let overlay = FakeOverlay::new(&[("OPENWEBUI_HMAC", key.as_str())]);
+
+    let error = validate_no_gateway_material_reuse(
+        &[adapter("desk", "OPENWEBUI_HMAC")],
+        &overlay,
+        &[GatewayCredential::ApiKeyDigest {
+            index: 0,
+            name: "owui-gateway-key",
+            spec: digest.as_str(),
+        }],
+    )
+    .expect_err("an adapter secret equal to an api key is reused material");
+
+    assert!(gateway_reuse_credential(&error, 0).contains("owui-gateway-key"));
+    assert_no_material_leaked(&error, &[key.as_str(), &digest[7..]]);
 }

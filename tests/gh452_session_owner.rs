@@ -46,7 +46,9 @@ async fn state(
                 .into_iter()
                 .zip(names)
                 .map(|(key, name)| ApiKeyConfig {
-                    key: key.to_owned(),
+                    key: None,
+                    key_sha256: Some(mcp_gateway::config::api_key_digest_spec(key.as_bytes())),
+                    expires_at: None,
                     name: name.to_owned(),
                     rate_limit: 0,
                     backends: vec!["*".to_owned()],

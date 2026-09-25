@@ -767,23 +767,41 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570. Stage 1 of C5 (branch fix/c5-attestation-default-off): default is off, enforce and unrecognised modes fail startup. Stays pending until enforce is wired (needs the check_attestation visibility change) or formally descoped. Design and landing order: MIK-7570."
+      "note": "Added 2026-09-25 by MIK-7570. Stage 1 of C5 (#895): default is off, unrecognised modes fail startup. Stage 2 (branch fix/c5-attestation-enforce): enforce is wired on gateway_invoke, surfaced tools and the direct route, plans are refused under it, and enforce without a key fails startup. Pending until stage 2 merges and is graded. Design and landing order: MIK-7570."
     },
     {
       "id": "MIK-7570.AUDIT.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/security/audit_tests.rs",
+        "src/gateway/meta_mcp/audit_record_tests.rs",
+        "src/gateway/router/audit_degraded_tests.rs",
+        "src/gateway/server/audit_start_tests.rs",
+        "tests/d1_audit_required.rs",
+        "tests/kubernetes_manifest_tests.rs",
+        "scripts/dev/helm-chart-smoke.sh",
+        "docs/UPGRADING-4.0.md",
+        "docs/MULTI_USER.md"
+      ],
+      "note": "Graded 2026-09-25 (D1, PR #979). With auth on, security.transparency_log is required at load (validate_required_by_auth; stdio too) and an unopenable log stops startup. Every entry carries the logger-written envelope: schema_version 2, trace_id, outcome (ok|tool_error|denied|invalid|error), error_code, and who (credential_kind, principal, account, authority, subject). CredentialKind is set at every AuthenticatedClient mint site and carried on MetaMcpCallerContext; who never holds an email or label. One invocation record per gateway_invoke, written around invoke_tool_traced, so refusals, failures and cache hits are recorded; request_hash covers the params sent, response_hash the value returned. Fail-closed under auth: a failed append withholds the result (503/-32005), and invoke, the direct route and /readyz probe once before refusing; mcp_audit_append_failures_total{cause} and mcp_audit_degraded. Tests: src/security/audit_tests.rs (T9 reserved keys, T10 v1+v2 chain, T11 governance envelope, T14 outcome table, T19 trace id), src/gateway/meta_mcp/audit_record_tests.rs (T4 OIDC who, T5 API key no secret, T6 denied, T7 backend error, T8 tool_error, T15 request hash, T16 response hash), src/gateway/router/audit_degraded_tests.rs (T17 fail-closed and recovery, T17b auth-off control, T18 direct route, R3 readiness-driven recovery), src/gateway/server/audit_start_tests.rs (T3), tests/d1_audit_required.rs (T1, T2, T13), init_config_loads_under_d1 (T12), enterprise_alpha_ships_writable_audit_log_with_fsgroup, helm_credential_render_has_writable_audit_path in scripts/dev/helm-chart-smoke.sh (T20). Red CI run 36148301109. Rotation is not included (separate item); UPGRADING-4.0 item 43 documents the fill case. The E1-owned probe sites (admin gate, admin UI layer) land with E1."
     },
     {
       "id": "MIK-7570.APIKEY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/config/features/api_key.rs",
+        "src/config/features/api_key_digest_tests.rs",
+        "src/gateway/auth_api_key_digest_tests.rs",
+        "src/personal_accounts/config/adapter_secret_tests.rs",
+        "tests/e4_hash_key_cli.rs",
+        "docs/DEPLOYMENT.md",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-25 (E4). auth.api_keys[] stores key_sha256 (sha256:<64 lowercase hex> or env:VAR holding it); a plaintext key, both fields, neither, or a malformed digest fails the load before any env: inlining, naming the entry or variable and never the value. Validation hashes the presented key once and compares digests with ct_eq; principal is hex(digest)[..12], unchanged from 3.x. Optional expires_at refuses a matching key with 401 after that instant and only warns at startup. Offline `mcp-gateway hash-key` reads the key from stdin, strips one line ending, and --verify exits 0/1/2. The no-reuse rule hashes the adapter secret against the digest. Cells: plaintext_api_key_fails_to_load, malformed_digest_fails_to_load, both_key_and_digest_fails_to_load, neither_key_nor_digest_fails_to_load, env_digest_reference_authenticates, env_reference_holding_plaintext_is_refused, expired_key_does_not_block_startup, api_key_config_debug_redacts, digest_key_authenticates_plaintext_token, digest_itself_is_not_a_credential, principal_unchanged_across_migration, expired_key_is_refused, unexpired_key_is_accepted, resolved_auth_config_debug_shows_no_digest, adapter_secret_equal_to_api_key_is_refused, hash_key_cli_prints_digest, hash_key_verify_exit_codes."
     },
     {
       "id": "MIK-7570.ADMINSSO.1",

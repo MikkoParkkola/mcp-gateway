@@ -185,7 +185,7 @@ mod tests {
 
     fn auth_on_with_store_dir(store_dir: &str) -> String {
         format!(
-            "auth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: \"{store_dir}\"\n"
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: \"{store_dir}\"\n"
         )
     }
 
@@ -289,7 +289,7 @@ mod tests {
         .unwrap();
         let (config, path) = load(
             cfg_dir.path(),
-            "auth:\n  enabled: true\n  bearer_token: f6-test-token\n",
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\n",
         );
 
         assert_eq!(start(&config, &path), Ok(false));
@@ -322,11 +322,19 @@ mod tests {
     async fn export_reads_governance_log_from_store_dir() {
         let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let store_dir = data.path().join("cp");
+        // The invocation log path goes into the one `security` block the
+        // auth-on config already carries (D1: auth on requires the log).
+        let inv = data.path().join("invocation.jsonl");
+        let base = auth_on_with_store_dir(&store_dir.to_string_lossy()).replace(
+            "transparency_log:\n    enabled: true\n",
+            &format!(
+                "transparency_log:\n    enabled: true\n    path: \"{}\"\n",
+                inv.display()
+            ),
+        );
         let yaml = format!(
-            "{}  export:\n    enabled: true\n    sink_path: \"{sink}\"\nsecurity:\n  transparency_log:\n    path: \"{inv}\"\n",
-            auth_on_with_store_dir(&store_dir.to_string_lossy()),
+            "{base}  export:\n    enabled: true\n    sink_path: \"{sink}\"\n",
             sink = data.path().join("sink.ndjson").display(),
-            inv = data.path().join("invocation.jsonl").display(),
         );
         let (config, path) = load(cfg_dir.path(), &yaml);
         // A corrupt cursor makes the governance exporter's open fail, which is
