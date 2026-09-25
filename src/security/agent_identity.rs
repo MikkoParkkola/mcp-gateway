@@ -729,3 +729,7 @@ mod tests;
 #[cfg(test)]
 #[path = "agent_identity_falsifier_tests.rs"]
 mod falsifier_tests;
+
+#[cfg(test)]
+#[path = "agent_identity_load_tests.rs"]
+mod load_tests;

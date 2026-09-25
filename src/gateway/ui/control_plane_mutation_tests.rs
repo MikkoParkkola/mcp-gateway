@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Governance mutation and decision tests for `ui::control_plane`.
 
-use super::{GRANT_WRITES_REFUSED, apply_mutation};
+use super::apply_mutation;
 use crate::control_plane::{
     AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneDecisionTargetKind,
     ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneRole, ControlPlaneRollbackPlan,
@@ -37,11 +37,9 @@ fn rollback() -> ControlPlaneRollbackPlan {
     }
 }
 
-// MIK-6686.CP.2, inverted by E2-min — an admin mutation passes RBAC and is
-// then refused with 409: nothing is persisted or audited, because dispatch
-// never reads the store.
+// MIK-6686.CP.2 — an admin mutation is authorized, persisted, and audited.
 #[test]
-fn admin_grant_mutation_is_refused_after_rbac() {
+fn admin_grant_mutation_persists_and_audits() {
     let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
     let g = grant();
     let resp = apply_mutation(
@@ -52,19 +50,14 @@ fn admin_grant_mutation_is_refused_after_rbac() {
         "upsert".to_string(),
         "MIK-1".to_string(),
         rollback(),
-        &GRANT_WRITES_REFUSED,
+        |s, event| s.commit_grant_audited(g.clone(), event),
     );
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
-    assert!(store.list_grants().unwrap().is_empty());
-    assert!(audit_is_empty(&store));
-}
-
-fn audit_is_empty(store: &Arc<dyn ControlPlaneStore>) -> bool {
-    store
-        .read_audit(&AuditFilter::new(10))
-        .unwrap()
-        .events
-        .is_empty()
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(store.list_grants().unwrap().len(), 1);
+    let audit = store.read_audit(&AuditFilter::new(10)).unwrap().events;
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].action, ControlPlaneAction::MutateGrant);
+    assert_eq!(audit[0].actor_id, "gateway-client:tester");
 }
 
 // MIK-6686.CP.2 — a non-admin is denied; nothing is persisted or audited.
@@ -80,7 +73,7 @@ fn auditor_grant_mutation_is_denied_with_no_side_effects() {
         "upsert".to_string(),
         "MIK-1".to_string(),
         rollback(),
-        &GRANT_WRITES_REFUSED,
+        |s, event| s.commit_grant_audited(g.clone(), event),
     );
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(store.list_grants().unwrap().is_empty());
@@ -104,63 +97,77 @@ fn mutation_without_store_returns_503() {
         "upsert".to_string(),
         "MIK-1".to_string(),
         rollback(),
-        &GRANT_WRITES_REFUSED,
+        |_s, _event| Ok(()),
     );
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
-fn decide(
-    store: &Arc<dyn ControlPlaneStore>,
-    role: ControlPlaneRole,
-    target_kind: ControlPlaneDecisionTargetKind,
-    target_id: &str,
-    decision: super::Decision,
-) -> StatusCode {
-    super::resolve_decision_core(
-        Ok(store),
-        &actor(role),
-        super::DecisionRequest {
-            target_kind,
-            target_id: target_id.to_string(),
-            decision,
-            reason: "MIK-1".to_string(),
-            rollback: rollback(),
-        },
-    )
-    .status()
-}
-
-// MIK-6687.CP.3, inverted by E2-min — an admin decision on a queued grant is
-// refused with 409 either way; the store row and the audit log are untouched.
+// MIK-6687.CP.3 — an admin decision on a queued grant flips its status
+// through the audited-commit path (approve -> Approved, deny -> Revoked).
 #[test]
-fn decision_on_a_grant_is_refused_without_side_effects() {
-    use super::Decision;
+fn decision_resolves_grant_through_audited_path() {
+    use super::{Decision, DecisionRequest, resolve_decision_core};
     let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
     let mut g = grant();
     g.status = ControlPlaneGrantStatus::Requested;
     store.put_grant(g).unwrap();
 
-    for decision in [Decision::Approve, Decision::Deny] {
-        let status = decide(
-            &store,
-            ControlPlaneRole::Admin,
-            ControlPlaneDecisionTargetKind::Grant,
-            "grant-1",
-            decision,
-        );
-        assert_eq!(status, StatusCode::CONFLICT, "{decision:?}");
-    }
+    let resp = resolve_decision_core(
+        Ok(&store),
+        &actor(ControlPlaneRole::Admin),
+        DecisionRequest {
+            target_kind: ControlPlaneDecisionTargetKind::Grant,
+            target_id: "grant-1".to_string(),
+            decision: Decision::Approve,
+            reason: "MIK-1".to_string(),
+            rollback: rollback(),
+        },
+    );
+    assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         store.get_grant("grant-1").unwrap().unwrap().status,
-        ControlPlaneGrantStatus::Requested
+        ControlPlaneGrantStatus::Approved
     );
-    assert!(audit_is_empty(&store));
+    assert_eq!(
+        store
+            .read_audit(&AuditFilter::new(10))
+            .unwrap()
+            .events
+            .len(),
+        1
+    );
+
+    let resp = resolve_decision_core(
+        Ok(&store),
+        &actor(ControlPlaneRole::Admin),
+        DecisionRequest {
+            target_kind: ControlPlaneDecisionTargetKind::Grant,
+            target_id: "grant-1".to_string(),
+            decision: Decision::Deny,
+            reason: "MIK-1".to_string(),
+            rollback: rollback(),
+        },
+    );
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        store.get_grant("grant-1").unwrap().unwrap().status,
+        ControlPlaneGrantStatus::Revoked
+    );
+    // Deny is also audited: two decisions -> two audit entries.
+    assert_eq!(
+        store
+            .read_audit(&AuditFilter::new(10))
+            .unwrap()
+            .events
+            .len(),
+        2
+    );
 }
 
-// MIK-6687.CP.3, inverted by E2-min — a policy decision is refused with 409.
+// MIK-6687.CP.3 — a policy decision flips `enforced` through the audited path.
 #[test]
-fn decision_on_a_policy_is_refused_without_side_effects() {
-    use super::Decision;
+fn decision_resolves_policy_through_audited_path() {
+    use super::{Decision, DecisionRequest, resolve_decision_core};
     let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
     store
         .put_policy(crate::control_plane::ControlPlanePolicy {
@@ -170,59 +177,89 @@ fn decision_on_a_policy_is_refused_without_side_effects() {
         })
         .unwrap();
 
-    let status = decide(
-        &store,
-        ControlPlaneRole::Admin,
-        ControlPlaneDecisionTargetKind::Policy,
-        "pol-1",
-        Decision::Approve,
+    let resp = resolve_decision_core(
+        Ok(&store),
+        &actor(ControlPlaneRole::Admin),
+        DecisionRequest {
+            target_kind: ControlPlaneDecisionTargetKind::Policy,
+            target_id: "pol-1".to_string(),
+            decision: Decision::Approve,
+            reason: "MIK-1".to_string(),
+            rollback: rollback(),
+        },
     );
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert!(!store.get_policy("pol-1").unwrap().unwrap().enforced);
-    assert!(audit_is_empty(&store));
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(store.get_policy("pol-1").unwrap().unwrap().enforced);
+    assert_eq!(
+        store
+            .read_audit(&AuditFilter::new(10))
+            .unwrap()
+            .events
+            .len(),
+        1
+    );
 }
 
-// MIK-6687.CP.3 — decision guards: a non-admin is denied by RBAC (no state
-// change), an admin's decision on a target the store lacks gets the same 409
-// as one it holds (E2-min; the store is never read), and an unsupported kind
-// returns 422.
+// MIK-6687.CP.3 — decision guards: non-admin denied (no state change), a
+// missing target returns 404, an unsupported kind returns 422.
 #[test]
 fn decision_guards_rbac_missing_and_unsupported() {
-    use super::Decision;
+    use super::{Decision, DecisionRequest, resolve_decision_core};
     let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
     let mut g = grant();
     g.status = ControlPlaneGrantStatus::Requested;
     store.put_grant(g).unwrap();
 
-    let status = decide(
-        &store,
-        ControlPlaneRole::Auditor,
-        ControlPlaneDecisionTargetKind::Grant,
-        "grant-1",
-        Decision::Approve,
+    // Auditor is denied; grant stays Requested; no audit entry.
+    let resp = resolve_decision_core(
+        Ok(&store),
+        &actor(ControlPlaneRole::Auditor),
+        DecisionRequest {
+            target_kind: ControlPlaneDecisionTargetKind::Grant,
+            target_id: "grant-1".to_string(),
+            decision: Decision::Approve,
+            reason: "MIK-1".to_string(),
+            rollback: rollback(),
+        },
     );
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         store.get_grant("grant-1").unwrap().unwrap().status,
         ControlPlaneGrantStatus::Requested
     );
-    assert!(audit_is_empty(&store));
-
-    let status = decide(
-        &store,
-        ControlPlaneRole::Admin,
-        ControlPlaneDecisionTargetKind::Policy,
-        "absent",
-        Decision::Approve,
+    assert!(
+        store
+            .read_audit(&AuditFilter::new(10))
+            .unwrap()
+            .events
+            .is_empty()
     );
-    assert_eq!(status, StatusCode::CONFLICT);
 
-    let status = decide(
-        &store,
-        ControlPlaneRole::Admin,
-        ControlPlaneDecisionTargetKind::RuntimeHealth,
-        "srv-1",
-        Decision::Approve,
+    // Missing target -> 404.
+    let resp = resolve_decision_core(
+        Ok(&store),
+        &actor(ControlPlaneRole::Admin),
+        DecisionRequest {
+            target_kind: ControlPlaneDecisionTargetKind::Policy,
+            target_id: "absent".to_string(),
+            decision: Decision::Approve,
+            reason: "MIK-1".to_string(),
+            rollback: rollback(),
+        },
     );
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Unsupported kind -> 422.
+    let resp = resolve_decision_core(
+        Ok(&store),
+        &actor(ControlPlaneRole::Admin),
+        DecisionRequest {
+            target_kind: ControlPlaneDecisionTargetKind::RuntimeHealth,
+            target_id: "srv-1".to_string(),
+            decision: Decision::Approve,
+            reason: "MIK-1".to_string(),
+            rollback: rollback(),
+        },
+    );
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

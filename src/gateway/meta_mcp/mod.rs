@@ -2633,6 +2633,9 @@ pub(crate) fn publish_identity_grants(
 #[cfg(test)]
 #[path = "grant_reload_tests.rs"]
 mod grant_reload_tests;
+#[cfg(test)]
+#[path = "grant_agent_key_tests.rs"]
+mod grant_agent_key_tests;
 
 #[cfg(test)]
 #[path = "authz_tests.rs"]

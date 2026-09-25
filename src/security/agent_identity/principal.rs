@@ -170,14 +170,27 @@ impl std::fmt::Display for DeclaredSource {
 /// not care which one was passed, and a type carrying a distinction nothing
 /// enforces is documentation that reads as a guarantee. Passing a declared
 /// label where authorization is expected must **fail to compile**.
+///
+/// It carries its [`ProofSource`] because an id alone is not an identity: an
+/// mTLS subject and a JWT `sub` that stringify the same are two principals,
+/// and anything keyed by the bare id would let one inherit the other's grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProvenAgentId<'a>(&'a str);
+pub struct ProvenAgentId<'a> {
+    id: &'a str,
+    proof: ProofSource,
+}
 
 impl<'a> ProvenAgentId<'a> {
     /// The underlying identifier, for comparison and audit.
     #[must_use]
     pub fn as_str(self) -> &'a str {
-        self.0
+        self.id
+    }
+
+    /// The namespace [`Self::as_str`] belongs to.
+    #[must_use]
+    pub fn proof(self) -> ProofSource {
+        self.proof
     }
 
     /// Build one directly, for fixtures only.
@@ -187,14 +200,14 @@ impl<'a> ProvenAgentId<'a> {
     /// guarantee is checked against a non-test build (`cargo check --lib`),
     /// where this constructor is absent.
     #[cfg(test)]
-    pub(crate) fn for_test(id: &'a str) -> Self {
-        Self(id)
+    pub(crate) fn for_test(id: &'a str, proof: ProofSource) -> Self {
+        Self { id, proof }
     }
 }
 
 impl std::fmt::Display for ProvenAgentId<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
+        f.write_str(self.id)
     }
 }
 
@@ -208,11 +221,17 @@ impl std::fmt::Display for ProvenAgentId<'_> {
 /// The only constructor is [`From<ProvenAgentId>`], so an owned proven id can
 /// still only originate from a principal that was actually proven.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwnedProvenAgentId(String);
+pub struct OwnedProvenAgentId {
+    id: String,
+    proof: ProofSource,
+}
 
 impl From<ProvenAgentId<'_>> for OwnedProvenAgentId {
     fn from(id: ProvenAgentId<'_>) -> Self {
-        Self(id.as_str().to_string())
+        Self {
+            id: id.as_str().to_string(),
+            proof: id.proof(),
+        }
     }
 }
 
@@ -220,13 +239,28 @@ impl OwnedProvenAgentId {
     /// Borrow it back as the authorization-bearing type.
     #[must_use]
     pub fn as_proven(&self) -> ProvenAgentId<'_> {
-        ProvenAgentId(&self.0)
+        ProvenAgentId {
+            id: &self.id,
+            proof: self.proof,
+        }
     }
 
     /// The underlying identifier, for audit.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.id
+    }
+
+    /// The namespace [`Self::as_str`] belongs to.
+    #[must_use]
+    pub fn proof(&self) -> ProofSource {
+        self.proof
+    }
+
+    /// `source:id`, the spelling a grant row and an audit record use.
+    #[must_use]
+    pub fn qualified(&self) -> String {
+        format!("{}:{}", self.proof, self.id)
     }
 }
 
@@ -266,7 +300,10 @@ impl AgentIdentity {
     /// label is a compile error rather than a code-review catch.
     #[must_use]
     pub fn proven_agent_id(&self) -> Option<ProvenAgentId<'_>> {
-        self.proven.as_ref().map(|p| ProvenAgentId(p.id()))
+        self.proven.as_ref().map(|p| ProvenAgentId {
+            id: p.id(),
+            proof: p.proof(),
+        })
     }
 
     /// The caller-supplied tag, in the type that attribution consumes.

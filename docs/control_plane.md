@@ -46,24 +46,8 @@ The response includes:
 - `view`: read-only server, tool, trust evidence, runtime health, and audit evidence projection.
 - `decision_queue`: human-gated items derived from policy, trust, server, grant, and runtime state.
 - `current_limits`: machine-readable limitations of this slice.
-- `mutation_disabled_reason`: why no store is open, `auth_off` or
-  `store_unavailable`. Absent when a store is open.
-- `authority`: where grants and policies are enforced from.
-  `grants` is `security.identity_grants.path`; `policies` is
-  `security.sanitize_input, security.ssrf_protection`.
-
-## Grant and policy writes are refused
-
-`POST /ui/api/control-plane/grants`, `/policies` and `/decisions` check RBAC
-(a non-admin gets 403) and then return 409, with no store or audit write.
-Dispatch never reads the control-plane store, so a write there would be
-accepted and ignored. The reason codes are
-`grants_managed_in_identity_grants_file` (use `mcp-gateway identity grants`,
-which edits the file at `security.identity_grants.path`) and
-`policies_managed_in_gateway_config` (set `security.sanitize_input` or
-`security.ssrf_protection`). A decision on another kind still returns 422. The
-snapshot's grants and policies are the enforced ones; the store's rows for
-those kinds are not shown, and `route.read_only` is always `true`.
+- `mutation_disabled_reason`: why governance mutation is off, `auth_off` or
+  `store_unavailable`. Absent while mutation is enabled.
 - `base_source`: `explicit` when `control_plane.store_dir` chose the store
   directory, `default` when it came from the config file's location.
 
@@ -81,9 +65,9 @@ without embedding the full TrustCard in every descriptor.
 
 ## Store location
 
-The store needs auth on and a writable directory. The directory holds `store/`
-(grant and policy rows that nothing enforces, kept for 4.1) and `audit.jsonl`
-(the governance audit log, which the page and SIEM export read).
+Governance mutation needs auth on and a writable store directory. The directory
+holds `store/` (grants and policies) and `audit.jsonl` (the governance audit log,
+which SIEM export also reads).
 
 ```yaml
 control_plane:
@@ -95,7 +79,7 @@ control_plane:
   `--config /etc/mcp-gateway/gateway.yaml`, or `~/.mcp-gateway/control-plane`
   with no config file. If that directory cannot be opened, the gateway still
   starts, serves governance read-only, logs a WARN naming the path, reports
-  `mutation_disabled_reason: store_unavailable`, and answers writes with 503
+  `mutation_disabled_reason: store_unavailable`, and answers mutations with 503
   `CONTROL_STORE_UNAVAILABLE` and a reason naming the path.
 - **Set**: `~` is expanded, and the result must be absolute; a relative value
   refuses start. With auth on, a directory the gateway cannot create and write
@@ -121,8 +105,7 @@ or SIEM/OTel sinks.
 
 ## Roles
 
-- `admin`: can read, review, approve, and mutate grants or policies. The grant
-  and policy routes pass RBAC and then refuse with 409 (see above).
+- `admin`: can read, review, approve, and mutate grants or policies.
 - `security_reviewer`: can read inventory/evidence and record reviews, but cannot mutate grants or policies.
 - `developer`: can read inventory/evidence.
 - `auditor`: read-only inventory/evidence role.
