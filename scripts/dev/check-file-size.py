@@ -8,6 +8,12 @@ gate ratchets instead of failing the tree: every offender is recorded in
 ``file-size-baseline.txt`` with the line count it had when recorded. A file may
 shrink freely; it may not grow, and no file may newly cross the ceiling.
 
+A module declaration (`mod child;`) and the inert attributes directly above it
+are not counted. Attaching a file is the one growth that extracting code out of
+an over-ceiling file cannot avoid, and a declaration carries no logic: whatever
+it attaches is held to the ceiling as a file of its own (#609). An inline
+`mod child { ... }` counts in full.
+
 Usage:
     check-file-size.py            # check, exit 1 on a regression
     check-file-size.py --update   # rewrite the baseline from the tree
@@ -15,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -23,13 +30,36 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE = Path(__file__).with_name("file-size-baseline.txt")
 SCANNED = ("src", "tests")
 
+DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$")
+# Built-in attributes that carry no code. A macro attribute above a `mod` could
+# expand to anything, so it counts.
+INERT_ATTRIBUTE = re.compile(
+    r"^\s*#\[\s*(cfg|cfg_attr|path|allow|expect|warn|deny|doc|deprecated|rustfmt::skip)"
+    r"\b.*\]\s*$"
+)
+
+
+def counted_lines(text: str) -> int:
+    """Newlines in `text`, less each module declaration and its inert attributes."""
+    lines = text.split("\n")
+    free = 0
+    for i, line in enumerate(lines):
+        if not DECLARATION.match(line):
+            continue
+        free += 1
+        above = i - 1
+        while above >= 0 and INERT_ATTRIBUTE.match(lines[above]):
+            free += 1
+            above -= 1
+    return text.count("\n") - free
+
 
 def measure() -> dict[str, int]:
     """Line counts for every Rust file over the ceiling, keyed by repo path."""
     sizes = {}
     for top in SCANNED:
         for path in sorted((ROOT / top).rglob("*.rs")):
-            lines = path.read_text(encoding="utf-8", errors="replace").count("\n")
+            lines = counted_lines(path.read_text(encoding="utf-8", errors="replace"))
             if lines > CEILING:
                 sizes[str(path.relative_to(ROOT))] = lines
     return sizes
