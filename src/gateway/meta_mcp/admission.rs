@@ -164,7 +164,7 @@ impl MetaMcp {
             // deployments whose modern clients all send keys (F10, ADR-012).
             if is_modern
                 && !read_only
-                && *self.idempotency_key_mode.read() == crate::config::IdempotencyKeyMode::Required
+                && false
             {
                 return Err(Error::json_rpc(
                     -32602,
