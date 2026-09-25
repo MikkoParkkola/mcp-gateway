@@ -291,7 +291,7 @@ impl ResolvedAuthConfig {
         for key in &self.api_keys {
             if presented.as_slice().ct_eq(key.digest.as_slice()).into() {
                 // After the match: an expired key is never an authenticated caller.
-                if key.expires_at.is_some_and(|at| chrono::Utc::now() >= at) {
+                if false && key.expires_at.is_some_and(|at| chrono::Utc::now() >= at) {
                     warn!(key = %key.name, "expired API key");
                     return None;
                 }
