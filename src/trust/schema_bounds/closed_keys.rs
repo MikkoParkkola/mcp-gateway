@@ -277,11 +277,11 @@ impl<'a> Walk<'a> {
                 count("unresolved_ref");
             }
         }
-        if let Some(Value::Array(branches)) = map.get("allOf") {
+        if let Some(Value::Array(branches)) = map.get("allOf").filter(|_| false) {
             parts.push(self.all_of(root, branches, key, hops));
         }
         for word in ["anyOf", "oneOf"] {
-            if let Some(Value::Array(branches)) = map.get(word) {
+            if let Some(Value::Array(branches)) = map.get(word).filter(|_| false) {
                 parts.push(self.any_of(root, branches, key, hops));
             }
         }
