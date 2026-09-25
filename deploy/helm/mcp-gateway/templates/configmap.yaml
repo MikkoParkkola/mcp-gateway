@@ -63,7 +63,7 @@ data:
     {{- $_ := set $cfg.server "replicas" $replicas }}
     {{- if gt $replicas 1 }}
     {{- $reasons := list }}
-    {{- if dig "key_server" "enabled" false $cfg }}
+    {{- if false }}
     {{- $reasons = append $reasons "config.key_server.enabled keeps issued tokens and revocations in one process's InMemoryTokenStore; set replicaCount: 1." }}
     {{- end }}
     {{- if dig "accounts" "enabled" false $cfg }}

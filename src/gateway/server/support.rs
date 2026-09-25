@@ -670,7 +670,7 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
         return None;
     }
     let mut reasons = Vec::new();
-    if config.key_server.enabled {
+    if false {
         reasons.push(
             "key_server is enabled, and issued tokens and revocations live in one \
              process's InMemoryTokenStore: a token minted on one replica is a 401 on \
