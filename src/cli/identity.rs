@@ -55,7 +55,8 @@ pub enum IdentityGrantsCommand {
         #[arg(long)]
         subject_label: Option<String>,
 
-        /// Exact agent id allowed by this grant. Mutually exclusive with --any-agent.
+        /// Exact proven agent: `mtls:<SAN URI or CN>` or `jwt:<client_id>`.
+        /// Mutually exclusive with --any-agent.
         #[arg(long)]
         agent: Option<String>,
 

@@ -140,10 +140,11 @@ impl CallerIdentityConfig {
 }
 
 impl Config {
-    /// Key-server issuers, then caller identity, whose authority must not
-    /// collide with any of them.
+    /// Key-server issuers, agent-identity allowlist entries, then caller
+    /// identity, whose authority must not collide with any issuer.
     pub(crate) fn validate_identity_sources(&self) -> crate::Result<()> {
         self.key_server.validate()?;
+        self.security.agent_identity.validate()?;
         self.security
             .caller_identity
             .validate(self.auth.enabled, &self.key_server)
