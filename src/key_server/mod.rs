@@ -33,6 +33,8 @@
 
 pub mod audit;
 pub mod handler;
+#[cfg(test)]
+mod identity_rules_tests;
 pub mod oidc;
 pub mod policy;
 pub mod store;
