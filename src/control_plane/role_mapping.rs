@@ -30,6 +30,34 @@ pub struct ControlPlaneConfig {
     pub role_mapping: ControlPlaneRoleMappingConfig,
     /// SIEM evidence-export runtime configuration (MIK-6703). Opt-in.
     pub export: super::ExportConfig,
+    /// Directory for the governance store (`store/`) and its audit log
+    /// (`audit.jsonl`). Unset: `<config dir>/<config stem>-control-plane`, so
+    /// existing installs do not move. Set: must be absolute after `~`
+    /// expansion, and a start that cannot write it refuses to serve. The store
+    /// takes no lease, so one gateway process per directory. Restart-required.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_dir: Option<String>,
+}
+
+/// Where the control-plane store lives, resolved once at startup from
+/// `store_dir` and the config path (MIK-7570 F6). The admin API reports it, so
+/// it names the directory the running process chose, not a later reload's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneBaseInfo {
+    /// Directory holding `store/` and `audit.jsonl`.
+    pub path: std::path::PathBuf,
+    /// Which setting chose `path`.
+    pub source: ControlPlaneBaseSource,
+}
+
+/// Which setting chose the control-plane base directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlPlaneBaseSource {
+    /// `control_plane.store_dir` names it.
+    Explicit,
+    /// Derived from the config file's location, as before `store_dir` existed.
+    Default,
 }
 
 /// Ordered, first-match-wins identity-to-role rules.

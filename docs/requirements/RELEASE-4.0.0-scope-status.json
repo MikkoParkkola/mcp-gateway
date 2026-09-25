@@ -509,11 +509,14 @@
     },
     {
       "id": "MIK-7570.GOVSTORE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/server/control_plane_store.rs",
+        "tests/f6_control_plane_store.rs"
+      ],
+      "note": "Graded 2026-09-25 (F6, PR 794). Green CI run 36093018826 at 33412ca6. Configurable: store_opens_at_explicit_store_dir (src/gateway/server/control_plane_store.rs:193), export_reads_governance_log_from_store_dir (:314), default_store_path_unchanged (:291) and store_dir_change_is_restart_required (:300). An explicit unwritable location refuses start: explicit_unopenable_store_dir_refuses_start (:217, ENOTDIR) and relative_store_dir_refuses_start (:263); the write probe follows no planted symlink per write_probe_does_not_follow_a_planted_symlink (:238). A read-only store states its reason: default_unwritable_store_degrades_without_refusing (:279, ENOTDIR) and, in the admin API, default_unwritable_store_reports_store_unavailable and auth_off_reports_auth_off (tests/f6_control_plane_store.rs:61, :106). Red first: CI 36082406900 (7 F6 tests) and CI 36092536484 (symlink test). Delete-the-branch on Spark: an explicit failure degrading like the default reddens only :217; export ignoring the resolved base reddens only :314; File::create in the probe reddens only :238."
     },
     {
       "id": "GH612.CODEMODE.1",

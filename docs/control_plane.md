@@ -46,6 +46,10 @@ The response includes:
 - `view`: read-only server, tool, trust evidence, runtime health, and audit evidence projection.
 - `decision_queue`: human-gated items derived from policy, trust, server, grant, and runtime state.
 - `current_limits`: machine-readable limitations of this slice.
+- `mutation_disabled_reason`: why governance mutation is off, `auth_off` or
+  `store_unavailable`. Absent while mutation is enabled.
+- `base_source`: `explicit` when `control_plane.store_dir` chose the store
+  directory, `default` when it came from the config file's location.
 
 The local API derives server and runtime health from the in-process backend
 registry. It does not fetch tools over the network; it only reports tools already
@@ -58,6 +62,34 @@ The same digest source is projected into live `tools/list` descriptors as a
 small `trustCard` reference so Control Plane rows, protocol clients, and policy
 consumers can correlate a tool descriptor with its local TrustCard evidence
 without embedding the full TrustCard in every descriptor.
+
+## Store location
+
+Governance mutation needs auth on and a writable store directory. The directory
+holds `store/` (grants and policies) and `audit.jsonl` (the governance audit log,
+which SIEM export also reads).
+
+```yaml
+control_plane:
+  store_dir: /var/lib/mcp-gateway/control-plane
+```
+
+- **Unset** (the default): `<config dir>/<config stem>-control-plane`, for
+  example `/etc/mcp-gateway/gateway-control-plane` for
+  `--config /etc/mcp-gateway/gateway.yaml`, or `~/.mcp-gateway/control-plane`
+  with no config file. If that directory cannot be opened, the gateway still
+  starts, serves governance read-only, logs a WARN naming the path, reports
+  `mutation_disabled_reason: store_unavailable`, and answers mutations with 503
+  `CONTROL_STORE_UNAVAILABLE` and a reason naming the path.
+- **Set**: `~` is expanded, and the result must be absolute; a relative value
+  refuses start. With auth on, a directory the gateway cannot create and write
+  also refuses start, with the path and the OS error.
+- The store takes no lease. Run one gateway process per `store_dir`.
+- Changing `store_dir` takes a restart. A reload reports `control_plane` as
+  restart-required and the running process keeps its directory.
+- Every start logs the directory in use and whether it came from `store_dir`.
+- Moving an existing store is a copy of the directory; the gateway does not
+  migrate it.
 
 ## Local Web UI
 

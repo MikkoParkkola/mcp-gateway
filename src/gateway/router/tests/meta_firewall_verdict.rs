@@ -232,6 +232,7 @@ async fn state_with_firewalls(
         firewall: Some(handler_firewall),
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: None,
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),

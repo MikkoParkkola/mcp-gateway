@@ -37,6 +37,7 @@ upgrading a running deployment.
 | 14 | Cached and idempotent results are kept per caller | None; expect per-key cache hit rates and a one-TTL idempotency gap |
 | 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
 | 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
+| 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -306,6 +307,20 @@ storage exists.
 The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
 startup). That is tracked separately.
+## 22. The governance store location is configurable
+
+New `control_plane.store_dir`. When it is unset, the store stays at
+`<config dir>/<config stem>-control-plane`, so existing installs do not move. When it is set, it
+must be absolute after `~` expansion, and with auth on a gateway that cannot write it refuses to
+start. The
+store has no lease: one gateway process per `store_dir`. The admin API
+(`GET /ui/api/control-plane`) adds `mutation_disabled_reason` (`auth_off` or `store_unavailable`)
+and `base_source` (`explicit` or `default`), and a 503 mutation answer names the cause and the
+path.
+
+Helm: the chart's config directory is a read-only ConfigMap, so the default location cannot be
+created there, and a chart install reports `store_unavailable`. Governance mutation on Helm needs
+a persistent `store_dir`; an `emptyDir` would lose a revocation on restart.
 
 ## After upgrading
 

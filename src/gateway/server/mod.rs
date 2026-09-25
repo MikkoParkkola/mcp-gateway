@@ -6,6 +6,7 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
+mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod persistence;
@@ -59,6 +60,7 @@ use crate::security::firewall::Firewall;
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
+use control_plane_store::{build_control_plane_store, control_plane_base};
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
 #[cfg(feature = "cost-governance")]
@@ -201,75 +203,6 @@ async fn load_configured_identity_grants(
     }
 }
 
-/// Open the durable control-plane store (grants/policies plus a
-/// governance-scoped audit log, separate from the invocation transparency log;
-/// ADR-005, MIK-6685).
-///
-/// Returns `None` — disabling the governance mutation routes (they answer 503) —
-/// when auth is disabled, since an auth-disabled gateway treats every caller as
-/// an anonymous admin and a durable governance mutation surface must not be open
-/// to unauthenticated callers. Also returns `None` if the data directory or the
-/// audit log cannot be opened; never fatal to startup.
-///
-/// The store is rooted next to the config file when one is known
-/// (`<config-dir>/control-plane`), so distinct gateway instances do not share
-/// governance state; otherwise it falls back to `~/.mcp-gateway/control-plane`.
-/// Governance audit entries reuse the transparency log's signing identity, so
-/// they are signed iff the invocation log is.
-/// Per-config control-plane base directory (governance store + audit log).
-/// Shared by [`build_control_plane_store`] and the SIEM export wiring so both
-/// resolve the identical `audit.jsonl` path (MIK-6703).
-fn control_plane_base(config_path: Option<&std::path::Path>) -> std::path::PathBuf {
-    config_path.map_or_else(
-        || expand_home_path("~/.mcp-gateway/control-plane"),
-        |p| {
-            let dir = p.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("gateway");
-            dir.join(format!("{stem}-control-plane"))
-        },
-    )
-}
-
-fn build_control_plane_store(
-    config: &Config,
-    config_path: Option<&std::path::Path>,
-) -> Option<Arc<dyn crate::control_plane::ControlPlaneStore>> {
-    use crate::control_plane::FileControlPlaneStore;
-    use crate::security::TransparencyLogger;
-    use crate::security::transparency_log::TransparencyLogConfig;
-
-    if !config.auth.enabled {
-        info!(
-            "control-plane governance mutations disabled: auth is off (would expose an anonymous-admin mutation surface)"
-        );
-        return None;
-    }
-
-    // Derive a per-config store directory so distinct gateway instances do not
-    // share governance state (see control_plane_base).
-    let base = control_plane_base(config_path);
-    let audit_cfg = Arc::new(TransparencyLogConfig {
-        enabled: true,
-        path: base.join("audit.jsonl").to_string_lossy().into_owned(),
-        key_id: config.security.transparency_log.key_id.clone(),
-        shared_secret: config.security.transparency_log.shared_secret.clone(),
-    });
-    let audit = match TransparencyLogger::open(audit_cfg) {
-        Ok(logger) => Arc::new(logger),
-        Err(e) => {
-            warn!(error = %e, "control-plane audit log unavailable; governance mutations disabled");
-            return None;
-        }
-    };
-    match FileControlPlaneStore::open(base.join("store"), audit) {
-        Ok(store) => Some(Arc::new(store) as Arc<dyn crate::control_plane::ControlPlaneStore>),
-        Err(e) => {
-            warn!(error = %e, "control-plane store unavailable; governance mutations disabled");
-            None
-        }
-    }
-}
-
 /// Spawn the SIEM evidence-export background task (MIK-6703).
 ///
 /// Returns `Some(status)` when export is enabled and both log exporters open;
@@ -280,7 +213,7 @@ fn build_control_plane_store(
 /// re-anchored entries are signature-verified (SIEM.SIG.1, needs MIK-6700).
 fn spawn_export_task(
     config: &Config,
-    config_path: Option<&std::path::Path>,
+    control_plane_base: &crate::control_plane::role_mapping::ControlPlaneBaseInfo,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Option<Arc<crate::control_plane::ExportStatus>> {
     use crate::control_plane::{
@@ -297,7 +230,7 @@ fn spawn_export_task(
     }
 
     let inv_path = expand_home_path(&config.security.transparency_log.path);
-    let gov_path = control_plane_base(config_path).join("audit.jsonl");
+    let gov_path = control_plane_base.path.join("audit.jsonl");
     let secret = config.security.transparency_log.shared_secret.clone();
     let sink_path = expand_home_path(&ecfg.sink_path);
 
@@ -1591,11 +1524,11 @@ impl Gateway {
         );
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
-        let export_status = spawn_export_task(
-            &self.config,
-            self.config_path.as_deref(),
-            shutdown_tx.subscribe(),
-        );
+        // The control-plane base, resolved once: the export task, the store
+        // and the admin API all name this directory.
+        let control_plane_base = control_plane_base(&self.config, self.config_path.as_deref());
+        let export_status =
+            spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
 
         // Wire the config hot-reload *context* into meta_mcp before it moves
         // into AppState. The file watcher that can mutate `live_config` is
@@ -1830,8 +1763,7 @@ impl Gateway {
         #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
 
-        let control_plane_store =
-            build_control_plane_store(&self.config, self.config_path.as_deref());
+        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
 
         // The durable task runtime, opened before any listener exists.
         //
@@ -1977,6 +1909,7 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
+            control_plane_base: Some(control_plane_base),
             tasks: task_service,
             task_executor,
             subscriptions,
