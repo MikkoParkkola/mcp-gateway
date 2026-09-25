@@ -29,7 +29,7 @@ pub fn api_key_digest_spec(key: &[u8]) -> String {
 
 /// Parse `sha256:` followed by exactly 64 lowercase hex characters.
 #[must_use]
-pub fn parse_api_key_digest(spec: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_api_key_digest(spec: &str) -> Option<[u8; 32]> {
     let hex_part = spec.strip_prefix(DIGEST_PREFIX)?;
     if hex_part.len() != 64
         || !hex_part
@@ -44,7 +44,7 @@ pub fn parse_api_key_digest(spec: &str) -> Option<[u8; 32]> {
 }
 
 /// API key configuration for multi-client access.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
     /// Legacy plaintext key. Parsed only so the load can refuse it by name;
     /// never written back.
@@ -126,7 +126,7 @@ impl ApiKeyConfig {
 
     /// True when `now` is at or past `expires_at`.
     #[must_use]
-    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
+    pub(crate) fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         self.expires_at.is_some_and(|at| now >= at)
     }
 }

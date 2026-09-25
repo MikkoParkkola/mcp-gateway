@@ -38,6 +38,7 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 pub use input_schema::InputSchemaEnforcement;
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
+pub(crate) use features::parse_api_key_digest;
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
@@ -48,7 +49,6 @@ pub use features::{
     PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
     RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
     StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
-    parse_api_key_digest,
 };
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
