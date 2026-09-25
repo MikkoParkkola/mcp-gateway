@@ -174,7 +174,10 @@ echo "== helm_replicas_guard_per_process_state =="
 # task store.
 grep -qE '^  replicas: 1$' <<<"$dep" || fail "default replicaCount is not 1"
 grep -qE '^      replicas: 1$' <<<"$cm" || fail "rendered gateway.yaml does not declare server.replicas: 1"
-grep -qE '^    type: RollingUpdate$' <<<"$dep" || fail "a default install lost RollingUpdate"
+# Recreate whenever per-process state is on, the default modern protocol
+# included: a surge pod holds its own task store, tokens or custody.
+grep -qE '^    type: Recreate$' <<<"$dep" || fail "a default install (modern protocol on) does not render Recreate"
+grep -q 'rollingUpdate' <<<"$dep" && fail "the default Recreate still renders a rollingUpdate block"
 two=(--set replicaCount=2 --set config.server.modern_protocol=false)
 for case in "key_server.enabled=true:InMemoryTokenStore" "accounts.enabled=true:single_process"; do
   out="$("$HELM" template t "$CHART" "${two[@]}" --set "config.${case%%:*}" 2>&1)" \
@@ -189,6 +192,7 @@ out="$("$HELM" template t "$CHART" --set config.server.replicas=3 2>&1)" \
 multi="$("$HELM" template t "$CHART" "${two[@]}" 2>&1)" \
   || fail "replicaCount=2 with modern_protocol=false did not render"
 grep -qE '^      replicas: 2$' <<<"$multi" || fail "server.replicas does not follow replicaCount=2"
+grep -qE '^    type: RollingUpdate$' <<<"$multi" || fail "no per-process state, yet no RollingUpdate"
 ks="$("$HELM" template t "$CHART" --set config.key_server.enabled=true --show-only templates/deployment.yaml 2>&1)"
 grep -qE '^    type: Recreate$' <<<"$ks" || fail "key_server does not render strategy Recreate"
 grep -q 'rollingUpdate' <<<"$ks" && fail "Recreate still renders a rollingUpdate block"

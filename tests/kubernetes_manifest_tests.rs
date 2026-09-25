@@ -59,9 +59,16 @@ fn deployment_defaults_are_ha_safe_probe_backed_and_restricted() {
     // One: key-server tokens, accounts custody and task records are per process
     // (UPGRADING-4.0 item 37), and the modern protocol reaches the task store.
     assert_eq!(deployment["spec"]["replicas"].as_i64(), Some(1));
+    // Recreate: the shipped config serves the modern protocol, so a surge pod
+    // would hold a second task store beside the old one (UPGRADING-4.0 item 37).
     assert_eq!(
-        deployment["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"].as_i64(),
-        Some(0)
+        str_at(&deployment, &["spec", "strategy", "type"]),
+        "Recreate"
+    );
+    assert!(
+        deployment["spec"]["strategy"]
+            .get("rollingUpdate")
+            .is_none()
     );
 
     let container = &deployment["spec"]["template"]["spec"]["containers"][0];
@@ -586,4 +593,25 @@ fn enterprise_alpha_config_is_group_readable_without_a_world_bit() {
         .expect("config volume");
     // 288 is octal 0440.
     assert_eq!(config["configMap"]["defaultMode"].as_i64(), Some(0o440));
+}
+
+/// The Gateway CRD and its example must admit the single replica the gateway
+/// requires while per-process state is on; a schema minimum of 2 forbade it.
+#[test]
+fn gateway_crd_and_example_admit_one_replica() {
+    let crd = docs(CRDS)
+        .into_iter()
+        .find(|doc| str_at(doc, &["spec", "names", "kind"]) == "Gateway")
+        .expect("Gateway CRD");
+    let replicas = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+        ["replicas"];
+    assert_eq!(replicas["minimum"].as_i64(), Some(1), "{replicas:?}");
+    assert_eq!(replicas["default"].as_i64(), Some(1), "{replicas:?}");
+    let example = docs(include_str!(
+        "../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+    ))
+    .into_iter()
+    .find(|doc| str_at(doc, &["kind"]) == "Gateway")
+    .expect("example Gateway");
+    assert_eq!(example["spec"]["replicas"].as_i64(), Some(1));
 }
