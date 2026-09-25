@@ -227,7 +227,6 @@ impl CapabilityExecutor {
             self.env
                 .get()
                 .resolve(var_name)
-                .filter(|v| !v.is_empty())
                 .ok_or_else(|| {
                     Error::Config(format!(
                         "Environment variable '{}' not set or empty (required for {})",
