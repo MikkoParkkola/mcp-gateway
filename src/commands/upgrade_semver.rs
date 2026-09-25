@@ -109,9 +109,6 @@ impl Eq for SemVer {}
 impl fmt::Display for SemVer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)?;
-        if !self.pre.is_empty() {
-            write!(f, "-{}", self.pre.join("."))?;
-        }
         Ok(())
     }
 }
