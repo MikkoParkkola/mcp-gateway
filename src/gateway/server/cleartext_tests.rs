@@ -27,7 +27,14 @@ fn auth_on_network_bind_without_tls_refused() {
         .expect("bearer tokens over plain HTTP on 0.0.0.0 must be refused");
     assert!(refusal.contains("the bind address 0.0.0.0"), "{refusal}");
     assert!(refusal.contains("server.cleartext_http"), "{refusal}");
-    assert!(refusal.contains("mtls"), "{refusal}");
+    for remedy in [
+        "mtls",
+        "tls_terminated_upstream",
+        "cluster_internal",
+        "host_local_publish",
+    ] {
+        assert!(refusal.contains(remedy), "names {remedy}: {refusal}");
+    }
 }
 
 #[test]
@@ -89,32 +96,33 @@ fn cluster_internal_requires_service_host() {
         c.server.cluster_domain = domain.map(str::to_string);
         serve_refusal(&c)
     };
-    for (url, domain) in [
-        (Some(SERVICE_URL), None),
-        (Some("http://gw.ns.svc:39400"), None),
-        (
-            Some("http://gw.ns.svc.corp.example:39400"),
-            Some("corp.example"),
-        ),
-    ] {
-        assert_eq!(accepts(url, domain), None, "{url:?} names a Service");
+    // The chart smoke reads the same rows, so gateway and chart agree.
+    let rows = include_str!("../../../tests/fixtures/c3_service_hosts.txt")
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'));
+    let mut seen = 0;
+    for row in rows {
+        let cols: Vec<&str> = row.split_whitespace().collect();
+        let [verdict, url, domain] = cols[..] else {
+            panic!("malformed fixture row {row:?}");
+        };
+        let domain = (domain != "-").then_some(domain);
+        let refusal = accepts(Some(url), domain);
+        match verdict {
+            "accept" => assert_eq!(refusal, None, "{row}: names a Service"),
+            "reject" => assert!(refusal.is_some(), "{row}: is not a Service host"),
+            other => panic!("unknown verdict {other:?} in {row:?}"),
+        }
+        seen += 1;
     }
+    assert!(seen >= 7, "the fixture lost rows: {seen}");
+    assert!(
+        accepts(None, None).is_some(),
+        "an unset public_url names nothing"
+    );
     let ingress = accepts(Some("https://mcp.example.com"), None).expect("an ingress host");
     assert!(ingress.contains("tls_terminated_upstream"), "{ingress}");
     assert!(ingress.contains("mcp.example.com"), "{ingress}");
-    for (url, domain) in [
-        (None, None),
-        // `.svc.` in the middle of a public name is not a Service.
-        (Some("https://api.svc.example.com"), None),
-        (Some("http://gw.svc.cluster.local"), None),
-        // A custom cluster domain replaces cluster.local.
-        (Some(SERVICE_URL), Some("corp.example")),
-    ] {
-        assert!(
-            accepts(url, domain).is_some(),
-            "{url:?} is not a Service host"
-        );
-    }
 }
 
 #[test]

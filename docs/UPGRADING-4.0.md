@@ -834,9 +834,11 @@ at WARN on every start.
 The shipped deployments keep starting (item 21):
 
 - **Helm chart:** credential mode renders `server.cleartext_http` from the new value
-  `server.cleartextHttp`, default `cluster_internal`, and then always renders the chart's
-  NetworkPolicy. The chart fails to render when `cluster_internal` meets a `service.type` other
-  than `ClusterIP` or a `config.server.public_url` that is not a Service name; set
+  `server.cleartextHttp`, default `cluster_internal`, and then always renders an ingress-only
+  NetworkPolicy (egress is restricted only with `networkPolicy.enabled: true`, so backends on any
+  port stay reachable). The chart fails to render when `cluster_internal` meets a `service.type`
+  other than `ClusterIP` or a `config.server.public_url` other than this release's own Service
+  name (`<fullname>.<namespace>.svc[.<cluster_domain>]`); set
   `server.cleartextHttp=tls_terminated_upstream` when an ingress terminates TLS in front of the
   pod. Mesh mode accepts no credential and renders no value.
 - **enterprise-alpha:** `base/configmap.yaml` sets `cleartext_http: cluster_internal` beside its

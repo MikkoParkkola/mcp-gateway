@@ -79,8 +79,9 @@ data:
     {{- end }}
     {{- $host := regexReplaceAll ":[0-9]+$" (urlParse $cfg.server.public_url).host "" }}
     {{- $domain := $cfg.server.cluster_domain | default "cluster.local" }}
-    {{- if not (regexMatch (printf "^[^.]+\\.[^.]+\\.svc(\\.%s)?$" (regexQuoteMeta $domain)) $host) }}
-    {{- fail (printf "config.server.public_url host %s is not this gateway's Kubernetes Service name, but server.cleartextHttp is cluster_internal: %s." $host $fix) }}
+    {{- $svc := printf "%s.%s.svc" (include "mcp-gateway.fullname" .) .Release.Namespace }}
+    {{- if not (regexMatch (printf "^%s(\\.%s)?$" (regexQuoteMeta $svc) (regexQuoteMeta $domain)) $host) }}
+    {{- fail (printf "config.server.public_url host %s is not this release's Service name %s[.%s], but server.cleartextHttp is cluster_internal: %s." $host $svc $domain $fix) }}
     {{- end }}
     {{- end }}
     {{- toYaml $cfg | nindent 4 }}

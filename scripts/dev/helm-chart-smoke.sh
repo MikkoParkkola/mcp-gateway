@@ -275,6 +275,36 @@ echo "== cluster_internal_renders_a_network_policy =="
 kinds="$("$HELM" template t "$CHART" | grep '^kind:' | awk '{print $2}' | sort -u | paste -sd, -)"
 grep -q 'NetworkPolicy' <<<"$kinds" \
   || fail "cluster_internal is the default but no NetworkPolicy renders: [$kinds]"
+# Forced by cluster_internal alone, the policy restricts ingress only: backends
+# listen on any port, and an egress allow-list nobody asked for would cut them
+# off. networkPolicy.enabled keeps the restrictive Ingress+Egress form.
+forced="$("$HELM" template t "$CHART" --show-only templates/networkpolicy.yaml)"
+grep -qE '^ *policyTypes: \["Ingress"\]$' <<<"$forced" \
+  || fail "the cluster_internal NetworkPolicy is not Ingress-only"
+! grep -qE '^ *egress:' <<<"$forced" \
+  || fail "the cluster_internal NetworkPolicy restricts egress; backends on other ports would break"
+optin="$("$HELM" template t "$CHART" --set networkPolicy.enabled=true --show-only templates/networkpolicy.yaml)"
+grep -qE '^ *policyTypes: \["Ingress", "Egress"\]$' <<<"$optin" && grep -qE '^ *egress:' <<<"$optin" \
+  || fail "networkPolicy.enabled no longer renders the Ingress+Egress policy"
+
+echo "== cluster_internal_requires_this_releases_service_host =="
+# The rows the gateway's own test reads (cluster_internal_requires_service_host).
+# Rendered as fullname gw in namespace ns, so accepted rows name gw.ns.svc.
+while read -r verdict url domain; do
+  case "$verdict" in ''|'#'*) continue ;; esac
+  args=(--namespace ns --set fullnameOverride=gw --set "config.server.public_url=$url")
+  [ "$domain" = "-" ] || args+=(--set "config.server.cluster_domain=$domain")
+  if "$HELM" template gw "$CHART" "${args[@]}" --show-only templates/configmap.yaml >/dev/null 2>&1; then
+    [ "$verdict" = accept ] || fail "public_url $url (domain $domain) rendered; the gateway refuses it"
+  else
+    [ "$verdict" = reject ] || fail "public_url $url (domain $domain) failed to render; the gateway accepts it"
+  fi
+done <"$CHART/../../../tests/fixtures/c3_service_hosts.txt"
+# Chart-only: another release's Service is a Service, but not this gateway's.
+if "$HELM" template gw "$CHART" --namespace ns --set fullnameOverride=gw \
+    --set config.server.public_url=http://other.ns.svc:39400 >/dev/null 2>&1; then
+  fail "a public_url naming another release's Service rendered under cluster_internal"
+fi
 
 echo "== cluster_internal_refuses_off_cluster_publishing =="
 for bad in "service.type=NodePort" "service.type=LoadBalancer" \

@@ -93,8 +93,10 @@ pub(super) fn cleartext_credential_refusal(config: &Config) -> Option<String> {
     Some(format!(
         "refusing to serve HTTP at {exposure}: {credential}, so bearer tokens and API keys \
          would cross the network in cleartext. Enable mtls (TLS on this listener), or set \
-         server.cleartext_http = tls_terminated_upstream if a proxy terminates TLS in front \
-         of this gateway."
+         server.cleartext_http to who protects them: tls_terminated_upstream if a proxy \
+         terminates TLS in front of this gateway, cluster_internal if callers reach it only \
+         by its Kubernetes Service name (server.public_url), or host_local_publish if a \
+         container's port is published on loopback only."
     ))
 }
 
