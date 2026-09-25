@@ -174,14 +174,7 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
     })?;
     let file = serde_json::from_str::<IdentityGrantFile>(&content)
         .or_else(|_| serde_yaml::from_str::<IdentityGrantFile>(&content))
-        .map_err(|e| {
-            matching::bare_exact_refusal(path, &content).unwrap_or_else(|| {
-                format!(
-                    "failed to parse identity grants file {}: {e}",
-                    path.display()
-                )
-            })
-        })?;
+        .map_err(|e| matching::parse_refusal(path, &content, &e))?;
 
     if file.schema_version != IDENTITY_GRANTS_FILE_SCHEMA_VERSION {
         return Err(format!(

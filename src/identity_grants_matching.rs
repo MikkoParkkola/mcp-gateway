@@ -18,7 +18,20 @@ pub struct GrantAgentKey {
     /// The namespace `id` belongs to.
     pub source: ProofSource,
     /// The proven id: SAN URI or bare CN for mTLS, `sub` for JWT.
+    #[serde(deserialize_with = "non_empty_id")]
     pub id: String,
+}
+
+/// An empty proven id matches no caller, so a row naming one is a dead grant.
+/// Refused wherever a key is read, as the CLI refuses to write one.
+fn non_empty_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let id = String::deserialize(deserializer)?;
+    if id.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "an exact agent id is empty; it would match no caller",
+        ));
+    }
+    Ok(id)
 }
 
 impl std::fmt::Display for GrantAgentKey {
@@ -38,6 +51,23 @@ impl GrantAgent {
     }
 }
 
+/// Why a grants file failed its typed parse. `yaml_error` is the fallback
+/// parser's; a JSON file is re-read by `serde_json` so its own error, not
+/// YAML's view of JSON, is the one reported.
+pub(super) fn parse_refusal(
+    path: &std::path::Path,
+    content: &str,
+    yaml_error: &serde_yaml::Error,
+) -> String {
+    bare_exact_refusal(path, content).unwrap_or_else(|| {
+        let error = remainder_error(content).unwrap_or_else(|| yaml_error.to_string());
+        format!(
+            "failed to parse identity grants file {}: {error}",
+            path.display()
+        )
+    })
+}
+
 /// The refusal for a grants file holding 3.x bare `exact` rows, naming every
 /// one, or `None` when there are none.
 ///
@@ -47,7 +77,7 @@ impl GrantAgent {
 /// goes through the same reader and N rows must not cost N attempts. No
 /// source is defaulted and nothing becomes `any`: each would be a guess, and
 /// both widen.
-pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Option<String> {
+fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Option<String> {
     use serde_yaml::Value;
     // JSON is YAML, so one parse covers both encodings. 3.x wrote YAML rows
     // as a tag (`agent: !exact runner`) and JSON rows as `{"exact": "runner"}`.
@@ -58,11 +88,7 @@ pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Optio
         .into_iter()
         .flatten()
         .filter_map(|row| {
-            let id = match row.get("agent")? {
-                Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
-                agent @ Value::Mapping(_) => agent.get("exact").and_then(Value::as_str),
-                _ => None,
-            }?;
+            let id = bare_exact_id(row)?;
             let grant_id = row
                 .get("grant_id")
                 .and_then(Value::as_str)
@@ -77,12 +103,45 @@ pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Optio
              id: <SAN URI or bare CN>}}` or `agent: !exact {{source: jwt, id: <client_id>}}` \
              (JSON: `\"agent\": {{\"exact\": {{\"source\": \"jwt\", \"id\": ...}}}}`), or as \
              `agent: any` only if every agent of that subject is meant. The gateway will not \
-             choose.",
+             choose.{}",
             path.display(),
             rows.len(),
-            rows.join(", ")
+            rows.join(", "),
+            remainder_error(content)
+                .map(|e| format!(" Apart from those rows the file also fails to parse: {e}"))
+                .unwrap_or_default()
         )
     })
+}
+
+/// The id of a 3.x bare `exact` row: `!exact runner` or `{exact: runner}`.
+fn bare_exact_id(row: &serde_yaml::Value) -> Option<&str> {
+    match row.get("agent")? {
+        serde_yaml::Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
+        agent @ serde_yaml::Value::Mapping(_) => agent.get("exact")?.as_str(),
+        _ => None,
+    }
+}
+
+/// Why the file still fails with its bare rows removed, so a refusal naming
+/// them does not hide a second defect behind them. Each encoding is re-read
+/// by its own parser: `serde_yaml` refuses the JSON map form of `exact`.
+fn remainder_error(content: &str) -> Option<String> {
+    if let Ok(mut file) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(rows) = file.get_mut("grants").and_then(|g| g.as_array_mut()) {
+            rows.retain(|row| !row.pointer("/agent/exact").is_some_and(|id| id.is_string()));
+        }
+        return serde_json::from_value::<super::IdentityGrantFile>(file)
+            .err()
+            .map(|e| e.to_string());
+    }
+    let mut file: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    if let Some(rows) = file.get_mut("grants").and_then(|g| g.as_sequence_mut()) {
+        rows.retain(|row| bare_exact_id(row).is_none());
+    }
+    serde_yaml::from_value::<super::IdentityGrantFile>(file)
+        .err()
+        .map(|e| e.to_string())
 }
 
 // Identity is `(authority, subject)`. The label is whatever each side had to
