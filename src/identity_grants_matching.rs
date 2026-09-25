@@ -64,6 +64,7 @@ pub(super) fn parse_refusal(
         let error = serde_json::from_str::<serde_json::Value>(content)
             .ok()
             .and_then(|_| serde_json::from_str::<super::IdentityGrantFile>(content).err())
+            .as_ref()
             .map_or_else(|| yaml_error.to_string(), ToString::to_string);
         format!(
             "failed to parse identity grants file {}: {error}",
