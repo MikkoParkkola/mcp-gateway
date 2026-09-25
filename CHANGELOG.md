@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
   header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §47.
 
+### Fixed
+
+- **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`
+  dropped every inbound notification. It now delivers `notifications/progress` to the call whose
+  request carried that `progressToken`, under the stdio transport's rules: progress only, the
+  token must belong to a live call, and a frame it cannot attribute is dropped. The caller gets
+  its own token back through the request-scoped translation, as on stdio.
+
 ### Changed
 
 - **API keys are configured as sha256 digests, with an optional expiry
