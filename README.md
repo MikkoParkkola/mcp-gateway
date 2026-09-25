@@ -359,7 +359,8 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 ### Protocol and transport
 
 - **MCP versions**: the `initialize` handshake negotiates up to 2025-11-25. The newer 2026-07-28 revision is reached only on the stateless `POST /mcp` path, via the `MCP-Protocol-Version` header; it is served by default and is switched off with `server.modern_protocol: false`
-- **Transports**: stdio, Streamable HTTP, SSE, WebSocket
+- **Backend transports**: stdio, Streamable HTTP, SSE, WebSocket (outbound)
+- **Client transports**: clients connect via stdio or HTTP (`POST /mcp`); the gateway accepts no inbound WebSocket
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
 - **Config discovery**: auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/`
