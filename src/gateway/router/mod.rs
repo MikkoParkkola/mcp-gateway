@@ -197,8 +197,13 @@ impl AppState {
     /// and listeners on `subscriptions/listen`. Kept in one function because
     /// telling only one of them is the failure mode — the capability is
     /// advertised as `listChanged: true` to both.
-    pub fn announce_tools_changed(&self) {
-        self.proxy_manager.broadcast_tools_list_changed();
+    ///
+    /// The stream audience is scoped to callers who may access `backend`;
+    /// `subscriptions/listen` is not yet (A5c).
+    pub async fn announce_tools_changed(&self, backend: &str) {
+        self.proxy_manager
+            .broadcast_tools_list_changed(backend)
+            .await;
         self.subscriptions
             .publish(crate::gateway::subscription_registry::tools_list_changed());
     }

@@ -25,6 +25,8 @@ pub mod oauth;
 // auth layer that must run first.
 mod openwebui_adapter;
 pub mod proxy;
+#[cfg(test)]
+mod proxy_scope_tests;
 pub mod recovery;
 mod router;
 /// The one constructor that turns a verified identity into a grant subject,
