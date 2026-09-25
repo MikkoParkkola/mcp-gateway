@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops, and never logs more of its URL than the origin. `mcp-gateway add`, the admin UI and
   discovery store a `ws://`/`wss://` URL as `ws_url`. Refused on `ws_url`: cleartext `ws://`
   credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
-  header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §41.
+  header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §47.
 
 ### Changed
 
@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/UPGRADING-4.0.md` item 41.
 - **Breaking: a backend that fails to start counts toward its circuit breaker, on every
   transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
-  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §42.
+  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §48.
 - **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
   line prints the upgrade request with its query string and headers.
 

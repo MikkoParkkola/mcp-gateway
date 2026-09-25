@@ -163,7 +163,7 @@ backends:
     description: "Sentry issues"
 
   realtime:
-    # WebSocket backend: headers ride the upgrade request once (UPGRADING-4.0 §41).
+    # WebSocket backend: headers ride the upgrade request once (UPGRADING-4.0 §47).
     ws_url: "wss://rt.example.com/mcp"
     headers:
       Authorization: "Bearer ${RT_TOKEN}"
