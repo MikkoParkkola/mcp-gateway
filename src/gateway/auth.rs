@@ -991,6 +991,13 @@ pub async fn auth_middleware(
     let token = token.as_str();
 
     // 1. Try static auth (existing behavior)
+    let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+    if auth_config.api_keys.iter().any(|k| {
+        k.digest.as_slice() == presented.as_slice()
+            && k.expires_at.is_some_and(|at| chrono::Utc::now() >= at)
+    }) {
+        return axum::response::IntoResponse::into_response(axum::http::StatusCode::FORBIDDEN);
+    }
     if let Some((client, api_key)) = auth_config.validate_token_with_origin(token) {
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
