@@ -468,9 +468,11 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        let _ = backend;
-        self.multiplexer.broadcast(notification);
-        debug!("Broadcast notifications/tools/list_changed to all sessions");
+        let reached = self
+            .multiplexer
+            .broadcast_to_backend(&notification, backend)
+            .await;
+        debug!(backend, reached, "Sent notifications/tools/list_changed");
     }
 
     /// Update the cached roots (e.g., from a client's roots/list response).
