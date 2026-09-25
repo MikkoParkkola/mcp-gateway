@@ -130,6 +130,7 @@ fn context<'a>(
         agent_id: None,
         agent_declared: None,
         grant_subject: who.grant.clone(),
+        stdio_nonce: None,
         verified_identity: who.identity.as_ref(),
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,

@@ -96,6 +96,9 @@ pub mod test_helpers {
             key_server: None,
             dashboard_bootstrap: std::sync::Arc::default(),
             tls_enabled: false,
+            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config::Config::default(),
+            )),
         }
     }
 

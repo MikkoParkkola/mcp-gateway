@@ -11,7 +11,11 @@ use tracing::{debug, info, warn};
 use crate::config::CircuitBreakerConfig;
 
 /// Circuit breaker state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialises as its [`Self::as_str`] label, so a typed field and the label
+/// can never disagree on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CircuitState {
     /// Circuit is closed (allowing requests)
     Closed,
@@ -22,7 +26,7 @@ pub enum CircuitState {
 }
 
 impl CircuitState {
-    /// Return the lowercase kebab-case label used in API responses.
+    /// Return the lowercase `snake_case` label used in API responses.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -510,10 +514,26 @@ mod tests {
     // ── CircuitState::as_str ──────────────────────────────────────────────
 
     #[test]
-    fn circuit_state_as_str_returns_lowercase_kebab() {
+    fn circuit_state_as_str_returns_lowercase_snake_case() {
         assert_eq!(CircuitState::Closed.as_str(), "closed");
         assert_eq!(CircuitState::Open.as_str(), "open");
         assert_eq!(CircuitState::HalfOpen.as_str(), "half_open");
+    }
+
+    /// B6: the wire form is pinned to literals, variant by variant, and agrees
+    /// with `as_str`. `kebab-case` would change only `HalfOpen`, which a check
+    /// on `Open` alone misses; literals also catch `as_str` moving with it.
+    #[test]
+    fn circuit_state_serialises_as_its_label() {
+        let cases = [
+            (CircuitState::Closed, "closed"),
+            (CircuitState::Open, "open"),
+            (CircuitState::HalfOpen, "half_open"),
+        ];
+        for (state, wire) in cases {
+            assert_eq!(serde_json::to_value(state).unwrap(), wire);
+            assert_eq!(state.as_str(), wire);
+        }
     }
 
     // ── stats snapshot ────────────────────────────────────────────────────

@@ -35,6 +35,9 @@ fn authorizer(yaml: &str, key_server: Option<Arc<KeyServer>>) -> AuthState {
         key_server,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     }
 }
 
