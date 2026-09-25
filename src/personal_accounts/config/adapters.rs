@@ -71,6 +71,7 @@ use serde::{Deserialize, Serialize};
 
 use super::AccountsConfigError;
 use super::journey::SessionConfig;
+use super::references::ReferenceKey;
 
 /// The one approved adapter kind. An enum rather than a validated `String` so
 /// that an unrecognised spelling is refused BY NAME at parse time
@@ -258,9 +259,19 @@ fn validate_header(index: usize, header: &str) -> Result<(), AccountsConfigError
 fn validate_secret_ref(index: usize, reference: &str) -> Result<(), AccountsConfigError> {
     let fail = |problem: &'static str| AccountsConfigError::Adapter { index, problem };
 
+    if let Some(path) = reference.strip_prefix("file:") {
+        // Whether the file is readable is `resolve_secrets`' question; its
+        // spelling is decidable here.
+        if !std::path::Path::new(path).is_absolute() {
+            return Err(fail(
+                "hmac_secret_ref file: reference must name an absolute path",
+            ));
+        }
+        return Ok(());
+    }
     let Some(variable) = reference.strip_prefix("env:") else {
         return Err(fail(
-            "hmac_secret_ref must be an env: reference, never a literal secret",
+            "hmac_secret_ref must be an env: or file: reference, never a literal secret",
         ));
     };
     if variable.trim().is_empty() {
@@ -314,21 +325,25 @@ fn resolve_material(
     let mut adapter_secrets: Vec<Vec<u8>> = Vec::new();
 
     for (index, adapter) in adapters.iter().enumerate() {
-        let variable =
-            adapter
-                .hmac_secret_ref
-                .strip_prefix("env:")
-                .ok_or(AccountsConfigError::Adapter {
-                    index,
-                    problem: "hmac_secret_ref must be an env: reference, never a literal secret",
-                })?;
+        let reference = adapter.hmac_secret_ref.as_str();
+        if !super::references::is_reference(reference) {
+            return Err(AccountsConfigError::Adapter {
+                index,
+                problem: "hmac_secret_ref must be an env: or file: reference, never a literal secret",
+            });
+        }
+        let variable = super::references::reference_name(reference);
         read.push(variable.to_string());
-        let secret = overlay.resolve(variable).ok_or_else(|| {
-            AccountsConfigError::AdapterSecretUnresolved {
+        let secret = overlay
+            .resolve_reference(
+                &format!("accounts.adapters[{index}].hmac_secret_ref"),
+                reference,
+            )
+            .map_err(AccountsConfigError::SecretFile)?
+            .ok_or_else(|| AccountsConfigError::AdapterSecretUnresolved {
                 index,
                 variable: variable.to_string(),
-            }
-        })?;
+            })?;
         let material = secret.into_bytes();
         if material.len() < MIN_SECRET_BYTES {
             return Err(AccountsConfigError::AdapterSecretTooShort { index });
@@ -408,15 +423,15 @@ impl<'a> GatewayCredential<'a> {
         }
     }
 
-    /// The variable an `env:` credential refers to, if it is one.
+    /// What an `env:` or `file:` credential refers to, if it is one.
     ///
     /// The `auto` bearer is not a reference and not a literal to compare: it is
     /// minted fresh per resolution, so it has no configured material at all.
-    fn env_variable(self) -> Option<&'a str> {
+    fn reference(self) -> Option<ReferenceKey> {
         if self.is_auto_bearer() {
             return None;
         }
-        self.spec().strip_prefix("env:")
+        ReferenceKey::of(self.spec())
     }
 
     fn is_auto_bearer(self) -> bool {
@@ -447,7 +462,7 @@ pub(crate) fn validate_no_gateway_reference_alias(
     credentials: &[GatewayCredential<'_>],
 ) -> Result<(), AccountsConfigError> {
     for (index, adapter) in adapters.iter().enumerate() {
-        let Some(variable) = adapter.hmac_secret_ref.strip_prefix("env:") else {
+        let Some(key) = ReferenceKey::of(&adapter.hmac_secret_ref) else {
             // Shape is `validate`'s refusal to report, not this one's.
             continue;
         };
@@ -456,7 +471,7 @@ pub(crate) fn validate_no_gateway_reference_alias(
         // configuration that is in fact separated.
         if let Some(credential) = credentials
             .iter()
-            .find(|credential| credential.env_variable() == Some(variable))
+            .find(|credential| credential.reference().as_ref() == Some(&key))
         {
             return Err(AccountsConfigError::AdapterSecretReusesGatewayAuth {
                 index,
@@ -495,12 +510,13 @@ pub(crate) fn validate_no_gateway_material_reuse(
             // is the correct one.
             continue;
         }
-        let material = match credential.env_variable() {
-            Some(variable) => overlay.resolve(variable),
-            // A literal credential in the file is still the credential the
-            // gateway authenticates with, so it is compared as material.
-            None => Some(credential.spec().to_string()),
-        };
+        // A literal credential in the file is still the credential the gateway
+        // authenticates with, so it is compared as material. An unreadable
+        // `file:` is `auth`'s own diagnostic, as an unset variable is.
+        let material = overlay
+            .resolve_reference(&credential.label(), credential.spec())
+            .ok()
+            .flatten();
         let is_digest = matches!(credential, GatewayCredential::ApiKeyDigest { .. });
         match material {
             Some(value) if is_digest => {
@@ -516,10 +532,10 @@ pub(crate) fn validate_no_gateway_material_reuse(
     }
 
     for (index, adapter) in adapters.iter().enumerate() {
-        let Some(variable) = adapter.hmac_secret_ref.strip_prefix("env:") else {
+        if !super::references::is_reference(&adapter.hmac_secret_ref) {
             continue;
-        };
-        let Some(secret) = overlay.resolve(variable) else {
+        }
+        let Ok(Some(secret)) = overlay.resolve_reference("", &adapter.hmac_secret_ref) else {
             // Unresolvable is `resolve_secrets`' refusal, reported there with
             // the variable named; nothing to compare here.
             continue;

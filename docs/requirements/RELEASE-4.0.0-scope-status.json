@@ -837,11 +837,16 @@
     },
     {
       "id": "MIK-7570.BREAKER.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/probe_tests.rs",
+        "src/gateway/ui/control_plane.rs",
+        "src/failsafe/circuit_breaker.rs",
+        "src/gateway/router/handlers_health_predicate_tests.rs"
+      ],
+      "note": "Graded 2026-09-25 (B6, PR #1024). BackendStatus.circuit_state is the typed CircuitState, so every consumer compares the enum. Health: health_is_degraded_while_the_breaker_is_open (/health 503 degraded, /livez and /readyz 200) with the closed control health_is_healthy_with_breaker_closed. UI: ui_redacted_status_counts_open_breaker_degraded (closed 1/0, open 0/1). Control plane: control_plane_reports_open_breaker_down_and_blocked. Metrics: metrics_gauge_reads_zero_while_breaker_open (mcp_backend_circuit_state 1 closed, 0 open). Only Open degrades: half_open_circuit_is_healthy. Wire unchanged: circuit_state_serialises_as_its_label and backend_status_serialises_circuit_state_lowercase. Red-first CI run 36174266529 failed exactly the three consumer tests at the tests-only commit; six local mutants killed; design mutant PR #1026."
     },
     {
       "id": "MIK-7570.CHART.2",
@@ -853,11 +858,15 @@
     },
     {
       "id": "MIK-7570.AUDIT.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/direct_audit_tests.rs",
+        "src/gateway/router/backend_handlers/direct_audit.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (D2, PR #1092). Every direct-route (POST /mcp/{name}) tools/call writes the same schema_version 2 invocation record as gateway_invoke, refused, failed and malformed calls included, with route=direct; meta-route records carry route=meta. Outcome from the HTTP status through E1-core's AuditOutcome::from_http_status, a 200 read from its body. who from AuditWho::from_request, never a label. A FailClosed append failure withholds the result (503/-32005). The scope check runs after the parse and before the backend lookup, so a backend that does not exist still gets 403 for a scoped key. A nameless tools/call is refused 400/-32602 instead of being forwarded without the per-tool check. Tests: direct_audit_tests.rs (T1-T3, T5-T11) and direct_outcome_table_covers_every_row (T4). Red CI run 36189694264 (the tests commit alone: exactly the 11 D2 cells fail). Mutants killed in CI: no_write 36194001658, scope_first 36193698752, by_code 36193701876, who_label 36193703200, suppress_32005 36193705595. UPGRADING-4.0 item 43."
     },
     {
       "id": "MIK-7570.AUDIT.3",
@@ -914,11 +923,15 @@
     },
     {
       "id": "MIK-7570.STDIO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "tests/r5_stdio_modern_continuation.rs",
+        "src/gateway/server/stdio_nonce.rs",
+        "src/protocol/mrtr.rs"
+      ],
+      "note": "Graded 2026-09-25 (R5, design R5-design.md rev 3; criterion text amended in the same PR, #1034). A modern-era stdio caller whose call declares elicitation in its own _meta now receives an InputRequiredResult with a redeemable requestState, and its retry completes, instead of -32003. Mechanism: MetaMcpCallerContext::principal_source (src/gateway/meta_mcp/invoke.rs) is the one derivation the mint and the redeem read; a stdio caller binds as sha256(\"stdio:\" + nonce) with a per-process OS-RNG nonce (src/gateway/server/stdio_nonce.rs) that only the two stdio context builders can obtain; the input bridge stays Era::Legacy. Green: CI run 36179259012 at c034f39a6. Red first: CI run 36179275448 (tests only on the release line): T1, T2, T9 failed with -32003, guards green. Delete-the-branch via CI, one mutant per run: M1 principal_source ignores the nonce, run 36178774897 (T1, T2, T9, T6 red); M2 redeem derives from identity only, run 36178778956 (T2 red, T1 green); M3 constant nonce, run 36178785311 (T5 red); M4 bridge admits unnamed callers, run 36178785954 (T3 red, with T1, T2, T9); M5 HTTP builder sets the stdio nonce, run 36178788579 (T7 and ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another red); M6 with_retry drops the nonce, run 36178790942 (T6 red). Out of scope: confirmation, task-confirmation and chain continuations still bind on identity only."
     },
     {
       "id": "MIK-7570.DOCS.1",

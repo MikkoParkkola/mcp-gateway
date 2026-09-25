@@ -99,6 +99,44 @@ impl AuditOutcome {
         }
     }
 
+    /// The outcome of an HTTP route that audits by status: the admin UI
+    /// (E1-f) and the direct route (D2). `code` is the JSON-RPC code the route
+    /// answered with, when it answered with one; otherwise the kind's
+    /// [`Self::default_code`]. One table, so every such route maps a status
+    /// the same way.
+    ///
+    /// | status | outcome |
+    /// |---|---|
+    /// | 2xx | `ok` |
+    /// | 401, 403 | `denied` |
+    /// | 400, 404 | `invalid` |
+    /// | any other (409 included) | `error` |
+    #[must_use]
+    pub fn from_http_status(status: axum::http::StatusCode, code: Option<i32>) -> Self {
+        use crate::error::rpc_codes;
+        let (kind, default): (fn(i32) -> Self, i32) = match status.as_u16() {
+            200..=299 => return Self::Ok,
+            401 | 403 => (Self::Denied, rpc_codes::INVALID_REQUEST),
+            400 | 404 => (Self::Invalid, rpc_codes::INVALID_PARAMS),
+            _ => (Self::Error, rpc_codes::INTERNAL_ERROR),
+        };
+        kind(code.unwrap_or(default))
+    }
+
+    /// The JSON-RPC code an outcome of this kind carries when the answer had
+    /// none: -32600 denied, -32602 invalid, -32603 error; none for `ok` and
+    /// `tool_error`.
+    #[must_use]
+    pub fn default_code(self) -> Option<i32> {
+        let status = match self {
+            Self::Ok | Self::ToolError => return None,
+            Self::Denied(_) => axum::http::StatusCode::FORBIDDEN,
+            Self::Invalid(_) => axum::http::StatusCode::BAD_REQUEST,
+            Self::Error(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        Self::from_http_status(status, None).error_code()
+    }
+
     /// The `error_code` field value; absent for `ok` and `tool_error`.
     #[must_use]
     pub const fn error_code(self) -> Option<i32> {
@@ -181,6 +219,82 @@ impl AuditWho {
     #[must_use]
     pub fn account(&self) -> &str {
         &self.account
+    }
+
+    /// The caller of a direct-route request (D2-d): its credential and
+    /// verified subject, never a label or an email.
+    #[must_use]
+    pub fn from_request(
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    ) -> Self {
+        Self::from_parts(
+            CredentialKind::of(client),
+            client.map(|c| c.principal.as_str()),
+            client.map(|c| c.name.as_str()),
+            grant_subject,
+        )
+    }
+
+    /// The one invocation-caller constructor both routes delegate to.
+    /// `authority` and `subject` come only from the verified grant subject.
+    pub(crate) fn from_parts(
+        credential_kind: CredentialKind,
+        principal: Option<&str>,
+        account: Option<&str>,
+        grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    ) -> Self {
+        Self {
+            credential_kind: Some(credential_kind),
+            principal: principal.unwrap_or_default().to_string(),
+            account: account.unwrap_or("anonymous").to_string(),
+            authority: grant_subject.map(|g| g.authority.clone()),
+            subject: grant_subject.map(|g| g.subject.clone()),
+        }
+    }
+}
+
+/// Which route served an invocation (D2-f).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationRoute {
+    /// `gateway_invoke` on the meta route.
+    Meta,
+    /// `tools/call` on `POST /mcp/{name}`.
+    Direct,
+}
+
+impl InvocationRoute {
+    /// The `route` field value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Meta => "meta",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+/// What an invocation record is about. `tool` is `None` when a malformed
+/// call named none; the record then has no `tool` key.
+#[derive(Debug, Clone, Copy)]
+pub struct InvocationTarget<'a> {
+    /// The route that served the call.
+    pub route: InvocationRoute,
+    /// The backend.
+    pub server: &'a str,
+    /// The tool, when the call named one.
+    pub tool: Option<&'a str>,
+}
+
+impl<'a> InvocationTarget<'a> {
+    /// A `gateway_invoke` of `tool` on `server`.
+    #[must_use]
+    pub const fn meta(server: &'a str, tool: &'a str) -> Self {
+        Self {
+            route: InvocationRoute::Meta,
+            server,
+            tool: Some(tool),
+        }
     }
 }
 

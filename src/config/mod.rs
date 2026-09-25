@@ -35,6 +35,7 @@ use crate::{Error, Result};
 use config_file::ConfigFile;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
+use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
 
@@ -509,7 +510,7 @@ impl Config {
 
     fn finish(
         path: Option<&ConfigFile>,
-        overlay: EnvOverlay,
+        mut overlay: EnvOverlay,
         env_paths: ResolvedEnvFiles,
         expansion: Expansion,
     ) -> Result<Evaluated> {
@@ -580,9 +581,10 @@ impl Config {
         }
         let secret_refs = match expansion {
             Expansion::Resolve => {
-                let refs = config.expand_env_vars(&overlay)?;
+                let (refs, files) = config.expand_env_vars(&overlay)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
+                overlay.record_secret_files(files);
                 refs
             }
             Expansion::Literal => BTreeSet::new(),
@@ -615,7 +617,7 @@ impl Config {
     /// and `capabilities.directories`. A disabled backend keeps its text
     /// verbatim: auth validation skips it too, and enabling it goes through
     /// reload, which runs this again.
-    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<BTreeSet<String>> {
+    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<SecretRefsRead> {
         // Every unresolved reference in one error: fixing them one restart at a
         // time is the experience this replaces.
         let mut unresolved = Vec::new();
@@ -658,40 +660,52 @@ impl Config {
     /// A reference that does not resolve (unset or empty) is left verbatim.
     /// `validate_with_env` reports it, which is a better diagnostic than a
     /// silently empty secret.
-    fn resolve_secret_refs(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
+    fn resolve_secret_refs(&mut self, overlay: &EnvOverlay) -> SecretRefsRead {
         let mut seen = BTreeSet::new();
-        let mut subst = |slot: &mut String| {
-            if let Some(name) = slot.strip_prefix("env:") {
+        let mut files = SecretFileDigests::new();
+        // Records the reference and returns the value it resolves to. A file is
+        // read once: the digest reload compares is of the bytes substituted.
+        let mut record = |slot: &str, seen: &mut BTreeSet<String>| match SecretRef::parse(slot) {
+            SecretRef::Env(name) => {
                 seen.insert(name.to_string());
+                SecretRef::Env(name).resolve("", overlay).ok()
             }
-            if let Ok(value) = SecretRef::parse(slot).resolve("", overlay) {
+            SecretRef::File(path) => {
+                let value = secret_ref::read_file_ref("", path).ok();
+                files.insert(path.to_path_buf(), value.as_deref().map(digest));
+                value
+            }
+            SecretRef::Literal(_) => None,
+        };
+        // A literal stays as written; an empty one is `validate_with_env`'s to
+        // report, like an unresolved reference left verbatim.
+        let mut subst = |slot: &mut String, seen: &mut BTreeSet<String>| {
+            if let Some(value) = record(slot, seen) {
                 *slot = value;
             }
         };
 
         if let Some(token) = self.auth.bearer_token.as_mut() {
-            subst(token);
+            subst(token, &mut seen);
         }
         for key in &mut self.auth.api_keys {
             if let Some(digest) = key.key_sha256.as_mut() {
-                subst(digest);
+                subst(digest, &mut seen);
             }
         }
         for agent in &mut self.agent_auth.agents {
             if let Some(secret) = agent.hs256_secret.as_mut() {
-                subst(secret);
+                subst(secret, &mut seen);
             }
         }
         if let Some(token) = self.key_server.admin_token.as_mut() {
-            subst(token);
+            subst(token, &mut seen);
         }
         // Record names only. Leave `env:` spellings in place so a rewrite cannot
         // persist decoded account key material.
         if let Some(accounts) = &self.accounts {
             for reference in accounts.keys.values() {
-                if let Some(name) = reference.strip_prefix("env:") {
-                    seen.insert(name.to_string());
-                }
+                let _names_only = record(reference, &mut seen);
             }
             // Adapter signing references, recorded the same way and for the
             // same reason as the account keys above: NAMES only, and the
@@ -701,12 +715,10 @@ impl Config {
             // compares these names across overlays could not report a rotated
             // adapter secret that no running holder can take.
             for adapter in &accounts.adapters {
-                if let Some(name) = adapter.hmac_secret_ref.strip_prefix("env:") {
-                    seen.insert(name.to_string());
-                }
+                let _names_only = record(&adapter.hmac_secret_ref, &mut seen);
             }
         }
-        seen
+        (seen, files)
     }
 
     /// Get enabled backends only.
@@ -1416,19 +1428,34 @@ impl ServerConfig {
     #[must_use]
     pub fn resolve_metrics_token(&self, overlay: &EnvOverlay) -> Option<String> {
         let raw = self.metrics_token.as_deref()?;
-        let Some(var) = raw.strip_prefix("env:") else {
-            return (!raw.is_empty()).then(|| raw.to_string());
-        };
-        let value = overlay.resolve(var).filter(|v| !v.is_empty());
-        if value.is_none() {
-            tracing::warn!(
-                field = "server.metrics_token",
-                variable = var,
-                "server.metrics_token references an unset or empty environment variable; \
-                 /metrics answers 401 until it is set and the gateway restarted"
-            );
+        match SecretRef::parse(raw) {
+            SecretRef::Literal(text) => (!text.is_empty()).then(|| text.to_string()),
+            SecretRef::Env(var) => {
+                let value = overlay.resolve(var).filter(|v| !v.is_empty());
+                if value.is_none() {
+                    tracing::warn!(
+                        field = "server.metrics_token",
+                        variable = var,
+                        "server.metrics_token references an unset or empty environment variable; \
+                         /metrics answers 401 until it is set and the gateway restarted"
+                    );
+                }
+                value
+            }
+            // Same contract as `env:`: a scrape credential never stops startup.
+            reference @ SecretRef::File(_) => {
+                match reference.resolve("server.metrics_token", overlay) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        tracing::warn!(
+                            field = "server.metrics_token",
+                            "{error}; /metrics answers 401 until it is fixed and the gateway restarted"
+                        );
+                        None
+                    }
+                }
+            }
         }
-        value
     }
 }
 
@@ -1898,6 +1925,8 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod secret_file_ref_tests;
 #[cfg(test)]
 mod secret_ref_tests;
 #[cfg(test)]
