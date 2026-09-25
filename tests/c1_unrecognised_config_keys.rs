@@ -98,21 +98,21 @@ fn merge_key_refused_under_a_backend() {
     );
 }
 
-/// `projection_mode: 0` names the enum's first variant by index. The gateway's
-/// loader accepts that; a bare YAML deserializer rejects it. The check must
-/// judge keys with the loader's own type rules, or every key after such a
-/// value goes unchecked.
-const INDEXED_ENUM: &str = "meta_mcp:\n  projection_mode: 0\n";
+/// A mapping key given twice. The loader keeps the last value and loads; a
+/// bare YAML deserializer into `Config` stops at the second `server` with a
+/// "duplicate field" error. The key check must follow the loader, or every key
+/// after that point goes unchecked.
+const REPEATED_KEY: &str = "server:\n  port: 39400\nserver:\n  port: 39400\n";
 
 #[test]
 fn value_the_loader_accepts_loads() {
-    let (_dir, _path, result) = load(INDEXED_ENUM);
-    result.expect("an enum given by index loads");
+    let (_dir, _path, result) = load(REPEATED_KEY);
+    result.expect("a repeated mapping key loads, last value wins");
 }
 
 #[test]
-fn unrecognised_key_after_a_loader_coerced_value_refused() {
-    refusal(&format!("{INDEXED_ENUM}serverr: {{}}\n"), &["serverr"]);
+fn unrecognised_key_after_a_loader_accepted_value_refused() {
+    refusal(&format!("{REPEATED_KEY}serverr: {{}}\n"), &["serverr"]);
 }
 
 #[test]
