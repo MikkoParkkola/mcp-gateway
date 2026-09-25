@@ -32,7 +32,7 @@ impl StdioNonce {
 
     /// This process's nonce. The serve loop forces it at start so the RNG is
     /// read before the first request rather than inside one.
-    pub(super) fn process() -> &'static Self {
+    pub(crate) fn process() -> &'static Self {
         static NONCE: OnceLock<StdioNonce> = OnceLock::new();
         NONCE.get_or_init(Self::generate)
     }
