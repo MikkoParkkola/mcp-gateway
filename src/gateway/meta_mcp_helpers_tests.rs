@@ -123,67 +123,57 @@ fn extract_u64_or_ignores_non_integer_values() {
 
 const TEST_INSTRUCTIONS: &str = "test instructions";
 
+/// A legacy `initialize` result as the HTTP server builds it.
+fn init(version: &str, instructions: &str) -> crate::protocol::InitializeResult {
+    build_initialize_result(
+        version,
+        instructions,
+        crate::protocol::meta::Era::Legacy,
+        crate::gateway::ChangeFeed::Http,
+    )
+}
+
 #[test]
 fn build_initialize_result_has_correct_version() {
-    let result = build_initialize_result(
-        "2025-11-25",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2025-11-25", TEST_INSTRUCTIONS);
     assert_eq!(result.protocol_version, "2025-11-25");
 }
 
 #[test]
 fn build_initialize_result_has_tools_capability() {
-    let result = build_initialize_result(
-        "2024-11-05",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2024-11-05", TEST_INSTRUCTIONS);
     assert!(result.capabilities.tools.is_some());
     assert!(result.capabilities.tools.unwrap().list_changed);
 }
 
 #[test]
 fn build_initialize_result_has_resources_capability() {
-    let result = build_initialize_result(
-        "2025-11-25",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2025-11-25", TEST_INSTRUCTIONS);
     let resources = result.capabilities.resources.unwrap();
-    assert!(resources.subscribe);
-    assert!(resources.list_changed);
+    // F24: nothing delivers resources/updated or resources/list_changed.
+    assert!(!resources.subscribe);
+    assert!(!resources.list_changed);
 }
 
 #[test]
 fn build_initialize_result_has_prompts_capability() {
-    let result = build_initialize_result(
-        "2025-11-25",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2025-11-25", TEST_INSTRUCTIONS);
     let prompts = result.capabilities.prompts.unwrap();
-    assert!(prompts.list_changed);
+    assert!(
+        !prompts.list_changed,
+        "F24: nothing delivers prompts/list_changed"
+    );
 }
 
 #[test]
 fn build_initialize_result_has_logging_capability() {
-    let result = build_initialize_result(
-        "2025-11-25",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2025-11-25", TEST_INSTRUCTIONS);
     assert!(result.capabilities.logging.is_some());
 }
 
 #[test]
 fn build_initialize_result_advertises_four_capabilities() {
-    let result = build_initialize_result(
-        "2025-11-25",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2025-11-25", TEST_INSTRUCTIONS);
     assert!(result.capabilities.tools.is_some(), "missing tools");
     assert!(result.capabilities.resources.is_some(), "missing resources");
     assert!(result.capabilities.prompts.is_some(), "missing prompts");
@@ -192,11 +182,7 @@ fn build_initialize_result_advertises_four_capabilities() {
 
 #[test]
 fn build_initialize_result_has_server_info() {
-    let result = build_initialize_result(
-        "2024-11-05",
-        TEST_INSTRUCTIONS,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2024-11-05", TEST_INSTRUCTIONS);
     assert_eq!(result.server_info.name, "mcp-gateway");
     assert!(result.server_info.title.is_some());
     assert!(result.server_info.description.is_some());
@@ -205,11 +191,7 @@ fn build_initialize_result_has_server_info() {
 #[test]
 fn build_initialize_result_passes_instructions_through() {
     let instructions = "custom routing guide";
-    let result = build_initialize_result(
-        "2024-11-05",
-        instructions,
-        crate::protocol::meta::Era::Legacy,
-    );
+    let result = init("2024-11-05", instructions);
     assert_eq!(result.instructions.as_deref(), Some(instructions));
 }
 
@@ -871,7 +853,11 @@ fn extensions_reach_the_wire_when_the_gateway_implements_one() {
         serde_json::json!({}),
     );
 
-    let wire = serde_json::to_value(build_server_capabilities(implemented)).unwrap();
+    let wire = serde_json::to_value(build_server_capabilities(
+        implemented,
+        crate::gateway::ChangeFeed::Http,
+    ))
+    .unwrap();
 
     assert_eq!(
         wire.get("extensions")
@@ -889,9 +875,10 @@ fn empty_extensions_are_omitted_so_discovery_stays_additive() {
     // `"extensions": {}` breaks that: a key that appears for every client is a
     // handshake change, not an additive one. Serializing it unconditionally is
     // what turned that AC red, so this pins the omission rather than the default.
-    let wire = serde_json::to_value(build_server_capabilities(initialize_extensions(
-        crate::protocol::meta::Era::Legacy,
-    )))
+    let wire = serde_json::to_value(build_server_capabilities(
+        initialize_extensions(crate::protocol::meta::Era::Legacy),
+        crate::gateway::ChangeFeed::Http,
+    ))
     .unwrap();
 
     assert!(
@@ -906,7 +893,11 @@ fn ac_ext_1_a_the_builder_serializes_the_map_it_was_given() {
     probe.insert("example.test/probe".to_string(), serde_json::json!({}));
 
     // WHEN: the builder serializes those capabilities.
-    let wire = serde_json::to_value(build_server_capabilities(probe)).unwrap();
+    let wire = serde_json::to_value(build_server_capabilities(
+        probe,
+        crate::gateway::ChangeFeed::Http,
+    ))
+    .unwrap();
 
     let extensions = wire
         .get("extensions")

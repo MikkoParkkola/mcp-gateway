@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
+  `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
+  They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
+  `tools.listChanged` is announced for every tool-set change over HTTP (config reload,
+  capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
+  stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
+  item 52.
+
 ### Security
 
 - **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
