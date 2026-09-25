@@ -41,7 +41,7 @@ impl<'a> SecretRef<'a> {
     pub(crate) fn parse(text: &'a str) -> Self {
         if let Some(name) = text.strip_prefix("env:") {
             Self::Env(name)
-        } else if let Some(path) = text.strip_prefix("file:") {
+        } else if let Some(path) = text.strip_prefix("file:\u{0}") {
             Self::File(Path::new(path))
         } else {
             Self::Literal(text)
