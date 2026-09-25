@@ -223,6 +223,7 @@ mod tests {
 
     use crate::config::{BackendConfig, OAuthConfig, TransportConfig};
     use crate::identity_propagation::IdentityPropagationConfig;
+    use crate::secret_injection::CredentialRule;
 
     /// Drift guard for the hand list: every key a `BackendConfig` serializes,
     /// across every transport variant, is on the list, and every list entry is
@@ -251,6 +252,8 @@ mod tests {
             a2a_agent_card_path: Some("p".into()),
         });
         let oauth: OAuthConfig = serde_yaml::from_str("{}").expect("oauth sample parses");
+        let rule: CredentialRule = serde_yaml::from_str("{name: n, value: v, inject_key: k}")
+            .expect("credential rule sample parses");
         let one = || std::iter::once(("k".to_owned(), "v".to_owned())).collect();
         let mut serialized = BTreeSet::new();
         for transport in transports {
@@ -266,7 +269,7 @@ mod tests {
                 env: one(),
                 headers: one(),
                 oauth: Some(oauth.clone()),
-                secrets: Vec::new(),
+                secrets: vec![rule.clone()],
                 passthrough: true,
                 allow_cleartext_credentials: true,
                 runtime_profile: Some("p".into()),
