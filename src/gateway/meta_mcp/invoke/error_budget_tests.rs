@@ -407,7 +407,8 @@ async fn one_callers_burst_does_not_disable_the_capability_for_another() {
     assert!(
         refused
             .iter()
-            .all(|t| t.contains("Rate limit exceeded for backend 'srv'")),
+            .all(|t| t.contains("Rate limit exceeded for backend 'srv'")
+                && t.contains("\"error_code\":\"RATE_LIMITED\"")),
         "a rate-limit refusal must say so, not claim the breaker is open: {:?}",
         refused.first()
     );
@@ -425,6 +426,11 @@ fn a_gateway_rate_limit_refusal_is_ignored_and_an_open_breaker_is_a_failure() {
         BudgetOutcome::of(&Err::<Value, _>(Error::CircuitOpen("srv".into()))),
         BudgetOutcome::Failure
     );
+    // The caller's recovery hint says "back off", not "wait for the breaker".
+    assert!(matches!(
+        super::classify_dispatch_error(&Error::RateLimited("srv".into())).0,
+        super::ErrorCategory::RateLimited
+    ));
 }
 
 /// F23 T2, the control. A genuinely open breaker still reports itself as open
