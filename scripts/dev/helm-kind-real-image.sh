@@ -157,6 +157,18 @@ for line in raw.splitlines():
 sys.exit(f"no JSON-RPC result with id={want_id} carrying {key!r}: {raw[:600]!r}")
 ' "$1" "$2"
 }
+# Negative control: the same request with a bearer the Secret does not hold
+# must be refused, or the positive check below proves nothing about auth.
+wrong_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "http://127.0.0.1:39499/mcp" \
+  -H "Authorization: Bearer wrong-$TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"helm-kind-real-image","version":"0"}}}' || true)"
+if [ "$wrong_code" != "401" ]; then
+  echo "FAIL: initialize with a wrong bearer answered '$wrong_code', want 401" >&2
+  diagnose
+  exit 1
+fi
 init="$(mcp 1 initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"helm-kind-real-image","version":"0"}}' || true)"
 if ! assert_result 1 protocolVersion <<<"$init"; then
   echo "FAIL: initialize did not return a JSON-RPC result" >&2
@@ -172,4 +184,4 @@ if ! assert_result 2 tools <<<"$tools"; then
   exit 1
 fi
 
-echo "helm kind real image passed: $IMAGE Ready, /livez 200, initialize + tools/list answered on $CLUSTER"
+echo "helm kind real image passed: $IMAGE Ready, /livez 200, initialize + tools/list answered, wrong bearer 401 on $CLUSTER"

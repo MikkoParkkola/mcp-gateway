@@ -199,6 +199,10 @@ done
 grep -qE '^ *sizeLimit: 1Gi$' <<<"$dep" || fail "state emptyDir default sizeLimit is not 1Gi"
 sized="$("$HELM" template t "$CHART" --set stateVolume.sizeLimit=5Gi 2>&1 || true)"
 grep -qE '^ *sizeLimit: 5Gi$' <<<"$sized" || fail "stateVolume.sizeLimit does not set the emptyDir sizeLimit"
+# Unset, the emptyDir would render unbounded (or `sizeLimit: null`): the schema refuses it.
+err="$("$HELM" template t "$CHART" --set stateVolume.sizeLimit=null 2>&1 >/dev/null || true)"
+{ grep -q "specifications of the schema" <<<"$err" && grep -q "sizeLimit" <<<"$err"; } \
+  || fail "an unset stateVolume.sizeLimit is not refused by the schema: ${err:-rendered}"
 
 echo "== service_account_token_not_mounted =="
 # Neither pod calls the Kubernetes API: the gateway has no API client, and the

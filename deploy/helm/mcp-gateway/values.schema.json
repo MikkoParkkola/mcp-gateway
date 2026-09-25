@@ -126,7 +126,10 @@
           "type": "string",
           "description": "sizeLimit of the state emptyDir (HOME); past it the kubelet evicts the pod."
         }
-      }
+      },
+      "required": [
+        "sizeLimit"
+      ]
     },
     "configVolume": {
       "type": "object",
