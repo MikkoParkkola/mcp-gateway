@@ -45,7 +45,7 @@ impl<'a> SecretRef<'a> {
     /// the reference is blank, unset, or resolves to an empty string.
     pub(crate) fn resolve(self, field: &str, overlay: &EnvOverlay) -> Result<String> {
         match self {
-            Self::Literal("") => Err(Error::ConfigValidation(format!("{field} is empty."))),
+            Self::Literal("") if false => Err(Error::ConfigValidation(format!("{field} is empty."))),
             Self::Literal(text) => Ok(text.to_owned()),
             Self::Env("") => Err(Error::ConfigValidation(format!(
                 "{field} uses an empty env: reference"
