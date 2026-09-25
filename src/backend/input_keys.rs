@@ -169,18 +169,69 @@ mod tests {
             judged("a").is_none(),
             "a credentialed page reached the shared slot"
         );
+        assert!(judged("b").is_some(), "the discovery fill still stands");
 
         backend
             .remember_listed_tools(None, false, &[edit_declaring("b")])
             .await;
         assert!(
             judged("b").is_none(),
-            "the fresh discovery fill still stands"
+            "the drained list must replace the fresh discovery fill"
         );
         assert!(judged("a").is_some());
         assert!(
             !backend.cached_tools_snapshot_and_truncated().1,
             "a drained list is complete; the truncated mark must not survive it"
         );
+    }
+
+    /// F14a, item 4: the replacement is a store, not a fill that reads the
+    /// slot as stale. It neither queues behind a discovery fill already on
+    /// the wire nor loses to it when that fill lands afterwards.
+    #[tokio::test]
+    async fn a_drained_direct_list_beats_an_in_flight_discovery_fill() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let entry = std::sync::Arc::clone(lease.entry());
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let discovered: crate::protocol::Tool =
+            serde_json::from_value(edit_declaring("a")).expect("a tool");
+        let fill = tokio::spawn({
+            let (started, release) = (started.clone(), release.clone());
+            async move {
+                entry
+                    .tools_cache
+                    .get_or_fetch_shared(Duration::from_secs(600), || {
+                        let (started, release) = (started.clone(), release.clone());
+                        let tools = vec![discovered.clone()];
+                        async move {
+                            started.notify_one();
+                            release.notified().await;
+                            Ok(tools)
+                        }
+                    })
+                    .await
+            }
+        });
+        started.notified().await;
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            backend.remember_listed_tools(None, false, &[edit_declaring("b")]),
+        )
+        .await
+        .expect("the direct list must not wait for an in-flight fill");
+        release.notify_one();
+        fill.await.expect("join").expect("the discovery fill");
+
+        let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
+        assert!(judged("b").is_none(), "the later-landing fill overwrote it");
+        assert!(judged("a").is_some());
     }
 }

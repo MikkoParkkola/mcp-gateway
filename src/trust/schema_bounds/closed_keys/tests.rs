@@ -327,3 +327,18 @@ fn a_ref_to_a_free_map_is_a_free_map() {
     assert!(!refused(&schema, &json!({"open": {"anything": 1}})));
     assert!(refused(&schema, &json!({"shut": {"anything": 1}})));
 }
+
+/// F14e under a combinator: an `anyOf` branch that is a `$ref` to a free map
+/// opens the level exactly as the same branch inlined does.
+#[test]
+fn a_ref_to_a_free_map_in_any_of_matches_the_inlined_form() {
+    let shut = closed(&json!({"a": {}}));
+    let by_ref = json!({
+        "$defs": {"free": {"type": "object"}},
+        "anyOf": [{"$ref": "#/$defs/free"}, shut]
+    });
+    let inlined = json!({"anyOf": [{"type": "object"}, shut]});
+    for schema in [&by_ref, &inlined] {
+        assert!(!refused(schema, &json!({"b": 1})), "{schema}");
+    }
+}

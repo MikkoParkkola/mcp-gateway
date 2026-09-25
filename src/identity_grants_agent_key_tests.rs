@@ -296,3 +296,33 @@ async fn an_empty_exact_agent_id_is_refused_at_load() {
         assert!(error.contains("empty"), "{name}: {error}");
     }
 }
+
+/// A type error with no bare row keeps the parser's line and column, in both
+/// encodings: the refusal points at the row to fix.
+#[tokio::test]
+async fn a_type_error_keeps_its_line_and_column() {
+    let yaml = [
+        ("!exact runner", "!exact {source: jwt, id: runner}"),
+        ("!exact build-bot", "!exact {source: mtls, id: build-bot}"),
+        ("scope: read", "scope: sometimes"),
+    ];
+    let json = [
+        (
+            r#""exact": "runner""#,
+            r#""exact": {"source": "jwt", "id": "runner"}"#,
+        ),
+        (
+            r#""exact": "build-bot""#,
+            r#""exact": {"source": "mtls", "id": "build-bot"}"#,
+        ),
+        (r#""scope": "read""#, r#""scope": "sometimes""#),
+    ];
+    for (name, rewrites) in [("grants-3.4.0.yaml", yaml), ("grants-3.4.0.json", json)] {
+        let error = edited_refusal(name, &rewrites).await;
+        assert!(error.contains("sometimes"), "{name}: {error}");
+        assert!(
+            error.contains("line") && error.contains("column"),
+            "{name}: {error}"
+        );
+    }
+}
