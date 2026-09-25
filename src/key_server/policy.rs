@@ -318,8 +318,10 @@ mod tests {
 
     #[test]
     fn resolve_scopes_first_match_wins() {
-        // GIVEN: engine with two rules; company rule is first
-        let engine = make_engine(vec![company_rule(), github_actions_rule()]);
+        // GIVEN: engine with two rules for the same issuer; company rule is first
+        let mut company = company_rule();
+        company.match_criteria.issuer = "https://token.actions.githubusercontent.com".to_string();
+        let engine = make_engine(vec![company, github_actions_rule()]);
         let identity = make_identity(
             "alice@company.com",
             "https://token.actions.githubusercontent.com",
