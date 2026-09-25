@@ -77,11 +77,15 @@ data:
     {{- if ne .Values.service.type "ClusterIP" }}
     {{- fail (printf "service.type %s publishes the gateway's plain-HTTP port outside the cluster, but server.cleartextHttp is cluster_internal: %s." .Values.service.type $fix) }}
     {{- end }}
-    {{- $host := regexReplaceAll ":[0-9]+$" (urlParse $cfg.server.public_url).host "" }}
+    {{- $url := trim (toString ($cfg.server.public_url | default "")) }}
+    {{- $host := "" }}
+    {{- if $url }}
+    {{- $host = regexReplaceAll ":[0-9]+$" (urlParse $url).host "" }}
+    {{- end }}
     {{- $domain := $cfg.server.cluster_domain | default "cluster.local" }}
     {{- $svc := printf "%s.%s.svc" (include "mcp-gateway.fullname" .) .Release.Namespace }}
     {{- if not (regexMatch (printf "^%s(\\.%s)?$" (regexQuoteMeta $svc) (regexQuoteMeta $domain)) $host) }}
-    {{- fail (printf "config.server.public_url host %s is not this release's Service name %s[.%s], but server.cleartextHttp is cluster_internal: %s." $host $svc $domain $fix) }}
+    {{- fail (printf "config.server.public_url host %s is not this release's Service name %s[.%s], but server.cleartextHttp is cluster_internal: %s." ($host | default "(unset or empty)") $svc $domain $fix) }}
     {{- end }}
     {{- end }}
     {{- toYaml $cfg | nindent 4 }}

@@ -86,7 +86,8 @@ pub(super) fn cleartext_credential_refusal(config: &Config) -> Option<String> {
                  needs server.public_url to name this gateway's Kubernetes Service \
                  (<svc>.<ns>.svc, optionally followed by .<server.cluster_domain>), and {named}. \
                  A caller reaching it by another name comes through something that should \
-                 terminate TLS: set server.cleartext_http = tls_terminated_upstream."
+                 terminate TLS: set server.cleartext_http = tls_terminated_upstream, or enable \
+                 mtls (TLS on this listener)."
             ));
         }
     }
@@ -175,7 +176,9 @@ pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<Reloa
         .clone_from(&wanted.server.public_url);
     serve_refusal(&effective).map(|reason| ReloadPostureRefusal {
         reason,
-        restart_would_also_refuse: serve_refusal(wanted).is_some(),
+        // The whole start path, replicas included: the advice is about what a
+        // restart on this file would do.
+        restart_would_also_refuse: super::support::start_refusal(wanted).is_some(),
     })
 }
 

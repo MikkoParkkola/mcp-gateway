@@ -122,6 +122,7 @@ fn cluster_internal_requires_service_host() {
     );
     let ingress = accepts(Some("https://mcp.example.com"), None).expect("an ingress host");
     assert!(ingress.contains("tls_terminated_upstream"), "{ingress}");
+    assert!(ingress.contains("mtls"), "{ingress}");
     assert!(ingress.contains("mcp.example.com"), "{ingress}");
 }
 
@@ -146,6 +147,26 @@ fn reload_to_public_url_refused_for_cleartext_credentials() {
         refused.reason
     );
     assert!(refused.restart_would_also_refuse);
+}
+
+/// The restart advice asks the whole start path. A file whose cleartext answer
+/// is fine but which declares more replicas than its per-process state allows
+/// must still be reported as one a restart refuses.
+#[test]
+fn reload_restart_advice_counts_the_replica_refusal() {
+    let running = config("127.0.0.1", CleartextHttp::Refuse, None);
+    let mut wanted = config(
+        "127.0.0.1",
+        CleartextHttp::TlsTerminatedUpstream,
+        Some("https://gw.example"),
+    );
+    wanted.server.replicas = 3;
+    assert_eq!(serve_refusal(&wanted), None, "the cleartext half passes");
+    let refused = reload_posture_refusal(&running, &wanted).expect("running has no answer");
+    assert!(
+        refused.restart_would_also_refuse,
+        "a restart would refuse three replicas with the modern protocol on"
+    );
 }
 
 #[test]

@@ -48,11 +48,40 @@ fn the_compose_service_names_its_loopback_publish_as_the_cleartext_boundary() {
         Some("host_local_publish")
     );
     let ports = service["ports"].as_sequence().expect("ports is a list");
-    assert!(
-        ports
-            .iter()
-            .filter_map(Value::as_str)
-            .all(|p| p.starts_with("127.0.0.1:")),
-        "host_local_publish is honest only while every publish is loopback: {ports:?}"
-    );
+    assert!(!ports.is_empty(), "the service publishes its port");
+    for port in ports {
+        assert!(
+            is_loopback_publish(port),
+            "host_local_publish is honest only while every publish is loopback: {port:?}"
+        );
+    }
+}
+
+/// Short syntax `HOST_IP:HOST:CONTAINER`, or the long map form, whose `host_ip`
+/// defaults to every interface when omitted.
+fn is_loopback_publish(port: &Value) -> bool {
+    match port {
+        Value::String(p) => p.starts_with("127.0.0.1:"),
+        Value::Mapping(_) => port["host_ip"].as_str() == Some("127.0.0.1"),
+        other => panic!("unrecognised ports entry {other:?}"),
+    }
+}
+
+/// Both `ports:` syntaxes, loopback and not: a long-syntax entry without
+/// `host_ip` publishes on every interface.
+#[test]
+fn both_port_syntaxes_are_judged() {
+    for (yaml, loopback) in [
+        ("\"127.0.0.1:39400:39400\"", true),
+        ("\"39400:39400\"", false),
+        ("\"0.0.0.0:39400:39400\"", false),
+        (
+            "{target: 39400, published: 39400, host_ip: 127.0.0.1}",
+            true,
+        ),
+        ("{target: 39400, published: 39400}", false),
+    ] {
+        let port: Value = serde_yaml::from_str(yaml).expect("yaml");
+        assert_eq!(is_loopback_publish(&port), loopback, "{yaml}");
+    }
 }
