@@ -61,12 +61,14 @@ protocol requirements additionally use the pinned specifications linked below.
 
 ### Enterprise multi-user and security scope (MIK-7570)
 
-Approved by the operator on 2026-09-24 (decision `enterprise_scope_in_4_0`): the multi-user and security features ship finished in 4.0.0 so enterprise users can adopt it. Designs and landing order are tracked in MIK-7570.
+Approved by the operator on 2026-09-24 (decision `enterprise_scope_in_4_0`): the multi-user and security features ship finished in 4.0.0 so enterprise users can adopt it. Designs and landing order are tracked in MIK-7570. Until matching rows exist in [the test plan](RELEASE-4.0.0-scope-tests.md), each item's reviewed design (its failing-first test table) is the acceptance source.
+
+Deferred by the same ruling to a later release (tier 4, not criteria here): key revocation and auth reload without restart, the account-store rekey command (its runbook ships in 4.0.0), the single unified grant store, `init --profile team`, backend-level OAuth reconnect (the managed-account half is MIK-7570.RECONNECT.1), a shared multi-replica token store, Vault/KMS secret resolvers, and full RBAC roles.
 
 | ID | Required outcome | Delivery package |
 |---|---|---|
 | MIK-7570.CACHE.1 | The response cache never serves one caller's cached result to another caller, on the meta route and the direct route (A0). | ENTERPRISE |
-| GH555.DISCOVERY.1 | Every discovery surface (tools/list, list_tools, list_servers, search, initialize guide and counts, resolve, suggestions, stats, /health, direct-route listing) shows a caller exactly the backends and tools it could invoke (A3). | ENTERPRISE |
+| GH555.DISCOVERY.1 | Every discovery surface (tools/list, list_tools, list_servers, search, initialize guide and counts, resolve, suggestions, direct-route listing) shows a caller exactly the backends and tools it could invoke; stats and webhook status are admin-only, and /health shows a non-admin caller only status and version (A3). | ENTERPRISE |
 | MIK-7570.CHART.1 | The Helm chart installs and the gateway starts and serves with the chart's default values (B1). | ENTERPRISE |
 | MIK-7570.GOVSTORE.1 | The governance store location is configurable; an explicit unwritable location refuses start, and a read-only store states its reason in the admin API (F6). | ENTERPRISE |
 | GH612.CODEMODE.1 | The Code Mode authorization test asserts that an out-of-scope call is denied, not only which tool names are listed (GH #612). | ENTERPRISE |
@@ -82,7 +84,7 @@ Approved by the operator on 2026-09-24 (decision `enterprise_scope_in_4_0`): the
 | MIK-7570.CONFIG.1 | A configuration key the gateway does not recognise is a load error, not silently ignored (C1). | ENTERPRISE |
 | MIK-7570.BACKENDGRANT.1 | A newly added backend is not reachable by any key until granted; an empty backend grant means none (A10). | ENTERPRISE |
 | MIK-7570.CONFIG.2 | The gateway refuses a config file or env file readable by other users (C2). | ENTERPRISE |
-| MIK-7570.TRANSPORT.1 | With auth on and a non-loopback bind, plain HTTP is refused unless the deployment qualifies for the cluster-internal carve-out (C3). | ENTERPRISE |
+| MIK-7570.TRANSPORT.1 | With auth on and a non-loopback bind, plain HTTP is refused at load unless `server.cleartext_http` is `tls_terminated_upstream`, `host_local_publish`, or `cluster_internal` with a `public_url` whose host is a Kubernetes Service name (ends in `.svc` or contains `.svc.`); every non-refuse value logs a warning on each start (C3). | ENTERPRISE |
 | MIK-7570.SECRET.1 | A secret reference that cannot be resolved fails closed at load (C4). | ENTERPRISE |
 | MIK-7570.SECRET.2 | Secrets can be referenced from files with the file: form, with the same fail-closed rules (C9). | ENTERPRISE |
 | MIK-7570.METRICS.1 | /metrics requires authentication when auth is on (C7). | ENTERPRISE |
@@ -104,7 +106,7 @@ Approved by the operator on 2026-09-24 (decision `enterprise_scope_in_4_0`): the
 | MIK-7570.RECONNECT.1 | A managed personal account whose upstream token is rejected gets at most one forced refresh per token revision and then a reconnect prompt (A11). | ENTERPRISE |
 | MIK-7570.OWASP.1 | The published OWASP self-assessment matches the shipped controls (D5). | ENTERPRISE |
 | MIK-7570.PAGING.1 | The backend tool cache follows nextCursor, so tools past a backend's first tools/list page are listed and callable (F3). | ENTERPRISE |
-| MIK-7570.STDIO.1 | A modern-era stdio caller with no verified identity is handled as the reviewed R5 design specifies (R5). | ENTERPRISE |
+| MIK-7570.STDIO.1 | The three ignored MIK-7387 stdio tests for a modern-era caller with no verified identity run un-ignored and pass, or this criterion is waived by a recorded ruling that moves R5 to 5.0 (R5). | ENTERPRISE |
 | MIK-7570.DOCS.1 | The team deployment guide, backup/restore and key runbook, reconciled upgrade guide and client matrix ship with 4.0.0 (F docs). | ENTERPRISE |
 
 ## Boundaries
