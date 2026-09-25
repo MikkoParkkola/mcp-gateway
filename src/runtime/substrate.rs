@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn detect_matches_target_os() {
         let s = Substrate::detect();
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(s, Substrate::GVisor);
         #[cfg(target_os = "macos")]
         assert_eq!(s, Substrate::AppleVm);

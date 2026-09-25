@@ -74,7 +74,7 @@ mod tests {
         let hook = OverrideHook::auto();
         assert!(!hook.is_pinned());
         let s = hook.resolve();
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(s, Substrate::GVisor);
         #[cfg(target_os = "macos")]
         assert_eq!(s, Substrate::AppleVm);

@@ -187,7 +187,7 @@ fn ac_2_mik_new_runtime_d_2_compiler_descriptor_gviso() {
 
     // 3. Auto-detection: effective_substrate() uses current platform
     let substrate = descriptor.effective_substrate();
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(substrate, Substrate::GVisor);
     #[cfg(target_os = "macos")]
     assert_eq!(substrate, Substrate::AppleVm);
@@ -439,7 +439,7 @@ fn ac_5_mik_new_runtime_d_5_override_hook_operator_can() {
     let auto = minimal_descriptor();
     assert!(auto.substrate_override.is_none());
     let effective = auto.effective_substrate();
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(effective, Substrate::GVisor);
     #[cfg(target_os = "macos")]
     assert_eq!(effective, Substrate::AppleVm);

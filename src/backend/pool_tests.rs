@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::*;
+#[cfg(unix)]
 use crate::backend::RestartOutcome;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;

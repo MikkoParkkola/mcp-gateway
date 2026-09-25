@@ -205,7 +205,7 @@ fn no_override_uses_auto_detect() {
     // effective_substrate() without override calls Substrate::detect()
     // which returns the current platform's substrate.
     let substrate = d.effective_substrate();
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(substrate, Substrate::GVisor);
     #[cfg(target_os = "macos")]
     assert_eq!(substrate, Substrate::AppleVm);
