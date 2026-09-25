@@ -41,7 +41,7 @@ struct Fixture {
 fn fixture(root: &Path, enabled: bool, descriptors: Option<&Value>) -> Fixture {
     fs::create_dir_all(root).unwrap();
     let env_path = root.join("keys.env");
-    fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &env_path,
         format!("{KEY_VAR}={KEY_B64}\n{SECRET_VAR}={SECRET_VALUE}\n"),
     )
@@ -52,7 +52,7 @@ fn fixture(root: &Path, enabled: bool, descriptors: Option<&Value>) -> Fixture {
         .map(|d| format!("  descriptors: {}\n", serde_json::to_string(d).unwrap()))
         .unwrap_or_default();
     let config = root.join("config.yaml");
-    fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &config,
         format!(
             "env_files:\n  - {}\nserver:\n  port: 18493\naccounts:\n  schema_version: accounts.v1\n  enabled: {enabled}\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {}\n  authority_dir: {}\n  current_key_id: current\n  keys:\n    current: env:{KEY_VAR}\n{descriptors_line}",

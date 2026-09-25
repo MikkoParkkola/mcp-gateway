@@ -24,13 +24,6 @@ pub(crate) enum SecretFile {
 
 /// Why a file's mode is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "constructed by the rule, which is a stub until CONFIG.2 lands"
-    )
-)]
 pub(crate) enum Refusal {
     /// A world bit is set.
     World,
@@ -48,7 +41,16 @@ pub(crate) enum Refusal {
 /// projection under `fsGroup`.
 #[must_use]
 pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
-    let _ = (mode, file_uid, euid);
+    let m = mode & 0o777;
+    if m & 0o007 != 0 {
+        return Some(Refusal::World);
+    }
+    if m & 0o020 != 0 {
+        return Some(Refusal::GroupWrite);
+    }
+    if m & 0o040 != 0 && file_uid == euid {
+        return Some(Refusal::GroupReadOwned);
+    }
     None
 }
 

@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29 or 30 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30 or 34 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29 and 30 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30 and 34 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -50,6 +50,7 @@ upgrading a running deployment.
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
+| 34 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -660,6 +661,40 @@ so the two are told apart. Each such rule is warned about at startup with its in
 A token request whose `backends:` scope names none of the rule's backends is also refused with
 `no_backends_granted`. Tool lists are unchanged: an empty `tools` still means every tool on the
 granted backends.
+
+## 34. A config or env file other users can read fails the load
+
+In 3.x a config file readable by other local accounts drew one WARN in the HTTP startup banner,
+stdio never checked it, and env files were never checked at all. Both can hold credentials.
+On Unix the gateway now checks the config file, and every `env_files` entry, before reading it.
+The check follows symlinks, so a Kubernetes `..data` link is judged by the file it points to.
+
+| Mode bits | File owned by the gateway's user | File owned by another user |
+|---|---|---|
+| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused |
+| group write | refused | refused |
+| group read | refused | allowed |
+| owner only (`0600`, `0400`) | allowed | allowed |
+
+Group read is allowed only on a file the gateway does not own, because there the group is how it
+reads the file. That is the case for a root-owned Kubernetes projection with `fsGroup`.
+
+- **A refused config file fails every command that loads it**, `doctor` and `config export`
+  included. The error names the path, the mode and the fix: `chmod 600 <path>`.
+- **A refused env file fails `serve`, stdio and reload.** `doctor`, `config export` and the other
+  commands that do not serve print a warning and skip the file.
+- **Helm:** the chart now sets `podSecurityContext.fsGroup: 1001` and
+  `configVolume.defaultMode: 288` (octal `0440`), so the projected config is `root:1001 0440`.
+  Without them the projection is `root:root 0644` and is refused. If you run another UID, or a mesh
+  injects its own group, override both values together.
+- **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
+- **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode. Either
+  `chmod 600` it and `chown 1001` it, or `chmod 640` it with group 1001.
+- **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
+- **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
+  written by an older release, or copied into place, may need the `chmod`.
+
+Parent directory permissions, and the `capabilities/` files, are not checked.
 
 ## After upgrading
 

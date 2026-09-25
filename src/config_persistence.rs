@@ -577,13 +577,13 @@ mod tests {
     fn a_config_rewrite_keeps_secret_references_unresolved() {
         let dir = tempfile::tempdir().expect("tempdir");
         let env_path = dir.path().join("secrets.env");
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             &env_path,
             "FALSIFIER_TOKEN=tok-must-not-land\nFALSIFIER_HEADER=hdr-must-not-land\n",
         )
         .expect("write env file");
         let path = dir.path().join("config.yaml");
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             &path,
             format!(
                 "env_files:\n  - {}\nauth:\n  enabled: true\n  bearer_token: env:FALSIFIER_TOKEN\nbackends:\n  demo:\n    http_url: https://example.invalid/mcp\n    headers:\n      Authorization: \"Bearer ${{FALSIFIER_HEADER}}\"\n",

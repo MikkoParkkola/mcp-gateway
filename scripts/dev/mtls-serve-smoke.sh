@@ -53,6 +53,8 @@ mtls:
   ca_cert: "$tmp/tls/ca.crt"
   require_client_cert: false
 YAML
+# The gateway refuses a config other users can read (CONFIG.2).
+chmod 600 "$tmp/gateway.yaml"
 
 "$bin" --config "$tmp/gateway.yaml" >"$tmp/gateway.log" 2>&1 &
 server_pid=$!

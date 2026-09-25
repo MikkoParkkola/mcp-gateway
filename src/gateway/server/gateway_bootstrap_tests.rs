@@ -142,8 +142,11 @@ fn fixture(accounts: &Accounts<'_>) -> Fixture {
         .expect("the fixture root resolves");
 
     let env_path = root.join("accounts.env");
-    std::fs::write(&env_path, format!("{KEY_VAR}={}\n", key_of(accounts)))
-        .expect("write the fixture env file");
+    crate::gateway::test_helpers::write_owner_only(
+        &env_path,
+        format!("{KEY_VAR}={}\n", key_of(accounts)),
+    )
+    .expect("write the fixture env file");
 
     let body = match accounts {
         Accounts::Omitted => format!(
@@ -162,7 +165,8 @@ fn fixture(accounts: &Accounts<'_>) -> Fixture {
         ),
     };
     let config_path = root.join("config.yaml");
-    std::fs::write(&config_path, body).expect("write the fixture config");
+    crate::gateway::test_helpers::write_owner_only(&config_path, body)
+        .expect("write the fixture config");
 
     Fixture {
         _root: temp,
@@ -538,7 +542,7 @@ async fn a_disabled_accounts_block_starts_an_ordinary_gateway_with_no_custody() 
         1,
         "the fixture must carry exactly one `enabled: true` line for this test to flip"
     );
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &fx.config_path,
         yaml.replace(ENABLED, "\n  enabled: false\n"),
     )
