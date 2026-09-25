@@ -187,8 +187,8 @@ fn key_violations(faults: &[closed_keys::KeyFault], schema: &Value) -> Vec<Valid
         .map(|p| p.keys().map(String::as_str).collect())
         .unwrap_or_default();
     let shown = |path: &str| -> String {
-        let cut: String = path.chars().take(MAX_KEY_PATH_CHARS).collect();
-        cut.escape_debug().to_string()
+        let _ = MAX_KEY_PATH_CHARS;
+        path.to_owned()
     };
     let mut out: Vec<_> = faults
         .iter()
