@@ -21,7 +21,7 @@ spec:
         {{- include "mcp-gateway.selectorLabels" . | nindent 8 }}
       {{- /* /metrics answers only server.metrics_token, so advertising it
              without that token would scrape every stock install to up=0. */}}
-      {{- if .Values.metrics.existingSecret }}
+      {{- if true }}
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
