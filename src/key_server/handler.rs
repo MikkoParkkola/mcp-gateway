@@ -231,30 +231,8 @@ async fn exchange_token(
     };
 
     // Enforce max tokens per identity
-    let active_count = ks
-        .store
-        .count_for_subject(&identity.issuer, &identity.subject)
-        .await;
-    if active_count >= ks.config.max_tokens_per_identity as usize {
-        warn!(
-            subject = %identity.subject,
-            active = active_count,
-            max = ks.config.max_tokens_per_identity,
-            "Max tokens per identity exceeded"
-        );
-        let ev = AuditEvent::denied(
-            format!(
-                "max tokens per identity ({}) exceeded",
-                ks.config.max_tokens_per_identity
-            ),
-            client_ip,
-        );
-        audit::emit(&ev);
-        return error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too_many_tokens",
-            "Maximum number of active tokens for this identity exceeded",
-        );
+    if let Some(refusal) = token_cap_refusal(&ks, &identity, client_ip).await {
+        return refusal;
     }
 
     // Issue token
@@ -351,6 +329,42 @@ async fn revoke_tokens_by_subject(
         Json(json!({"revoked": count, "issuer": issuer, "subject": params.subject})),
     )
         .into_response()
+}
+
+/// The 429 response when `(issuer, subject)` already holds the configured
+/// maximum of active tokens; `None` while it is under the cap.
+async fn token_cap_refusal(
+    ks: &KeyServer,
+    identity: &VerifiedIdentity,
+    client_ip: Option<IpAddr>,
+) -> Option<axum::response::Response> {
+    let active_count = ks
+        .store
+        .count_for_subject(&identity.issuer, &identity.subject)
+        .await;
+    if active_count < ks.config.max_tokens_per_identity as usize {
+        return None;
+    }
+    warn!(
+        issuer = %identity.issuer,
+        subject = %identity.subject,
+        active = active_count,
+        max = ks.config.max_tokens_per_identity,
+        "Max tokens per identity exceeded"
+    );
+    let ev = AuditEvent::denied(
+        format!(
+            "max tokens per identity ({}) exceeded",
+            ks.config.max_tokens_per_identity
+        ),
+        client_ip,
+    );
+    audit::emit(&ev);
+    Some(error_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too_many_tokens",
+        "Maximum number of active tokens for this identity exceeded",
+    ))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
