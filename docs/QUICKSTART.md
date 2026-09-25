@@ -264,9 +264,12 @@ sudo chown 1001:1001 gateway.container.yaml
 # The container must bind 0.0.0.0 to receive anything, and the config `init`
 # writes keeps /mcp public, so the gateway refuses that pairing unless the
 # allow-flag is set. The boundary is the publish: 127.0.0.1 only, so nothing
-# off this host reaches the port. Mirrors deploy/single-node/docker-compose.yaml.
+# off this host reaches the port. The same publish is why the auth `init` turns
+# on may cross the container's 0.0.0.0 in plain HTTP (host_local_publish).
+# Mirrors deploy/single-node/docker-compose.yaml.
 docker run --rm -p 127.0.0.1:39400:39400 \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
+  -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v "$PWD/gateway.container.yaml:/config.yaml:ro" \
   -v "$PWD/capabilities:/capabilities:ro" \
   ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400
