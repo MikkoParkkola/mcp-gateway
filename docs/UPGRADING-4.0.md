@@ -688,8 +688,15 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   Without them the projection is `root:root 0644` and is refused. If you run another UID, or a mesh
   injects its own group, override both values together.
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
-- **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode. Either
-  `chmod 600` it and `chown 1001` it, or `chmod 640` it with group 1001.
+- **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
+  container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
+  user is. `chmod 640` with group 1001 passes only while the file's owner is not UID 1001, because
+  group read on a file the gateway owns is refused.
+- **The fix the error names depends on ownership.** On a file the gateway owns it is
+  `chmod 600`. On a file another user owns, `chmod 600` would lock the gateway out, so it names
+  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
+- **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
+  gateway then reads, so a file swapped or loosened in between is not loaded.
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.

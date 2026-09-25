@@ -15,6 +15,7 @@ use figment::{Figment, value::Value};
 use serde_ignored::Path as KeyPath;
 
 use super::Config;
+use super::config_file::ConfigFile;
 use crate::{Error, Result};
 
 /// Keys that were removed, with the reason. A retired key is refused like any
@@ -87,16 +88,17 @@ type BackendFindings = BTreeMap<String, Option<&'static str>>;
 /// `loaded` is the figment the config was just extracted from. Every key is
 /// reported in one error, sorted. A file that cannot be read was already
 /// reported by that extract.
-pub(super) fn refuse_unrecognised_keys(path: Option<&Path>, loaded: &Figment) -> Result<()> {
-    let Some(path) = path else { return Ok(()) };
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Ok(());
-    };
-    let file: Value = Config::yaml(Some(path))
+pub(super) fn refuse_unrecognised_keys(
+    source: Option<&ConfigFile>,
+    loaded: &Figment,
+) -> Result<()> {
+    let Some(source) = source else { return Ok(()) };
+    let (path, raw) = (source.path(), source.text());
+    let file: Value = Config::yaml(Some(source))
         .extract()
         .map_err(|e| Error::Config(e.to_string()))?;
     let mut found = ignored_by_serde(loaded, &file)?;
-    let backend = unread_backend_keys(&raw);
+    let backend = unread_backend_keys(raw);
     found.extend(backend.keys().cloned());
     if found.is_empty() {
         return Ok(());
