@@ -104,4 +104,36 @@ ver="$(grep -E '^version:' "$CHART/Chart.yaml" | awk '{print $2}')"
 grep -q 'schemaVersion:' "$CHART/values.schema.json" \
   || { echo "FAIL: values.schema.json lacks a schemaVersion marker" >&2; exit 1; }
 
+# The chart never started from #292 on: `serve --host` exits 2, a `backends`
+# sequence fails the map-typed config, and the task store under a read-only HOME
+# is fatal. Each defect hid the next, so these checks collect every failure
+# rather than stopping at the first.
+fails=0
+fail() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
+dep="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml)"
+cm="$("$HELM" template t "$CHART" --show-only templates/configmap.yaml)"
+
+echo "== helm_rendered_args_and_config_are_valid =="
+# --host/--port are top-level flags; the `serve` subcommand takes only --stdio.
+if grep -qE '^ *- "?serve"?$' <<<"$dep"; then
+  fail "rendered args carry the serve subcommand; serve --host exits 2"
+fi
+grep -qE '^ *backends: \{\}$' <<<"$cm" \
+  || fail "rendered gateway.yaml backends is not a map; Config.backends is a map"
+
+echo "== helm_renders_writable_state =="
+grep -qE '^ *- name: state$' <<<"$dep" && grep -qE '^ *emptyDir: \{\}$' <<<"$dep" \
+  || fail "no emptyDir state volume"
+grep -qE '^ *mountPath: /var/lib/mcp-gateway$' <<<"$dep" \
+  || fail "no writable mount at /var/lib/mcp-gateway"
+# Captured, not piped into grep -q: under pipefail an early-exiting reader
+# makes the writer's SIGPIPE fail the pipeline on a match.
+home_env="$(grep -A1 -E '^ *- name: HOME$' <<<"$dep" || true)"
+grep -qE '^ *value: "?/var/lib/mcp-gateway"?$' <<<"$home_env" \
+  || fail "HOME is not /var/lib/mcp-gateway; the task store resolves under a read-only home"
+grep -qE '^ *readOnlyRootFilesystem: true$' <<<"$dep" \
+  || fail "readOnlyRootFilesystem is no longer true"
+
+[ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
+
 echo "helm chart smoke passed"
