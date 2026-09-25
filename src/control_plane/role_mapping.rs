@@ -42,7 +42,7 @@ pub struct ControlPlaneConfig {
 /// Where the control-plane store lives, resolved once at startup from
 /// `store_dir` and the config path (MIK-7570 F6). The admin API reports it, so
 /// it names the directory the running process chose, not a later reload's.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlPlaneBaseInfo {
     /// Directory holding `store/` and `audit.jsonl`.
     pub path: std::path::PathBuf,
@@ -51,13 +51,12 @@ pub struct ControlPlaneBaseInfo {
 }
 
 /// Which setting chose the control-plane base directory.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlPlaneBaseSource {
     /// `control_plane.store_dir` names it.
     Explicit,
     /// Derived from the config file's location, as before `store_dir` existed.
-    #[default]
     Default,
 }
 

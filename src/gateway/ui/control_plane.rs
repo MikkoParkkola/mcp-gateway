@@ -135,7 +135,10 @@ async fn control_plane_snapshot(
         &ControlPlaneResponseFlags {
             mutation_enabled: state.control_plane_store.is_some(),
             mutation_disabled_reason: mutation_disabled_reason(&state),
-            base_source: state.control_plane_base.source,
+            base_source: state
+                .control_plane_base
+                .as_ref()
+                .map_or(ControlPlaneBaseSource::Default, |base| base.source),
             store_read_degraded,
             export_configured: state.export_status.is_some(),
         },
@@ -285,9 +288,12 @@ fn control_plane_store(state: &AppState) -> Result<&Arc<dyn ControlPlaneStore>, 
     if !state.live_config.running().auth.enabled {
         return Err("Control-plane store is disabled: auth is off".to_string());
     }
+    let path = state
+        .control_plane_base
+        .as_ref()
+        .map_or_else(String::new, |base| base.path.display().to_string());
     Err(format!(
-        "Control-plane store at '{}' could not be opened; set control_plane.store_dir to a writable directory",
-        state.control_plane_base.path.display()
+        "Control-plane store at '{path}' could not be opened; set control_plane.store_dir to a writable directory"
     ))
 }
 

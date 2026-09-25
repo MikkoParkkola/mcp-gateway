@@ -132,7 +132,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_base: Default::default(),
+        control_plane_base: None,
         live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
             mcp_gateway::config::Config::default(),
         )),

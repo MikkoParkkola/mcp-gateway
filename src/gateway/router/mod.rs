@@ -145,8 +145,9 @@ pub struct AppState {
     pub control_plane_store: Option<Arc<dyn ControlPlaneStore>>,
     /// Where the control-plane store lives and which setting chose it,
     /// resolved once at startup (MIK-7570 F6). The admin API reports it and
-    /// names it in a 503 when the store could not be opened there.
-    pub control_plane_base: crate::control_plane::role_mapping::ControlPlaneBaseInfo,
+    /// names it in a 503 when the store could not be opened there. `None`
+    /// only for a state built without a startup (embedders, tests).
+    pub control_plane_base: Option<crate::control_plane::role_mapping::ControlPlaneBaseInfo>,
     /// Live gateway configuration (hot-reloadable). The control-plane RBAC role
     /// mapping is read through this so a `/reload` that changes
     /// `control_plane.role_mapping` takes effect without a restart — e.g. a

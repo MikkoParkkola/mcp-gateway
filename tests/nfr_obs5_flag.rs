@@ -134,7 +134,7 @@ async fn state(base: &Config, modern_protocol: bool) -> (Arc<AppState>, tempfile
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_base: Default::default(),
+        control_plane_base: None,
         live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
         export_status: None,
         transparency_log: None,

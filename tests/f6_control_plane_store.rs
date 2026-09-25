@@ -68,10 +68,10 @@ async fn default_unwritable_store_reports_store_unavailable() {
         ..Fixture::default()
     })
     .await;
-    Arc::get_mut(&mut app).unwrap().control_plane_base = ControlPlaneBaseInfo {
+    Arc::get_mut(&mut app).unwrap().control_plane_base = Some(ControlPlaneBaseInfo {
         path: base.clone(),
         source: ControlPlaneBaseSource::Default,
-    };
+    });
 
     let (status, body) = send(&app, Method::GET, "/ui/api/control-plane", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
