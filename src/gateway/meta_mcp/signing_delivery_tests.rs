@@ -309,6 +309,12 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
         "counter",
         "prev_entry_hash",
         "entry_hash",
+        // The D1 envelope the logger writes into every entry.
+        "schema_version",
+        "trace_id",
+        "outcome",
+        "error_code",
+        "who",
     ];
     for key in event.as_object().unwrap().keys() {
         assert!(

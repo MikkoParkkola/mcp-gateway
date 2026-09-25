@@ -126,6 +126,7 @@ impl KeyServer {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::KeyServerToken,
         };
 
         let ev = AuditEvent::used(&temp, None);
@@ -186,6 +187,7 @@ impl KeyServer {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::OidcBearer,
         };
         Some((client, identity))
     }

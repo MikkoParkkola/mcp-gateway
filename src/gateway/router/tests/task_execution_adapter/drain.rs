@@ -97,6 +97,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
             None,
             OWNER.to_owned(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
+            crate::security::audit::CredentialKind::None,
             false,
             Declared::NONE,
             None,

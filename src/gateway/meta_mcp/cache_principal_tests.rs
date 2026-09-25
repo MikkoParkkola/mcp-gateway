@@ -140,6 +140,7 @@ mod invoke_path {
     fn unresolved(retry: &RetryFields) -> MetaMcpCallerContext<'_> {
         MetaMcpCallerContext {
             authentication: Authentication::Authenticated,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
             credential_principal: None,
             api_key_name: None,
             retry,

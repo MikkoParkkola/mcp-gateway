@@ -1926,7 +1926,7 @@ async fn a_reload_does_not_change_request_time_authentication() {
     };
     write_owner_only(
         &config_path,
-        "auth:\n  enabled: true\n  bearer_token: \"test-admin-token\"\n",
+        "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"test-admin-token\"\n",
     )
     .unwrap();
 

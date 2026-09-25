@@ -22,7 +22,6 @@ use crate::context_integrity::{
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::gateway::authz::{Authorize as _, Emit};
-use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::GrantSubject;
 use crate::identity_propagation::{CallerProof, CallerProvenance};
@@ -130,6 +129,8 @@ use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 mod side_effect_markers;
+// D1: the invocation record, written around `invoke_tool_traced`.
+mod audit;
 
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
@@ -1192,13 +1193,29 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        // D1-f: a degraded audit log refuses before dispatch, after one probe.
+        if let Some(log) = &self.transparency_logger {
+            log.admit().await?;
+        }
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone)
-                .await
-                // Single delivery boundary: unwrap the guard-sealed result.
-                .map(GuardedValue::into_inner)
+            // Boxed: the traced future is large, and every caller of
+            // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
+            let traced =
+                Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
+            let (result, dispatch_failure) = audit::with_dispatch_scope(traced).await;
+            // Single delivery boundary: unwrap the guard-sealed result.
+            let result = result.map(GuardedValue::into_inner);
+            // One record per call, refusals and failures included (D1-d).
+            self.audit_invocation(
+                args,
+                session_id,
+                caller,
+                &trace_id_clone,
+                result,
+                dispatch_failure,
+            )
         })
         .await
     }
@@ -1548,19 +1565,6 @@ impl MetaMcp {
         // suffix, so their keys are byte-identical to before.
         let projection_key_suffix =
             crate::projection::projection_key_suffix(self.projection_mode, session_id);
-
-        // === PRE-INVOKE: Compute request hash for transparency log ============
-        //
-        // Computed eagerly here so the hash covers the raw arguments before any
-        // secret injection or transformation.  Zero-cost when the logger is None.
-        let request_hash = if self.transparency_logger.is_some() {
-            format!(
-                "sha256:{}",
-                sha256_hex(canonical_json(&arguments).as_bytes())
-            )
-        } else {
-            String::new()
-        };
 
         tracing::Span::current().record("trace_id", trace_id);
 
@@ -2058,6 +2062,9 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
+                // The caller gets a tool result, but the audit record says
+                // `error` with this code (D1-d.2: a backend failure).
+                audit::note_dispatch_failure(&e);
                 // Classify the error and convert to a structured tool-level
                 // error response.  This keeps `isError + content + recovery`
                 // in the tool result body rather than promoting to a JSON-RPC
@@ -2466,59 +2473,8 @@ impl MetaMcp {
         #[cfg(feature = "spec-preview")]
         self.promote_tool_for_session(session_id, &tool_key);
 
-        // === POST-INVOKE: Transparency log (issue #133, D3) ==================
-        //
-        // Commit the request+response pair to the hash-chain log AFTER all
-        // post-processing so `result` reflects what the caller actually receives.
-        // Failures are non-fatal — we log a warning but never abort the invocation.
-        if let Some(ref tl) = self.transparency_logger {
-            let response_hash =
-                format!("sha256:{}", sha256_hex(canonical_json(&result).as_bytes()));
-            let caller = api_key_name.unwrap_or("anonymous");
-            // MIK-7215.CONTROL.3/.3a: the log's correlation key must survive
-            // the removal of sessions. The W3C trace id carried in `_meta`
-            // spans the whole call rather than one connection, so it is used
-            // where present; `session_id` remains the fallback for a legacy
-            // caller that never sent one; and the id this invocation minted
-            // for its own tracing scope keys the case where neither exists —
-            // the ordinary case after MCP 2026-07-28, and the one a shared
-            // placeholder made uncorrelatable. The chain is total, so the
-            // placeholder is now unreachable.
-            let otel_trace_id = args
-                .get("_meta")
-                .and_then(crate::protocol::trace::TraceContext::from_meta)
-                .and_then(|tc| tc.trace_id().map(str::to_string));
-            let key = match (otel_trace_id.as_deref(), session_id) {
-                (Some(otel), _) => crate::security::transparency_log::CorrelationKey {
-                    id: otel,
-                    source: crate::security::transparency_log::CorrelationSource::OtelTraceId,
-                },
-                (None, Some(session)) => crate::security::transparency_log::CorrelationKey {
-                    id: session,
-                    source: crate::security::transparency_log::CorrelationSource::SessionId,
-                },
-                (None, None) => crate::security::transparency_log::CorrelationKey {
-                    id: trace_id,
-                    source: crate::security::transparency_log::CorrelationSource::TraceId,
-                },
-            };
-            if let Err(e) = tl.log_invocation_correlated(
-                key,
-                caller,
-                server,
-                tool,
-                &request_hash,
-                &response_hash,
-            ) {
-                warn!(
-                    server,
-                    tool,
-                    trace_id,
-                    error = %e,
-                    "Transparency log write failed (non-fatal)"
-                );
-            }
-        }
+        // The invocation record is written by `invoke_tool`, around this
+        // function, so a refused or failed call is recorded too (D1-d).
 
         // === POST-INVOKE: Response signing (ADR-001, OWASP ASI07) ===
         //
@@ -5281,6 +5237,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5357,6 +5314,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5439,6 +5397,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5489,6 +5448,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5529,6 +5489,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5574,6 +5535,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
