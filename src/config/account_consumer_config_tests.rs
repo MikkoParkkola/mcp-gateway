@@ -32,7 +32,6 @@
 
 use super::Config;
 use crate::capability::definition::AuthConfig;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const CURRENT_B64: &str = "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=";
@@ -44,7 +43,8 @@ const STATIC_AUTHORIZATION: &str = "Bearer synthetic-static-gateway-token";
 
 fn write_env(dir: &Path) -> PathBuf {
     let path = dir.join("keys.env");
-    fs::write(&path, format!("{CURRENT_VAR}={CURRENT_B64}\n")).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, format!("{CURRENT_VAR}={CURRENT_B64}\n"))
+        .unwrap();
     path
 }
 
@@ -117,7 +117,7 @@ fn evaluate(dir: &Path, port: u16, descriptors: &str, backends: &str) -> crate::
         store_block(dir),
     );
     let path = dir.join(format!("config-{port}.yaml"));
-    fs::write(&path, body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
     Config::load_evaluated(Some(path.as_path())).map(|_| ())
 }
 
@@ -377,7 +377,7 @@ fn resolved_account_reference_survives_config_round_trip() {
         managed_descriptor("work-gmail", "google"),
     );
     let path = root.path().join("round-trip.yaml");
-    fs::write(&path, body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
 
     let dumped = serialized(&path);
     assert_eq!(
@@ -469,7 +469,7 @@ fn static_credentials_without_any_accounts_block_are_unaffected() {
          oauth:\n      enabled: true\n      shared_account: true\n"
     );
     let path = root.path().join("legacy.yaml");
-    fs::write(&path, body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
 
     let dumped = serialized(&path);
     assert_eq!(

@@ -232,7 +232,7 @@ impl StdioGateway {
     async fn start(config: Value) -> Self {
         let directory = tempfile::tempdir().expect("stdio gateway directory");
         let config_path = directory.path().join("gateway.yaml");
-        std::fs::write(
+        mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
             serde_yaml::to_string(&config).expect("config YAML"),
         )

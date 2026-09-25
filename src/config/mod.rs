@@ -7,9 +7,12 @@
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
 pub(crate) mod account_bindings;
+mod config_file;
 mod env_overlay;
 mod features;
 mod input_schema;
+#[cfg(unix)]
+mod secret_file;
 mod secret_ref;
 mod strict_keys;
 
@@ -21,7 +24,6 @@ use std::{
 
 use figment::{
     Figment, Metadata, Profile, Provider,
-    providers::{Format, Yaml},
     value::{Dict, Map, Tag, Value},
 };
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,7 @@ use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::verify_remote_server_provenance;
 use crate::{Error, Result};
+use config_file::ConfigFile;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 pub use input_schema::InputSchemaEnforcement;
@@ -320,7 +323,7 @@ impl Config {
     ///
     /// Shared by every entry point so that "no such file" and "cannot read it"
     /// stay one diagnostic rather than one per loader.
-    fn prepare(path: Option<&Path>) -> Result<Option<PathBuf>> {
+    fn prepare(path: Option<&Path>) -> Result<Option<ConfigFile>> {
         // Resolve the config file: explicit path takes priority; otherwise
         // search well-known fallback locations.
         let resolved: Option<PathBuf> = match path {
@@ -358,7 +361,9 @@ impl Config {
             )));
         }
 
-        Ok(resolved)
+        // Read once, through the handle the mode check ran on; every later
+        // stage parses these bytes rather than reopening the path.
+        resolved.map(ConfigFile::read).transpose()
     }
 
     /// Load the config, warning on (rather than refusing) a malformed env file.
@@ -370,7 +375,7 @@ impl Config {
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let resolved = Self::prepare(path)?;
         Ok(Self::evaluate(
-            resolved.as_deref(),
+            resolved.as_ref(),
             &SystemHome,
             Tolerance::Warn,
             Expansion::Resolve,
@@ -392,7 +397,7 @@ impl Config {
     pub fn load_literal(path: Option<&Path>) -> Result<Self> {
         let resolved = Self::prepare(path)?;
         Ok(Self::evaluate(
-            resolved.as_deref(),
+            resolved.as_ref(),
             &SystemHome,
             Tolerance::Warn,
             Expansion::Literal,
@@ -429,12 +434,7 @@ impl Config {
         home: &dyn HomeResolver,
     ) -> Result<Evaluated> {
         let resolved = Self::prepare(path)?;
-        Self::evaluate(
-            resolved.as_deref(),
-            home,
-            Tolerance::Fail,
-            Expansion::Resolve,
-        )
+        Self::evaluate(resolved.as_ref(), home, Tolerance::Fail, Expansion::Resolve)
     }
 
     /// Re-evaluate against env files the running process already recorded.
@@ -451,7 +451,7 @@ impl Config {
         let resolved = Self::prepare(path)?;
         let overlay = EnvOverlay::from_paths_checked(env_paths.as_paths())?;
         Self::finish(
-            resolved.as_deref(),
+            resolved.as_ref(),
             overlay,
             env_paths.clone(),
             Expansion::Resolve,
@@ -465,7 +465,7 @@ impl Config {
     /// moves where the next file is looked for. Resolving the whole list up
     /// front would agree with itself and read a file nothing watches.
     fn evaluate(
-        path: Option<&Path>,
+        path: Option<&ConfigFile>,
         home: &dyn HomeResolver,
         tolerance: Tolerance,
         expansion: Expansion,
@@ -507,7 +507,7 @@ impl Config {
     }
 
     fn finish(
-        path: Option<&Path>,
+        path: Option<&ConfigFile>,
         overlay: EnvOverlay,
         env_paths: ResolvedEnvFiles,
         expansion: Expansion,
@@ -593,15 +593,15 @@ impl Config {
     }
 
     /// The config file alone, with no environment layered over it.
-    fn yaml(path: Option<&Path>) -> Figment {
+    fn yaml(path: Option<&ConfigFile>) -> Figment {
         let mut figment = Figment::new();
         if let Some(path) = path {
-            figment = figment.merge(Yaml::file(path));
+            figment = figment.merge(path);
         }
         figment
     }
 
-    fn figment(path: Option<&Path>, overlay: &EnvOverlay) -> Figment {
+    fn figment(path: Option<&ConfigFile>, overlay: &EnvOverlay) -> Figment {
         Self::yaml(path).merge(OverlayEnv::new(overlay))
     }
 

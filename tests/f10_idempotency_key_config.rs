@@ -7,7 +7,8 @@ use mcp_gateway::config::{Config, IdempotencyKeyMode};
 fn load(body: &str) -> mcp_gateway::Result<Config> {
     let dir = tempfile::tempdir().expect("a private config directory");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, body).expect("the fixture config must be writable");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, body)
+        .expect("the fixture config must be writable");
     Config::load(Some(&path))
 }
 
