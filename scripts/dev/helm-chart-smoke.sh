@@ -122,7 +122,7 @@ grep -qE '^ *backends: \{\}$' <<<"$cm" \
   || fail "rendered gateway.yaml backends is not a map; Config.backends is a map"
 
 echo "== helm_renders_writable_state =="
-grep -qE '^ *- name: state$' <<<"$dep" && grep -qE '^ *emptyDir: \{\}$' <<<"$dep" \
+grep -qE '^ *- name: state$' <<<"$dep" && grep -qE '^ *emptyDir:' <<<"$dep" \
   || fail "no emptyDir state volume"
 grep -qE '^ *mountPath: /var/lib/mcp-gateway$' <<<"$dep" \
   || fail "no writable mount at /var/lib/mcp-gateway"
@@ -166,6 +166,42 @@ mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingS
   --show-only templates/configmap.yaml)"
 grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$mesh" \
   || fail "mesh mode drops server.metrics_token"
+
+echo "== helm_pod_identity_is_the_images_uid =="
+# The image's user and group are both 1001 (Dockerfile groupadd/useradd). Any
+# other UID, GID or fsGroup either runs as root or cannot read its own HOME, so
+# the chart refuses to render it rather than shipping a pod that fails later.
+for k in runAsUser runAsGroup fsGroup; do
+  grep -qE "^ *$k: 1001$" <<<"$dep" || fail "default render does not set $k: 1001"
+  "$HELM" template t "$CHART" --set "podSecurityContext.$k=1001" >/dev/null 2>&1 \
+    || fail "podSecurityContext.$k=1001 does not render"
+  for bad in 0 1000; do
+    err="$("$HELM" template t "$CHART" --set "podSecurityContext.$k=$bad" 2>&1 >/dev/null || true)"
+    grep -q "podSecurityContext.$k must be 1001" <<<"$err" \
+      || fail "podSecurityContext.$k=$bad renders (or fails without the UID guard): ${err:-rendered}"
+  done
+done
+
+echo "== helm_every_emptydir_has_a_size_limit =="
+# A full HOME (npm/uv caches, task store) must evict this pod, not fill the node.
+for args in "" "--set rbac.create=true --set networkPolicy.enabled=true" "--set auth.mode=mesh"; do
+  # shellcheck disable=SC2086
+  r="$("$HELM" template t "$CHART" $args)"
+  unbounded="$(awk '/^ *emptyDir:/ { getline n; if (n !~ /^ *sizeLimit: /) c++ } END { print c+0 }' <<<"$r")"
+  [ "$unbounded" = "0" ] || fail "$unbounded emptyDir volume(s) without sizeLimit (args: ${args:-none})"
+done
+grep -qE '^ *sizeLimit: 1Gi$' <<<"$dep" || fail "state emptyDir default sizeLimit is not 1Gi"
+sized="$("$HELM" template t "$CHART" --set stateVolume.sizeLimit=5Gi 2>&1 || true)"
+grep -qE '^ *sizeLimit: 5Gi$' <<<"$sized" || fail "stateVolume.sizeLimit does not set the emptyDir sizeLimit"
+
+echo "== service_account_token_not_mounted =="
+# Neither pod calls the Kubernetes API: the gateway has no API client, and the
+# `kubernetes` subcommands shell out to kubectl, which the image does not carry.
+grep -qE '^ *automountServiceAccountToken: false$' <<<"$dep" \
+  || fail "chart mounts a service account token by default"
+EA_DEP="$(dirname "$CHART")/../kubernetes/enterprise-alpha/base/deployment.yaml"
+grep -qE '^ *automountServiceAccountToken: false$' "$EA_DEP" \
+  || fail "enterprise-alpha deployment mounts a service account token"
 
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 

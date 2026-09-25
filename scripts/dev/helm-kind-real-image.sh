@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # The chart runs the real gateway: load a locally built image into kind, install
 # the chart with probes on under Pod Security `restricted`, and require Ready
-# plus /livez 200.
+# plus /livez 200, then an MCP `initialize` and `tools/list` answered with a
+# JSON-RPC result.
 #
 # helm-kind-lifecycle.sh drives `pause` and so tests rollout mechanics only. That
 # is how the chart shipped from #292 unable to start at all: `serve --host` exits
@@ -25,6 +26,9 @@ HELM="${HELM:-helm}"
 KUBECTL="${KUBECTL:-kubectl}"
 KEEP="${MCP_GATEWAY_KIND_KEEP:-0}"
 TIMEOUT="${MCP_GATEWAY_ROLLOUT_TIMEOUT:-180s}"
+# The chart's default is credential mode: the Secret below and the MCP requests
+# at the end carry the same bearer.
+TOKEN="kind-real-image-not-a-real-credential-0123456789"
 
 # ghcr.io/owner/repo:tag -> registry, repository, tag (the chart's three values).
 REGISTRY="${IMAGE%%/*}"
@@ -75,7 +79,7 @@ fi
   pod-security.kubernetes.io/enforce=restricted \
   pod-security.kubernetes.io/enforce-version=latest
 "$KUBECTL" create secret generic mcp-gateway-auth -n "$NAMESPACE" \
-  --from-literal=token="kind-real-image-not-a-real-credential-0123456789" \
+  --from-literal=token="$TOKEN" \
   --dry-run=client -o yaml | "$KUBECTL" apply -f -
 
 echo "== install $IMAGE with probes on =="
@@ -110,4 +114,57 @@ if [ "$code" != "200" ]; then
   exit 1
 fi
 
-echo "helm kind real image passed: $IMAGE Ready and /livez 200 on $CLUSTER"
+echo "== MCP initialize then tools/list through the Service =="
+# Ready and /livez say the process is up, not that it serves MCP. port-forward
+# pins one pod, so the session initialize mints is the one tools/list presents.
+# Each answer must be a JSON-RPC result for the id sent: an `error` member, a
+# 401, or an HTML page all fail, where a bare "contains jsonrpc" would not.
+mcp() { # id-or-empty method params_json [session] -> response headers + body
+  local id="$1" method="$2" params="$3" sess="${4:-}" body
+  if [ -n "$id" ]; then
+    body="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"$method\",\"params\":$params}"
+  else
+    body="{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params}"
+  fi
+  curl -sS --max-time 10 -D - -X POST "http://127.0.0.1:39499/mcp" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    ${sess:+-H "Mcp-Session-Id: $sess"} \
+    -d "$body"
+}
+assert_result() { # id want_key response
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, sys
+want_id, key, raw = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+# Plain JSON after the headers, or SSE framing where it rides a `data:` line.
+for line in raw.splitlines():
+    line = line[5:].strip() if line.startswith("data:") else line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        msg = json.loads(line)
+    except ValueError:
+        continue
+    if msg.get("jsonrpc") == "2.0" and msg.get("id") == want_id \
+            and "error" not in msg and key in (msg.get("result") or {}):
+        sys.exit(0)
+sys.exit(f"no JSON-RPC result with id={want_id} carrying '{key}': {raw[:600]!r}")
+PY
+}
+init="$(mcp 1 initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"helm-kind-real-image","version":"0"}}' || true)"
+if ! assert_result 1 protocolVersion "$init"; then
+  echo "FAIL: initialize did not return a JSON-RPC result" >&2
+  diagnose
+  exit 1
+fi
+session="$(tr -d '\r' <<<"$init" | awk -F': ' 'tolower($1)=="mcp-session-id" {print $2; exit}' || true)"
+mcp "" notifications/initialized '{}' "$session" >/dev/null || true
+tools="$(mcp 2 tools/list '{}' "$session" || true)"
+if ! assert_result 2 tools "$tools"; then
+  echo "FAIL: tools/list did not return a JSON-RPC result" >&2
+  diagnose
+  exit 1
+fi
+
+echo "helm kind real image passed: $IMAGE Ready, /livez 200, initialize + tools/list answered on $CLUSTER"
