@@ -484,13 +484,13 @@ mod restart_required_tests {
         );
 
         // Every restart-only server field, not a hand-picked few:
-        // `request_timeout` and `shutdown_timeout` were both omitted before.
+        // `shutdown_timeout` was omitted before.
         for (label, changed) in [
             (
-                "request_timeout",
+                "shutdown_timeout",
                 Config {
                     server: crate::config::ServerConfig {
-                        request_timeout: std::time::Duration::from_secs(7),
+                        shutdown_timeout: std::time::Duration::from_secs(7),
                         ..Config::default().server
                     },
                     ..Config::default()
@@ -576,8 +576,8 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
     let mut pending = Vec::new();
 
     // `server` wholesale, minus the one field that IS re-read per request.
-    // Listing the restart-only fields by hand is how `request_timeout` and
-    // `shutdown_timeout` went unreported: subtracting the
+    // Listing the restart-only fields by hand is how `shutdown_timeout` (and the
+    // since-removed `request_timeout`) went unreported: subtracting the
     // single live field from the whole cannot drift as fields are added.
     let server_without_public_url = |c: &Config| {
         let mut server = c.server.clone();

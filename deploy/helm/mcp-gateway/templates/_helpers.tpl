@@ -80,3 +80,11 @@ own HOME, so it is refused at render time instead of failing in the cluster. */}
 {{- end -}}
 {{- join " " $reasons -}}
 {{- end -}}
+
+{{/* The server.cleartext_http value the gateway config renders, or "" when
+     none is rendered (mesh mode accepts no credential, so C3 does not apply). */}}
+{{- define "mcp-gateway.cleartextHttp" -}}
+{{- if eq .Values.auth.mode "credential" -}}
+{{- .Values.server.cleartextHttp | default "cluster_internal" -}}
+{{- end -}}
+{{- end -}}

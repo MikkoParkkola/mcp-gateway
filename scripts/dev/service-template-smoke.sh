@@ -39,6 +39,8 @@ grep -Fq '["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]' 
 # That wide bind is only legal because the template declares why. Asserted here
 # so removing the declaration fails the smoke rather than the container.
 grep -Fq 'MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND' "$docker_template"
+# And the auth `init` writes would cross it in plain HTTP (C3).
+grep -Fq 'MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish' "$docker_template"
 grep -Fq "http://127.0.0.1:39400/livez" "$docker_template"
 if docker compose version >/dev/null 2>&1; then
   (cd "$source_layout" && docker compose -f "$docker_template" config >/dev/null)
