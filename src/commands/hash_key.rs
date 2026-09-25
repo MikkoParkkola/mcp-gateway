@@ -10,7 +10,7 @@
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
 
-use mcp_gateway::config::{api_key_digest_spec, parse_api_key_digest};
+use mcp_gateway::config::api_key_digest_spec;
 use subtle::ConstantTimeEq;
 
 const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify sha256:<hex>]";
@@ -40,16 +40,13 @@ pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(expected) => {
-            let (Some(expected), Some(presented)) = (
-                parse_api_key_digest(expected),
-                parse_api_key_digest(&presented),
-            ) else {
+            if !same_shape(expected, &presented) {
                 eprintln!(
                     "hash-key: --verify takes sha256: followed by 64 lowercase hex characters"
                 );
                 return ExitCode::from(2);
-            };
-            if bool::from(presented.as_slice().ct_eq(expected.as_slice())) {
+            }
+            if bool::from(presented.as_bytes().ct_eq(expected.as_bytes())) {
                 eprintln!("hash-key: the key matches");
                 ExitCode::SUCCESS
             } else {
@@ -58,6 +55,20 @@ pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
             }
         }
     }
+}
+
+/// Whether `expected` has the canonical shape of `presented`, the library's
+/// own output: the same prefix and length, then lowercase hex. Derived from
+/// that output so the digest format is defined once, in the library.
+fn same_shape(expected: &str, presented: &str) -> bool {
+    let Some(split) = presented.find(':').map(|i| i + 1) else {
+        return false;
+    };
+    expected.len() == presented.len()
+        && expected.get(..split) == presented.get(..split)
+        && expected[split..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Strip exactly one trailing `\r\n` or `\n`.

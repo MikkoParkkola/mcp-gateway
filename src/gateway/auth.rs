@@ -299,7 +299,7 @@ impl ResolvedAuthConfig {
                     AuthenticatedClient {
                         quota_principal: Some(key.quota_principal.clone()),
                         name: key.name.clone(),
-                        // Equals principal_of(plaintext), so owners and caches survive.
+                        // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
                         principal: hex::encode(&key.digest[..6]),
                         rate_limit: key.rate_limit,
                         backends: key.backends.clone(),
