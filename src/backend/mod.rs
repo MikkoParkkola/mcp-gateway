@@ -21,7 +21,7 @@ pub(crate) const LIST_MAX_PAGES: usize = 32;
 /// Wall-clock budget for one paginated `*/list` fill, across every page
 /// (design §2.G, revision 2). Checked between pages, never mid-request, so
 /// the in-flight permit is held for at most this plus one page's timeout.
-const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
+const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::MAX;
 
 mod annotations;
 mod cached_metadata;
