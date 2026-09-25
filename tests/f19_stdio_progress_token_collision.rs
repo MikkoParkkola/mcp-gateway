@@ -201,3 +201,78 @@ async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progre
         "the caller's own token reached the backend unchanged: {seen}"
     );
 }
+
+/// F19b: the same collision where one caller's call runs on the task worker,
+/// outside any request scope.
+///
+/// Outside a scope `substitute_progress_token` forwards the caller's token
+/// unchanged (`src/backend/ops.rs:784-797`), so the peer receives `"1"` raw
+/// from the task call and a minted token from the direct call. The task
+/// call's registration on the stdio transport captures no sink, because no
+/// request scope exists on the worker's task, so its progress is dropped. The
+/// direct caller, whose registration is its own minted token, must receive
+/// exactly its own progress.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_task_call_sharing_a_progress_token_cannot_reach_a_direct_caller() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (state, _store_dir) = common::state(Fixture::default()).await;
+    let log = register_command_backend(&state, home.path());
+
+    let mut task_call = call(1, 11);
+    task_call["params"]["task"] = json!({});
+    task_call["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
+    task_call["params"]["_meta"]["io.mcp-gateway/idempotency-key"] = json!("f19b-task");
+
+    // The creating response returns at once; the call itself runs on the
+    // worker and parks at the peer until the direct call arrives.
+    let frames_task = post_frames(&state, task_call).await;
+    let mut parked = false;
+    for _ in 0..400 {
+        if !std::fs::read_to_string(&log).unwrap_or_default().is_empty() {
+            parked = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        parked,
+        "the task call never reached the peer; creating response: {frames_task:?}"
+    );
+    let frames_direct =
+        tokio::time::timeout(Duration::from_secs(30), post_frames(&state, call(2, 22)))
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the direct call never completed. Peer saw: {:?}",
+                    std::fs::read_to_string(&log).unwrap_or_default()
+                )
+            });
+
+    let seen = std::fs::read_to_string(&log).unwrap_or_default();
+    let lines: Vec<&str> = seen.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the peer must see both calls: {seen}; task answered {frames_task:?}"
+    );
+    // Control: the task call really ran outside a request scope, so the route
+    // under test is the unsubstituted one.
+    assert!(
+        lines[0].contains(&format!("\"progressToken\":\"{SHARED_TOKEN}\"")),
+        "the task call was expected to reach the peer with the caller's raw token: {seen}"
+    );
+    assert!(
+        !lines[1].contains(&format!("\"progressToken\":\"{SHARED_TOKEN}\"")),
+        "the direct call must reach the peer with a minted token: {seen}"
+    );
+    assert_eq!(
+        progress_of(&frames_direct),
+        vec![(json!(SHARED_TOKEN), json!(22))],
+        "the direct caller must receive exactly its own progress (22): {frames_direct:?}"
+    );
+    assert!(
+        progress_of(&frames_task).is_empty(),
+        "the task call's creating response carries no progress: {frames_task:?}"
+    );
+}
