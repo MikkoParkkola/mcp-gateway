@@ -61,6 +61,7 @@ sudo chown 1001:1001 gateway.container.yaml
 docker run -d --name mcp-gateway \
   -p 127.0.0.1:39400:39400 \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
+  -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
@@ -71,8 +72,11 @@ docker run -d --name mcp-gateway \
 The container must bind `0.0.0.0` or the published port reaches nothing, and
 the config `init` writes keeps `/mcp` public — a pairing the gateway refuses
 unless `allow_unauthenticated_network_bind` is set. The boundary is the publish
-address: `127.0.0.1:39400` means only this host reaches the port. Publishing on
-`0.0.0.0` instead requires configuring authentication first.
+address: `127.0.0.1:39400` means only this host reaches the port. The same
+boundary is why `server.cleartext_http: host_local_publish` is honest: `init`
+turns authentication on, and its credential crosses the container's `0.0.0.0`
+in plain HTTP, which the gateway otherwise refuses (UPGRADING-4.0 item 38).
+Publishing on `0.0.0.0` instead requires configuring authentication and TLS first.
 
 On Linux, the image runs as UID/GID 1001. Bind-mount an owner-only deployment
 copy that this identity can read; do not change ownership on your working
@@ -100,6 +104,7 @@ services:
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
       MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
+      MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:39400/livez"]
       interval: 30s
@@ -156,7 +161,7 @@ Use the same doctor command for local and container deployments:
 
 ```bash
 mcp-gateway doctor --config gateway.yaml --format json
-curl -sf http://localhost:39400/health > /dev/null
+curl -sf http://localhost:39400/readyz > /dev/null
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
 scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
 scripts/dev/service-template-smoke.sh  # repo checkout: service template paths + native start smoke
@@ -456,6 +461,8 @@ server {
         proxy_read_timeout 300s;
     }
     location /health  { proxy_pass http://mcp_gateway; }
+    location /livez   { proxy_pass http://mcp_gateway; }
+    location /readyz  { proxy_pass http://mcp_gateway; }
     location /ui      { proxy_pass http://mcp_gateway; }
     # /metrics checks its own bearer (server.metrics_token); pass the
     # Authorization header through. The allow-list is defence in depth.
@@ -611,11 +618,13 @@ annotated pod in the cluster. The Helm chart advertises `/metrics` (the
 Secret holding the token, and `metrics.serviceMonitor.enabled` renders a
 prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
 
-- `mcp_gateway_requests_total` -- count per backend/tool
-- `mcp_gateway_request_duration_seconds` -- latency histogram
-- `mcp_gateway_circuit_breaker_state` -- state gauge
-- `mcp_gateway_rate_limiter_rejections_total` -- rejection count
-- `mcp_gateway_active_connections` -- current connections
+- `mcp_backend_requests_total` -- requests per backend
+- `mcp_backend_request_duration_seconds` -- backend latency histogram
+- `mcp_backend_circuit_state` -- circuit breaker state per backend
+- `mcp_circuit_breaker_opened_total` -- breaker trips
+- `mcp_tool_invocations_total`, `mcp_tool_invocation_duration_seconds` -- per-tool calls and latency
+- `mcp_cache_hits_total` -- response cache hits
+- `mcp_jsonrpc_requests_total` -- JSON-RPC requests by method
 - `mcp_backend_idle_stop_close_failures` -- per backend, counts backends stopped
   for idleness that did not shut down cleanly (see below)
 - `mcp_message_signing_nonce_entries` -- live signing nonces held for replay
@@ -965,6 +974,19 @@ credential, or fronting it with something that authenticates and setting
 a restart would do with the file in front of it, so follow that rather than
 guessing. Set both, then restart — the same start
 that applies the authentication is the one that admits the hostname.
+
+**Then say who encrypts it.** With authentication on, the credential reaches
+this listener in plain HTTP, and a declared tunnel hostname puts that on the
+network. The gateway refuses it unless `mtls` is on or `server.cleartext_http`
+names the protection. A tunnel terminates TLS in front of the gateway, so:
+
+```yaml
+server:
+  public_url: "https://your-tunnel.example.com"
+  cleartext_http: tls_terminated_upstream
+```
+
+It is logged at WARN on every start. See UPGRADING-4.0 item 38.
 
 ### Managing the gateway from your MCP client
 

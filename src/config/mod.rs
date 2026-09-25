@@ -738,6 +738,14 @@ impl Config {
         if self.server.port == 0 {
             tracing::warn!("Server port is 0; OS will assign an ephemeral port");
         }
+        // The router caps every body at this (C8), so 0 would refuse all of them.
+        if self.server.max_body_size == 0 {
+            return Err(Error::ConfigValidation(
+                "server.max_body_size is 0, which refuses every request body; \
+                 set a positive byte count (default 10485760)"
+                    .into(),
+            ));
+        }
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
@@ -1242,13 +1250,11 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
-    /// Request timeout.
-    #[serde(with = "humantime_serde")]
-    pub request_timeout: Duration,
     /// Graceful shutdown timeout.
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
-    /// Maximum request body size (bytes).
+    /// Maximum request body size (bytes) on every route. Read once at startup:
+    /// an oversize body gets HTTP 413.
     pub max_body_size: usize,
     /// Externally reachable base URL of this gateway (scheme + host + optional
     /// port), e.g. `https://mcp.your-domain.tld`. Set this when the gateway
@@ -1291,6 +1297,43 @@ pub struct ServerConfig {
     /// `replicaCount`. Above 1, startup refuses the per-process state
     /// (`support::replica_state_refusal`, UPGRADING-4.0 §37).
     pub replicas: u32,
+    /// Whether plain HTTP may carry credentials on a network bind (C3,
+    /// UPGRADING-4.0). See [`CleartextHttp`].
+    #[serde(default, skip_serializing_if = "CleartextHttp::is_refuse")]
+    pub cleartext_http: CleartextHttp,
+    /// The Kubernetes cluster domain `cleartext_http: cluster_internal` accepts
+    /// after `.svc`. Unset means `cluster.local`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_domain: Option<String>,
+}
+
+/// `server.cleartext_http`: who protects credentials sent over plain HTTP on a
+/// network bind. Every value but `refuse` is logged at WARN on each start.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleartextHttp {
+    /// Refuse to serve: enable `mtls` or pick a value below.
+    #[default]
+    Refuse,
+    /// A reverse proxy terminates TLS in front of this gateway.
+    TlsTerminatedUpstream,
+    /// Callers reach the pod only over the cluster network, by its Service
+    /// name; `public_url` must be that name.
+    ClusterInternal,
+    /// A container binds `0.0.0.0` and the host publishes it on loopback only.
+    HostLocalPublish,
+}
+
+impl CleartextHttp {
+    /// `true` for the default, so an unset value is not serialized.
+    #[must_use]
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's skip_serializing_if passes a reference"
+    )]
+    pub fn is_refuse(&self) -> bool {
+        *self == Self::Refuse
+    }
 }
 
 /// `server.idempotency_key`: see [`ServerConfig::idempotency_key`].
@@ -1312,13 +1355,14 @@ impl Default for ServerConfig {
             modern_protocol: true,
             host: "127.0.0.1".to_string(),
             port: 39400,
-            request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
             allow_unauthenticated_network_bind: false,
             idempotency_key: IdempotencyKeyMode::Optional,
             metrics_token: None,
+            cleartext_http: CleartextHttp::Refuse,
+            cluster_domain: None,
             replicas: 1,
         }
     }
@@ -1330,7 +1374,6 @@ impl std::fmt::Debug for ServerConfig {
             .field("modern_protocol", &self.modern_protocol)
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("request_timeout", &self.request_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("max_body_size", &self.max_body_size)
             .field("public_url", &self.public_url)
@@ -1343,6 +1386,8 @@ impl std::fmt::Debug for ServerConfig {
                 "metrics_token",
                 &self.metrics_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("cleartext_http", &self.cleartext_http)
+            .field("cluster_domain", &self.cluster_domain)
             .field("replicas", &self.replicas)
             .finish()
     }

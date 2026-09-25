@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`server.max_body_size` is enforced on every route (breaking).** It was read
+  nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
+  webhooks included, used the framework's 2 MiB default. An oversize body now
+  gets HTTP 413 everywhere; on `/mcp` and `/mcp/{name}` the JSON-RPC code is
+  -32600 (was 400, JSON-RPC -32700). `max_body_size: 0` now fails the load.
+  See UPGRADING-4.0.md item 39.
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
   made write tools unusable from standard MCP clients, none of which send the
@@ -135,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no validator; set `observe` to keep the audit lines. `enforce` is refused at
   load until it covers the direct route and multi-step plans. See
   `docs/UPGRADING-4.0.md` item 30.
+- **A credential over plain HTTP on a network bind refuses the start
+  (breaking).** With `auth`, `agent_auth` or the key server on, a non-loopback
+  bind or `public_url`, and no mTLS, the gateway refuses to serve, and a reload
+  into that state is refused. `server.cleartext_http` names the protection
+  instead: `tls_terminated_upstream`, `cluster_internal` (Service-name
+  `public_url` only) or `host_local_publish`, each logged at WARN on every
+  start. The Helm chart (`server.cleartextHttp`), enterprise-alpha and compose
+  set it. See `docs/UPGRADING-4.0.md` item 38.
 - **`/metrics` requires a dedicated scrape token (breaking).** It sat outside
   authentication and its labels name your backends. It now answers only
   `Bearer <server.metrics_token>` and returns 401 otherwise, the admin bearer
@@ -163,7 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call time when `X` is unset or empty instead of sending `""`; `{env.X:-}`
   allows empty on purpose. A `${...}` that is not a `${NAME}` reference is
   refused. Errors name listed env files that were not
-  found. See `docs/UPGRADING-4.0.md` item 38.
+  found. See `docs/UPGRADING-4.0.md` item 40.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
@@ -262,6 +276,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
+  its backend's `timeout`. A config that still sets it now fails to load with an
+  explanation. See UPGRADING-4.0.md item 39.
 - **The inbound WebSocket listener and `server.ws_port` (breaking).** The
   listener only echoed text frames back; it served no MCP, ran outside the
   Origin/Host guard and had no auth. A config that still sets `server.ws_port`

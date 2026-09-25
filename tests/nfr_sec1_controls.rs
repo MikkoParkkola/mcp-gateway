@@ -216,9 +216,10 @@ async fn control_8_a_modern_request_with_unparseable_json_is_refused() {
 }
 
 // ============================================================================
-// NFR.SEC.1 control 7 — request body ceiling (10 MiB)
-// `axum::body::to_bytes` at `handlers.rs:513`. Built in memory rather than
-// shipped as a fixture, which is what the inventory priced as too expensive.
+// NFR.SEC.1 control 7 — request body ceiling (`server.max_body_size`, 10 MiB)
+// The router-wide `DefaultBodyLimit` layer, read by `helpers::read_body`; an
+// oversize body gets 413 (C8; 3.x answered 400/-32700). Built in memory rather
+// than shipped as a fixture, which is what the inventory priced as too expensive.
 // ============================================================================
 #[tokio::test]
 async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
@@ -230,7 +231,7 @@ async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
     let (status, _) = post(&app, over, &[]).await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
+        StatusCode::PAYLOAD_TOO_LARGE,
         "the 10 MiB ceiling must still bind a caller who never handshook"
     );
     // Falsifier: the SAME shape under the ceiling is served, so the refusal is

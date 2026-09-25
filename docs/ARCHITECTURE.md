@@ -14,7 +14,7 @@
           |              │  │               │    │  - list_servers   │      │
    POST /mcp             │  │  /mcp    ─────┼───>│  - list_tools    │      │
    ──────────────────────>  │  /mcp/{id}───┼──┐ │  - search_tools  │      │
-          |              │  │  /health ─────┼─┐│ │  - invoke        │      │
+          |              │  │  probes* ─────┼─┐│ │  - invoke        │      │
    GET /mcp (SSE)        │  └──────────────┘ ││ └───────┬───────────┘      │
    ──────────────────────>                    ││         │                  │
           |              │  ┌─────────────┐  ││ ┌───────v───────────┐      │
@@ -51,6 +51,8 @@
                          │  (stdio)        │ │ (HTTP)   │ │ (YAML)   │
                          └─────────────────┘ └──────────┘ └──────────┘
 ```
+
+\* `/health`, `/livez` and `/readyz`.
 
 ## Module Map
 
@@ -141,4 +143,4 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 - **API keys** support per-client rate limits, opt-in per-client circuit breakers, and backend restrictions.
 - **Secrets** use OS keychain (macOS Keychain, Linux secret-service) -- never stored in config files.
 - **OAuth** supports per-backend configuration with dynamic client registration.
-- **`/health`** is always public (configurable via `auth.public_paths`).
+- **`/health`** is public by default (`auth.public_paths`); a caller without admin gets only its `status` and `version`. `/livez` and `/readyz` are public exactly when `/health` is, and answer a plain `ok`.

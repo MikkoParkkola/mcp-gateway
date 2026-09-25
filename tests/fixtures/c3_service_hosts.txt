@@ -1,0 +1,15 @@
+# C3 `cluster_internal` Service-host cases. One file, two readers:
+# `cluster_internal_requires_service_host` in src/gateway/server/cleartext_tests.rs
+# (the gateway's check) and scripts/dev/helm-chart-smoke.sh (the chart's render
+# check), so the two cannot drift apart.
+#
+# Columns: verdict public_url cluster_domain ("-" means the default,
+# cluster.local). The chart renders these as release fullname "gw" in namespace
+# "ns", so every accepted row names gw.ns.svc.
+accept http://gw.ns.svc.cluster.local:39400 -
+accept http://gw.ns.svc:39400 -
+accept http://gw.ns.svc.corp.example:39400 corp.example
+reject https://mcp.example.com -
+reject https://api.svc.example.com -
+reject http://gw.svc.cluster.local -
+reject http://gw.ns.svc.cluster.local:39400 corp.example
