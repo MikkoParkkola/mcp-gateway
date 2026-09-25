@@ -29,6 +29,9 @@ const HEADER_CF_ACCESS_EMAIL: &str = "cf-access-authenticated-user-email";
 const HEADER_CF_ACCESS_USER_ID: &str = "cf-access-authenticated-user-id";
 const HEADER_CF_ACCESS_JWT: &str = "cf-access-jwt-assertion";
 const HEADER_IDENTITY_MAX_LEN: usize = 512;
+/// A signed Access assertion carries an RS256 signature and Cloudflare's claim
+/// set, typically 800-2000+ bytes, so it gets its own, larger bound.
+const HEADER_CF_ACCESS_JWT_MAX_LEN: usize = 8 * 1024;
 
 /// Why a request's identity headers were refused. Each maps to one status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,9 +176,17 @@ fn trusted_proxy_identity(
     ) {
         return Err(IdentityHeaderRefusal::RemovedHeader);
     }
-    let label = strict_header(headers, HEADER_GATEWAY_IDENTITY_LABEL)?;
-    Ok(strict_header(headers, HEADER_GATEWAY_IDENTITY_SUBJECT)?
-        .map(|subject| GrantSubject::new(config.authority.clone(), subject, label)))
+    let label = strict_header(
+        headers,
+        HEADER_GATEWAY_IDENTITY_LABEL,
+        HEADER_IDENTITY_MAX_LEN,
+    )?;
+    Ok(strict_header(
+        headers,
+        HEADER_GATEWAY_IDENTITY_SUBJECT,
+        HEADER_IDENTITY_MAX_LEN,
+    )?
+    .map(|subject| GrantSubject::new(config.authority.clone(), subject, label)))
 }
 
 /// `cloudflare_access`: the identity is a verified `Cf-Access-Jwt-Assertion`
@@ -188,7 +199,9 @@ async fn cloudflare_access_identity(
     if any_present(headers, &GATEWAY_IDENTITY_HEADERS) {
         return Err(IdentityHeaderRefusal::WrongModeHeader);
     }
-    let Some(assertion) = strict_header(headers, HEADER_CF_ACCESS_JWT)? else {
+    let Some(assertion) =
+        strict_header(headers, HEADER_CF_ACCESS_JWT, HEADER_CF_ACCESS_JWT_MAX_LEN)?
+    else {
         return if any_present(headers, &[HEADER_CF_ACCESS_USER_ID, HEADER_CF_ACCESS_EMAIL]) {
             Err(IdentityHeaderRefusal::AccessAssertion)
         } else {
@@ -210,14 +223,18 @@ async fn cloudflare_access_identity(
 }
 
 /// One identity header, strictly: absent or blank is `None`; repeated, not
-/// UTF-8, or over [`HEADER_IDENTITY_MAX_LEN`] bytes is refused, never
+/// UTF-8, or over `max_len` bytes is refused, never
 /// truncated or first-wins.
-fn strict_header(headers: &HeaderMap, name: &str) -> Result<Option<String>, IdentityHeaderRefusal> {
+fn strict_header(
+    headers: &HeaderMap,
+    name: &str,
+    max_len: usize,
+) -> Result<Option<String>, IdentityHeaderRefusal> {
     let mut values = headers.get_all(name).iter();
     let Some(value) = values.next() else {
         return Ok(None);
     };
-    if values.next().is_some() || value.len() > HEADER_IDENTITY_MAX_LEN {
+    if values.next().is_some() || value.len() > max_len {
         return Err(IdentityHeaderRefusal::Malformed);
     }
     let text = value
