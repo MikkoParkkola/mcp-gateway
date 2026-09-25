@@ -32,6 +32,13 @@ const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Removed keys outside `backends`, by full dotted path, with the reason.
+const RETIRED_KEYS: &[(&str, &str)] = &[(
+    "server.ws_port",
+    "the inbound WebSocket listener was removed in 4.0; it only echoed frames and \
+     never served MCP. Clients connect over HTTP (POST /mcp). Remove server.ws_port",
+)];
+
 /// Every key a `backends.<name>` mapping may carry.
 ///
 /// `BackendConfig.transport` is `#[serde(flatten)]` over an untagged enum, so
@@ -231,7 +238,8 @@ fn refusal(path: &Path, found: &BTreeSet<String>, backend: &BackendFindings) -> 
         let leaf = key.rsplit('.').next().unwrap_or(key);
         let retired = RETIRED_BACKEND_KEYS
             .iter()
-            .find(|(name, _)| key.starts_with("backends.") && *name == leaf);
+            .find(|(name, _)| key.starts_with("backends.") && *name == leaf)
+            .or_else(|| RETIRED_KEYS.iter().find(|(name, _)| *name == key.as_str()));
         let unselected = backend.get(key).copied().flatten().and_then(|selector| {
             TRANSPORTS
                 .iter()
