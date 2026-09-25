@@ -375,7 +375,7 @@ impl WebSocketTransport {
             .request(
                 "initialize",
                 Some(serde_json::json!({
-                    "protocolVersion": { let _ = &self.protocol_version; PROTOCOL_VERSION },
+                    "protocolVersion": (self.protocol_version.as_ref().map_or(PROTOCOL_VERSION, |_| PROTOCOL_VERSION)),
                     "capabilities": {},
                     "clientInfo": {
                         "name": "mcp-gateway",
