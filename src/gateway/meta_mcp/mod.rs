@@ -362,8 +362,8 @@ pub struct MetaMcp {
     /// storage, every constant namespace has to be revisited first.
     pub(super) execution_admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
     pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
-    /// `server.idempotency_key`. Restart-scoped like the rest of `server`.
-    pub(super) idempotency_key_mode: RwLock<crate::config::IdempotencyKeyMode>,
+    /// `server.idempotency_key` and the un-keyed admission warn limit (F10).
+    pub(super) unkeyed: admission::UnkeyedPolicy,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built
@@ -627,7 +627,7 @@ impl MetaMcp {
             idempotency_cache: None,
             execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
-            idempotency_key_mode: RwLock::new(crate::config::IdempotencyKeyMode::Optional),
+            unkeyed: admission::UnkeyedPolicy::default(),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,
@@ -737,10 +737,6 @@ impl MetaMcp {
 
     pub(crate) fn set_idempotency_config(&self, config: crate::config::IdempotencyConfig) {
         *self.idempotency_config.write() = config;
-    }
-
-    pub(crate) fn set_idempotency_key_mode(&self, mode: crate::config::IdempotencyKeyMode) {
-        *self.idempotency_key_mode.write() = mode;
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).

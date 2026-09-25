@@ -16,12 +16,13 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use super::super::*;
 use super::support::*;
 
-fn unkeyed_total(handle: &metrics_exporter_prometheus::PrometheusHandle) -> usize {
+fn unkeyed_total(handle: &metrics_exporter_prometheus::PrometheusHandle) -> u64 {
     handle
         .render()
         .lines()
-        .filter(|line| line.starts_with("mcp_unkeyed_calls_total"))
-        .count()
+        .filter(|line| line.starts_with("mcp_unkeyed_calls_total{"))
+        .filter_map(|line| line.rsplit_once(' ')?.1.trim().parse::<u64>().ok())
+        .sum()
 }
 
 #[tokio::test]

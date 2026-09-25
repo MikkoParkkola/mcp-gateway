@@ -537,13 +537,15 @@ admitted this way.
   (which performs no sync admission) are admitted in both modes.
 - "Read-only" means an exact `idempotency.read_only_tools` entry or a gateway
   discovery tool, never a backend's own `readOnlyHint`. The metric label
-  `read_only_hint` reports that decision.
+  `gateway_read_only` reports that decision.
 - The era marker is chosen by the client, so `required` is a contract for
   cooperating clients, not a security boundary.
 - `server` is restart-scoped: a change takes effect on restart.
 
-**Migration.** Watch `mcp_unkeyed_calls_total` by `era` and `read_only_hint`
-(labels carry no identity). Once modern clients send keys, set:
+**Migration.** Watch `mcp_unkeyed_calls_total` by `era` and `gateway_read_only`
+(labels carry no identity). The counter sees the sync-admission routes only
+(the meta route and stdio); un-keyed traffic on `POST /mcp/{name}` never appears
+in it. Once modern clients send keys, set:
 
 ```yaml
 server:

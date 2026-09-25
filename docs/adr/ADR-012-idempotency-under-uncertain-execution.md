@@ -192,7 +192,7 @@ Decision:
    refuses only modern calls carrying no key and no task, to tools not marked
    read-only, on the sync-admission routes (meta and stdio). It is a contract for
    cooperating clients, not a security boundary: the era marker is client-chosen.
-3. `mcp_unkeyed_calls_total{era, read_only_hint}` counts every un-keyed
+3. `mcp_unkeyed_calls_total{era, gateway_read_only}` counts every un-keyed
    admission, and a warn rate-limited to once per tool per 10 minutes names the
    backend and tool of a modern one. Neither carries identity; neither fires on a
    refusal.

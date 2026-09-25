@@ -357,10 +357,14 @@ pub(super) fn nested_arguments(target_bytes: usize) -> Value {
 /// where a client puts it.
 ///
 /// NO idempotency key travels here, and that is the supported shape for this
-/// adapter rather than an omission. Under `server.idempotency_key: required`
-/// an un-keyed modern call to a mutating target is refused -32602 (F10); the
-/// configured exact read-only target in `signing_config` takes the unkeyed
-/// branch of `admit_operation` in either mode.
+/// adapter rather than an omission. A keyed stdio call used to be refused
+/// `-32003 A verified execution principal is required`, because stdio carries
+/// no authenticated identity for a keyed operation to belong to; stdio now
+/// owns keyed operations under `STDIO_CREDENTIAL_PRINCIPAL` (7459895de), and
+/// F10 T3 pins that. Without a key, `server.idempotency_key: required` refuses
+/// a modern call to a mutating target -32602 (F10); the configured exact
+/// read-only target in `signing_config` takes the unkeyed branch of
+/// `admit_operation` in either mode.
 ///
 /// The replay test depends on an ORDER, so it is stated rather than left
 /// implicit: `prepare_signing_invocation` runs before `admit_meta_sync`, so a

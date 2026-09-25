@@ -67,7 +67,7 @@ fn samples(handle: &PrometheusHandle) -> Vec<(Vec<String>, u64)> {
 fn count(handle: &PrometheusHandle, era: &str, read_only: bool) -> u64 {
     let want = vec![
         format!("era=\"{era}\""),
-        format!("read_only_hint=\"{read_only}\""),
+        format!("gateway_read_only=\"{read_only}\""),
     ];
     samples(handle)
         .into_iter()
@@ -103,7 +103,7 @@ fn recorder() -> (
 }
 
 /// T1 + T9: the default admits an un-keyed modern mutation, once, counted with
-/// exactly `{era, read_only_hint}` and no principal label.
+/// exactly `{era, gateway_read_only}` and no principal label.
 #[tokio::test]
 async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
@@ -120,7 +120,7 @@ async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
             .iter()
             .map(|label| label.split('=').next().unwrap_or_default())
             .collect();
-        assert_eq!(names, ["era", "read_only_hint"], "label set: {labels:?}");
+        assert_eq!(names, ["era", "gateway_read_only"], "label set: {labels:?}");
     }
 }
 
@@ -222,4 +222,48 @@ async fn t8_required_scope_excludes_legacy_and_read_only() {
     let response = dispatch(&fixture, invoke("t8-read", None, json!({}))).await;
     assert_ok("an un-keyed read-only call under required", &response);
     assert_eq!(count(&handle, "modern", true), 1, "{}", handle.render());
+}
+
+const WARN: &str = "admitted without an idempotency key";
+
+/// Warn lines emitted while `calls` are dispatched on a fresh fixture.
+fn warns_for(calls: Vec<Value>) -> String {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime");
+    let ((), logs) = crate::security::firewall::response_tests::audit::capture_warnings(|| {
+        runtime.block_on(async {
+            let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
+            for call in calls {
+                assert_ok("a warn-row call", &dispatch(&fixture, call).await);
+            }
+        });
+    });
+    logs
+}
+
+/// The warn fires once per (backend, tool) for rapid modern un-keyed calls,
+/// names both, and never fires for a legacy or a keyed call.
+#[test]
+fn unkeyed_warn_is_rate_limited_and_modern_only() {
+    let logs = warns_for(vec![
+        invoke("w-a", None, json!({})),
+        invoke("w-b", None, json!({})),
+    ]);
+    assert_eq!(logs.matches(WARN).count(), 1, "{logs}");
+    let line = logs
+        .lines()
+        .find(|line| line.contains(WARN))
+        .unwrap_or_default();
+    assert!(
+        line.replace('"', "").contains("backend=nonce_backend"),
+        "{line}"
+    );
+    assert!(line.replace('"', "").contains("tool=echo"), "{line}");
+
+    let legacy_call = legacy(invoke("w-legacy", None, json!({})));
+    assert_eq!(warns_for(vec![legacy_call]).matches(WARN).count(), 0);
+    let keyed = with_key(invoke("w-keyed", None, json!({})), json!("w-key"));
+    assert_eq!(warns_for(vec![keyed]).matches(WARN).count(), 0);
 }

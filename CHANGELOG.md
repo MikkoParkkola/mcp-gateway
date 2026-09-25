@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carrying a key or a task. The new `server.idempotency_key: optional | required`
   (default `optional`) restores the refusal under `required`, for modern
   un-keyed, un-tasked calls to tools not marked read-only on the meta route and
-  stdio only. New counter `mcp_unkeyed_calls_total{era, read_only_hint}` shows
+  stdio only. New counter `mcp_unkeyed_calls_total{era, gateway_read_only}` shows
   the traffic to watch before switching. See UPGRADING-4.0.md section 28 and the
   ADR-012 addendum.
 
