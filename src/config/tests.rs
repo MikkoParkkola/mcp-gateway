@@ -1023,54 +1023,36 @@ fn duration_parser_handles_milliseconds() {
     );
 }
 
-/// Flow style is valid YAML and loads identically to the block form. A
-/// line-oriented detector saw nothing here, so an operator whose config used
-/// flow mappings got the removal with no warning at all — the exact silence
-/// this warning exists to break.
+/// Flow style is valid YAML and loads identically to the block form, so the
+/// retired key is refused there too.
 #[test]
-fn retired_key_detector_sees_flow_style_mappings() {
-    assert!(
-        !Config::retired_keys_in_str("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}")
-            .is_empty(),
-        "flow-style mappings are valid YAML; the detector must see the key there too"
-    );
-}
-
-/// The mirror failure: the key's NAME inside a value is not a use of the key.
-/// A CHANGELOG excerpt or a description quoting `idle_timeout:` must not make
-/// the gateway warn about a config that never set it.
-#[test]
-fn retired_key_detector_ignores_the_name_inside_values() {
-    assert!(
-        Config::retired_keys_in_str(
-            "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m is no longer supported\n"
-        )
-        .is_empty(),
-        "the key name appearing inside a block scalar is text, not a set key"
-    );
-}
-
-/// `Config::load` warns by reading the file from disk, a path the string-level
-/// tests never touch. Without this, the detector could be perfect and still be
-/// wired to nothing.
-#[test]
-fn retired_key_detector_reads_the_loaded_file() {
+fn retired_key_refused_in_flow_style_mappings() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     std::fs::write(
         &path,
-        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
+        "backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}",
     )
     .expect("write config");
-
-    assert_eq!(
-        Config::retired_keys_in_file(&path)
-            .iter()
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>(),
-        vec!["idle_timeout"],
-        "the file-reading path Config::load uses must find the retired key"
+    let err = Config::load(Some(&path)).expect_err("flow-style retired key must be refused");
+    assert!(
+        err.to_string().contains("backends.demo.idle_timeout"),
+        "{err}"
     );
+}
+
+/// The key's NAME inside a value is not a use of the key: a description
+/// quoting `idle_timeout:` must not make the config refuse to load.
+#[test]
+fn retired_key_name_inside_a_value_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m is no longer supported\n",
+    )
+    .expect("write config");
+    Config::load(Some(&path)).expect("a key name inside a block scalar is text, not a set key");
 }
 
 // -------------------------------------------------------------------------
