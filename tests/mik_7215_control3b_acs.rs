@@ -112,8 +112,12 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
     // One registry, shared between the state the router reads and the executor
     // that publishes: two would send a task's notifications to a listener set
     // no client here is on.
-    let subscriptions =
-        Arc::new(mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(
+        mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(
+            64,
+            mcp_gateway::gateway::test_helpers::auth_state(&config.auth),
+        ),
+    );
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),

@@ -28,7 +28,7 @@ use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::auth::AuthState;
-use crate::gateway::auth::live::{HeldCredential, current_client};
+use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
 /// A tagged notification event from a backend
@@ -285,10 +285,9 @@ impl NotificationMultiplexer {
             .collect();
         let mut reached = 0;
         for (tx, credential) in targets {
-            let live = current_client(&authorizer, credential.as_ref()).await;
-            if live.is_some_and(|c| c.can_access_backend(backend))
-                && tx.send(notification.clone()).is_ok()
-            {
+            let verdict =
+                delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
+            if verdict == Delivery::Deliver && tx.send(notification.clone()).is_ok() {
                 reached += 1;
             }
         }
@@ -528,13 +527,25 @@ pub fn subscription_stream(
 
         loop {
             match listener.recv().await {
-                Ok(notification) => {
+                Ok(published) => {
                     // Filtered per listener, never at the publisher: one
                     // client's filter must not decide what another receives.
-                    if !delivers(&filter, &notification) {
+                    if !delivers(&filter, &published.notification) {
                         continue;
                     }
-                    let tagged = subscription.tag(notification);
+                    // Re-validated at delivery, only for wanted items: a token
+                    // revoked or expired after the stream opened is not told.
+                    match listener.delivery(&published).await {
+                        Delivery::Deliver => {}
+                        Delivery::OutOfScope => continue,
+                        Delivery::Dead => {
+                            // Skipping would hold one of the listener slots for
+                            // a stream that can never receive again.
+                            warn!("subscription listener's credential no longer authenticates; closing");
+                            break;
+                        }
+                    }
+                    let tagged = subscription.tag(published.notification);
                     yield Ok(Event::default()
                         .event("message")
                         .data(tagged.to_string()));

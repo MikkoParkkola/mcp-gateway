@@ -18,7 +18,10 @@ mod recovery;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
 
 fn test_subscriptions() -> Arc<SubscriptionRegistry> {
-    Arc::new(SubscriptionRegistry::new(DEFAULT_MAX_LISTENERS))
+    Arc::new(SubscriptionRegistry::new(
+        DEFAULT_MAX_LISTENERS,
+        crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+    ))
 }
 
 #[tokio::test]

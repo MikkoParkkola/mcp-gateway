@@ -185,8 +185,12 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
     let meta_mcp = Arc::new(meta);
     let continuation = meta_mcp.continuation();
 
-    let subscriptions =
-        Arc::new(mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(
+        mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(
+            64,
+            mcp_gateway::gateway::test_helpers::auth_state(&config.auth),
+        ),
+    );
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
