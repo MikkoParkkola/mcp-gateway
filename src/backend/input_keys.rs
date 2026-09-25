@@ -68,11 +68,12 @@ impl Backend {
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
             return;
         }
-        let Ok(mut parsed) =
-            serde_json::from_value::<Vec<crate::protocol::Tool>>(Value::Array(tools.to_vec()))
-        else {
-            return;
-        };
+        // Entry by entry, as `normalize_tools_list_response` reads them: one
+        // malformed tool must not leave the slot cold for every other one.
+        let mut parsed: Vec<crate::protocol::Tool> = tools
+            .iter()
+            .filter_map(|tool| serde_json::from_value(tool.clone()).ok())
+            .collect();
         // The same normalisation a discovery fill applies; the resend set it
         // returns stays with discovery, so this fill grants no retries.
         let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
