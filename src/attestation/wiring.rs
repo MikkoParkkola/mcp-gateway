@@ -60,8 +60,8 @@ pub fn resolve_attestation_wiring(
 ) -> Result<Option<(Arc<AttestationValidator>, AttestationMode)>, String> {
     let normalized = mode.map(|m| m.trim().to_ascii_lowercase());
     let mode = match normalized.as_deref() {
-        None | Some("" | "off") => return Ok(None),
-        Some("observe") => AttestationMode::Observe,
+        Some("off") => return Ok(None),
+        None | Some("" | "observe") => AttestationMode::Observe,
         Some("enforce") => {
             return Err(format!(
                 "{ATTESTATION_MODE_ENV}=enforce is not available in this build; \
