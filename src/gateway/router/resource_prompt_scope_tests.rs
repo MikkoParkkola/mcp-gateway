@@ -79,7 +79,9 @@ fn uri_of(backend: &str) -> String {
 
 fn api_key(key: &str, backends: &[&str]) -> ApiKeyConfig {
     ApiKeyConfig {
-        key: key.to_string(),
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(key.as_bytes())),
+        expires_at: None,
         name: key.to_string(),
         rate_limit: 0,
         backends: backends.iter().map(|b| (*b).to_string()).collect(),
