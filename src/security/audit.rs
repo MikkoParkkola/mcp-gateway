@@ -249,7 +249,7 @@ impl AuditWho {
             principal: principal.unwrap_or_default().to_string(),
             account: account.unwrap_or("anonymous").to_string(),
             authority: grant_subject.map(|g| g.authority.clone()),
-            subject: grant_subject.map(|g| g.subject.clone()),
+            subject: account.map(str::to_string),
         }
     }
 }
