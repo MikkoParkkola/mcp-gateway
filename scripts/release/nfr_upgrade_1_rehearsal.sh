@@ -279,6 +279,22 @@ else
   record "PHASE2.API_KEY_MIGRATED_TO_DIGEST" "FAIL" "hash-key migration did not produce a verifying digest, or the plaintext key is still in gateway.yaml"
 fi
 
+echo "-- phase 2a': enable the audit log (UPGRADING-4.0 item 43) --"
+# 4.0 refuses an auth-enabled config without security.transparency_log at
+# load. The documented step: turn the log on with a writable path. The 3.x
+# copy taken above stays without it for the rollback.
+AUDIT_LOG="$DATA_DIR/audit/transparency.jsonl"
+mkdir -p "$(dirname "$AUDIT_LOG")"
+python3 - "$CONFIG_PATH" "$AUDIT_LOG" <<'PY'
+import sys, yaml
+path, log = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    d = yaml.safe_load(f)
+d.setdefault("security", {})["transparency_log"] = {"enabled": True, "path": log}
+with open(path, "w") as f:
+    yaml.safe_dump(d, f, sort_keys=False)
+PY
+
 echo "-- phase 2b: active caller on 4.0.0 (modern-off default: true) --"
 start_gateway "$BIN_400" "phase2-400-post-upgrade"
 INIT_400="$(rpc_modern "initialize")"
@@ -305,6 +321,11 @@ else
   record "PHASE2.ACTIVE_CALLER_POST_UPGRADE" "FAIL" "gateway_invoke failed post-upgrade: $ECHO_400"
 fi
 stop_gateway "phase2-400-post-upgrade"
+if [[ -s "$AUDIT_LOG" ]] && grep -q '"schema_version":2' "$AUDIT_LOG"; then
+  record "PHASE2.AUDIT_LOG_WRITTEN" "PASS" "the tool call wrote schema_version 2 records to $AUDIT_LOG"
+else
+  record "PHASE2.AUDIT_LOG_WRITTEN" "FAIL" "no schema_version 2 record in $AUDIT_LOG"
+fi
 
 echo "-- phase 3: modern-off --"
 cp "$CONFIG_PATH" "$CONFIG_PATH.pre-modern-off"

@@ -42,6 +42,12 @@ cat >"$tmp/gateway.yaml" <<YAML
 server:
   host: "127.0.0.1"
   port: $port
+# 4.0 refuses auth without an audit log (UPGRADING-4.0 item 43).
+security:
+  transparency_log:
+    enabled: true
+    path: "$tmp/audit/transparency.jsonl"
+
 auth:
   enabled: true
   bearer_token: "smoke-token"

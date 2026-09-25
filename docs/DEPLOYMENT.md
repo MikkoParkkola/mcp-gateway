@@ -802,6 +802,10 @@ auth:
   enabled: true
   bearer_token: "env:MCP_GATEWAY_TOKEN"
   public_paths: ["/health"]
+security:
+  transparency_log:          # required with auth on (UPGRADING-4.0 item 43)
+    enabled: true
+    path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 ```
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.

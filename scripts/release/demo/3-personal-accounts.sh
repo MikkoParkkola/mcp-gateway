@@ -34,6 +34,12 @@ server:
 
 # Two API keys and no single_user override: AuthConfig::implies_multi_user is
 # true, so the gateway is in the multi-user posture the isolation guard defends.
+# 4.0 refuses auth without an audit log (UPGRADING-4.0 item 43).
+security:
+  transparency_log:
+    enabled: true
+    path: "$RUN_DIR/audit/transparency.jsonl"
+
 auth:
   enabled: true
   api_keys:
