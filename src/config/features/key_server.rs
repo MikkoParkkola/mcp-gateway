@@ -255,8 +255,9 @@ pub struct PolicyScopesConfig {
 /// Runtime OIDC verification parameters (derived from `KeyServerConfig`).
 #[derive(Debug, Clone)]
 pub struct KeyServerOidcConfig {
-    /// Maximum age of an incoming OIDC token (seconds).
-    pub max_token_age_secs: u64,
+    /// How old an incoming token's `iat` may be.
+    // ci-allow-secret-debug: an age bound, not a credential
+    pub token_age: crate::key_server::TokenAgeCap,
 }
 
 #[cfg(test)]

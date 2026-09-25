@@ -227,6 +227,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mcp_cache_bypass_total`, `mcp_idempotency_guard_skipped_total`, reason
   `unresolved_principal`, labelled by `route`). Anonymous callers still share one namespace. No
   configuration change; see `docs/UPGRADING-4.0.md` item 14.
+- **BREAKING: caller identity headers can no longer be spoofed.**
+  `security.identity_grants.trust_caller_identity_headers` is removed and a
+  config that still sets it fails to load. Its replacement,
+  `security.caller_identity`, has three modes. `off` (default) reads no
+  identity header. `trusted_proxy` honours `X-Gateway-Identity-Subject` and
+  `-Label` only from a TCP peer listed in `trusted_proxies`, under the
+  configured `authority`; any other peer sending them gets 403, and
+  `X-Gateway-Identity` and `X-Gateway-Identity-Authority` get 400.
+  `cloudflare_access` takes the identity only from a verified
+  `Cf-Access-Jwt-Assertion` (team certs, `aud`, `exp`) and answers
+  `Cf-Access-Authenticated-User-*` without one with 401. Before, any client
+  that reached the gateway chose its own subject and authority, including an
+  OIDC issuer's. A repeated identity header, an `X-Gateway-Identity-*` value over 512 bytes, or a
+  `Cf-Access-Jwt-Assertion` over 8 KiB is refused
+  instead of truncated. Refusals count in `mcp_identity_header_refused_total`,
+  ignored headers in `mcp_identity_header_ignored_total`. Loopback proxies need
+  `auth.enabled: true`. `KeyServerOidcConfig.max_token_age_secs` becomes
+  `token_age: TokenAgeCap`, and `MetaMcp::with_trusted_identity_headers` becomes
+  `with_caller_identity`. See `docs/UPGRADING-4.0.md` item 16.
 - **BREAKING: identity grants written as documented now match.** Grants,
   owners and callers compare on `authority` and `subject`; `label` is display
   text. Before, a grant labelled differently from the runtime label (an API

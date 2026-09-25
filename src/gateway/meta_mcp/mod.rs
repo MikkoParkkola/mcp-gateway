@@ -117,26 +117,6 @@ pub(crate) use task_confirmation::{
 #[cfg(feature = "spec-preview")]
 const MAX_PROMOTED_PER_SESSION: usize = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CallerIdentityHeaderTrust {
-    Disabled,
-    Enabled,
-}
-
-impl CallerIdentityHeaderTrust {
-    const fn from_enabled(enabled: bool) -> Self {
-        if enabled {
-            Self::Enabled
-        } else {
-            Self::Disabled
-        }
-    }
-
-    pub(super) const fn is_enabled(self) -> bool {
-        matches!(self, Self::Enabled)
-    }
-}
-
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
 /// Deliberately has **no `Default`**: the authorizer is mandatory, and a
@@ -598,10 +578,12 @@ pub struct MetaMcp {
     /// post-bump epoch.
     pub(super) policy_epoch: Arc<AtomicU64>,
 
-    /// Trust caller identity headers from an authenticated edge proxy.
-    ///
-    /// Disabled by default because direct clients can otherwise spoof headers.
-    pub(super) caller_identity_header_trust: CallerIdentityHeaderTrust,
+    /// Which caller identity headers are honoured, and from whom. Off by
+    /// default because direct clients can otherwise spoof headers.
+    caller_identity: crate::security::caller_identity::CallerIdentityConfig,
+    /// Verifier for `Cf-Access-Jwt-Assertion`, built iff the mode is
+    /// `cloudflare_access`.
+    access_verifier: Option<Arc<crate::key_server::OidcVerifier>>,
 
     /// Tool-result boundary classifier and policy envelope.
     ///
@@ -692,7 +674,8 @@ impl MetaMcp {
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: Arc::new(RwLock::new(LocalIdentityGrantStore::new())),
             policy_epoch: Arc::new(AtomicU64::new(0)),
-            caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
+            caller_identity: crate::security::caller_identity::CallerIdentityConfig::default(),
+            access_verifier: None,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
             firewall: None,
@@ -886,10 +869,30 @@ impl MetaMcp {
         self
     }
 
-    /// Enable or disable trusted caller identity headers.
+    /// Set which caller identity headers are honoured (`security.caller_identity`).
     #[must_use]
-    pub fn with_trusted_identity_headers(mut self, enabled: bool) -> Self {
-        self.caller_identity_header_trust = CallerIdentityHeaderTrust::from_enabled(enabled);
+    pub fn with_caller_identity(
+        mut self,
+        config: crate::security::caller_identity::CallerIdentityConfig,
+    ) -> Self {
+        self.access_verifier = (config.mode
+            == crate::security::caller_identity::CallerIdentityMode::CloudflareAccess)
+            .then(|| {
+                Arc::new(crate::key_server::OidcVerifier::cloudflare_access(
+                    &config.cloudflare_access,
+                ))
+            });
+        if config.mode == crate::security::caller_identity::CallerIdentityMode::TrustedProxy {
+            // The allowlist proves the request came through a proxy, not that
+            // the proxy wrote the header; that half is the proxy's job.
+            tracing::warn!(
+                authority = %config.authority,
+                proxies = config.trusted_proxies.len(),
+                "caller_identity trusted_proxy: each proxy MUST strip or overwrite \
+                 client-supplied X-Gateway-Identity-* headers"
+            );
+        }
+        self.caller_identity = config;
         self
     }
 
@@ -1352,10 +1355,16 @@ impl MetaMcp {
         self.identity_grants.read().values().cloned().collect()
     }
 
-    /// Return whether trusted caller identity headers are enabled.
-    #[must_use]
-    pub const fn trust_caller_identity_headers(&self) -> bool {
-        self.caller_identity_header_trust.is_enabled()
+    /// The caller identity header configuration.
+    pub(crate) const fn caller_identity(
+        &self,
+    ) -> &crate::security::caller_identity::CallerIdentityConfig {
+        &self.caller_identity
+    }
+
+    /// The Access assertion verifier, present iff the mode is `cloudflare_access`.
+    pub(crate) fn access_verifier(&self) -> Option<&crate::key_server::OidcVerifier> {
+        self.access_verifier.as_deref()
     }
 
     /// Replace the context integrity kernel.

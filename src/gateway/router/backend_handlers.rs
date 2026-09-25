@@ -524,6 +524,28 @@ pub(super) async fn backend_handler(
         }
     }
 
+    // The caller as the meta route resolves it, resolved before the body is
+    // read, so a refused identity header reaches no passthrough, propagation
+    // or idempotency work on this route either.
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
+    let grant_subject = match super::identity::caller_grant_subject(
+        verified_identity.as_ref(),
+        &inbound_headers,
+        peer,
+        state.meta_mcp.caller_identity(),
+        state.meta_mcp.access_verifier(),
+        cert_identity.as_ref(),
+        oauth_agent_identity.as_ref(),
+    )
+    .await
+    {
+        Ok(subject) => subject,
+        Err(refusal) => return super::identity::identity_refusal_response(refusal),
+    };
+
     // Check backend access if auth is enabled
     if let Some(ref client) = client
         && !client.can_access_backend(&name)
@@ -844,15 +866,6 @@ pub(super) async fn backend_handler(
     // twice on the one route that never reaches `invoke_tool_traced`.
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
-        // The caller as the meta route resolves it, so both routes key one
-        // caller the same way (mTLS, trusted headers, OAuth agent).
-        let grant_subject = super::identity::caller_grant_subject(
-            verified_identity.as_ref(),
-            &inbound_headers,
-            state.meta_mcp.trust_caller_identity_headers(),
-            cert_identity.as_ref(),
-            oauth_agent_identity.as_ref(),
-        );
         match state.meta_mcp.direct_route_idempotency(
             retry.idempotency_key.as_deref(),
             &name,

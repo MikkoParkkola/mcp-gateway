@@ -20,7 +20,6 @@ security:
     enabled: true
     path: ~/.mcp-gateway/identity-grants.yaml
     fail_on_error: true
-    trust_caller_identity_headers: false
 ```
 
 `fail_on_error` defaults to `true`. If the operator explicitly enables local
@@ -28,21 +27,59 @@ grants but the file is missing, unreadable, malformed, or uses an unsupported
 schema version, gateway startup fails instead of silently running with an empty
 grant store.
 
-`trust_caller_identity_headers` defaults to `false`. Enable it only when the
-gateway is reachable solely through a trusted edge or bridge that authenticates
-the caller and strips or overwrites inbound identity headers. When enabled, the
-gateway accepts:
+## Caller identity headers
 
-- `X-Gateway-Identity-Subject` or `X-Gateway-Identity`
-- Optional `X-Gateway-Identity-Authority`
-- Optional `X-Gateway-Identity-Label`
-- Cloudflare Access fallback: `Cf-Access-Authenticated-User-Id` or
-  `Cf-Access-Authenticated-User-Email`
+A proxy in front of the gateway can name the end user a request is for.
+`security.caller_identity` decides whether that is read, and from whom:
 
-Validated OIDC temporary-token identities take precedence over trusted headers.
-Trusted headers take precedence over mTLS and agent-JWT identities. If none are
+```yaml
+security:
+  caller_identity:
+    mode: trusted_proxy            # off (default) | trusted_proxy | cloudflare_access
+    trusted_proxies: [10.0.0.5]    # exact IPs of the proxies' TCP connections
+    authority: corp-sso            # grant authority for every header subject
+```
+
+- `off` reads no identity header.
+- `trusted_proxy` reads `X-Gateway-Identity-Subject` and optional
+  `X-Gateway-Identity-Label`, only when the TCP peer is in `trusted_proxies`.
+  The same headers from any other peer get 403. `X-Forwarded-For` is never
+  read. The authority is always `authority`; it may not be `mtls`,
+  `agent_oauth`, `api_key` or an OIDC issuer. `X-Gateway-Identity` and
+  `X-Gateway-Identity-Authority` are refused with 400. **Each proxy MUST strip
+  or overwrite every client-supplied `X-Gateway-Identity-*` header**: the
+  allowlist proves the request came through the proxy, not that the proxy wrote
+  the header. A loopback entry needs `auth.enabled: true`; `0.0.0.0` and `::`
+  are refused.
+- `cloudflare_access` reads only a verified `Cf-Access-Jwt-Assertion`:
+
+  ```yaml
+  security:
+    caller_identity:
+      mode: cloudflare_access
+      cloudflare_access:
+        team_domain: acme.cloudflareaccess.com   # bare host
+        audiences: [<Access application AUD tag>]
+  ```
+
+  The assertion is checked against `https://<team_domain>/cdn-cgi/access/certs`,
+  its `aud` and its `exp`. The caller is `(https://<team_domain>, <sub>)`.
+  `Cf-Access-Authenticated-User-*` is never read; sent without a valid assertion
+  it gets 401, and `X-Gateway-Identity-*` gets 400.
+
+An `X-Gateway-Identity-*` value is at most 512 bytes of UTF-8 and a
+`Cf-Access-Jwt-Assertion` at most 8 KiB; each may appear once, and anything
+else gets 400. Refusals are counted in `mcp_identity_header_refused_total{reason}`.
+Headers that were valid but not used are counted in
+`mcp_identity_header_ignored_total{reason}` (`oidc_precedence`,
+`cf_access_in_trusted_proxy`).
+
+Validated OIDC temporary-token identities take precedence over header identities.
+Header identities take precedence over mTLS and agent-JWT identities. If none are
 present, dispatch falls back to the authenticated API key name as the local
 grant subject.
+
+## Grant Files
 
 Grant files are JSON or YAML:
 
@@ -73,7 +110,8 @@ it authenticated:
 |---|---|---|
 | API key (`auth.api_keys`) | `api_key` | the key's `name` |
 | OIDC temporary token | the token's issuer | the token's `sub` |
-| Trusted identity headers | `X-Gateway-Identity-Authority`, else `trusted_header` | the header subject |
+| `trusted_proxy` headers | `caller_identity.authority` | `X-Gateway-Identity-Subject` |
+| Cloudflare Access assertion | `https://<team_domain>` | the assertion's `sub` |
 | mTLS client certificate | `mtls` | first SAN URI, else CN |
 | Agent JWT | `agent_oauth` | the agent's `client_id` |
 

@@ -395,8 +395,11 @@ pub struct ResponseContractConfig {
 /// `IdentityGrant` rows and applies them to personal capability dispatch.
 /// This is the free/core local operator path; org-wide grant storage and
 /// delegated approvals remain enterprise control-plane concerns.
+///
+/// `deny_unknown_fields`: the removed `trust_caller_identity_headers` must
+/// fail to load, not be ignored (it moved to `security.caller_identity`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct IdentityGrantsConfig {
     /// Load local identity grants at startup. Default: `false`.
     pub enabled: bool,
@@ -405,11 +408,6 @@ pub struct IdentityGrantsConfig {
     /// Fail startup if the configured file cannot be read or parsed. Default:
     /// `true` so operators do not silently run with an empty grant store.
     pub fail_on_error: bool,
-    /// Trust caller identity headers from an already-authenticated edge proxy.
-    ///
-    /// Default: `false`. Enable only when direct clients cannot reach the
-    /// gateway and the edge strips or overwrites these headers.
-    pub trust_caller_identity_headers: bool,
 }
 
 impl Default for IdentityGrantsConfig {
@@ -418,7 +416,6 @@ impl Default for IdentityGrantsConfig {
             enabled: false,
             path: "~/.mcp-gateway/identity-grants.yaml".to_string(),
             fail_on_error: true,
-            trust_caller_identity_headers: false,
         }
     }
 }
@@ -593,6 +590,9 @@ pub struct SecurityConfig {
     /// Local personal-capability grant file. Default: disabled.
     #[serde(default)]
     pub identity_grants: IdentityGrantsConfig,
+    /// Caller identity headers. Default: off.
+    #[serde(default)]
+    pub caller_identity: crate::security::caller_identity::CallerIdentityConfig,
     /// Context-integrity tool-result boundary policy. Default: monitor-only.
     #[serde(default)]
     pub context_integrity: ContextIntegrityConfig,
@@ -629,6 +629,7 @@ impl Default for SecurityConfig {
             response_inspection: ResponseInspectionConfig::default(),
             response_contract: ResponseContractConfig::default(),
             identity_grants: IdentityGrantsConfig::default(),
+            caller_identity: crate::security::caller_identity::CallerIdentityConfig::default(),
             context_integrity: ContextIntegrityConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
             provenance_stamping: false,
