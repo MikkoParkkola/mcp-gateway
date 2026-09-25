@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
+- **Breaking:** a `control_plane.role_mapping` rule with `role: admin` now makes its
+  SSO identity a gateway admin on every admin surface (admin meta-tools, `/ui/api/*`),
+  not only the control plane. The mapping is read per request, so a reload revokes
+  admin at once. A `role: admin` rule whose only condition is `domain` fails to load,
+  and each admin rule logs a warning at load. Header identities never confer admin.
+  See `docs/UPGRADING-4.0.md` item 51 (E1, MIK-7570.ADMINSSO.1).
 
 ## [4.0.0-beta.1] - 2026-09-25
 

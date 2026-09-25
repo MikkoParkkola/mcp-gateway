@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 or 43 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 or 51 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -13,10 +13,10 @@ changes to the license and to a removed CLI surface rather than to running behav
 7 and 8 are decided per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Item 38 refuses the start with its own error, which names the setting, so a notice would
-only repeat it.
+Items 38 and 51 refuse the start with their own error, which names the setting, so a notice would
+only repeat it; item 51 also warns once per `role: admin` rule at every load.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 and 43 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 and 51 refuse the gateway's start (item 43 only with auth on and no working audit log; item 51 only for a `role: admin` rule whose only condition is `domain`; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -63,6 +63,7 @@ upgrading a running deployment.
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1038,6 +1039,36 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 51. SSO admin rules now grant full gateway admin
+
+A `control_plane.role_mapping` rule with `role: admin` used to make its identity
+an admin of the control plane only. Everything else (the admin meta-tools and the
+`/ui/api/*` admin routes) read a flag that no SSO identity could set, so an SSO
+user could not be a gateway admin at all.
+
+- **A `role: admin` rule now grants gateway admin on every surface**: kill,
+  revive, reload, stats and webhook status, backend and capability editing,
+  import, and the control plane. **Review your existing `role: admin` rules
+  before upgrading**: a rule written for the control plane now also grants kill,
+  reload and backend editing. Each one logs a warning at load that says so.
+- **A `role: admin` rule whose only condition is `domain` fails to load.** Name the
+  identity provider's admin group (`group`) or, for a small team, exact `email`
+  addresses. A `domain` rule for any other role still loads.
+- Admin is decided per request from the live mapping, so a reload that removes the
+  rule revokes admin on the next request, including for tokens issued before it.
+- Header identities (`trusted_proxy`, `cloudflare_access`) and mTLS certificates
+  never confer admin. The static bearer and `api_keys[].admin: true` are
+  unchanged.
+
+To make SSO users admins, add:
+
+```yaml
+control_plane:
+  role_mapping:
+    rules:
+      - { issuer: <your-idp-issuer>, group: <your-admin-group>, role: admin }
+```
 
 ## After upgrading
 
