@@ -97,6 +97,34 @@
     "resources": {
       "type": "object"
     },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runAsUser": {
+          "type": "integer",
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render."
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render."
+        },
+        "fsGroup": {
+          "type": "integer",
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render."
+        }
+      }
+    },
+    "stateVolume": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sizeLimit": {
+          "type": "string",
+          "description": "sizeLimit of the state emptyDir (HOME); past it the kubelet evicts the pod."
+        }
+      }
+    },
     "config": {
       "type": "object"
     },

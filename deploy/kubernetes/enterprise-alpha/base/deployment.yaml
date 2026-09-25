@@ -27,7 +27,10 @@ spec:
       # every annotated pod in the cluster. Scrape with a dedicated job.
     spec:
       serviceAccountName: mcp-gateway
-      automountServiceAccountToken: true
+      # The gateway never calls the Kubernetes API: it has no API client, and
+      # the `kubernetes` subcommands shell out to kubectl, which the image does
+      # not carry. The reconciler Role is for wherever that CLI runs.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         # The image declares `USER gateway`, a name the kubelet cannot verify

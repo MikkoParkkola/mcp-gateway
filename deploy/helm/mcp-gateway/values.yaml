@@ -31,6 +31,20 @@ service:
   type: ClusterIP
   port: 39400
 
+# The pod's identity. The image's gateway user and group are both 1001, and the
+# chart refuses to render any other value, root (0) included: a different UID
+# cannot write HOME and a different GID or fsGroup cannot read what the
+# image's group owns.
+podSecurityContext:
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+# The `state` emptyDir holds HOME (task store, npm/uv caches). Past this size
+# the kubelet evicts the pod instead of letting it fill the node's disk.
+stateVolume:
+  sizeLimit: 1Gi
+
 resources:
   requests:
     cpu: 100m

@@ -707,6 +707,13 @@ These need no action and have no startup notice.
   `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
   `fill_budget` (120 s spent).
 
+- **The Helm chart's `state` volume is capped, and its pod identity is fixed.** The
+  emptyDir under HOME now has a `sizeLimit` of `1Gi`; a pod whose task store and npm/uv
+  caches outgrow it is evicted and restarts empty. Raise it with
+  `--set stateVolume.sizeLimit=4Gi`. `podSecurityContext` accepts only 1001, the image's
+  UID/GID, and fails the render otherwise. enterprise-alpha stops mounting a service
+  account token; run `mcp-gateway kubernetes` from a place that has kubectl credentials.
+
 ## Rolling back
 
 Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade
