@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::backend::RestartOutcome;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -1592,7 +1591,7 @@ done
     flipper.await.expect("flipper task panicked");
 
     assert!(
-        matches!(outcome, Ok(RestartOutcome::SkippedStopping)),
+        matches!(outcome, Ok(crate::backend::RestartOutcome::SkippedStopping)),
         "a restart that finished after shutdown reported success: {outcome:?}"
     );
     assert!(
@@ -1753,8 +1752,9 @@ async fn a_start_after_shutdown_never_spawns_a_child() {
         started.is_err(),
         "a stopped backend reported a successful start"
     );
+    use crate::backend::RestartOutcome::SkippedStopping;
     assert!(
-        matches!(restarted, Ok(RestartOutcome::SkippedStopping)),
+        matches!(restarted, Ok(SkippedStopping)),
         "force_restart on a stopped backend should report that it did nothing, \
          got {restarted:?}"
     );

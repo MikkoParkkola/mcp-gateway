@@ -2089,6 +2089,8 @@ async fn envfile_19c_startup_resolves_each_entry_under_the_home_in_force_then_th
         );
         assert_eq!(expected[1], two, "entry two is the file under the new home");
     }
+    #[cfg(not(unix))]
+    let _ = two;
 
     // THEN, SECOND: the reload opens those same two paths, and cannot resolve
     // again — the resolver refuses every call from here on.
