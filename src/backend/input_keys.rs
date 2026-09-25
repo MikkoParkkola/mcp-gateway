@@ -82,11 +82,21 @@ impl Backend {
         let entry = Arc::clone(lease.entry());
         // A store, not a fill: it must not depend on the slot reading as
         // stale, nor queue behind a discovery fill already on the wire.
-        entry.tools_cache.replace(parsed, || {
-            entry
-                .tools_truncated
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        });
+        let _ = entry
+            .tools_cache
+            .get_or_fetch_shared_then(
+                std::time::Duration::ZERO,
+                || {
+                    let tools = parsed.clone();
+                    async move { Ok((tools, ())) }
+                },
+                |()| {
+                    entry
+                        .tools_truncated
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                },
+            )
+            .await;
     }
 }
 
