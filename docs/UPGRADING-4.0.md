@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
+change to your configuration on upgrade. It loads unchanged unless items 8, 12 or 26 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
 items 1-4, 6, 11 and 23-25 below, then stamps the new version. The notice is printed rather than logged, so
@@ -13,7 +13,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12 and 13 refuse the gateway's start. Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13 and 26 refuse the gateway's start. Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -43,6 +43,7 @@ upgrading a running deployment.
 | 23 | `logging/setLevel` on `/mcp` and `/mcp/{name}` needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
 | 24 | `notifications/tools/list_changed` from backend edits reaches only callers of that backend | None; a key that must hear about every backend needs `backends: ["*"]` |
 | 25 | Admin-panel grant, policy and decision writes return 409 | Change grants with `mcp-gateway identity grants`, policies in `security.*`; keep the old store files |
+| 26 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -465,6 +466,42 @@ audit log, which the page and SIEM export read, so the note in item 22 about a p
 Existing rows in `store/grants.json` and `store/policies.json` are no longer shown. Leave them on
 disk: 4.1 will bring them back as unenforced drafts that need re-approval. **Do not delete or
 hand-edit them.**
+
+## 26. A config key the gateway does not read fails the load
+
+In 3.x the config file could carry keys nothing read, and they were dropped in silence. A
+misspelling therefore looked like a setting: `key_server: {enabeld: true}` loaded, and the key
+server stayed off.
+
+In 4.0.0 every key in the config file must be one the gateway reads. The load fails and one error
+lists every offending key, sorted, as a dotted path from the top of the file, with list entries
+as `[index]`:
+
+```text
+Configuration validation error: Unrecognised config key(s) in /etc/mcp-gateway/gateway.yaml:
+auth.api_keys[0].bakends, backends.brave.timout, key_server.enabeld. 4.0 refuses keys it does
+not read; fix the spelling or delete the key.
+```
+
+The error is printed on one line. Fix the spelling of each named key, or delete it. The same
+check runs on `gateway_reload_config` and on file-watch reloads: a refused reload keeps the running
+config and reports the error.
+
+- **`backends.<name>.idle_timeout` is refused.** It was retired in 3.x and only warned. It never
+  had an effect. The error names it and says why. Delete it, or use `stop_when_idle_for` on a
+  backend declared with a `command`.
+- **A key that belongs to a feature the binary was built without** (`cost_governance`, or a
+  backend's `a2a_url` and `a2a_agent_card_path`) is named as such rather than as a misspelling.
+  Release images carry both features.
+- **Environment variables are not checked.** `MCP_GATEWAY_*` variables are read as config keys,
+  and a misspelt one such as `MCP_GATEWAY_SERVER__PROT` is still ignored without a word. Only the
+  file is checked, so deployments that set `MCP_GATEWAY_TOKEN`, `MCP_GATEWAY_LOG_LEVEL` or
+  `MCP_GATEWAY_LOG_FORMAT` load as before.
+- **YAML merge keys (`<<:`) were never applied**, and are now refused as a key named `<<`. Write
+  the merged keys out in full.
+
+Every example under `examples/`, the Helm chart's rendered config, the enterprise-alpha manifest
+and the config `mcp-gateway init` writes load unchanged.
 
 ## After upgrading
 
