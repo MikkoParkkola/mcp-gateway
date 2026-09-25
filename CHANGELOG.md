@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
   `tools.listChanged` is announced for every tool-set change over HTTP (config reload,
-  capability reload, admin UI, revive) and is `false` over stdio. See UPGRADING-4.0 item 52.
+  capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
+  stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
+  item 52.
 
 ## [4.0.0-beta.2] - 2026-09-25
 

@@ -1136,6 +1136,10 @@ control_plane:
   `notifications/tools/list_changed` once to the GET stream and to `subscriptions/listen`:
   a backend added, modified or removed (config reload or the admin UI), a capability file
   reloaded, a backend revived. Before, only the admin UI did.
+- On the 2025 GET stream it now arrives as a standard `event: message` carrying the bare
+  JSON-RPC notification. 3.x wrapped it in a gateway envelope (`event: notification`,
+  `{"source","event_type","data"}`) that MCP clients do not read; a client parsing that
+  envelope reads `method` at the top level instead.
 - `serve --stdio` reports `tools.listChanged: false`, because it has no channel for an
   unsolicited notification.
 - **`resources/subscribe` and `resources/unsubscribe` are refused** with `-32601`, "this
