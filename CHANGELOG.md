@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+
+### Added
+
+- `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
+  item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
+  the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
+  A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
+  (C9, MIK-7570.SECRET.2)
+
+### Changed
+
+- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
+  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
+  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
+  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
+  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
+  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
+  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
+
+### Fixed
+
+### Security
+
+- **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
+  (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
+  now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
+  "direct"`; meta-route records carry `route: "meta"`. With auth on, a failed append
+  withholds the result (503, -32005). The backend-scope check now runs after the body is
+  parsed, so its refusal names the tool; it still answers 403 for an unknown backend.
+  A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
+  forwarded without the per-tool authorization check.
+  See UPGRADING-4.0 item 43.
+
+## [4.0.0-beta.2] - 2026-09-25
+
+> **Pre-release.** The second 4.0 beta. It is the first beta with container images:
+> `v4.0.0-beta.1` published to GitHub, crates.io and npm, but its image was never promoted
+> because the tag's container smoke test failed (fixed in #1018), so
+> `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1` does not exist. Like beta.1 it is not
+> feature complete: the criteria still open for 4.0.0 are listed under *Known gaps* in
+> [`docs/release/4.0.0-beta.2-notes.md`](docs/release/4.0.0-beta.2-notes.md). It contains
+> every entry below this heading, everything in `[4.0.0-beta.1]`, and the `[4.0.0]` section
+> further down, which describes the 4.0 line and is not yet released as a final version.
+> Breaking changes from 3.x are listed in [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md).
+> Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.2`,
+> `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`);
+> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+
+### Added
+
+- **With auth on, the tool-call audit log is required and fails closed
+  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
+  true` fails to load, and a log that cannot open stops startup. Every entry
+  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
+  (credential kind, key fingerprint, verified issuer and subject; never an email).
+  Refused and failed calls are recorded. A failed append answers HTTP 503 /
+  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
+  chart and enterprise-alpha mount a writable `audit` volume. The log is not
+  rotated yet. See UPGRADING-4.0.md item 43.
+
 ### Changed
 
 - **API keys are configured as sha256 digests, with an optional expiry
@@ -16,13 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
-- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
-  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
-  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
-  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
-  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
-  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
-  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
 - **Breaking:** a `control_plane.role_mapping` rule with `role: admin` now makes its
   SSO identity a gateway admin on every admin surface (admin meta-tools, `/ui/api/*`),
   not only the control plane. The mapping is read per request, so a reload revokes
@@ -41,8 +95,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and HTTP callers with no verified identity are still refused `-32003`
   (MIK-7570.STDIO.1).
 
-### Fixed
-
 - **An open circuit breaker now degrades `/health` (breaking for `/health` monitors).** The
   breaker reported `"open"` and every consumer compared against `"Open"`, so `/health`, the
   admin panel and the redacted `/ui/api/status` never saw an open breaker. `BackendStatus.circuit_state`
@@ -50,6 +102,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/health` answers 503 `degraded` while a breaker is open, the admin panel shows the backend
   `Down` and `Blocked`, and `/livez` / `/readyz` stay backend-blind. See item 45 in
   [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). (MIK-7570.BREAKER.1)
+
+- **Attestation `enforce` enforces (breaking).** It refuses, with -32002, a
+  call whose token is missing or invalid: `gateway_invoke` (the `attestation`
+  argument), the direct `/mcp/{backend}` route and surfaced tools
+  (`_meta["io.mcp-gateway/attestation"]`, stripped before forwarding).
+  Playbooks and code-mode plans are refused under enforce. Enforce without
+  `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
+  `docs/UPGRADING-4.0.md` item 46.
+
+- **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each
+  webhook endpoint now gets its own per-minute budget and answers `429` past it; the
+  default is 100 per minute and `0` disables the limit. See `docs/UPGRADING-4.0.md` item 42.
+
+- **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
+  discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
+  is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
+  A budget that has blocked stays blocked across a restart until UTC midnight.
 
 ## [4.0.0-beta.1] - 2026-09-25
 
@@ -61,7 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > changes from 3.x are listed in [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md).
 > Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.1`,
 > `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1`);
-> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it. No container image was
+> published for beta.1; see `[4.0.0-beta.2]`.
 
 ### Added
 
@@ -101,26 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routing it needs. Omitting `accounts.hosted` mounts no route and changes no
   existing refusal text.
 
-- **With auth on, the tool-call audit log is required and fails closed
-  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
-  true` fails to load, and a log that cannot open stops startup. Every entry
-  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
-  (credential kind, key fingerprint, verified issuer and subject; never an email).
-  Refused and failed calls are recorded. A failed append answers HTTP 503 /
-  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
-  chart and enterprise-alpha mount a writable `audit` volume. The log is not
-  rotated yet. See UPGRADING-4.0.md item 43.
-
 ### Fixed
-
-- **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each
-  webhook endpoint now gets its own per-minute budget and answers `429` past it; the
-  default is 100 per minute and `0` disables the limit. See `docs/UPGRADING-4.0.md` item 42.
-
-- **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
-  discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
-  is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
-  A budget that has blocked stays blocked across a restart until UTC midnight.
 
 - **The default capability directories no longer include a checkout under `HOME`.**
   `capabilities.directories` defaulted to `capabilities` plus
@@ -215,20 +266,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explanation. `MCP_GATEWAY_*` environment variables are not checked. Reloads
   run the same check and keep the running config on refusal. See
   UPGRADING-4.0.md item 29.
-- **Attestation is off by default, and an unrecognised
+- **Attestation is off by default, and `enforce` or an unrecognised
   `GATEWAY_ATTESTATION_MODE` fails startup (breaking).** An unset mode used to
   attach an observe-mode validator, and every unrecognised value, `enforce`
   included, fell back to observe with a warning, so a deployment that asked
   for enforcement silently ran without it. Unset, empty or `off` now attaches
-  no validator; set `observe` to keep the audit lines. See
+  no validator; set `observe` to keep the audit lines. `enforce` is refused at
+  load until it covers the direct route and multi-step plans. See
   `docs/UPGRADING-4.0.md` item 30.
-- **Attestation `enforce` enforces (breaking).** It refuses, with -32002, a
-  call whose token is missing or invalid: `gateway_invoke` (the `attestation`
-  argument), the direct `/mcp/{backend}` route and surfaced tools
-  (`_meta["io.mcp-gateway/attestation"]`, stripped before forwarding).
-  Playbooks and code-mode plans are refused under enforce. Enforce without
-  `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
-  `docs/UPGRADING-4.0.md` item 46.
 - **A credential over plain HTTP on a network bind refuses the start
   (breaking).** With `auth`, `agent_auth` or the key server on, a non-loopback
   bind or `public_url`, and no mTLS, the gateway refuses to serve, and a reload
@@ -2213,7 +2258,8 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...HEAD
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.2...HEAD
+[4.0.0-beta.2]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...v4.0.0-beta.2
 [4.0.0-beta.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
 [4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1

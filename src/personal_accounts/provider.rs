@@ -170,13 +170,26 @@ impl EnvSecrets {
 
 impl SecretSource for EnvSecrets {
     fn resolve(&self, reference: &str) -> Option<String> {
-        // `env:` only, exactly as the configuration layer documents. A literal
-        // is not accepted here: accepting one would make a mistyped secret in a
-        // config file work, which is how it ends up committed.
-        let variable = reference.strip_prefix("env:")?;
+        // `env:` or `file:` (C9), exactly as the configuration layer documents.
+        // A literal is not accepted here: accepting one would make a mistyped
+        // secret in a config file work, which is how it ends up committed.
+        if !(reference.starts_with("env:") || reference.starts_with("file:")) {
+            return None;
+        }
         // The guard is taken and dropped inside this synchronous call, so no
         // environment read is held across an await.
-        self.env.get().resolve(variable)
+        match self
+            .env
+            .get()
+            .resolve_reference("accounts client secret", reference)
+        {
+            Ok(value) => value,
+            Err(message) => {
+                // Names the path and the reason, never the content.
+                tracing::warn!("{message}");
+                None
+            }
+        }
     }
 }
 
