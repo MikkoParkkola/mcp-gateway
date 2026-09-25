@@ -393,6 +393,25 @@ fn shipped_kubernetes_configs_declare_the_name_clients_dial() {
     );
 }
 
+/// C3: the base ConfigMap serves bearer tokens over plain HTTP on `0.0.0.0`, so
+/// it declares `cleartext_http: cluster_internal`. That value is honest only
+/// while the Service stays inside the cluster, so the Service must be
+/// `ClusterIP` (a NodePort or LoadBalancer publishes the cleartext port).
+#[test]
+fn enterprise_alpha_cleartext_http_is_cluster_internal_behind_a_cluster_ip() {
+    let config = &docs(BASE_CONFIGMAP)[0];
+    let gateway: Value =
+        serde_yaml::from_str(str_at(config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+    assert_eq!(
+        gateway["server"]["cleartext_http"].as_str(),
+        Some("cluster_internal")
+    );
+    let service = &docs(include_str!(
+        "../deploy/kubernetes/enterprise-alpha/base/service.yaml"
+    ))[0];
+    assert_eq!(str_at(service, &["spec", "type"]), "ClusterIP");
+}
+
 /// No shipped configuration publishes `/mcp`.
 ///
 /// The unattributed-caller guard on the tasks extension (`handlers.rs`) is not

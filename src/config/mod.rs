@@ -1322,6 +1322,43 @@ pub struct ServerConfig {
     /// Whether a modern `tools/call` must carry `_meta`
     /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §28).
     pub idempotency_key: IdempotencyKeyMode,
+    /// Whether plain HTTP may carry credentials on a network bind (C3,
+    /// UPGRADING-4.0). See [`CleartextHttp`].
+    #[serde(default, skip_serializing_if = "CleartextHttp::is_refuse")]
+    pub cleartext_http: CleartextHttp,
+    /// The Kubernetes cluster domain `cleartext_http: cluster_internal` accepts
+    /// after `.svc`. Unset means `cluster.local`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_domain: Option<String>,
+}
+
+/// `server.cleartext_http`: who protects credentials sent over plain HTTP on a
+/// network bind. Every value but `refuse` is logged at WARN on each start.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleartextHttp {
+    /// Refuse to serve: enable `mtls` or pick a value below.
+    #[default]
+    Refuse,
+    /// A reverse proxy terminates TLS in front of this gateway.
+    TlsTerminatedUpstream,
+    /// Callers reach the pod only over the cluster network, by its Service
+    /// name; `public_url` must be that name.
+    ClusterInternal,
+    /// A container binds `0.0.0.0` and the host publishes it on loopback only.
+    HostLocalPublish,
+}
+
+impl CleartextHttp {
+    /// `true` for the default, so an unset value is not serialized.
+    #[must_use]
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's skip_serializing_if passes a reference"
+    )]
+    pub fn is_refuse(&self) -> bool {
+        *self == Self::Refuse
+    }
 }
 
 /// `server.idempotency_key`: see [`ServerConfig::idempotency_key`].
@@ -1350,6 +1387,8 @@ impl Default for ServerConfig {
             public_url: None,
             allow_unauthenticated_network_bind: false,
             idempotency_key: IdempotencyKeyMode::Optional,
+            cleartext_http: CleartextHttp::Refuse,
+            cluster_domain: None,
         }
     }
 }
