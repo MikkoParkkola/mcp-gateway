@@ -393,10 +393,10 @@ fn shipped_kubernetes_configs_declare_the_name_clients_dial() {
     );
 }
 
-/// C3: the base ConfigMap serves bearer tokens over plain HTTP on `0.0.0.0`, so
+/// C3: the base `ConfigMap` serves bearer tokens over plain HTTP on `0.0.0.0`, so
 /// it declares `cleartext_http: cluster_internal`. That value is honest only
 /// while the Service stays inside the cluster, so the Service must be
-/// `ClusterIP` (a NodePort or LoadBalancer publishes the cleartext port).
+/// `ClusterIP` (a `NodePort` or `LoadBalancer` publishes the cleartext port).
 #[test]
 fn enterprise_alpha_cleartext_http_is_cluster_internal_behind_a_cluster_ip() {
     let config = &docs(BASE_CONFIGMAP)[0];

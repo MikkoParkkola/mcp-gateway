@@ -174,7 +174,7 @@ fn no_credential_is_not_this_check() {
     assert!(serve_refusal(&c).is_none());
 }
 
-/// The enterprise-alpha ConfigMap as shipped: it binds `0.0.0.0` with bearer
+/// The enterprise-alpha `ConfigMap` as shipped: it binds `0.0.0.0` with bearer
 /// auth and no mTLS, so it starts only through `cluster_internal`.
 #[test]
 fn the_enterprise_alpha_configmap_starts() {
