@@ -363,5 +363,12 @@ mod c4_tests {
             err.to_string().contains("MCP_GW_C4_BLANK_TPL"),
             "got: {err}"
         );
+        // `{env.X:-}` is the explicit escape, as `${VAR:-}` is for config.
+        assert_eq!(
+            SecretResolver::new()
+                .resolve("a{env.MCP_GW_C4_UNSET_TPL:-}b")
+                .expect("explicit empty"),
+            "ab"
+        );
     }
 }
