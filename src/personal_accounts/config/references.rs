@@ -56,8 +56,6 @@ impl ReferenceKey {
             return Some(Self::Env(variable.to_string()));
         }
         let path = std::path::Path::new(spec.strip_prefix("file:")?);
-        Some(Self::File(
-            std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
-        ))
+        Some(Self::File(path.to_path_buf()))
     }
 }
