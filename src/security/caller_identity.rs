@@ -95,6 +95,13 @@ impl CallerIdentityConfig {
                 if authority.is_empty() {
                     return Err(refuse("trusted_proxy needs a non-blank authority".into()));
                 }
+                // Stored raw on every header subject, so padding would load and
+                // then never match the grant rows written without it.
+                if authority != self.authority {
+                    return Err(refuse(
+                        "authority must not carry leading or trailing whitespace".into(),
+                    ));
+                }
                 if ["mtls", "agent_oauth", "api_key"].contains(&authority)
                     || key_server.oidc.iter().any(|p| p.issuer.trim() == authority)
                     || access_issuer.as_deref() == Some(authority)
