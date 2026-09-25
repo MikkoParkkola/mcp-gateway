@@ -37,7 +37,7 @@ Properties: OS-native keychain storage (macOS Keychain / libsecret / Windows Cre
 | Codex primitive | mcp-gateway today | Gap | Module to extend |
 |---|---|---|---|
 | `denied_domains` / `allowed_domains` | None — per-server allowlists only at tool granularity (`examples/per-client-tool-scopes.yaml`: `allowed_tools` / `denied_tools`) | High — no URL-level egress filter | `src/session_sandbox.rs` + new `src/gateway/network_policy.rs` |
-| `allow_local_binding = false` | None | High — SSRF tail risk on local MCP backends | `session_sandbox.rs` (extend bind validator) |
+| `allow_local_binding = false` | None | High — SSRF tail risk on local MCP backends | new bind validator (the session sandbox module was removed in 4.0) |
 | `allowed_web_search_modes = ["cached"]` | None — brave/jina/parallel tools fetch live | High — repeat-query token spend + freshness leakage | New cache-gate middleware in router; integrate hebb cache (B2-MEM) |
 | `mcp_oauth_credentials_store = "keyring"` | `src/gateway/oauth/mod.rs` stores via env / .env / 1Password | Medium — disk leakage + SOC2/ISO27001 procurement blocker | `oauth/mod.rs` + new `oauth/keyring_store.rs` (keyring-rs crate) |
 | `forced_login_method` / `forced_chatgpt_workspace_id` | OAuth config exists (`docs/OAUTH_CONFIG.md`) but no pin enforcement | Low — additive constraint on existing `oauth/audit.rs` | `src/gateway/auth.rs` + `config/features/auth.rs` |

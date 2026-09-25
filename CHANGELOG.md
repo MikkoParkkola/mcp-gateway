@@ -252,6 +252,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed the `session_sandbox` and `tunnel` modules. No configuration key reached
+  either: nothing constructed a `SandboxEnforcer` outside its own tests and a
+  benchmark, and there is no `tunnel:` section (a config that has one already
+  fails the load as an unread key). The `session_sandbox/*` benchmark group goes
+  with them. Also removed `src/gateway/ui/costs.rs`, a second `/ui/api/costs`
+  handler that no module declared, so it was never compiled.
+
 - **The inbound WebSocket listener and `server.ws_port` (breaking).** The
   listener only echoed text frames back; it served no MCP, ran outside the
   Origin/Host guard and had no auth. A config that still sets `server.ws_port`
