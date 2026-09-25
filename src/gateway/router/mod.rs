@@ -274,6 +274,18 @@ fn authenticate(
     routes.layer(middleware::from_fn_with_state(auth, auth_middleware))
 }
 
+/// `/metrics`, carrying the scrape token resolved once at router build.
+#[cfg(feature = "metrics")]
+fn metrics_route(config: &crate::config::Config) -> Router {
+    let token = config
+        .server
+        .resolve_metrics_token(&config.env_overlay())
+        .map(Arc::<str>::from);
+    Router::new()
+        .route("/metrics", get(handlers::metrics_handler))
+        .with_state(token)
+}
+
 /// [`create_router_with`] plus the managed-account handles, which only a
 /// gateway that brought custody up has.
 pub(crate) fn create_router_with_accounts(
@@ -399,10 +411,10 @@ pub(crate) fn create_router_with_accounts(
     // Merge RFC 9728 protected-resource metadata route (unauthenticated)
     app = app.merge(protected_resource_route);
 
-    // Merge /metrics scrape endpoint (unauthenticated — Prometheus scrapers do not send auth headers)
+    // Merge /metrics outside auth: it checks its own scrape token, not the bearer
     #[cfg(feature = "metrics")]
     {
-        app = app.merge(Router::new().route("/metrics", get(handlers::metrics_handler)));
+        app = app.merge(metrics_route(&startup_config));
     }
 
     // Merge web UI HTML route (unauthenticated — static HTML, no data)

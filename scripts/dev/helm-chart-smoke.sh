@@ -135,7 +135,7 @@ grep -qE '^ *readOnlyRootFilesystem: true$' <<<"$dep" \
   || fail "readOnlyRootFilesystem is no longer true"
 
 echo "== helm_metrics_scrape_follows_secret =="
-# /metrics answers only server.metrics_token (UPGRADING-4.0 §31). Without a
+# /metrics answers only server.metrics_token (UPGRADING-4.0 §32). Without a
 # Secret nothing advertises the endpoint, so a stock install is not scraped to
 # up=0; with one, the annotations, the env reference and the ServiceMonitor's
 # bearerTokenSecret all name that Secret.
