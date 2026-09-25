@@ -157,6 +157,32 @@ fn retired_idle_timeout_refused_with_explanation() {
     );
 }
 
+/// F15: the inbound WebSocket listener was removed; a config still naming its
+/// port must fail to load and say why, not start with the port silently unbound.
+#[test]
+fn retired_server_ws_port_refused_with_explanation() {
+    let message = refusal("server:\n  ws_port: 9000\n", &["server.ws_port"]);
+    for part in [
+        "inbound WebSocket listener was removed in 4.0",
+        "never served MCP",
+        "POST /mcp",
+        "Remove server.ws_port",
+    ] {
+        assert!(
+            message.contains(part),
+            "retired ws_port refusal must say `{part}`; got: {message}"
+        );
+    }
+}
+
+/// F15 control: a `server` section without `ws_port` still loads.
+#[test]
+fn server_section_without_ws_port_loads() {
+    let (_dir, _path, result) = load("server:\n  host: 127.0.0.1\n  port: 9000\n");
+    let config = result.expect("a server section without ws_port must load");
+    assert_eq!(config.server.port, 9000);
+}
+
 /// YAML files in `examples/` that are not gateway configs: a playbook and a
 /// capability, which this loader never reads. Every other `*.yaml` there is
 /// swept, so a new example is covered without an edit here.
