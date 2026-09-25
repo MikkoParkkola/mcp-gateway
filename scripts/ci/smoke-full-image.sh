@@ -29,6 +29,13 @@ REMOTE_TIMEOUT=120
 ANSWER="${RUNNER_TEMP:-/tmp}/smoke-full-answer.$$"
 trap 'rm -f "${ANSWER}"' EXIT
 
+# Pull before the first probe. On a runner that has not pulled this digest,
+# `docker run` writes its pull progress to stderr, and run_as_gateway captures
+# stderr as the probe's answer, so `node --version` read "Unable to find image
+# ... v24.x" and failed the major check. smoke-image.sh, run last, also expects
+# the image local (`--pull never`).
+docker pull --quiet "${IMAGE}" > /dev/null
+
 run_as_gateway() {
   docker run --rm --user 1001:1001 --entrypoint sh "${IMAGE}" \
     -c "timeout -k 10 ${1} ${2}" > "${ANSWER}" 2>&1
