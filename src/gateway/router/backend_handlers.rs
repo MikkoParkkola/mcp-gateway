@@ -459,7 +459,11 @@ pub(super) async fn backend_handler(
     let mut call = None;
     let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
     match call {
-        Some(_call) => answer,
+        Some(call) => {
+            // Mutant: the write is skipped; referenced so -Dwarnings still compiles.
+            let _ = (direct_audit::record, call, &state);
+            answer
+        }
         None => answer,
     }
 }
