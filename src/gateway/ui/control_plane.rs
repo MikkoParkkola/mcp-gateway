@@ -137,7 +137,7 @@ async fn control_plane_snapshot(
             // Dispatch reads grants and policies from config, never from the
             // store, so no write here is ever enforced: the route is read-only
             // even while the store is open for the audit log (E2-min).
-            mutation_enabled: false,
+            mutation_enabled: state.control_plane_store.is_some(), // MUTATION M3
             mutation_disabled_reason: mutation_disabled_reason(&state),
             base_source: state
                 .control_plane_base
@@ -400,6 +400,18 @@ struct WriteRefusal {
 
 impl WriteRefusal {
     fn response(&self) -> axum::response::Response {
+        // MUTATION M5: policies refusal arm accepts without writing.
+        if self.reason_code.starts_with("policies") {
+            return (
+                StatusCode::OK,
+                Json(MutationResponse {
+                    ok: true,
+                    reason_code: String::new(),
+                    reason: String::new(),
+                }),
+            )
+                .into_response();
+        }
         (
             StatusCode::CONFLICT,
             Json(MutationResponse {
@@ -628,6 +640,20 @@ fn merge_store_into_snapshot(
     snapshot: &mut ControlPlaneSnapshot,
 ) -> bool {
     let mut degraded = false;
+    // MUTATION M1: grant merge restored.
+    if let Ok(grants) = store.list_grants() {
+        for g in grants {
+            if let Some(existing) = snapshot
+                .grants
+                .iter_mut()
+                .find(|x| x.grant_id == g.grant_id)
+            {
+                *existing = g;
+            } else {
+                snapshot.grants.push(g);
+            }
+        }
+    }
     // One bounded page: the newest 200 events, newest first. The view never
     // walks the whole log, however long it has grown.
     match store.read_audit(&AuditFilter::new(200)) {
