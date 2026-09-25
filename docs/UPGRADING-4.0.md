@@ -1251,9 +1251,15 @@ same dead token each time, for up to the token's lifetime, which is often an hou
 - **A 401 or 403 from any HTTP backend is no longer retried.** Retrying repeats the refusal
   with the same credential. A 429, a 5xx, a 400 and a 404 are retried as before. A 404 and a
   400 still re-initialize an expired MCP session. Chain steps follow the same rule.
+- **Every route:** `gateway_invoke`, a capability (REST) call, `/mcp/{backend}`, and the
+  re-dispatch of an elicitation the gateway bridges for a legacy client.
+- **The audit log's `error_code` changes for a backend 401 on a capability (REST) call:**
+  `-32000` instead of `-32600`. The capability executor now reports a 401 as the backend's
+  refusal, not as an invalid request. A 401 that ends in the reconnect refusal is recorded as
+  that refusal: `outcome: denied` with `-32001` when the reconnect offer is attached. A 401 or
+  403 from an MCP backend over HTTP keeps `-32000`.
 - **Not covered:** backend-level OAuth (`backends.<name>.oauth`), which is planned for 4.1,
-  external (token-exchange) descriptors, and a 401 inside an elicitation continuation. There,
-  the caller's next call forces the refresh.
+  and external (token-exchange) descriptors, which hold no refreshable grant.
 
 **Rolling back to an earlier 4.0 beta is not supported once a forced refresh has happened.**
 The account store's authority file then records `forced_revision` for that account. An
