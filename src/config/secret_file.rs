@@ -106,9 +106,10 @@ fn refusal_fix(path: &Path, owned: bool) -> String {
         )
     } else {
         format!(
-            "Fix: clear the world and group-write bits; on Kubernetes set the Helm values \
-             podSecurityContext.fsGroup to a group this process is in and \
-             configVolume.defaultMode to 288 (octal 0440) (see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})."
+            "Fix: clear the world and group-write bits; on Kubernetes give the pod an \
+             fsGroup this process is in (the Helm chart pins podSecurityContext.fsGroup \
+             to 1001, the image's group) and keep the config volume's defaultMode at \
+             288 (octal 0440) (see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})."
         )
     }
 }
