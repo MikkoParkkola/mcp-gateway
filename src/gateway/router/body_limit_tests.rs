@@ -225,7 +225,10 @@ fn no_hard_coded_body_limit_outside_the_configured_layer() {
                 }
                 continue;
             }
-            if !name.ends_with(".rs") || name.contains("test") || name.contains("fixture") {
+            if path.extension().is_none_or(|e| e != "rs")
+                || name.contains("test")
+                || name.contains("fixture")
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
