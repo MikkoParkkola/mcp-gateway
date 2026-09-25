@@ -20,6 +20,19 @@ pub(crate) enum SecretFile {
     Config,
     /// A file listed under `env_files`.
     EnvFile,
+    /// The target of a `file:` secret reference (C9).
+    Reference,
+}
+
+impl SecretFile {
+    /// The largest file this kind may be. A `file:` secret is one value, so a
+    /// larger file is a wrong path, not a secret.
+    const fn max_bytes(self) -> Option<u64> {
+        match self {
+            Self::Config | Self::EnvFile => None,
+            Self::Reference => Some(64 * 1024),
+        }
+    }
 }
 
 /// Why a file's mode is refused.
@@ -67,6 +80,7 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
     let noun = match what {
         SecretFile::Config => "config file",
         SecretFile::EnvFile => "env file",
+        SecretFile::Reference => "secret file",
     };
     let cannot =
         |e: std::io::Error| Error::Config(format!("Cannot read {noun} {}: {e}", path.display()));
@@ -82,14 +96,37 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
             Refusal::GroupWrite => format!("lets group {gid} change it"),
             Refusal::GroupReadOwned => format!("lets group {gid} read it"),
         };
-        let fix = refusal_fix(path, meta.uid() == euid);
+        let fix = refusal_fix(path, meta.uid() == euid, what);
         return Err(Error::Config(format!(
             "Refusing to load {noun} {}: mode {mode:04o} {lets}, and it can hold credentials. {fix}",
             path.display()
         )));
     }
-    let mut text = String::new();
-    file.read_to_string(&mut text).map_err(cannot)?;
+    let text = if let Some(limit) = what.max_bytes() {
+        // Bounded on the handle the mode was judged on: a size taken from a
+        // separate `stat` could describe a different file than the one read.
+        let mut bytes = Vec::new();
+        file.take(limit + 1)
+            .read_to_end(&mut bytes)
+            .map_err(cannot)?;
+        if bytes.len() as u64 > limit {
+            return Err(Error::Config(format!(
+                "Refusing to load {noun} {}: it is larger than {} KiB, the limit for one secret.",
+                path.display(),
+                limit / 1024
+            )));
+        }
+        String::from_utf8(bytes).map_err(|_| {
+            Error::Config(format!(
+                "Cannot read {noun} {}: it is not UTF-8.",
+                path.display()
+            ))
+        })?
+    } else {
+        let mut text = String::new();
+        file.read_to_string(&mut text).map_err(cannot)?;
+        text
+    };
     Ok(text)
 }
 
@@ -98,11 +135,17 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
 /// `chmod 600` is only a fix on a file this process owns: on one another uid
 /// owns it would lock the gateway out. There the fix is the group route the
 /// Helm chart takes.
-fn refusal_fix(path: &Path, owned: bool) -> String {
+fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     if owned {
         format!(
             "Fix: chmod 600 {} (see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM}).",
             path.display()
+        )
+    } else if what == SecretFile::Reference {
+        format!(
+            "Fix: clear the world and group-write bits; on Kubernetes mount the Secret with \
+             defaultMode: 288 (octal 0440) and set podSecurityContext.fsGroup to a group this \
+             process is in (see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})."
         )
     } else {
         format!(
