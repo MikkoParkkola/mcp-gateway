@@ -292,7 +292,8 @@ A fourth refusal came before any of these on a cluster: the image declares `USER
 the kubelet cannot check against `runAsNonRoot: true`, so the pod was never created. The pod
 security context now sets `runAsUser: 1001`, the image's gateway user.
 
-Task records live in the `state` volume, and a restart empties an `emptyDir`. This release has no
+Task records live in the `state` volume. An `emptyDir` survives a container restart, and a pod
+that is replaced (rollout, eviction, reschedule) starts empty. This release has no
 chart setting for a persistent volume. The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
 startup). That is tracked separately.

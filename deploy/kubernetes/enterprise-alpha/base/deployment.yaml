@@ -118,6 +118,7 @@ spec:
         - name: config
           configMap:
             name: mcp-gateway-config
-        # Pod-lifetime state under HOME. A restart empties it, task records included.
+        # Pod-lifetime state under HOME: it survives a container restart, and a
+        # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
         - name: state
           emptyDir: {}

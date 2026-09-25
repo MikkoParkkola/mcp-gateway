@@ -198,7 +198,7 @@ every retry to be served rather than origin-pinned; it is a trade, not a fix.
 The chart and the manifests run the image with a read-only root filesystem. Everything the
 gateway writes under `$HOME` (task records, its data directory, the upgrade stamp, npm/uv
 caches) goes to a `state` volume at `/var/lib/mcp-gateway`, an `emptyDir` that a pod restart
-empties. `config.backends` is a map keyed by backend name.
+empties on pod replacement. `config.backends` is a map keyed by backend name.
 
 If you need both horizontal scale and the 2026-07-28 revision: MIK-7312 settled
 the mechanism as per-process key material rather than the shared store this
