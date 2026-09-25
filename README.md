@@ -373,7 +373,6 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 - **"Did you mean?"**: Levenshtein-based typo correction on tool names
 - **Tool annotations**: MCP 2025-11-25 `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; gateway meta-tools are fully annotated, while backend tools use the hybrid pass-through/fill policy in [ADR-003](docs/adr/ADR-003-mcp-tool-annotation-policy.md)
 - **Dynamic descriptions**: live tool and server counts in meta-tool descriptions
-- **Tunnel mode**: expose via Tailscale or pipenet without opening ports
 - **Shell completions**: `mcp-gateway completions bash|zsh|fish`
 - **Spec preview** (opt-in): filtered `tools/list` (SEP-1821), `tools/resolve` (SEP-1862), dynamic promotion
 
