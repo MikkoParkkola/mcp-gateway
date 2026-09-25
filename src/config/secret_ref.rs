@@ -35,15 +35,17 @@ impl<'a> SecretRef<'a> {
             .map_or(Self::Literal(text), Self::Env)
     }
 
-    /// The secret `field` holds. Unset and empty are both refused, and the
-    /// error never contains a value.
+    /// The secret `field` holds. Unset and empty are both refused, for a
+    /// reference and a literal alike: this is the one place that rule lives.
+    /// The error never contains a value.
     ///
     /// # Errors
     ///
-    /// [`Error::ConfigValidation`] naming `field` when the reference is empty,
-    /// unset, or resolves to an empty string.
+    /// [`Error::ConfigValidation`] naming `field` when the literal is empty, or
+    /// the reference is blank, unset, or resolves to an empty string.
     pub(crate) fn resolve(self, field: &str, overlay: &EnvOverlay) -> Result<String> {
         match self {
+            Self::Literal("") => Err(Error::ConfigValidation(format!("{field} is empty."))),
             Self::Literal(text) => Ok(text.to_owned()),
             Self::Env("") => Err(Error::ConfigValidation(format!(
                 "{field} uses an empty env: reference"
@@ -69,12 +71,13 @@ static TEMPLATE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("constant template pattern")
 });
 
-/// Expands every `${VAR}` in `text`. A variable that is unset and has no
-/// default is refused; `${VAR:-}` is the explicit way to allow empty.
+/// Expands every `${VAR}` in `text`. As in POSIX `${VAR:-default}`, a variable
+/// that is unset or empty takes the default; with no default it is refused.
+/// `${VAR:-}` is the explicit way to allow empty.
 ///
 /// # Errors
 ///
-/// The name of the first variable that is unset with no default.
+/// The name of the first variable that is unset or empty with no default.
 pub(crate) fn expand_template(
     text: &str,
     overlay: &EnvOverlay,
@@ -86,6 +89,7 @@ pub(crate) fn expand_template(
         out.push_str(&text[end..whole.start()]);
         let value = overlay
             .resolve(&caps[1])
+            .filter(|value| !value.is_empty())
             .or_else(|| caps.get(2).map(|d| d.as_str().to_owned()))
             .ok_or_else(|| caps[1].to_owned())?;
         out.push_str(&value);
@@ -95,18 +99,23 @@ pub(crate) fn expand_template(
     Ok(out)
 }
 
-/// [`expand_template`] for a config field, with the operator-facing error.
+/// [`expand_template`] for a config field, with the operator-facing message.
+/// The caller collects these so one load reports every unresolved reference,
+/// and appends [`EnvOverlay::absent_files_hint`] once.
 ///
 /// # Errors
 ///
-/// [`Error::ConfigValidation`] naming `field` and the unset variable.
-pub(crate) fn expand_field(field: &str, text: &str, overlay: &EnvOverlay) -> Result<String> {
+/// The message naming `field` and the unset or empty variable.
+pub(crate) fn expand_field(
+    field: &str,
+    text: &str,
+    overlay: &EnvOverlay,
+) -> std::result::Result<String, String> {
     expand_template(text, overlay).map_err(|var| {
-        Error::ConfigValidation(format!(
-            "{field} references ${{{var}}}, which is not set and has no default. \
-             Set it, or write ${{{var}:-}} to allow empty.{}",
-            overlay.absent_files_hint()
-        ))
+        format!(
+            "{field} references ${{{var}}}, which is not set (or is empty) and has no default. \
+             Set it, or write ${{{var}:-}} to allow empty."
+        )
     })
 }
 

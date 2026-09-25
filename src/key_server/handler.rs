@@ -415,7 +415,10 @@ fn check_admin_auth(ks: &KeyServer, headers: &HeaderMap) -> Result<(), axum::res
         });
 
     // Constant-time comparison to prevent timing side-channels
-    let matches = provided.is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
+    // An empty admin token is refused at load (C4); refusing it here too means
+    // a KeyServer built in code never accepts `Authorization: Bearer `.
+    let matches = !admin_token.is_empty()
+        && provided.is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
 
     if matches {
         Ok(())

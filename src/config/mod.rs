@@ -612,26 +612,32 @@ impl Config {
     /// verbatim: auth validation skips it too, and enabling it goes through
     /// reload, which runs this again.
     fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<BTreeSet<String>> {
+        // Every unresolved reference in one error: fixing them one restart at a
+        // time is the experience this replaces.
+        let mut unresolved = Vec::new();
+        let mut expand = |field: String, value: &mut String| match secret_ref::expand_field(
+            &field, value, overlay,
+        ) {
+            Ok(expanded) => *value = expanded,
+            Err(message) => unresolved.push(message),
+        };
         for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
             for (key, value) in &mut backend.headers {
-                *value = secret_ref::expand_field(
-                    &format!("backends.{name}.headers.{key}"),
-                    value,
-                    overlay,
-                )?;
+                expand(format!("backends.{name}.headers.{key}"), value);
             }
             for (key, value) in &mut backend.env {
-                *value = secret_ref::expand_field(
-                    &format!("backends.{name}.env.{key}"),
-                    value,
-                    overlay,
-                )?;
+                expand(format!("backends.{name}.env.{key}"), value);
             }
         }
-
         for (i, dir) in self.capabilities.directories.iter_mut().enumerate() {
-            *dir =
-                secret_ref::expand_field(&format!("capabilities.directories[{i}]"), dir, overlay)?;
+            expand(format!("capabilities.directories[{i}]"), dir);
+        }
+        if !unresolved.is_empty() {
+            return Err(Error::ConfigValidation(format!(
+                "{}{}",
+                unresolved.join("\n"),
+                overlay.absent_files_hint()
+            )));
         }
 
         Ok(self.resolve_secret_refs(overlay))
@@ -1165,12 +1171,10 @@ impl Config {
     }
 
     /// A secret that resolves to nothing is refused, whether it is an
-    /// unresolvable reference or an empty literal (C4).
+    /// unresolvable reference or an empty literal (C4); `SecretRef::resolve`
+    /// holds the rule.
     fn validate_env_reference(field: &str, value: &str, overlay: &EnvOverlay) -> Result<()> {
-        if SecretRef::parse(value).resolve(field, overlay)?.is_empty() {
-            return Err(Error::ConfigValidation(format!("{field} is empty.")));
-        }
-        Ok(())
+        SecretRef::parse(value).resolve(field, overlay).map(drop)
     }
 
     fn validate_backend_runtime_profiles(&self) -> Result<()> {

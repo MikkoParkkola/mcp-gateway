@@ -757,11 +757,13 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 `bearer_token: ""`. A `{env.X}` template in a capability, webhook or injected credential sent
 `""` when `X` was unset. Each of these now fails instead.
 
-- **`${VAR}` with no default must be set** in the `headers` and `env` of every enabled backend
-  and in `capabilities.directories`. The error names the field and the variable:
-  `backends.github.headers.Authorization references ${GITHUB_TOKEN}, which is not set and has
-  no default. Set it, or write ${GITHUB_TOKEN:-} to allow empty.` `${VAR:-}` is the way to say
-  empty is intended, and `${VAR:-text}` still falls back to `text`.
+- **`${VAR}` with no default must be set and non-empty** in the `headers` and `env` of every
+  enabled backend and in `capabilities.directories`. The error names the field and the variable:
+  `backends.github.headers.Authorization references ${GITHUB_TOKEN}, which is not set (or is
+  empty) and has no default. Set it, or write ${GITHUB_TOKEN:-} to allow empty.` One load reports
+  every such reference, not only the first. As in a POSIX shell, `${VAR:-text}` falls back to
+  `text` when `VAR` is unset **or empty** (3.x used the default only when unset), and `${VAR:-}`
+  is the way to say empty is intended.
 - **A disabled backend is not expanded.** Its `${VAR}` text stays as written, so a variable only
   a disabled backend needs does not stop startup. Enabling it from the admin panel writes the
   file and reloads; while the variable is unset that reload fails, names the variable, and the
@@ -770,12 +772,13 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 - **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
   `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
   `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',
-  which is empty; empty secrets are refused.` A literal `bearer_token: ""` or `key: ""` fails
-  too (`auth.bearer_token is empty.`), including when the auth config is built outside the
-  loader.
+  which is empty; empty secrets are refused.` An empty literal in any of these four fails too
+  (`auth.bearer_token is empty.`), including when the config is built in code rather than
+  loaded, and the key server never accepts an empty admin bearer.
 - **`{env.X}` templates fail at call time.** Capability, webhook and injection templates resolve
   when they are used, not at load, so the tool call or webhook delivery errors
-  (`{env.X} is not set`) instead of sending an empty credential.
+  (`{env.X} is not set or is empty`) instead of sending an empty credential. A credential
+  injection rule whose `{env.X}` is unset used to be skipped; the call now fails.
 - **A listed env file that does not exist is still allowed**, but every unresolved-reference error
   now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
   up next to the variable it failed to supply.
