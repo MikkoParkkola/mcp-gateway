@@ -121,7 +121,7 @@ the sample cannot support a 95% interval at any width, and the gate says so rath
 inventing one.
 
 `spread` is **retained as a reported diagnostic**, just no longer as the gate. It is the
-signal that makes a dirty Spark run legible — a cell whose range blows out while its
+signal that makes a dirty bench-host run legible — a cell whose range blows out while its
 interval stays tight is a machine-conditions story, not a code story — and dropping it would
 cost that visibility for nothing. Both appear per cell in `report["cells"]`; only the
 interval decides the verdict.
@@ -230,7 +230,7 @@ The rep count is hardcoded in two places:
 
 Both must rise together, and that is a **separate change** with a real cost: the run goes
 from 3 warm-up + 9 compared (A/B/C × 3) + 6 report-only (D/E × 3) = 18 reps, to 3 + 18 + 12
-= 33 reps at n=6. Interleaving must be preserved — the arms share Spark and have to see the
+= 33 reps at n=6. Interleaving must be preserved — the arms share bench-host and have to see the
 same machine conditions — so the reps cannot be parallelised away.
 
 Merging that into this change would conflate a statistic fix with a benchmark-cost decision.

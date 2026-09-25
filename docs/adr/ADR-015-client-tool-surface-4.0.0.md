@@ -88,7 +88,7 @@ default is a breaking change for anyone who never set the key.
 
 - `gpt-review`, design stage, verdict **SHIP-WITH-FIXES** — the fixes are the
   three defects above. Run file:
-  `~/.claude/data/reviews/runs/gpt-20260916T004124Z-23867.md`.
+  `<review-archive>/runs/gpt-20260916T004124Z-23867.md`.
 - The second reviewer produced no valid verdict (the model emitted raw tool-call
   tokens instead of a review), so this decision rests on one independent review
   plus source verification of its two citable claims. Both were confirmed at the

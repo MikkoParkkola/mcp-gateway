@@ -1,4 +1,11 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- /* Rendered when the operator enables it, or when credential mode serves the
+       bearer token in cleartext under cluster_internal (C3), which makes the
+       cluster network the trust boundary. The forced policy restricts INGRESS
+       only: backends listen on any port, and an egress allow-list the operator
+       never asked for would cut them off silently. Egress is restricted only
+       when networkPolicy.enabled asks for it. */}}
+{{- $restrictive := .Values.networkPolicy.enabled }}
+{{- if or $restrictive (eq (include "mcp-gateway.cleartextHttp" .) "cluster_internal") }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -9,11 +16,16 @@ spec:
   podSelector:
     matchLabels:
       {{- include "mcp-gateway.selectorLabels" . | nindent 6 }}
+  {{- if $restrictive }}
   policyTypes: ["Ingress", "Egress"]
+  {{- else }}
+  policyTypes: ["Ingress"]
+  {{- end }}
   ingress:
     - ports:
         - protocol: TCP
           port: {{ .Values.service.port }}
+  {{- if $restrictive }}
   egress:
     - ports:
         - protocol: TCP
@@ -22,4 +34,5 @@ spec:
           port: 53
         - protocol: UDP
           port: 53
+  {{- end }}
 {{- end }}

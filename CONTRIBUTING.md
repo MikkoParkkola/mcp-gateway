@@ -68,7 +68,7 @@ src/
     mod.rs               Transport trait
     stdio.rs             Subprocess I/O (stdin/stdout JSON-RPC)
     http/                HTTP client (Streamable HTTP + SSE)
-    websocket.rs         WebSocket transport
+    websocket.rs         WebSocket client (no backend config selects it)
   protocol/            MCP JSON-RPC types, version negotiation
   capability/          REST-to-MCP bridge (YAML defs, executor, hot-reload)
   failsafe/            Circuit breaker, retry, rate limiter, health checks

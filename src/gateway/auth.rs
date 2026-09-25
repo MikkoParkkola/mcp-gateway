@@ -153,9 +153,17 @@ impl ResolvedAuthConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if any `env:VAR_NAME` secret reference cannot be resolved.
-    pub fn try_from_config(config: &AuthConfig) -> Result<Self> {
-        let bearer_token = config.resolve_bearer_token()?;
+    /// Returns an error if any `env:VAR_NAME` secret reference cannot be
+    /// resolved in `overlay` (the env files the config was loaded with, then
+    /// the process environment).
+    pub fn try_from_config(
+        config: &AuthConfig,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Self> {
+        // An empty credential compares equal to an empty presented token; the
+        // resolvers refuse one (C4, `SecretRef::resolve`), so every caller that
+        // builds this comparator is covered.
+        let bearer_token = config.resolve_bearer_token(overlay)?;
         let bearer_quota_principal = bearer_token
             .as_deref()
             .map(QuotaPrincipal::configured_bearer);
@@ -179,7 +187,7 @@ impl ResolvedAuthConfig {
             .api_keys
             .iter()
             .map(|k| {
-                let key = k.resolve_key()?;
+                let key = k.resolve_key(overlay)?;
                 let quota_principal = QuotaPrincipal::api_key(&key);
                 Ok(ResolvedApiKey {
                     key,
@@ -223,7 +231,8 @@ impl ResolvedAuthConfig {
     /// paths should prefer [`Self::try_from_config`] so the error is returned.
     #[must_use]
     pub fn from_config(config: &AuthConfig) -> Self {
-        Self::try_from_config(config).expect("auth config secret references should resolve")
+        Self::try_from_config(config, &crate::config::EnvOverlay::none())
+            .expect("auth config secret references should resolve")
     }
 
     /// Check if a path is public (bypasses auth)
@@ -1118,6 +1127,18 @@ mod backend_grant_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_bearer_refused_by_try_from_config() {
+        let config = AuthConfig {
+            enabled: true,
+            bearer_token: Some(String::new()),
+            ..AuthConfig::default()
+        };
+        let err = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
+            .expect_err("an empty bearer would match an empty presented token");
+        assert!(err.to_string().contains("empty"), "got: {err}");
+    }
 
     // ── Anonymous identity (CWE-346) ──────────────────────────────────────────
     //

@@ -73,7 +73,7 @@ criterion. A branch is only a cleanup candidate once that question has an answer
 
 ## 2026-09-16 sweep — nothing retirable, and the reason is worth recording
 
-80 local branches, 54 worktrees, 4.7 GiB under `~/github/.worktrees`. Only five
+80 local branches, 54 worktrees, 4.7 GiB under `<repos>/.worktrees`. Only five
 branches are contained in `origin/main`; one of them is `main`. The other four
 were checked against the delete gate and **none can be retired today**:
 

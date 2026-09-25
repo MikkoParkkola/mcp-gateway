@@ -89,6 +89,9 @@ pub struct EnvOverlay {
     /// triggered by a watcher on exactly these paths, so a rewrite between the
     /// two reads is the expected interleaving rather than an exotic one.
     sources: Vec<(PathBuf, String)>,
+    /// Listed env files that did not exist. Still legal; named in any
+    /// unresolved-reference error so the operator sees why a variable is unset.
+    absent: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for EnvOverlay {
@@ -97,6 +100,7 @@ impl std::fmt::Debug for EnvOverlay {
             .field("owned_keys", &self.owned)
             .field("var_count", &self.vars.len())
             .field("source_count", &self.sources.len())
+            .field("absent_files", &self.absent)
             .finish()
     }
 }
@@ -304,6 +308,21 @@ impl EnvOverlay {
             .or_else(|| std::env::var(name).ok())
     }
 
+    /// ` (env files listed but not found: <paths>)`, or empty when every
+    /// listed file existed. Appended to unresolved-reference errors.
+    #[must_use]
+    pub(crate) fn absent_files_hint(&self) -> String {
+        if self.absent.is_empty() {
+            return String::new();
+        }
+        let paths: Vec<String> = self
+            .absent
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        format!(" (env files listed but not found: {})", paths.join(", "))
+    }
+
     /// True when this overlay's own files assign `name`.
     ///
     /// Ownership, never value: this answers "did these files say so", which is
@@ -371,6 +390,7 @@ impl EnvOverlay {
     pub(crate) fn apply_file(&mut self, path: &Path) -> Result<()> {
         if !path.exists() {
             tracing::debug!("Env file not found (skipped): {}", path.display());
+            self.absent.push(path.to_path_buf());
             return Ok(());
         }
         // The mode check and the read share one handle (CONFIG.2). A refusal

@@ -58,6 +58,7 @@ docker run -d \
   --name "$container" \
   -p "127.0.0.1:$port:39400" \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
+  -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v "$work/gateway.yaml:/config.yaml:ro" \
   -v "$work/capabilities:/capabilities:ro" \
   "$image" \

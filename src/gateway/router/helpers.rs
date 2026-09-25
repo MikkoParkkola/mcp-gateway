@@ -388,3 +388,33 @@ pub(crate) fn parse_request_ref(
 #[cfg(test)]
 #[path = "merge_client_meta_borrow_tests.rs"]
 mod merge_client_meta_borrow_tests;
+
+/// Buffer a request body under the router's `DefaultBodyLimit`, which carries
+/// the startup `server.max_body_size`.
+///
+/// An oversize body is HTTP 413, as on every extractor route; any other read
+/// failure stays 400 with JSON-RPC -32700.
+pub(super) async fn read_body(
+    request: axum::extract::Request,
+) -> Result<axum::body::Bytes, (StatusCode, Json<Value>)> {
+    use axum::extract::FromRequest as _;
+    axum::body::Bytes::from_request(request, &())
+        .await
+        .map_err(|rejection| {
+            if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                build_http_error_response(
+                    None,
+                    -32600,
+                    "Request body exceeds server.max_body_size",
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                )
+            } else {
+                build_http_error_response(
+                    None,
+                    -32700,
+                    format!("Failed to read body: {}", rejection.body_text()),
+                    StatusCode::BAD_REQUEST,
+                )
+            }
+        })
+}

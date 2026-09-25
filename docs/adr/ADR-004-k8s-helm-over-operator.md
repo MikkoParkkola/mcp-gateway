@@ -68,7 +68,7 @@ Build MIK-6680–6683 only when at least one of these is true, and record which:
 
 ## Consequences
 
-- Positive: weeks of Spark-bound build collapse into a days-long Mac-buildable
+- Positive: weeks of bench-host-bound build collapse into a days-long Mac-buildable
   Helm chart; zero new heavy dependencies; scope matches the product.
 - Positive: the chart serves non-enterprise single-cluster users too.
 - Negative: no automatic drift-correction of custom resources until the operator

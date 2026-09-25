@@ -7,11 +7,11 @@ criteria stated as scope.
 
 | Reviewer | Verdict | Record |
 |---|---|---|
-| gpt (`gpt-daybreak-blue-latest`, effort high) | **SHIP-WITH-FIXES** — the package omits the production bridge wiring required to close all three stated criteria | `~/.claude/data/reviews/runs/gpt-20260914T212858Z-6204.md` |
-| kimi (`synthetic-review`) | **SHIP** — mechanism is sound for a pre-implementation design; the one material gap is that the three criterion rows stay ignored | `~/.claude/data/reviews/runs/synthetic-20260914T212937Z-9855.md` |
+| gpt (`gpt-daybreak-blue-latest`, effort high) | **SHIP-WITH-FIXES** — the package omits the production bridge wiring required to close all three stated criteria | `<review-archive>/runs/gpt-20260914T212858Z-6204.md` |
+| kimi (`synthetic-review`) | **SHIP** — mechanism is sound for a pre-implementation design; the one material gap is that the three criterion rows stay ignored | `<review-archive>/runs/synthetic-20260914T212937Z-9855.md` |
 
 `grok-review` and `glm-review` were both unavailable: the grok CLI is missing at
-`~/.grok/bin/grok`, and the GLM route returns `404 model "hf:zai-org/GLM-5.3-Flash"
+`<review-tools>/grok`, and the GLM route returns `404 model "hf:zai-org/GLM-5.3-Flash"
 not found`. Recorded rather than silently substituted — two reviewers ran, not the
 usual pair.
 
