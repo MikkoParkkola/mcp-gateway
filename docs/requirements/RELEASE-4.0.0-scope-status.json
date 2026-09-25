@@ -526,7 +526,7 @@
       "evidence": [
         "src/gateway/meta_mcp/search_ranking_authz_tests.rs:597-628"
       ],
-      "note": "Graded 2026-09-25 (test-only). code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one now asserts total_available == 1, matching its classic-route sibling, so a denied capability tool can no longer win a slot on the Code Mode search route without reddening. Passes unmodified on 33412ca6 (1 passed; 0 failed). Delete-the-branch on Spark: bypassing profile.tool_allowed and may_invoke together in collect_code_mode_capability_matches (src/gateway/meta_mcp/search.rs) reddens only this test with total_available == 2, restored after the run. CI run: see PR."
+      "note": "Graded 2026-09-25 (test-only). code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one now asserts total_available == 1, matching its classic-route sibling, so a denied capability tool can no longer win a slot on the Code Mode search route without reddening. Passes unmodified at 150e5367 (1 passed; 0 failed). Delete-the-branch on Spark, in collect_code_mode_capability_matches (src/gateway/meta_mcp/search.rs): removing only the profile.tool_allowed conjunct stays GREEN, because may_invoke's RoutingProfile::check (visibility.rs:58-60) applies the same tool_filter redundantly; bypassing both profile.tool_allowed and may_invoke together turns it RED with total_available == 2, restored after the run. CI run: see PR (added once green)."
     },
     {
       "id": "MIK-7570.IDHEADER.1",
