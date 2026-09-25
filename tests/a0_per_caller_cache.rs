@@ -95,7 +95,9 @@ fn answer(request: &Value, calls: &AtomicUsize) -> Value {
 
 fn api_key(name: &str, key: &str) -> ApiKeyConfig {
     ApiKeyConfig {
-        key: key.to_string(),
+        key: None,
+        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(key.as_bytes())),
+        expires_at: None,
         name: name.to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],

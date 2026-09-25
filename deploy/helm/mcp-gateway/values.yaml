@@ -52,6 +52,24 @@ podSecurityContext:
   runAsGroup: 1001
   fsGroup: 1001
 
+# Credential mode requires the audit log (UPGRADING-4.0 item 43). It is
+# written to /var/lib/mcp-gateway/audit/transparency.jsonl on the `audit`
+# volume (any config.security.transparency_log.path is replaced by it): an
+# emptyDir by default, which DIES WITH THE POD. Set existingClaim to a
+# PersistentVolumeClaim to keep it, or ship it out with control_plane.export
+# (SIEM). Each replica writes its own chain. Mesh mode renders no audit volume.
+#
+# THE LOG IS NOT ROTATED YET (rotation is a separate item due before 4.0.0
+# final). When the volume fills, every append fails with `storage_full`: the
+# gateway answers tool calls with 503 and /readyz goes 503, until space is
+# freed. Size it for your traffic: a tool call writes one or two records of
+# roughly 1 KiB, so 1Gi holds on the order of half a million calls. Watch
+# mcp_audit_degraded and
+# mcp_audit_append_failures_total{cause="storage_full"}.
+audit:
+  existingClaim: ""
+  sizeLimit: 1Gi
+
 configVolume:
   # Decimal, because `--set` and some YAML readers do not take octal: 288 is
   # 0440. Any world bit, or group write, is refused at startup.
@@ -130,6 +148,9 @@ config:
   # `auth` is NOT set here on purpose: the template renders it from auth.mode
   # above, so the credential and the mesh flag cannot both appear. A value set
   # here would be overwritten.
+  # That includes auth.api_keys: the chart renders no API keys. A config you
+  # mount yourself stores each key as key_sha256 (`mcp-gateway hash-key`),
+  # never the key.
   security:
     firewall:
       enabled: true

@@ -166,7 +166,9 @@ impl super::Config {
                 slots.push(("auth.bearer_token".into(), token));
             }
             for key in &self.auth.api_keys {
-                slots.push((format!("auth.api_keys['{}'].key", key.name), &key.key));
+                if let Some(spec) = key.key_sha256.as_deref() {
+                    slots.push((format!("auth.api_keys['{}'].key_sha256", key.name), spec));
+                }
             }
         }
         if self.agent_auth.enabled {

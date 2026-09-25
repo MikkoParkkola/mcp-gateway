@@ -261,6 +261,9 @@ security:
     enabled: true
     scan_requests: true
     scan_responses: true
+  transparency_log:
+    enabled: true
+    path: /var/lib/mcp-gateway/audit/transparency.jsonl
 server:
   cleartext_http: cluster_internal
   host: 0.0.0.0
@@ -297,6 +300,9 @@ security:
     enabled: true
     scan_requests: true
     scan_responses: true
+  transparency_log:
+    enabled: true
+    path: /var/lib/mcp-gateway/audit/transparency.jsonl
 backends: {}
 ";
 

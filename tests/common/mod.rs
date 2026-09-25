@@ -273,7 +273,9 @@ pub async fn post_raw(state: &Arc<AppState>, body: Vec<u8>) -> (StatusCode, Valu
 
 pub fn api_key(key: &str, rate_limit: u32, allowed: Option<Vec<String>>) -> ApiKeyConfig {
     ApiKeyConfig {
-        key: key.to_string(),
+        key: None,
+        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(key.as_bytes())),
+        expires_at: None,
         name: "client".to_string(),
         rate_limit,
         backends: vec!["*".to_string()],

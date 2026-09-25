@@ -5,6 +5,7 @@
 //! Each domain has its own sub-module; this `mod.rs` re-exports everything so
 //! callers continue to use `crate::config::KeyServerConfig`, etc.
 
+mod api_key;
 mod auth;
 mod cache;
 mod capability;
@@ -20,7 +21,9 @@ mod streaming;
 mod tasks;
 mod webhooks;
 
-pub use auth::{AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig};
+pub use api_key::{ApiKeyConfig, api_key_digest_spec};
+pub(crate) use api_key::{api_key_expired, parse_api_key_digest};
+pub use auth::{AgentAuthConfig, AgentDefinitionConfig, AuthConfig};
 pub use cache::CacheConfig;
 pub use capability::CapabilityConfig;
 pub use code_mode::CodeModeConfig;

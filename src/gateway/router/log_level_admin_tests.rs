@@ -82,7 +82,9 @@ async fn send_as(admin: bool, uri: &str, method: &str) -> (StatusCode, Value, bo
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
-            key: KEY.to_string(),
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(KEY.as_bytes())),
+            expires_at: None,
             name: KEY.to_string(),
             rate_limit: 0,
             backends: vec!["shared".to_string()],

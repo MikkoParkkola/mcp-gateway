@@ -37,11 +37,11 @@ server:
 auth:
   enabled: true
   api_keys:
-    - key: "$ALICE_KEY"
+    - key_sha256: "$(printf %s "$ALICE_KEY" | "$BIN" hash-key)"
       name: "Alice"
       rate_limit: 0
       backends: ["alice_notes", "personal_inbox"]
-    - key: "$BOB_KEY"
+    - key_sha256: "$(printf %s "$BOB_KEY" | "$BIN" hash-key)"
       name: "Bob"
       rate_limit: 0
       backends: ["bob_notes", "personal_inbox"]

@@ -51,6 +51,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         protocol_revision: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         authorizer,
         api_key_name: Some("test-caller"),
         agent_id: None,

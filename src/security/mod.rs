@@ -15,6 +15,7 @@
 //! - [`firewall`]: Unified request/response security firewall (RFC-0071)
 
 pub mod agent_identity;
+pub mod audit;
 pub mod caller_identity;
 pub mod data_flow;
 #[cfg(feature = "firewall")]

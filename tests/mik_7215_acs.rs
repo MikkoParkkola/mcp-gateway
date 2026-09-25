@@ -726,15 +726,13 @@ mod http {
         let auth = mcp_gateway::config::AuthConfig {
             enabled: true,
             bearer_token: None,
-            api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-                key: "admin-key".to_string(),
-                name: "admin-client".to_string(),
-                rate_limit: 0,
-                backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
-                admin: true,
-            }],
+            api_keys: vec![
+                serde_json::from_value(serde_json::json!({
+                    "key_sha256": mcp_gateway::config::api_key_digest_spec(b"admin-key"),
+                    "name": "admin-client", "backends": ["*"], "admin": true
+                }))
+                .expect("api key fixture"),
+            ],
             public_paths: Vec::new(),
             client_circuit_breaker: None,
             single_user: false,
@@ -846,15 +844,13 @@ mod http {
         let auth = mcp_gateway::config::AuthConfig {
             enabled: true,
             bearer_token: None,
-            api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-                key: "admin-key".to_string(),
-                name: "admin-client".to_string(),
-                rate_limit: 0,
-                backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
-                admin: true,
-            }],
+            api_keys: vec![
+                serde_json::from_value(serde_json::json!({
+                    "key_sha256": mcp_gateway::config::api_key_digest_spec(b"admin-key"),
+                    "name": "admin-client", "backends": ["*"], "admin": true
+                }))
+                .expect("api key fixture"),
+            ],
             public_paths: Vec::new(),
             client_circuit_breaker: None,
             single_user: false,
@@ -978,15 +974,13 @@ mod http {
         let auth = mcp_gateway::config::AuthConfig {
             enabled: true,
             bearer_token: None,
-            api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-                key: "admin-key".to_string(),
-                name: "row17-client".to_string(),
-                rate_limit: 0,
-                backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
-                admin: true,
-            }],
+            api_keys: vec![
+                serde_json::from_value(serde_json::json!({
+                    "key_sha256": mcp_gateway::config::api_key_digest_spec(b"admin-key"),
+                    "name": "row17-client", "backends": ["*"], "admin": true
+                }))
+                .expect("api key fixture"),
+            ],
             public_paths: Vec::new(),
             client_circuit_breaker: Some(mcp_gateway::config::CircuitBreakerConfig {
                 enabled: true,
