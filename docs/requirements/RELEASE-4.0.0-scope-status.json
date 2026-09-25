@@ -482,11 +482,17 @@
     },
     {
       "id": "GH555.DISCOVERY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/tests/issue_555_listing_scope/meta_tools.rs",
+        "src/gateway/router/tests/issue_555_listing_scope/backend_scope.rs",
+        "src/gateway/router/tests/issue_555_listing_scope/direct_route.rs",
+        "src/gateway/router/tests/issue_555_listing_scope/guide.rs",
+        "src/gateway/router/tests/issue_555_listing_scope/residuals.rs"
+      ],
+      "note": "Merged in PR #774 as 4d070867, an ancestor of the release line (git merge-base --is-ancestor, 2026-09-25). CI run 36076360232 green at head 304ce311. Red evidence: run 36067080760 (30 A3 cells failing on assertions) and run 36076287893 (agent-auth and mTLS cells); each guard site was deleted in throwaway PRs #770-#782 and turned its own cell red."
     },
     {
       "id": "MIK-7570.CHART.1",
