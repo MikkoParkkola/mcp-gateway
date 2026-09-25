@@ -288,7 +288,7 @@ impl ResolvedAuthConfig {
 
         // API keys: hash once, then compare against EVERY digest in constant time,
         // so neither a match nor its position is visible in the timing.
-        let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+        let presented = <sha2::Sha224 as sha2::Digest>::digest(token.as_bytes());
         let key = self.api_keys.iter().fold(None, |hit, k| {
             let eq: bool = presented.as_slice().ct_eq(k.digest.as_slice()).into();
             hit.or(eq.then_some(k))
