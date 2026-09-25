@@ -29,9 +29,9 @@ Status: design for review. Gating for 4.0. UPGRADING item 53.
 2. `Failsafe::can_proceed() -> bool` is replaced by `Failsafe::admit(&self, backend: &str) -> Result<()>`:
    breaker first (`Err(CircuitOpen)`), then limiter (`Err(RateLimited)`). Breaker first keeps
    today's short-circuit: an open breaker does not spend a limiter token.
-3. `ops.rs` request and notification paths call one shared helper that runs `admit` and sets
-   the circuit gauge from the breaker's decision only, so a rate-limit refusal no longer
-   reports an open circuit. The refusal is logged as a limiter refusal.
+3. `ops.rs` request and notification paths both call `admit`, which also sets the circuit
+   gauge from the breaker's decision only, so the paths cannot drift and a rate-limit
+   refusal no longer reports an open circuit. Each path logs the refusal's own message.
 4. `IgnoredRateLimit`'s doc now covers the gateway's own pre-dispatch refusal too.
    `BudgetOutcome::of` gets an explicit first arm `Err(Error::RateLimited(_)) => IgnoredRateLimit`.
    The message would also match `is_rate_limited`, but the variant arm is the contract and is
@@ -67,6 +67,8 @@ burst 2; breaker default) behind an always-OK transport, driven through `MetaMcp
   `CircuitOpen` and adds a `Failure` sample.
 - T4 unit (`failsafe/mod.rs`): limiter exhausted, breaker closed: `admit` is
   `Err(RateLimited)` and the breaker state stays `Closed`.
+- T5 (`router/probe_tests.rs`, metrics feature): rate limit burst 1, retry off; after a
+  rate-limit refusal `mcp_backend_circuit_state` still reads 1. Red at base: it reads 0.
 - T3 unit: `BudgetOutcome::of(&Err(RateLimited))` is `IgnoredRateLimit`;
   `of(&Err(CircuitOpen))` is `Failure`.
 
@@ -84,9 +86,9 @@ T1 fails; the refusal arrives as `isError` "Circuit breaker open for backend 'sr
 - kimi: T1 waits on a real 1 s refill. Kept: 12 in-process calls finish far inside one
   refill, and the wait is only for B's token. `governor` takes no injectable clock here.
 - kimi: `IgnoredRateLimit` doc. Accepted (item 4).
-- grok: no test reads the gauge. Accepted in part: one shared helper (item 3) makes the
-  two paths set it identically; the gauge row in `router/probe_tests.rs` is extended if its
-  recorder harness reaches this path, otherwise recorded as open.
+- grok: no test reads the gauge. Accepted in part: the gauge is set inside `admit` (item 3),
+  so both paths set it identically. T5 adds the rate-limit gauge row; the existing
+  open-breaker row still covers the 0 case.
 - grok: idempotency release row. Declined: `is_pre_dispatch` is the existing allowlist, and
   `RateLimited` joins `CircuitOpen` in it; the release behaviour is already pinned for that set.
 - grok: Failsafe unit row. Accepted (T4). Notification path: covered by the shared helper.
