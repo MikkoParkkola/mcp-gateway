@@ -306,10 +306,7 @@ fn backend_admitted(
     }
     let mtls = !state.mtls_policy.is_empty();
     let agent = if state.agent_auth.enabled {
-        let Some(identity) = oauth_agent_identity else {
-            return false;
-        };
-        Some(identity)
+        oauth_agent_identity
     } else {
         None
     };
