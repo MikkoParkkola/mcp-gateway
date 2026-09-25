@@ -568,7 +568,7 @@ Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testin
 # Load balancer probe (/health would pull the gateway for one backend down)
 curl -sf http://127.0.0.1:39400/readyz > /dev/null
 # Alert on broken backends
-curl -s http://localhost:39400/health | jq '.backends | to_entries[] | select(.value.circuit_state != "Closed")'
+curl -s http://localhost:39400/health | jq '.backends | to_entries[] | select(.value.circuit_state != "closed")'
 ```
 
 ## Monitoring and Observability
@@ -803,6 +803,10 @@ auth:
   enabled: true
   bearer_token: "env:MCP_GATEWAY_TOKEN"
   public_paths: ["/health"]
+security:
+  transparency_log:          # required with auth on (UPGRADING-4.0 item 43)
+    enabled: true
+    path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 ```
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.

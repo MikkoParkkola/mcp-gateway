@@ -1,6 +1,6 @@
 # NFR.UPGRADE.1 rehearsal — results
 
-**VERDICT: 17/17 PASS.**
+**VERDICT: 17/17 PASS.** Re-run 2026-09-25 against 4.0.0-beta.1: **19/19 PASS**; see the last section.
 
 Criterion (`docs/requirements/RELEASE-4.0.0-scope-update.md`): "Upgrade from 3.5.1 and
 exercise modern-off/rollback with config, credentials, permissions, mounts and active
@@ -182,3 +182,24 @@ front of whoever owns multi-tenant OAuth isolation, not buried in a script comme
   key, so the hash differs every run by construction. What the checks assert is a
   within-run before/after identity (`CONFIG_SHA_BEFORE == CONFIG_SHA_AFTER_UPGRADE`),
   not a fixed reference hash.
+
+## Re-run 2026-09-25: 4.0.0-beta.1 (F21)
+
+Once D1 (UPGRADING-4.0 item 43), E4 (item 41) and the file-mode rule (item 35) had merged,
+the script as written could no longer start the 4.0 phases. The first run at `37e34271a`
+scored 11/19: the 4.0 binary refused `gateway.yaml` at mode 0664, and the stamp checks
+still expected the literal `4.0.0`. The script now does what an operator upgrading has to
+do:
+
+- `umask 077`, so every file it writes is owner-only (item 35);
+- phase 2a turns the API key into a digest (item 41);
+- phase 2a' turns on `security.transparency_log` with a writable path under the data
+  directory (item 43). The new conjunct `PHASE2.AUDIT_LOG_WRITTEN` checks that the 4.0
+  tool call wrote `schema_version: 2` records.
+
+The stamp checks compare against the 4.0 binary's own `--version`.
+
+Run on the Linux aarch64 benchmark host, tree `a0f11387e`, `BIN_351` = the v3.5.1 release asset
+`mcp-gateway-linux-aarch64` (checked against `SHA256SUMS.txt`), `BIN_400` = a debug build
+of that tree (`mcp-gateway 4.0.0-beta.1`): **19 conjuncts, 19 PASS**, including
+`PHASE4.*` (rollback to 3.5.1 from the kept 3.x config).

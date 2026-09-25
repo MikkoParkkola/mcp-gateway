@@ -44,8 +44,8 @@ fn uptime_secs() -> u64 {
 
 /// Returns `true` when the caller has admin-level access.
 ///
-/// Admin access is explicit and follows a credential. The auth middleware marks
-/// a bearer token as admin; API keys must opt in with `admin: true`. The
+/// Admin access follows a credential: the bearer, an API key with `admin: true`,
+/// or an SSO identity while a `role: admin` mapping rule matches it (E1). The
 /// identity used when authentication is disabled is NOT admin, because an
 /// unauthenticated gateway cannot tell its operator from any other caller that
 /// reaches the port.
@@ -513,7 +513,7 @@ async fn status(
         // Redacted view: counts only, no names/details
         let healthy = backends
             .iter()
-            .filter(|b| b.status().circuit_state != "Open")
+            .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
         return Json(json!({
             "server_count": total,
