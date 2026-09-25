@@ -133,6 +133,50 @@ CASES = [
         CAUGHT,
     ),
     (
+        # The output-name half of the digest binding (#570). The name still
+        # reads the `list` step, but its amd64 child: the signature would cover
+        # one platform's image instead of the index clients resolve.
+        "list-bound-to-the-amd64-output",
+        "ci.yml",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
+        "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
+        "        env:\n          LIST: ${{ steps.list.outputs.amd64 }}\n",
+        CAUGHT,
+    ),
+    (
+        # The publisher loses its own gate step while docker-build keeps a
+        # byte-identical one; the tags would read an unset version (#570). A
+        # presence pin: text attribution catches it too. The attribution
+        # witnesses are the echoed and commented-out gate cases above.
+        "publisher-gate-step-deleted-builder-twin-kept",
+        "ci.yml",
+        "      - name: Extract tag\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
+        "        id: meta\n"
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "",
+        CAUGHT,
+    ),
+    (
+        # The step still runs the gate, but it is no longer `meta`, so
+        # `steps.meta.outputs.version` resolves to the empty string.
+        "publisher-gate-step-loses-its-id",
+        "ci.yml",
+        "        id: meta\n"
+        "        run: python3 scripts/release/check_tag_manifest.py\n"
+        "\n      - uses: docker/setup-buildx-action",
+        "        id: gate\n"
+        "        run: python3 scripts/release/check_tag_manifest.py\n"
+        "\n      - uses: docker/setup-buildx-action",
+        CAUGHT,
+    ),
+    (
         # The identity names a workflow that no longer signs anything, so the
         # verification can only pass against a signature nothing produces.
         "identity-points-at-the-other-publisher",
