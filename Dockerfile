@@ -4,6 +4,7 @@
 # Build:  docker build --target runtime -t mcp-gateway:latest .
 # Run:    docker run -p 127.0.0.1:39400:39400 \
 #           -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
+#           -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
 #           -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest \
 #           --config /config.yaml --host 0.0.0.0
 #         The container must bind 0.0.0.0 or the published port reaches nothing;
