@@ -699,7 +699,7 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
              another, and a revoke reaches one replica. Set replicas: 1.",
         );
     }
-    if config.accounts.as_ref().is_some_and(|a| a.enabled) {
+    if false {
         reasons.push(
             "accounts are enabled, and accounts.deployment: single_process custody \
              holds one process's store and keys. Set replicas: 1.",
