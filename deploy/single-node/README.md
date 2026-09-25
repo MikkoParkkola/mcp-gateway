@@ -14,9 +14,20 @@ launchd.
 ## Docker Compose
 
 ```bash
+# Linux: gateway.yaml here is a deployment copy, not your working config
+install -m 600 <working-config> gateway.yaml && sudo chown 1001:1001 gateway.yaml
 docker compose -f deploy/single-node/docker-compose.yaml up -d
-curl -sf http://127.0.0.1:39400/health
+curl -sf http://127.0.0.1:39400/readyz
 ```
+
+The gateway refuses a config file other users can read (see
+[UPGRADING-4.0](../../docs/UPGRADING-4.0.md), item 35), and a bind mount keeps
+the host file's mode and owner, so a default `0644` file stops the container.
+
+The checks in this guide use `/readyz`, which answers 200 once the config has
+loaded and the listener is up. It never reads backend health. `/livez` answers
+200 while the process serves, and `/health` answers 503 whenever any backend is
+marked down, so it suits dashboards rather than install checks.
 
 Run Compose from the directory that contains `gateway.yaml` and `capabilities/`.
 The Compose template mounts `$PWD/gateway.yaml` as `/config.yaml` and
@@ -38,17 +49,20 @@ tool:
 
 ```bash
 install -d -o mcp-gateway -g mcp-gateway /etc/mcp-gateway
-cp gateway.yaml /etc/mcp-gateway/gateway.yaml
+install -m 600 -o mcp-gateway -g mcp-gateway gateway.yaml /etc/mcp-gateway/gateway.yaml
 cp -R capabilities /etc/mcp-gateway/capabilities
 cp deploy/single-node/mcp-gateway.service /etc/systemd/system/mcp-gateway.service
 systemctl daemon-reload
 systemctl enable --now mcp-gateway
 systemctl status mcp-gateway
-curl -sf http://127.0.0.1:39400/health
+curl -sf http://127.0.0.1:39400/readyz
 ```
 
 The unit sets `WorkingDirectory=/etc/mcp-gateway`, so the same relative
 capability directory works without editing `gateway.yaml`.
+The config is installed `0600` and owned by the service user because the
+gateway refuses a config file other users can read (see
+[UPGRADING-4.0](../../docs/UPGRADING-4.0.md), item 35).
 
 ## macOS launchd
 
@@ -57,16 +71,17 @@ tool:
 
 ```bash
 install -d /usr/local/etc/mcp-gateway
-cp gateway.yaml /usr/local/etc/mcp-gateway/gateway.yaml
+install -m 600 gateway.yaml /usr/local/etc/mcp-gateway/gateway.yaml
 cp -R capabilities /usr/local/etc/mcp-gateway/capabilities
 cp deploy/single-node/com.mikkoparkkola.mcp-gateway.plist /Library/LaunchDaemons/
 launchctl bootstrap system /Library/LaunchDaemons/com.mikkoparkkola.mcp-gateway.plist
 launchctl print system/com.mikkoparkkola.mcp-gateway
-curl -sf http://127.0.0.1:39400/health
+curl -sf http://127.0.0.1:39400/readyz
 ```
 
 The launchd template sets `WorkingDirectory` to
-`/usr/local/etc/mcp-gateway`, matching the generated config layout.
+`/usr/local/etc/mcp-gateway`, matching the generated config layout. The daemon runs as
+root, so a root-owned `0600` copy is readable by it and by no other user.
 
 ## Template Smoke
 
