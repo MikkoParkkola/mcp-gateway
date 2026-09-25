@@ -169,8 +169,9 @@ struct IdTokenClaims {
     /// Email
     #[serde(default)]
     email: Option<String>,
-    /// Whether the IdP verified `email`. JSON `true` or the string `"true"`
-    /// (some IdPs, e.g. Cognito) count as verified; anything else does not.
+    /// Whether the identity provider verified `email`. JSON `true` or the
+    /// string `"true"` (sent by some providers) count as verified; anything
+    /// else does not.
     #[serde(default)]
     email_verified: Option<serde_json::Value>,
     /// Name
