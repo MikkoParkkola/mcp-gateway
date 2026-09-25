@@ -245,7 +245,9 @@ mod principal_derives_from_the_credential {
 
     fn key(name: &str, secret: &str) -> ApiKeyConfig {
         ApiKeyConfig {
-            key: secret.to_string(),
+            key: None,
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(secret.as_bytes())),
+            expires_at: None,
             name: name.to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],

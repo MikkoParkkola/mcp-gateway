@@ -48,8 +48,9 @@ pub use features::{
     KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
     PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
     RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
+    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
+pub(crate) use features::{api_key_expired, parse_api_key_digest};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
@@ -549,7 +550,7 @@ impl Config {
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and
-        // `auth.api_keys[].key`: after it, a credential written `env:SHARED`
+        // `auth.api_keys[].key_sha256`: after it, a credential written `env:SHARED`
         // holds the VALUE `SHARED` had, and the `env:` spelling is gone. The
         // structural alias check inside `validate_with_env` compares an
         // adapter's `env:SHARED` reference against that gateway text, so on
@@ -566,6 +567,9 @@ impl Config {
         // points) reach only that one, and re-running a text-only check costs
         // nothing. Nothing else moves — allowlist semantics and runtime wiring
         // are untouched by this.
+        // The API key digest check sits here for the same reason: an `env:`
+        // variable holding plaintext must be refused by NAME, before inlining.
+        config.auth.validate_api_key_material(&overlay)?;
         {
             let gateway_credentials = config.gateway_credentials();
             crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
@@ -669,7 +673,9 @@ impl Config {
             subst(token);
         }
         for key in &mut self.auth.api_keys {
-            subst(&mut key.key);
+            if let Some(digest) = key.key_sha256.as_mut() {
+                subst(digest);
+            }
         }
         for agent in &mut self.agent_auth.agents {
             if let Some(secret) = agent.hs256_secret.as_mut() {
@@ -738,6 +744,8 @@ impl Config {
         if self.server.port == 0 {
             tracing::warn!("Server port is 0; OS will assign an ephemeral port");
         }
+        // First, so no other reader touches a plaintext key (E4).
+        self.auth.validate_api_key_material(overlay)?;
         // The router caps every body at this (C8), so 0 would refuse all of them.
         if self.server.max_body_size == 0 {
             return Err(Error::ConfigValidation(
@@ -758,6 +766,9 @@ impl Config {
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
+        self.security
+            .transparency_log
+            .validate_required_by_auth(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
@@ -810,7 +821,9 @@ impl Config {
     /// value would compare against a token nobody holds. Handing over the
     /// configured text lets the checks resolve through the overlay themselves
     /// and skip `auto` deliberately.
-    fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
+    pub(crate) fn gateway_credentials(
+        &self,
+    ) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
         use crate::personal_accounts::config::GatewayCredential;
 
         let mut credentials: Vec<GatewayCredential<'_>> = Vec::new();
@@ -818,11 +831,13 @@ impl Config {
             credentials.push(GatewayCredential::BearerToken(token));
         }
         for (index, api_key) in self.auth.api_keys.iter().enumerate() {
-            credentials.push(GatewayCredential::ApiKey {
-                index,
-                name: api_key.name.as_str(),
-                spec: api_key.key.as_str(),
-            });
+            if let Some(spec) = api_key.key_sha256.as_deref() {
+                credentials.push(GatewayCredential::ApiKeyDigest {
+                    index,
+                    name: api_key.name.as_str(),
+                    spec,
+                });
+            }
         }
         credentials
     }

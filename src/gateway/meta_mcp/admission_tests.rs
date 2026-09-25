@@ -84,6 +84,7 @@ fn context<'a>(policy: &'a MutablePolicy, retry: &'a RetryFields) -> MetaMcpCall
         protocol_revision: None,
         credential_principal: Some("verified-credential-owner"),
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         authorizer: policy,
         api_key_name: Some("same-display-label"),
         agent_id: None,

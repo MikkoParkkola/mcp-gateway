@@ -425,7 +425,9 @@ mod http {
     /// production request reads it here.
     fn two_principal_auth() -> AuthConfig {
         let key = |k: &str, name: &str| ApiKeyConfig {
-            key: k.to_string(),
+            key: None,
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(k.as_bytes())),
+            expires_at: None,
             name: name.to_string(),
             rate_limit: 0,
             backends: vec![fixture::BACKEND.to_string()],

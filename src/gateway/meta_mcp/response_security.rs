@@ -148,25 +148,43 @@ impl super::MetaMcp {
         }
 
         // Logging applies to every actual response, including unscanned methods.
-        self.record_response_delivery_attempt(&response, &context.correlation);
+        // With auth on, a response whose delivery cannot be audited is withheld.
+        if !self.record_response_delivery_attempt(&response, &context.correlation) {
+            let error = crate::Error::AuditUnavailable;
+            response = match response.id {
+                Some(id) => super::error_response_preserving_status(id, &error),
+                None => crate::protocol::JsonRpcResponse::error(
+                    None,
+                    error.to_rpc_code(),
+                    error.to_string(),
+                ),
+            };
+        }
         response
     }
 
     /// Append evidence of the final output attempt; never a client receipt.
+    ///
+    /// Returns `false` only when the append failed under
+    /// [`AuditFailurePolicy::FailClosed`](crate::security::audit::AuditFailurePolicy),
+    /// meaning the response must not be delivered.
     fn record_response_delivery_attempt(
         &self,
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
-    ) {
+    ) -> bool {
+        use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
+
         use sha2::{Digest, Sha256};
 
         let Some(logger) = &self.transparency_logger else {
-            return;
+            return true;
         };
+        let fail_closed = logger.failure_policy() == AuditFailurePolicy::FailClosed;
         let encoded = serde_json::to_value(response).and_then(|value| serde_json::to_vec(&value));
         let Ok(encoded) = encoded else {
             tracing::warn!("Failed to encode response delivery attempt for transparency log");
-            return;
+            return !fail_closed;
         };
         let hash = format!("sha256:{}", hex::encode(Sha256::digest(encoded)));
         let mut fields = serde_json::Map::new();
@@ -179,12 +197,21 @@ impl super::MetaMcp {
         fields.insert("caller".into(), correlation.caller.into());
         fields.insert("server".into(), correlation.external_server.into());
         fields.insert("tool".into(), correlation.external_tool.into());
-        if let Err(error) = logger.append_event(fields) {
+        let envelope = AuditEnvelope {
+            outcome: response
+                .error
+                .as_ref()
+                .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code)),
+            ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
+        };
+        if let Err(error) = logger.append_event(fields, &envelope) {
             tracing::warn!(
                 error_kind = ?error.kind(),
                 "Failed to append response delivery attempt to transparency log"
             );
+            return !fail_closed;
         }
+        true
     }
 }
 

@@ -33,6 +33,7 @@ async fn a_second_grant_subject_is_not_served_the_firsts_idempotent_result() {
         request_state: None,
         idempotency_key: Some("one-key-both-callers".to_string()),
         malformed: Vec::new(),
+        attestation: None,
     };
     let alice = GrantSubject::new("mtls", "spiffe://example.test/alice", None);
     let bob = GrantSubject::new("mtls", "spiffe://example.test/bob", None);

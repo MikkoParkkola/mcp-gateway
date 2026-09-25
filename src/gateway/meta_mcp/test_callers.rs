@@ -64,6 +64,7 @@ pub(in crate::gateway) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
         protocol_revision: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         authorizer: &crate::gateway::authz::AllowAll,
         api_key_name: None,
         agent_id: None,
