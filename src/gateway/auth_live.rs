@@ -69,7 +69,6 @@ pub(crate) async fn current_client(
 /// An enum rather than `Option<&str>`, which reads as "no backend means
 /// everyone" at the one place that must never widen by accident.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "scaffolding: wired by the fix"))]
 pub(crate) enum Audience<'a> {
     Backend(&'a str),
     Any,
@@ -77,7 +76,6 @@ pub(crate) enum Audience<'a> {
 
 /// What delivery to one held credential should do now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "scaffolding: wired by the fix"))]
 pub(crate) enum Delivery {
     /// The credential is live and in scope.
     Deliver,
@@ -91,14 +89,18 @@ pub(crate) enum Delivery {
 /// The one entitlement rule for notifications delivered after the request
 /// that opened the stream, shared by the legacy session stream and
 /// `subscriptions/listen` so the two cannot drift.
-#[cfg_attr(not(test), expect(dead_code, reason = "scaffolding: wired by the fix"))]
 pub(crate) async fn delivery(
     state: &AuthState,
     credential: Option<&HeldCredential>,
     audience: Audience<'_>,
 ) -> Delivery {
-    let _ = (state, credential, audience);
-    Delivery::Deliver
+    let Some(client) = current_client(state, credential).await else {
+        return Delivery::Dead;
+    };
+    match audience {
+        Audience::Backend(backend) if !client.can_access_backend(backend) => Delivery::OutOfScope,
+        Audience::Backend(_) | Audience::Any => Delivery::Deliver,
+    }
 }
 
 #[cfg(test)]
