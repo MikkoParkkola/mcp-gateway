@@ -4023,7 +4023,7 @@ impl BudgetOutcome {
             }
             // The gateway's own limiter refused: the backend was never asked.
             // Matched on the variant, not on its message (F23).
-            Err(Error::RateLimited(_)) => Self::IgnoredRateLimit,
+            Err(Error::RateLimited(_)) => Self::Failure, // MUTANT: RateLimited sampled as a failure
             Err(error) => {
                 if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
                     Self::IgnoredRateLimit
