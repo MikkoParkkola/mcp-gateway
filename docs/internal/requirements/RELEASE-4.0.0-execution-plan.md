@@ -24,7 +24,7 @@ was made, not for what remains.
 | 2 | Mint counter is process-local, so a restart resets the NIST envelope bound | same | same shape as #1 |
 | 3 | Task model unverified — the specification page 404s at the indexed path | §12 finding, unverified | **RESOLVED.** Found at `/extensions/tasks/overview`; the branch is short of it and the extension ships not advertised. Conformance owned by MIK-7311 |
 | 4 | Failed-task payload shape unverified, same cause | same | **RESOLVED**, same source |
-| 5 | §12 ran ONE vendor over eight rounds; the gate requires two | §12 BLOCKING | **RESOLVED.** The second vendor is back, routed through a shim that presents native grok behind the Copilot argv (`~/.claude/bin/copilot-as-grok`); Copilot's own monthly quota is spent. Two vendors have since reviewed the MRTR design and test plan |
+| 5 | §12 ran ONE vendor over eight rounds; the gate requires two | §12 BLOCKING | **RESOLVED.** The second vendor is back, routed through a shim that presents native grok behind the Copilot argv (`<review-tools>/copilot-as-grok`); Copilot's own monthly quota is spent. Two vendors have since reviewed the MRTR design and test plan |
 | 6 | MIK-7256 has a reviewed design and test plan, no tests and no implementation | §P2 onward | in the pipeline |
 | 7 | §4 coverage is measured and **below** the Standard floor by 2.6 points | §4 BLOCKING | MIK-7324. Mutation, the other half of §4, is now measured and passing on `src/protocol` (28 caught / 2 missed, both survivors closed) |
 | 8 | Multi-round-trip tool calls are built and unreachable — a 2026 backend that asks a question cannot complete a call | §2 WIRED, on the branch's headline feature | MIK-7325. Design reviewed, six findings, all six verified at source and repaired; confirmation pass in flight |
@@ -56,7 +56,7 @@ deployment documentation carry the constraint as shipped text, not as a plan to 
 The §3, §4 and §5 verdicts in the DoD check are recorded at head `c4f4781a`. Every commit
 since then, and MIK-7256's implementation, invalidates them. Clippy, fmt, the secret scan
 and the full test suite are re-run at the final head before any of those gates is claimed.
-Local `cargo` is halted by the disk guard, so that run goes to Spark via `spark-run`.
+Local `cargo` is halted by the disk guard, so that run goes to bench-host via `bench-run`.
 
 ## §12 cannot pass today, and the clock is running
 
@@ -99,7 +99,7 @@ Steps 1 and 3 are done and step 5 is half done; what follows them is now the que
    `deploy/helm/mcp-gateway/values.yaml`. The chart's own `version` tracks packaging and
    moves on its own. Nothing in this plan bumped them, and a 4.0.0 tag built from a tree
    that calls itself 3.5.0 ships a lie in the binary's `--version`.
-5. Re-run §3, §4 and §5 on Spark at the final head.
+5. Re-run §3, §4 and §5 on bench-host at the final head.
 6. Second-vendor review pass **against the final head's full diff**, not resumed from the
    round 18 material: that verdict was given before the tasks disposition, the
    single-replica text and MIK-7256 existed. A ratification stamp is bound to a diff hash,
@@ -126,7 +126,7 @@ backwards, which is worth more than it looks: the first increment as numbered co
 | 1b | Legacy-client bridge — design, review, test plan, then wiring `Bridge::to_legacy_client` (mrtr.rs:186), which has no caller | MRTR.7 says MUST, same decision. The translation exists; issuing the requests over the client's transport mid-call is the missing half | MRTR.7 |
 | 2 | Tasks-extension conformance (MIK-7311, and TASK.1) — two statuses, two required fields, an error payload shape, a capability check. **Undersized as written**: TASK.1 also requires `tasks/get`, `tasks/update`, the task lifecycle and the long-running-call wiring that produces a task in the first place, none of which the four items above cover | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
 | 3 | Coverage on the five named modules (MIK-7324) — **runs after the wiring increments**, see Order | §4's failing half; `src/main.rs` is the sharpest, 22 added lines and none executed | §4 |
-| 4 | Mutation over the rest of the branch diff, on Spark, module by module — **runs after the wiring increments**, see Order | the measured 93.3% covers `src/protocol` only, and a subset is a lower bound | §4 |
+| 4 | Mutation over the rest of the branch diff, on bench-host, module by module — **runs after the wiring increments**, see Order | the measured 93.3% covers `src/protocol` only, and a subset is a lower bound | §4 |
 | 5 | Version bump to 4.0.0 everywhere (step 4 above), then re-run §3, §4, §5 at the final head | a tag built from a tree calling itself 3.5.0 ships a lie in `--version` | §3, §4, §5 |
 | 6 | Second-vendor review against the final head's full diff, then the DoD evidence comment on each ticket | a ratification stamp binds to a diff hash, so an older stamp covers nothing being pushed | §12, §1 |
 | 7 | Deploy — MIK-7265 closes on deploy, not on merge. Production is 3.4.0 and answers a foreign `Origin` with HTTP 200 | a merge is not a deployment | §11 |

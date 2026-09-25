@@ -306,7 +306,7 @@ then grade.
 
 This diagnosis stops at the edge of measurement. Confirming the fix requires
 executing the harness, which contract §4 admits only post-merge and which runs on
-Spark, not here. No harness run was performed for this document.
+bench-host, not here. No harness run was performed for this document.
 
 **The one thing that would falsify this recommendation:** a re-run with the
 response cache disabled and `requests_per_second` above the offered rate on all

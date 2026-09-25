@@ -1,4 +1,4 @@
-sha256: b2be9dabaf6c3d6dcd6541c8e637aff7e435d88e5632de02a4c1d89a07d81141
+sha256: 472fb77398d3193aafcb81697849a41573123fede73dc90c04c2807ab4c33051
 fulcrum: "1.0"
 name: linear_create_webhook
 description: "Create a Linear webhook to receive real-time events (issue created/updated, comment added, etc.)"
@@ -13,7 +13,7 @@ schema:
       label:
         type: string
         description: "Webhook label"
-        default: "Claude Elite Gateway"
+        default: "mcp-gateway"
       resourceTypes:
         type: array
         description: "Resource types to listen for: Issue, Comment, Project, Cycle, IssueLabel, Reaction"

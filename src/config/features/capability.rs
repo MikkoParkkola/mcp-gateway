@@ -23,17 +23,8 @@ impl Default for CapabilityConfig {
         Self {
             enabled: true,
             name: "gateway".to_string(),
-            directories: {
-                let mut dirs = vec!["capabilities".to_string()];
-                if let Some(home) = std::env::var_os("HOME") {
-                    let private_dir =
-                        std::path::Path::new(&home).join("github/mcp-gateway-private/capabilities");
-                    if private_dir.is_dir() {
-                        dirs.push(private_dir.to_string_lossy().into_owned());
-                    }
-                }
-                dirs
-            },
+            // Only the bundled catalogue. Any other source is named in config.
+            directories: vec!["capabilities".to_string()],
         }
     }
 }

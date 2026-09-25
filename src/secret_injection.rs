@@ -238,7 +238,8 @@ impl SecretInjector {
                 ))
             })?;
 
-            // Skip injection if the resolved value is empty (missing env var without default)
+            // Skip injection if the rule value itself is empty; an unset or empty
+            // {env.X} already failed above (C4).
             if resolved_value.is_empty() {
                 warn!(
                     backend = backend,

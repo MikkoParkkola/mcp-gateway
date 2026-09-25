@@ -5,7 +5,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-[[ "$(uname -s)" == Linux ]] || { echo 'Run this TLS/OIDC fixture on Linux (CI or Spark).' >&2; exit 1; }
+[[ "$(uname -s)" == Linux ]] || { echo 'Run this TLS/OIDC fixture on Linux (CI or bench-host).' >&2; exit 1; }
 log_dir="${MCP_GATEWAY_TASK_SDK_LOG_DIR:-$(mktemp -d "$repo_root/target-sdk-recovery.XXXXXX")}"
 mkdir -p "$log_dir"
 container=''
