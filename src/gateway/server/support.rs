@@ -346,7 +346,7 @@ pub(super) fn build_persisted_costs(
         .collect();
 
     crate::cost_accounting::persistence::PersistedCosts {
-        saved_at: crate::cost_accounting::persistence::now_secs(),
+        saved_at: snap.taken_at,
         tool_totals,
         key_totals: snap.key_daily.clone(),
     }
