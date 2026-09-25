@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::key_server::oidc::VerifiedIdentity;
+use crate::key_server::oidc::{VerifiedIdentity, email_domain};
 use crate::{Error, Result};
 
 use super::ControlPlaneRole;
@@ -83,13 +83,19 @@ impl ControlPlaneRoleRule {
             // An empty rule email (or a missing identity email) must never
             // match: a token with no `email` claim resolves to "" and must not
             // satisfy an email discriminator.
-            if email.is_empty() || identity.email.is_empty() || &identity.email != email {
+            if email.is_empty()
+                || identity.email.is_empty()
+                || !identity.email.eq_ignore_ascii_case(email)
+            {
                 return false;
             }
         }
         if let Some(domain) = &self.domain {
-            let email_domain = identity.email.split('@').next_back().unwrap_or("");
-            if domain.is_empty() || email_domain.is_empty() || email_domain != domain {
+            // `email_domain` is `None` for a missing email or one without
+            // exactly one `@`, so neither can satisfy a domain rule.
+            if domain.is_empty()
+                || !email_domain(&identity.email).is_some_and(|d| d.eq_ignore_ascii_case(domain))
+            {
                 return false;
             }
         }

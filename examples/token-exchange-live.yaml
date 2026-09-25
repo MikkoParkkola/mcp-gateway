@@ -41,11 +41,16 @@ key_server:
       audiences: []
       allowed_domains: []
   policies:
-    # Matches both the human user's real identity AND the gateway's
-    # self-minted assertion for that same user (the assertion carries the
-    # user's original email/subject through unchanged), so one rule covers
-    # both hops of the exchange.
-    - match: { domain: "example.com" }
+    # One rule per hop. The human user's real identity matches on a verified
+    # email domain. The gateway's self-minted assertion carries no
+    # `email_verified`, so its email is dropped on verification; it matches
+    # on the `mcp-gateway` issuer alone.
+    - match: { issuer: "https://accounts.google.com", domain: "example.com" }
+      scopes:
+        backends: ["mail-svc"]
+        tools: ["*"]
+        rate_limit: 60
+    - match: { issuer: "mcp-gateway" }
       scopes:
         backends: ["mail-svc"]
         tools: ["*"]

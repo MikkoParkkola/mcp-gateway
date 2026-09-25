@@ -140,6 +140,17 @@ impl VerifiedIdentity {
     }
 }
 
+/// The domain of `email` when it has exactly one `@` with a non-empty local
+/// part and domain; `None` otherwise. Callers compare the result with
+/// `eq_ignore_ascii_case`.
+///
+/// ponytail: ASCII case folding only; IDN/Unicode domains compare exactly.
+/// Add punycode normalisation if a tenant needs it.
+pub(crate) fn email_domain(email: &str) -> Option<&str> {
+    let (local, domain) = email.split_once('@')?;
+    (!local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(domain)
+}
+
 /// Raw claims extracted from an OIDC ID token.
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
@@ -158,6 +169,10 @@ struct IdTokenClaims {
     /// Email
     #[serde(default)]
     email: Option<String>,
+    /// Whether the IdP verified `email`. JSON `true` or the string `"true"`
+    /// (some IdPs, e.g. Cognito) count as verified; anything else does not.
+    #[serde(default)]
+    email_verified: Option<serde_json::Value>,
     /// Name
     #[serde(default)]
     name: Option<String>,
@@ -434,18 +449,41 @@ impl OidcVerifier {
             check_audience(&claims.aud, &provider.audiences)?;
         }
 
+        // An unverified address is dropped here, once, so every consumer of
+        // `VerifiedIdentity.email` (allowed_domains, policy, role mapping,
+        // grant label, propagated assertion) sees a verified address or "".
+        let email_verified = matches!(&claims.email_verified, Some(serde_json::Value::Bool(true)))
+            || matches!(&claims.email_verified, Some(serde_json::Value::String(v)) if v == "true");
+        let email = match claims.email {
+            Some(email) if email_verified => email,
+            Some(_) => {
+                debug!(
+                    reason = "email_unverified",
+                    "Dropping unverified OIDC email"
+                );
+                String::new()
+            }
+            None => String::new(),
+        };
+
         // Domain allowlist check
         if !provider.allowed_domains.is_empty() {
-            let email = claims.email.as_deref().unwrap_or("");
-            let domain = email.split('@').next_back().unwrap_or("");
-            if !provider.allowed_domains.iter().any(|d| d == domain) {
-                return Err(OidcError::DomainNotAllowed(domain.to_string()));
+            let domain = email_domain(&email);
+            if !domain.is_some_and(|domain| {
+                provider
+                    .allowed_domains
+                    .iter()
+                    .any(|d| d.eq_ignore_ascii_case(domain))
+            }) {
+                return Err(OidcError::DomainNotAllowed(
+                    domain.unwrap_or_default().to_string(),
+                ));
             }
         }
 
         Ok(VerifiedIdentity {
             subject: claims.sub,
-            email: claims.email.unwrap_or_default(),
+            email,
             name: claims.name,
             groups: claims.groups.unwrap_or_default(),
             issuer: claims.iss,

@@ -32,7 +32,7 @@ const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 60;
 ///       audiences: ["my-gateway-client-id"]
 ///       allowed_domains: ["company.com"]
 ///   policies:
-///     - match: { domain: "company.com" }
+///     - match: { issuer: "https://accounts.google.com", domain: "company.com" }
 ///       scopes:
 ///         backends: ["*"]
 ///         tools: ["*"]
@@ -161,7 +161,9 @@ impl KeyServerConfig {
     /// # Errors
     ///
     /// Returns [`Error::ConfigValidation`] for the first provider with an empty
-    /// (or whitespace-only) audience list.
+    /// (or whitespace-only) audience list, or the first policy rule whose
+    /// issuer is blank or unconfigured, whose `email`/`domain`/`group` is
+    /// blank, or which is issuer-only on a public multi-tenant issuer (A9).
     pub fn validate(&self) -> Result<()> {
         if !self.enabled {
             return Ok(());
@@ -177,8 +179,67 @@ impl KeyServerConfig {
                 )));
             }
         }
+        for (idx, policy) in self.policies.iter().enumerate() {
+            self.validate_policy_match(idx, &policy.match_criteria)?;
+        }
         Ok(())
     }
+
+    /// Refuse a rule that names no configured issuer, has a blank
+    /// discriminator, or is issuer-only on a public multi-tenant issuer.
+    fn validate_policy_match(&self, idx: usize, m: &PolicyMatchConfig) -> Result<()> {
+        let refuse = |why: String| {
+            Err(Error::ConfigValidation(format!(
+                "key_server.policies[{idx}].match: {why}"
+            )))
+        };
+        if m.issuer.trim().is_empty() {
+            return refuse("issuer is blank; every rule must name its OIDC issuer".to_string());
+        }
+        if !self.oidc.iter().any(|p| p.issuer == m.issuer) {
+            return refuse(format!(
+                "issuer '{}' is not one of key_server.oidc[].issuer, so the rule can never match",
+                m.issuer
+            ));
+        }
+        for (field, value) in [
+            ("email", &m.email),
+            ("domain", &m.domain),
+            ("group", &m.group),
+        ] {
+            if value.as_deref().is_some_and(|v| v.trim().is_empty()) {
+                return refuse(format!("'{field}' is blank; omit it or give it a value"));
+            }
+        }
+        let issuer_only = m.email.is_none() && m.domain.is_none() && m.group.is_none();
+        if issuer_only && is_public_multi_tenant_issuer(&m.issuer) {
+            return refuse(format!(
+                "issuer-only rule on multi-tenant issuer '{}' admits every account it issues                  for our audience; add a domain, email or group condition",
+                m.issuer
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Issuers where anyone can obtain a token for our audience, so a rule with
+/// no discriminator admits everyone. Any other multi-tenant issuer behaves
+/// the same way; these two are the ones the gateway recognises.
+const PUBLIC_MULTI_TENANT_ISSUER_HOSTS: [&str; 2] =
+    ["accounts.google.com", "token.actions.githubusercontent.com"];
+
+/// Compare by host so `https://accounts.google.com`, the scheme-less
+/// `accounts.google.com` Google also uses as `iss`, and a trailing slash or
+/// case variant all count.
+fn is_public_multi_tenant_issuer(issuer: &str) -> bool {
+    let trimmed = issuer.trim().trim_end_matches('/');
+    let host = trimmed
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .map_or(trimmed, |_| &trimmed[8..]);
+    PUBLIC_MULTI_TENANT_ISSUER_HOSTS
+        .iter()
+        .any(|public| public.eq_ignore_ascii_case(host))
 }
 
 /// Configuration for a single OIDC identity provider.
@@ -221,16 +282,19 @@ pub struct KeyServerPolicyConfig {
     pub scopes: PolicyScopesConfig,
 }
 
-/// Match criteria for a policy rule. All non-`None` fields must match.
+/// Match criteria for a policy rule. The issuer and every non-`None` field
+/// must match.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyMatchConfig {
-    /// Email domain suffix (e.g., `"company.com"`).
+    /// Exact email domain, ASCII case-insensitive (e.g., `"company.com"`).
+    /// Not a suffix: subdomains need their own rule. Matches only a verified
+    /// email.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
-    /// Exact OIDC issuer URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub issuer: Option<String>,
-    /// Exact email address.
+    /// Exact OIDC issuer URL. Required; must equal a `key_server.oidc[].issuer`.
+    pub issuer: String,
+    /// Exact email address, ASCII case-insensitive. Matches only a verified
+    /// email.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     /// Required group membership.

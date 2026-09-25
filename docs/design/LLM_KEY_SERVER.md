@@ -325,7 +325,7 @@ async fn revoke_token(store: &dyn TokenStore, jti: &str) -> Result<()> {
 Revoke all active tokens for a specific user (e.g., on employee offboarding):
 
 ```
-DELETE /auth/tokens?subject=alice@company.com
+DELETE /auth/tokens?issuer=https%3A%2F%2Faccounts.google.com&subject=110169484474386276334
 Authorization: Bearer <admin-token>
 ```
 
