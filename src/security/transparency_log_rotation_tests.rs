@@ -53,7 +53,7 @@ pub(super) fn rotate_n(l: &TransparencyLogger, path: &Path, n: usize) {
     while list_segments(path).unwrap().len() < start + n {
         append(l, i);
         i += 1;
-        assert!(i < 10_000, "no rotation happened");
+        assert!(i < 1_000, "no rotation happened");
     }
 }
 

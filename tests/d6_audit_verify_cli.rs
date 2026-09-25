@@ -43,7 +43,7 @@ fn write_log(path: &Path) {
         l.log_invocation("s", "c", "srv", &format!("t{i}"), "a", "b")
             .unwrap();
         i += 1;
-        assert!(i < 10_000, "no rotation happened");
+        assert!(i < 1_000, "no rotation happened");
     }
 }
 

@@ -188,15 +188,8 @@ pub(crate) fn verify_segments(
         // `.hwm` is written after its record, so reading it first means a live
         // append can only leave the stream ahead of it, never behind.
         let hw = segments::read_hwm(path, secret, &config.key_id);
-        let files = log_files(path)?;
-        // Wiped between the caller's check and this pass: nothing to verify
-        // is not a clean log.
-        if files.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("no audit log or sealed segment at {}", path.display()),
-            ));
-        }
+        // Nothing to verify is not a clean log.
+        let files = existing_log_files(path)?;
         #[cfg(test)]
         LISTED.with(|h| {
             let taken = h.borrow_mut().take();
