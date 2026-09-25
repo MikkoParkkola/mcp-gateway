@@ -148,9 +148,6 @@ pub(crate) fn integrity_file_refusal(mode: u32) -> Option<Refusal> {
     if m & 0o002 != 0 {
         return Some(Refusal::World);
     }
-    if m & 0o020 != 0 {
-        return Some(Refusal::GroupWrite);
-    }
     None
 }
 
