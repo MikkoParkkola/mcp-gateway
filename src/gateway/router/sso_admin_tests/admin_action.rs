@@ -38,7 +38,11 @@ async fn audited(policy: AuditFailurePolicy, exposed: &[String]) -> Audited {
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
-            path: dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
             key_id: "e1".to_string(),
             shared_secret: String::new(),
         }))
@@ -52,7 +56,10 @@ async fn audited(policy: AuditFailurePolicy, exposed: &[String]) -> Audited {
         Duration::from_secs(300),
     ));
     let state = Arc::get_mut(&mut gw.state).expect("state is unique");
-    assert!(state.backends.register(Arc::clone(&alpha)), "register alpha");
+    assert!(
+        state.backends.register(Arc::clone(&alpha)),
+        "register alpha"
+    );
     let mut meta = MetaMcp::new(Arc::clone(&state.backends)).with_exposed_meta_tools(exposed);
     // One logger, shared by the meta layer and `AppState`, as the server wires it.
     meta.enable_transparency_log(Arc::clone(&log));
@@ -115,7 +122,12 @@ impl Audited {
     }
 }
 
-fn ui(method: &str, uri: &str, bearer: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
+fn ui(
+    method: &str,
+    uri: &str,
+    bearer: &str,
+    body: &Value,
+) -> axum::http::Request<axum::body::Body> {
     axum::http::Request::builder()
         .method(method)
         .uri(uri)
@@ -152,7 +164,11 @@ fn assert_record(record: &Value, surface: &str, outcome: &str, code: Option<i64>
     assert_eq!(record["event"], "admin_action", "{record}");
     assert_eq!(record["surface"], surface, "{record}");
     assert_eq!(record["outcome"], outcome, "{record}");
-    assert_eq!(record.get("error_code").and_then(Value::as_i64), code, "{record}");
+    assert_eq!(
+        record.get("error_code").and_then(Value::as_i64),
+        code,
+        "{record}"
+    );
 }
 
 fn assert_ui_record(record: &Value, route: &str, status: u16, outcome: &str, code: Option<i64>) {
@@ -235,10 +251,16 @@ async fn admin_meta_tool_refused_while_degraded() {
     let before = fx.entries().len();
     let (status, body) = fx.revive(&fx.alice()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(!kill_switch.is_killed("alpha"), "the healed revive did not run");
+    assert!(
+        !kill_switch.is_killed("alpha"),
+        "the healed revive did not run"
+    );
     let new = &fx.entries()[before..];
     assert!(new.len() >= 2, "{new:#?}");
-    assert_eq!(new[0]["type"], "audit_probe", "admit wrote no probe: {new:#?}");
+    assert_eq!(
+        new[0]["type"], "audit_probe",
+        "admit wrote no probe: {new:#?}"
+    );
     assert_record(&new[1], "meta_tool", "ok", None);
 }
 
@@ -259,11 +281,12 @@ async fn failed_admin_record_withholds_meta_tool() {
 
 /// E1-T12: an admin UI mutation and a refused one each write one record;
 /// neither the body nor the email is logged.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn ui_admin_mutation_writes_admin_action() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
-    let (status, body) = fx.send(ui("POST", PREVIEW, &fx.alice(), &preview_body())).await;
+    let (status, body) = fx
+        .send(ui("POST", PREVIEW, &fx.alice(), &preview_body()))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, body) = fx
         .send(ui("POST", "/ui/api/reload", STANDARD_KEY, &json!({})))
@@ -281,7 +304,6 @@ async fn ui_admin_mutation_writes_admin_action() {
 }
 
 /// E1-T12a: a handler failure is `error` with the shared code.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn ui_admin_error_is_error() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
@@ -295,7 +317,6 @@ async fn ui_admin_error_is_error() {
 }
 
 /// E1-T12b (control): reads write nothing.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn ui_get_writes_no_record() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
@@ -317,17 +338,24 @@ async fn ui_get_writes_no_record() {
         .body(axum::body::Body::empty())
         .unwrap();
     let (status, body) = fx.send(request).await;
-    assert_eq!(status, StatusCode::OK, "a read was refused while degraded: {body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a read was refused while degraded: {body}"
+    );
 }
 
 /// A non-POST mutation is recorded too: `DELETE` names its method.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn ui_delete_writes_admin_action() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
     let uri = "/ui/api/backends/alpha";
     let (status, body) = fx.send(ui("DELETE", uri, &fx.alice(), &json!({}))).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "no config path: {body}");
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no config path: {body}"
+    );
     let records = fx.admin_actions();
     assert_eq!(records.len(), 1, "{records:#?}");
     assert_record(&records[0], "admin_ui", "error", Some(-32603));
@@ -338,13 +366,16 @@ async fn ui_delete_writes_admin_action() {
 
 /// E1-T12c (amended): a control-plane POST writes one `admin_action` each,
 /// the 409 as `error` and the RBAC refusal as `denied`, and nothing else.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn control_plane_mutation_is_recorded() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
-    let (status, body) = fx.send(ui("POST", GRANTS, &fx.alice(), &grant_body())).await;
+    let (status, body) = fx
+        .send(ui("POST", GRANTS, &fx.alice(), &grant_body()))
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    let (status, body) = fx.send(ui("POST", GRANTS, STANDARD_KEY, &grant_body())).await;
+    let (status, body) = fx
+        .send(ui("POST", GRANTS, STANDARD_KEY, &grant_body()))
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let entries = fx.entries();
     assert_eq!(entries.len(), 2, "only admin_action entries: {entries:#?}");
@@ -356,7 +387,6 @@ async fn control_plane_mutation_is_recorded() {
 }
 
 /// E1-T12d: the route is the matched template, never the path or query.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn route_is_the_template_not_the_path() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
@@ -368,12 +398,14 @@ async fn route_is_the_template_not_the_path() {
     let route = "/ui/api/backends/{name}/revive";
     assert_ui_record(&records[0], route, 404, "invalid", Some(-32602));
     let raw = fx.raw();
-    assert!(!raw.contains("secret-backend-canary"), "the path was logged");
+    assert!(
+        !raw.contains("secret-backend-canary"),
+        "the path was logged"
+    );
     assert!(!raw.contains("QUERY-CANARY"), "the query was logged");
 }
 
 /// E1-T13: while degraded the handler does not run.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn ui_admin_mutation_refused_while_degraded() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
@@ -385,25 +417,37 @@ async fn ui_admin_mutation_refused_while_degraded() {
     assert!(fx.alpha.is_circuit_tripped(), "the revive handler ran");
 }
 
+/// A control-plane POST while the log is down is refused before RBAC and the
+/// 409: the answer is 503, as the upgrade note says.
+#[tokio::test]
+async fn control_plane_post_refused_while_degraded() {
+    let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    fx.degrade();
+    let (status, body) = fx.send(ui("POST", GRANTS, &fx.alice(), &grant_body())).await;
+    assert_audit_unavailable_ui(status, &body);
+}
+
 /// E1-T13c (UI): admit passes, the record append fails, the result is withheld.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn failed_admin_record_withholds_ui_result() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
     fx.log.fail_next_append_for_test();
-    let (status, body) = fx.send(ui("POST", PREVIEW, &fx.alice(), &preview_body())).await;
+    let (status, body) = fx
+        .send(ui("POST", PREVIEW, &fx.alice(), &preview_body()))
+        .await;
     assert_audit_unavailable_ui(status, &body);
     assert!(body.get("tools").is_none(), "{body}");
 }
 
-/// E1-T13d: under BestEffort a failed record append is counted and both
+/// E1-T13d: under `BestEffort` a failed record append is counted and both
 /// surfaces answer as usual.
-#[cfg(feature = "webui")]
 #[tokio::test]
 async fn best_effort_admin_record_failure_does_not_refuse() {
     let fx = audited(AuditFailurePolicy::BestEffort, &[]).await;
     fx.log.set_append_failure_for_test(true);
-    let (status, body) = fx.send(ui("POST", PREVIEW, &fx.alice(), &preview_body())).await;
+    let (status, body) = fx
+        .send(ui("POST", PREVIEW, &fx.alice(), &preview_body()))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, body) = fx.revive(&fx.alice()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
