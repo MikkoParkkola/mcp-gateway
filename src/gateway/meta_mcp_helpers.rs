@@ -192,22 +192,26 @@ pub(crate) fn discovery_extensions() -> std::collections::HashMap<String, Value>
 /// constant: a test can perturb `extensions` here and observe the wire value
 /// change, which is the only way to prove the populate is wired rather than
 /// left at its `Default` (design test plan §5.1, §4.1).
+/// Only `tools.listChanged` can be true, and only on [`ChangeFeed::Http`] (F24).
 pub(crate) fn build_server_capabilities(
     extensions: std::collections::HashMap<String, Value>,
+    feed: super::ChangeFeed,
 ) -> ServerCapabilities {
     ServerCapabilities {
         tools: Some(ToolsCapability {
-            list_changed: true,
+            list_changed: feed == super::ChangeFeed::Http,
             #[cfg(feature = "spec-preview")]
             filtering: Some(true),
             #[cfg(feature = "spec-preview")]
             resolve: Some(true),
         }),
         resources: Some(ResourcesCapability {
-            subscribe: true,
-            list_changed: true,
+            subscribe: false,
+            list_changed: false,
         }),
-        prompts: Some(PromptsCapability { list_changed: true }),
+        prompts: Some(PromptsCapability {
+            list_changed: false,
+        }),
         logging: Some(std::collections::HashMap::new()),
         extensions,
         ..Default::default()
@@ -222,10 +226,11 @@ pub(crate) fn build_initialize_result(
     negotiated_version: &str,
     instructions: &str,
     era: crate::protocol::meta::Era,
+    feed: super::ChangeFeed,
 ) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
-        capabilities: build_server_capabilities(initialize_extensions(era)),
+        capabilities: build_server_capabilities(initialize_extensions(era), feed),
         server_info: Info {
             name: "mcp-gateway".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),

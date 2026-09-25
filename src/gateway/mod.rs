@@ -3,6 +3,8 @@
 //! Gateway server implementation
 
 pub mod auth;
+mod change_feed;
+pub use change_feed::ChangeFeed;
 pub(crate) mod authz;
 pub mod destructive_confirmation;
 mod differential;

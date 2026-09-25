@@ -217,15 +217,14 @@ fn ac_discover_3_initialize_result_is_unchanged() {
     // the wrong behaviour and never notices.
     for client_version in ["2025-11-25", "2025-06-18"] {
         let m = meta();
+        m.set_change_feed(mcp_gateway::gateway::ChangeFeed::Http);
         let params = serde_json::json!({
             "protocolVersion": client_version,
             "capabilities": {},
             "clientInfo": { "name": "ac-discover-3", "version": "1.0.0" }
         });
 
-        // WHEN: it sends `initialize` exactly as it did against 3.5.0
-        // Legacy: these params carry no `_meta`, which is exactly the peer whose
-        // handshake this criterion pins byte-for-byte.
+        // WHEN: it sends `initialize` exactly as against 3.5.0 (legacy: no `_meta`)
         let response = m.handle_initialize(
             RequestId::Number(1),
             Some(&params),
@@ -236,7 +235,7 @@ fn ac_discover_3_initialize_result_is_unchanged() {
                 mcp_gateway::gateway::test_helpers::CallerStanding::Admin,
             ),
         );
-        let result = response
+        let mut result = response
             .result
             .expect("initialize must return a result, as it did in 3.5.0");
 
@@ -274,22 +273,23 @@ fn ac_discover_3_initialize_result_is_unchanged() {
                  catching it."
             )
         });
-        let golden: Value = serde_json::from_str(&golden_raw).expect("golden must be valid JSON");
+        let mut golden: Value =
+            serde_json::from_str(&golden_raw).expect("golden must be valid JSON");
 
-        // The crate version is the one field that legitimately moves without the
-        // handshake changing, so it is asserted rather than frozen: a release
-        // bump must not red a golden that exists to catch discovery leaking into
-        // the result.
+        // The crate version legitimately moves without the handshake changing, so
+        // it is asserted rather than frozen: a release bump must not red this.
         assert_eq!(
             result["serverInfo"]["version"],
             Value::from(env!("CARGO_PKG_VERSION")),
             "initialize must report the crate's own version"
         );
-        let mut result = result;
-        let mut golden = golden;
         for doc in [&mut result, &mut golden] {
             doc["serverInfo"]["version"] = Value::Null;
         }
+        // UPGRADING-4.0 item 52 (F24), applied to the untouched 3.5.0 capture.
+        golden["capabilities"]["resources"]["subscribe"] = Value::Bool(false);
+        golden["capabilities"]["resources"]["listChanged"] = Value::Bool(false);
+        golden["capabilities"]["prompts"]["listChanged"] = Value::Bool(false);
 
         assert_eq!(
             result, golden,

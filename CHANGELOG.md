@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
+  `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
+  They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
+  `tools.listChanged` is announced for every tool-set change over HTTP (config reload,
+  capability reload, admin UI, revive) and is `false` over stdio. See UPGRADING-4.0 item 52.
+
 - **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
   discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
   is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.

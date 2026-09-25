@@ -64,6 +64,7 @@ upgrading a running deployment.
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
+| 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1063,6 +1064,26 @@ tool.
   or not. Their steps are synthesized and carry no token. Call each tool with its own token.
 - **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
   other methods are forwarded without an attestation check.
+
+## 52. The gateway advertises only the change notifications it delivers
+
+3.x advertised `resources.subscribe`, `resources.listChanged` and `prompts.listChanged` as
+`true`, but never sent `notifications/resources/updated`, `resources/list_changed` or
+`prompts/list_changed`. A client that subscribed waited forever and got no error. Now:
+
+- `initialize` and `server/discover` report all three as `false`, on both protocol eras.
+- `tools.listChanged` stays `true` over HTTP. Every change to the tool set now sends
+  `notifications/tools/list_changed` once to the GET stream and to `subscriptions/listen`:
+  a backend added, modified or removed (config reload or the admin UI), a capability file
+  reloaded, a backend revived. Before, only the admin UI did.
+- `serve --stdio` reports `tools.listChanged: false`, because it has no channel for an
+  unsolicited notification.
+- **`resources/subscribe` and `resources/unsubscribe` are refused** with `-32601`, "this
+  gateway does not deliver resources/updated", instead of being forwarded to the backend.
+  To see changes, poll `resources/list` or `resources/read`.
+
+The legacy `initialize` result differs from 3.5.0 in exactly those three flags (and, over
+stdio, `tools.listChanged`).
 
 ## After upgrading
 

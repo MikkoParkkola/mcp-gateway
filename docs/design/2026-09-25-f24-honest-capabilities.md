@@ -47,8 +47,9 @@ a promise not to push `resources/updated`, which is exactly what is delivered no
 - `BackendRegistry::register` (on success) and `remove` (when an entry went) send on it. Every
   membership change goes through those two methods, including the UI's add and remove, which
   write the config and reload, so any new mutation path announces for free.
-- The capability watcher sends after a reload that succeeded. Revive sends too.
-- The UI's three direct calls are removed, so nothing announces twice.
+- The capability watcher sends after a reload that succeeded.
+- The UI's add and remove drop their direct calls, so nothing announces twice. Revive keeps
+  its own call, because it changes no registry entry.
 - HTTP `tools.listChanged: true` therefore covers gateway membership, capability-file reloads
   and revive. A backend's own `notifications/tools/list_changed` stays dropped, as today;
   within a backend, the gateway's listing is refreshed from its metadata cache.
@@ -61,7 +62,7 @@ drives all four surfaces and compares against a flag set written literally in th
 never read from production. Every flag a surface reports as true needs a delivery probe in
 the same test file, one that fires the producer and sees the notification arrive. A flag
 with no probe fails with "advertised, no delivery probe". Probes: reload add, reload remove,
-reload modify, revive and capability reload. Each must reach a `subscriptions/listen`
+reload modify and capability reload. Revive's direct announce is unchanged. Each must reach a `subscriptions/listen`
 listener and a GET-stream session exactly once per action. The golden delta is derived from
 the same literal per-surface sets.
 
