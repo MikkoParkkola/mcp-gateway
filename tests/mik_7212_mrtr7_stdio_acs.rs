@@ -191,15 +191,21 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
 /// sets the child's working directory to this same temporary home — so a file
 /// dropped here is found without depending on `HOME` layout at all.
 fn write_config(home: &Path, backend_url: &str) {
-    mcp_gateway::gateway::test_helpers::write_owner_only(
-        home.join("gateway.yaml"),
-        format!(
-            "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
-             error_budget:\n  window_size: 100000\n  min_samples: 100000\n  capability:\n    \
-             window_size: 100000\n    min_samples: 100000\n"
-        ),
-    )
-    .expect("write gateway.yaml");
+    let yaml = format!(
+        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
+         error_budget:\n  window_size: 100000\n  min_samples: 100000\n  capability:\n    \
+         window_size: 100000\n    min_samples: 100000\n"
+    );
+    // The top-level config ignores keys it does not know, so a misnested
+    // budget would load silently and bring the cascade back. Fail here instead.
+    let parsed: mcp_gateway::config::Config = serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
+    assert_eq!(
+        (parsed.error_budget.min_samples, parsed.error_budget.capability.min_samples),
+        (Some(100_000), Some(100_000)),
+        "the error budget did not bind where the child reads it"
+    );
+    mcp_gateway::gateway::test_helpers::write_owner_only(home.join("gateway.yaml"), yaml)
+        .expect("write gateway.yaml");
 }
 
 fn initialize_request(id: i64) -> Value {
@@ -785,7 +791,10 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
 /// the handshake's own permit (see row 7b's doc): a count outside that window
 /// is a refusal the cap did not cause, or excess the cap let through.
 fn assert_busy_matches_excess(refused: usize, over_cap: i64, lines: &[String]) {
-    let over_cap = usize::try_from(over_cap).expect("the over-cap group is positive");
+    let over_cap = usize::try_from(over_cap)
+        .ok()
+        .filter(|n| *n >= 1)
+        .expect("the over-cap group is positive");
     eprintln!("7b server-busy refusals: {refused} of {over_cap} over the cap");
     assert!(
         (over_cap - 1..=over_cap).contains(&refused),
@@ -1038,7 +1047,7 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            prompts_in(seen).len() >= wanted
+            prompts_in(seen).len() + tool_refused_ids(seen).len() >= wanted
         })
         .await;
     let frames = frames_lenient(&lines);
