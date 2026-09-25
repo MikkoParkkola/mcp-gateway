@@ -421,3 +421,24 @@ async fn refused_reload_keeps_the_running_config() {
         .expect("the corrected config reloads");
     assert_eq!(live.get().backends["keep"].description, "after");
 }
+
+/// C8: `server.request_timeout` was never enforced; a config still carrying it
+/// must fail to load and point at the per-backend `timeout` that does bound calls.
+#[test]
+fn removed_request_timeout_is_refused() {
+    let message = refusal(
+        "server:\n  request_timeout: 30s\n",
+        &["server.request_timeout"],
+    );
+    for part in [
+        "removed in 4.0",
+        "never enforced",
+        "per-backend `timeout`",
+        "Remove server.request_timeout",
+    ] {
+        assert!(
+            message.contains(part),
+            "retired request_timeout refusal must say `{part}`; got: {message}"
+        );
+    }
+}
