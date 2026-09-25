@@ -765,7 +765,8 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 - **A disabled backend is not expanded.** Its `${VAR}` text stays as written, so a variable only
   a disabled backend needs does not stop startup. Enabling it from the admin panel writes the
   file and reloads; while the variable is unset that reload fails, names the variable, and the
-  running config is kept.
+  running config is kept. The file already says `enabled: true`, so set the variable (or disable
+  the backend again) before the next restart, which would otherwise refuse to start.
 - **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
   `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
   `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',

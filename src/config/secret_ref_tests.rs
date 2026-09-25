@@ -97,6 +97,12 @@ fn empty_env_bearer_refused() {
         msg.contains("auth.bearer_token"),
         "error must name the field: {msg}"
     );
+    // The variable is what the operator has to fix; a bare "field is empty"
+    // (the literal-empty check) would hide which one.
+    assert!(
+        msg.contains("MCP_GW_C4_EMPTY"),
+        "error must name the variable: {msg}"
+    );
 }
 
 #[test]
