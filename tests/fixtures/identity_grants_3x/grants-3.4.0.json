@@ -1,0 +1,57 @@
+{
+  "schema_version": "identity_grants.v1",
+  "grants": [
+    {
+      "grant_id": "g-runner",
+      "subject": {
+        "authority": "api_key",
+        "subject": "alice"
+      },
+      "agent": {
+        "exact": "runner"
+      },
+      "capability": "calendar_read",
+      "scope": "read",
+      "owner": {
+        "authority": "api_key",
+        "subject": "alice"
+      },
+      "provenance": "mcp-gateway identity grants grant",
+      "reason": "ci runner"
+    },
+    {
+      "grant_id": "g-bot",
+      "subject": {
+        "authority": "api_key",
+        "subject": "alice"
+      },
+      "agent": {
+        "exact": "build-bot"
+      },
+      "capability": "calendar_read",
+      "scope": "execute",
+      "owner": {
+        "authority": "api_key",
+        "subject": "alice"
+      },
+      "provenance": "mcp-gateway identity grants grant",
+      "reason": "bot"
+    },
+    {
+      "grant_id": "g-any",
+      "subject": {
+        "authority": "api_key",
+        "subject": "alice"
+      },
+      "agent": "any",
+      "capability": "calendar_read",
+      "scope": "execute",
+      "owner": {
+        "authority": "api_key",
+        "subject": "alice"
+      },
+      "provenance": "mcp-gateway identity grants grant",
+      "reason": "any"
+    }
+  ]
+}
