@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # NFR.WORKLOAD.1 bisect predicate. Called by `git bisect run` from inside the
-# dedicated bisect worktree on Spark. Builds the candidate commit's binary and
+# dedicated bisect worktree on bench-host. Builds the candidate commit's binary and
 # measures it INTERLEAVED against the already-built B (3.5.1) binary, on the
 # same port, sharing machine conditions across time -- an absolute threshold
-# against a 4ms margin does not survive Spark drift, so every step reproduces
+# against a 4ms margin does not survive bench-host drift, so every step reproduces
 # the gate's own relative formula locally: bad if candidate p50 > B p50 * 1.05.
 #
 # Exit codes (git bisect semantics):

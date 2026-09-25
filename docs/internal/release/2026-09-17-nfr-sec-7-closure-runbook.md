@@ -35,7 +35,7 @@ half is not a code gap. Every build that has been probed carries the guard:
 | Probed | Build | Result |
 | --- | --- | --- |
 | 2026-09-11 | built from the release tree, `127.0.0.1:39466` | both probes refused 403, legitimate 200, exit 0 |
-| 2026-09-13 | release build of `bd1adbb4` (`origin/main`), spark loopback | `2 probed, 1 uncovered, 0 failing`, exit 0 |
+| 2026-09-13 | release build of `bd1adbb4` (`origin/main`), bench-host loopback | `2 probed, 1 uncovered, 0 failing`, exit 0 |
 | 2026-09-17 | **the listening install**, `127.0.0.1:39401` | `2 probed, 1 uncovered, 2 failing` |
 
 The listening install still answers a foreign `Origin` and a foreign `Host` with the
@@ -46,14 +46,14 @@ that the listening process runs a build that has it.
 
 ## What is actually deployed
 
-`launchctl` label `com.claude.mcp-gateway`, PID 1908, plist at
-`~/Library/LaunchAgents/com.claude.mcp-gateway.plist`. The plist pins no version; it
+`launchctl` label `com.example.mcp-gateway`, PID 1908, plist at
+`~/Library/LaunchAgents/com.example.mcp-gateway.plist`. The plist pins no version; it
 execs a wrapper, and the wrapper pins the version in two lines:
 
 ```zsh
-# /Users/mikko/.local/bin/start-mcp-gateway
-typeset -r gateway_binary="/Users/mikko/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway"
-typeset -r gateway_config="/Users/mikko/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml"
+# /Users/<redacted>/.local/bin/start-mcp-gateway
+typeset -r gateway_binary="/Users/<redacted>/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway"
+typeset -r gateway_config="/Users/<redacted>/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml"
 ```
 
 Those two lines are the whole deployment control point. Note that `~/.local/bin/mcp-gateway`
@@ -83,7 +83,7 @@ ones. Steps 5-6 are the operator's.
      without applying them.
    A naive copy without this step risks breaking 33 backends on restart.
 5. Repoint the two `typeset -r` lines in `~/.local/bin/start-mcp-gateway`.
-6. `launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway`
+6. `launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway`
 
 ## Acceptance
 

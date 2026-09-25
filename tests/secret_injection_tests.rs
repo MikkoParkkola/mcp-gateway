@@ -251,8 +251,8 @@ fn inject_overwrite_protection() {
 }
 
 #[test]
-fn inject_empty_resolved_value_skipped() {
-    // Missing env var resolves to empty string — should be skipped
+fn inject_unset_env_value_errors() {
+    // C4: an unset {env.X} fails the call instead of resolving to "" and being skipped
     let rules = HashMap::from([(
         "backend".to_string(),
         vec![CredentialRule {
@@ -267,15 +267,12 @@ fn inject_empty_resolved_value_skipped() {
 
     let injector = SecretInjector::new(rules);
     let args = json!({"query": "test"});
-    let result = injector.inject("backend", "search", args).unwrap();
-
-    assert_eq!(result.injected_count, 0);
+    let err = injector
+        .inject("backend", "search", args)
+        .expect_err("an unset credential must fail the call");
     assert!(
-        !result
-            .arguments
-            .as_object()
-            .unwrap()
-            .contains_key("api_key")
+        err.to_string().contains("NONEXISTENT_VAR_SECRET_INJ_88"),
+        "{err}"
     );
 }
 

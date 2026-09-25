@@ -164,7 +164,7 @@ line in the affected design doc. A correction that is findable beats a history t
 repository's hooks live in a `.git` directory shared by every worktree *including the operator's
 own checkout* — a guard that misfires there blocks their commits, not just ours. Installing one
 is the operator's call and has been put to them. The predicate is checked rather than assumed:
-`git rev-parse --git-common-dir` from this worktree returns `/Users/mikko/github/mcp-gateway/.git`
+`git rev-parse --git-common-dir` from this worktree returns `<repos>/mcp-gateway/.git`
 (V, 2026-09-06), which is the same directory the operator's own checkout uses, hooks included.
 
 Put on 2026-09-06 in the operator's own session, as a direct question with three branches — block
@@ -322,7 +322,7 @@ reads later as a question nobody asked.
    criterion no longer blocks. What that waiver bought and cost is set out below.
 4. **Do the performance numbers gate the release?** **They were run** on 2026-09-03, which
    answers the question the useful way: `NFR.PERF.2` states its own consequence — without a
-   number the change does not ship — and the full-scope instruction scheduled the Spark job
+   number the change does not ship — and the full-scope instruction scheduled the bench-host job
    rather than arguing about whether its absence blocks. The job closed `NFR.PERF.2` and left
    `NFR.PERF.1` PARTIAL for want of a P50 and a P99 the harness cannot produce. **Ruled on
    2026-09-05**: that gap does not gate either. 4.0.0 ships on the headroom argument instead —
@@ -402,7 +402,7 @@ who owns the work.
 | B era detection | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
 | C MIK-7272 revision surface | `surface-c`, design first |
 | D response-cache keying | `cache-34` |
-| E performance vs 3.5.0 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist. **2026-09-06**: the operator's 2026-09-05 ruling lifted `NFR.PERF.1`'s blocking flag on the headroom argument (worst shared case +6.07% against a 10% P99 bound); the row stays PARTIAL but no longer gates the release, and the cluster is closed — see its removal note above. **2026-09-15 — that lift is SUPERSEDED**: `0a33b683` marked the headroom ruling superseded once the regression was re-measured against the branch, and `b329ad9b` set the blocking cell back to `yes`. `NFR.PERF.1` gates the release again and now waits on a fresh release-owner decision, which the criteria row states in its own last sentence **2026-09-16 — closed again, and this time not on a headroom argument.** The operator ruled the residual accepted with the carrier named: the claim rests on the 56 criterion micro-benchmarks measured on `spark` 2026-09-03, the release notes must say so, and the end-to-end harness was offered and declined as 4.1.0 work. `NFR.PERF.1` is non-blocking and cluster N is removed from the table above. **2026-09-21 — residual recorded against the accepted carrier, no status changed.** The 56 criterion micro-benchmarks named in the 2026-09-16 ruling (`benches/gateway_benchmarks.rs`, `criterion` 0.8) report a bootstrap interval about a **mean** of in-process component work; `NFR.PERF.1` names a P50 and a P99, which are order statistics. The carrier cannot express the quantity the criterion asks for at any sample size — structural, not pending. The nearest end-to-end evidence is a 52-rep counterbalanced paired run on `spark` 2026-09-21: P50 ratio 1.0883, 95% interval [1.0599, 1.1173], wholly above the 1.05 budget, ordering bias excluded (forward 1.0874, reversed 1.0911) — but measured against **`v3.5.1`**, not the `v3.5.0` this criterion names, so it evidences a regression and is not a verdict here. Recorded on the criteria row; cluster E stays closed and the blocking cell is untouched. |
+| E performance vs 3.5.0 | run on `bench-host` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist. **2026-09-06**: the operator's 2026-09-05 ruling lifted `NFR.PERF.1`'s blocking flag on the headroom argument (worst shared case +6.07% against a 10% P99 bound); the row stays PARTIAL but no longer gates the release, and the cluster is closed — see its removal note above. **2026-09-15 — that lift is SUPERSEDED**: `0a33b683` marked the headroom ruling superseded once the regression was re-measured against the branch, and `b329ad9b` set the blocking cell back to `yes`. `NFR.PERF.1` gates the release again and now waits on a fresh release-owner decision, which the criteria row states in its own last sentence **2026-09-16 — closed again, and this time not on a headroom argument.** The operator ruled the residual accepted with the carrier named: the claim rests on the 56 criterion micro-benchmarks measured on `bench-host` 2026-09-03, the release notes must say so, and the end-to-end harness was offered and declined as 4.1.0 work. `NFR.PERF.1` is non-blocking and cluster N is removed from the table above. **2026-09-21 — residual recorded against the accepted carrier, no status changed.** The 56 criterion micro-benchmarks named in the 2026-09-16 ruling (`benches/gateway_benchmarks.rs`, `criterion` 0.8) report a bootstrap interval about a **mean** of in-process component work; `NFR.PERF.1` names a P50 and a P99, which are order statistics. The carrier cannot express the quantity the criterion asks for at any sample size — structural, not pending. The nearest end-to-end evidence is a 52-rep counterbalanced paired run on `bench-host` 2026-09-21: P50 ratio 1.0883, 95% interval [1.0599, 1.1173], wholly above the 1.05 budget, ordering bias excluded (forward 1.0874, reversed 1.0911) — but measured against **`v3.5.1`**, not the `v3.5.0` this criterion names, so it evidences a regression and is not a verdict here. Recorded on the criteria row; cluster E stays closed and the blocking cell is untouched. |
 | F compat and surface facts | the operator settled the surface questions on 2026-09-02: `NFR.COMPAT.1` became a code change and `NFR.COMPAT.3` was waived on the record. What is left is work, not a decision — the default flip and the dual-role matrix. **2026-09-06**: the default flip is done and `NFR.OBS.5` is met; the dual-role matrix and `NFR.COMPAT.1` are what remain, plus a new hard release gate on the `MIK-7212.MRTR.7a`/`7b` bridge, which the flip landed ahead of |
 | G stdio dispatch path | unowned. `NFR.OBS.1` and `NFR.OBS.2` have both closed and left the cluster; what remains is `MIK-7246.CONFIRM.1a`, whose code is in the tree and which waits on the dual-vendor review verdict, not on an agent |
 | K deployed-build control drift | unowned. Neither half is protocol work: one is a deployment, the other a drift-check script that exists nowhere in the tree |
@@ -440,7 +440,7 @@ it is not describing work that is happening.
 | worktrees belonging to a named owner above | none |
 | remote-tracking branches for a named owner | none — every `origin/*` ref but this note's own is 2 days old |
 | uncommitted work in the main checkout | one file, `CLAUDE.md`, unrelated to any cluster |
-| rollup rows marked met since the table was written | zero — `count-release-criteria.py --check` reported 53 blocking when this table was written; it reports 44 since the Spark run closed `NFR.PERF.2` on 2026-09-03 and the ledger splits landed |
+| rollup rows marked met since the table was written | zero — `count-release-criteria.py --check` reported 53 blocking when this table was written; it reports 44 since the bench-host run closed `NFR.PERF.2` on 2026-09-03 and the ledger splits landed |
 
 No local branch, no remote branch, no worktree and no commit exists for `envelope-a`,
 `era-r4-repair`, `era-probe`, `surface-c`, `cache-34` or `perf-e`. Two agent worktrees do exist —
@@ -1229,7 +1229,7 @@ commit could not be reviewed inside the other's range.
 
 Payload: `f14e6954~1..364f4373`, src and tests, with the acceptance binary's measured state
 quoted. `kimi-review` returned **SHIP**, zero FINDINGs, three IMPROVEMENTs. Output at
-`~/.claude/data/reviews/runs/synthetic-20260911T145637Z-898.md`.
+`<review-archive>/runs/synthetic-20260911T145637Z-898.md`.
 
 The reviewer also reported that the two `Box::pin` call sites the payload asked it to
 examine (`src/gateway/server/mod.rs:1675`, `:1696`) were **not in the diff it was given**.
@@ -1308,7 +1308,7 @@ the acceptance evidence already supports, and one deploy.
 ### Pass two's verdict, and the one thing it opens
 
 `kimi-review` returned **SHIP** on `0a477a4b`, output at
-`~/.claude/data/reviews/runs/synthetic-20260911T150153Z-15208.md`. Two of the three
+`<review-archive>/runs/synthetic-20260911T150153Z-15208.md`. Two of the three
 questions came back clean and both were checked against the tree rather than taken on the
 reviewer's word. The `Box::pin` sites are correct: one heap allocation per dispatch, in
 exchange for not carrying a tens-of-kilobyte future on the reader loop's frame, and the
@@ -1355,7 +1355,7 @@ independent non-Claude reviewers, so neither pass was closed by the paragraphs a
 `grok-review` is the second half, and it did not agree.
 
 **Pass one, `grok-review`: SHIP-WITH-FIXES**, output at
-`~/.claude/data/reviews/runs/grok-20260911T145630Z-290.md`. One FINDING, gated NOW:
+`<review-archive>/runs/grok-20260911T145630Z-290.md`. One FINDING, gated NOW:
 `set_request_log_level` returned early when the declaration was absent, leaving whatever the
 previous caller wrote in the task-local slot. Verified at source before acting on it, and the
 path is real rather than theoretical:
@@ -1376,7 +1376,7 @@ every other outcome, with a test that performs the two sequential sets inside on
 in-flight list, so the repair was taken here rather than handed over.
 
 **Pass two, `grok-review`: SHIP**, output at
-`~/.claude/data/reviews/runs/grok-20260911T150156Z-15632.md`. It reached the registration
+`<review-archive>/runs/grok-20260911T150156Z-15632.md`. It reached the registration
 drain gap independently and graded it HIGH rather than MEDIUM — but it also supplied the
 reachability the section above left open: the gap **cannot fire on the sequential `run_stdio`
 loop this change serves**, because nothing there drops the future. The trigger it names is a
@@ -1459,7 +1459,7 @@ fully merged router with no enabling flag, and `OriginPolicy::from_live`
 (`src/gateway/router/origin_guard.rs:76`) reads configuration only to decide *which* origins
 are allowed — there is no setting that switches the gate off. That matters because the probed
 instance was not running on the written YAML alone: its startup log shows 196 capabilities
-loaded from `~/github/mcp-gateway-private/capabilities`, a path the probe config never named,
+loaded from a private checkout under `$HOME/github`, a path the probe config never named,
 so an ambient config layer was in force during the measurement. It could not have enabled or
 disabled the guard, because nothing can. What remains is that the install on 39401 has not
 been rebuilt from it, and rebuilding it means restarting the gateway that other sessions are

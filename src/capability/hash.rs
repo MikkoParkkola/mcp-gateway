@@ -165,11 +165,11 @@ mod tests {
             "  primary:\r\n",
             "    service: rest\r\n",
             "    config:\r\n",
-            "      endpoint: C:\\Users\\mikko\\capabilities\\foo.yaml\r\n"
+            "      endpoint: C:\\Users\\alice\\capabilities\\foo.yaml\r\n"
         );
         let hash = compute_capability_hash(body);
         let pinned = rewrite_with_pin(body, &hash);
         assert_eq!(compute_capability_hash(&pinned), hash);
-        assert!(pinned.contains(r"C:\Users\mikko\capabilities\foo.yaml"));
+        assert!(pinned.contains(r"C:\Users\alice\capabilities\foo.yaml"));
     }
 }

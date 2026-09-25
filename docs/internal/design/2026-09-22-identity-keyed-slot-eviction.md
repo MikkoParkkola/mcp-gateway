@@ -18,7 +18,7 @@ criterion needs both, and a reviewer grading it on either in isolation is gradin
 Evidence markers: **V** verified at the cited line, **I** inferred, **A** assumption.
 
 **Branch caveat.** Every line number below was verified on `design/live-identity-grant-reload`
-(worktree `/Users/mikko/github/.worktrees/relcheck`, HEAD `654d7b9d`). The reasoning is
+(worktree `<worktrees>/relcheck`, HEAD `654d7b9d`). The reasoning is
 branch-independent; the line numbers are not. Re-check them against the release line before
 grading.
 

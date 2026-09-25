@@ -142,7 +142,7 @@ message: a detached worktree at `14744d72` with a scratch `CARGO_TARGET_DIR` run
 
 **Correction, 18:20 — that commit was not one push away, and the number above was
 measured on the wrong base.** `fix/mrtr2-continuation-handle` as checked out in
-`/Users/mikko/github/.worktrees/mcp-2026-protocol` is **70 commits behind origin** and one
+`<worktrees>/mcp-2026-protocol` is **70 commits behind origin** and one
 ahead: `git rev-list --left-right --count origin/fix/mrtr2-continuation-handle...fix/mrtr2-continuation-handle`
 returns `70	1`, and `git merge-base --is-ancestor origin/fix/mrtr2-continuation-handle 14744d72`
 is false. Pushing that branch tip is a non-fast-forward that would drop 70 commits of
@@ -380,7 +380,7 @@ Two numeric gates carry **stale figures, not passes**:
   This is an open blocker wearing an old date.
 - **Mutation ≥75% on new code** passed at `edfd020a` on `src/protocol` only. No
   figure exists for the rest of the changed surface.
-- **`NFR.PERF.1`** is PARTIAL: latency measured on `spark` 2026-09-03, `v3.5.0`
+- **`NFR.PERF.1`** is PARTIAL: latency measured on `bench-host` 2026-09-03, `v3.5.0`
   (`32f135a6`) against a head that predates the merge. Needs a re-run at the
   release head.
 
@@ -462,8 +462,8 @@ worktree mtime movement — adopt the row rather than leaving it unowned.
 **Closes the 5th.**
 
 **5 — Re-measure the two stale numbers at the release head.** Coverage (below
-floor at `edfd020a`) and `NFR.PERF.1` (spark, 2026-09-03, against `32f135a6`).
-Both belong on `spark`. Coverage below the floor is a real blocker whose staleness
+floor at `edfd020a`) and `NFR.PERF.1` (bench-host, 2026-09-03, against `32f135a6`).
+Both belong on `bench-host`. Coverage below the floor is a real blocker whose staleness
 is the only reason it is not on the blocking list.
 
 **6 — `MIK-7256`'s 17 untested ACs.** Write them. Sized M in the triage.
@@ -582,7 +582,7 @@ authority and says so of itself, which is the only version of this fix that does
 go stale the same way.
 
 **Item 5 — coverage: running.** `cargo llvm-cov --all-features --no-fail-fast
---summary-only --json` is measuring on spark against a dedicated worktree at
+--summary-only --json` is measuring on bench-host against a dedicated worktree at
 `origin/main`, so the figure lands at a named commit rather than at whatever a
 shared checkout happened to hold. The operator's install and the peer checkouts on
 that host are untouched.
