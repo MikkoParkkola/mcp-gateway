@@ -1,4 +1,4 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- if or .Values.networkPolicy.enabled (eq (include "mcp-gateway.cleartextHttp" .) "cluster_internal") }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

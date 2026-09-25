@@ -59,8 +59,43 @@ fn service_host(config: &Config) -> Option<String> {
 /// does not answer it: that asserts authentication happens upstream, not
 /// encryption.
 pub(super) fn cleartext_credential_refusal(config: &Config) -> Option<String> {
-    let _ = config;
-    None
+    let exposure = network_exposure(config)?;
+    let credential = if config.auth.enabled {
+        "authentication is enabled"
+    } else if config.agent_auth.enabled {
+        "agent_auth is enabled"
+    } else if config.key_server.enabled {
+        "the key server is enabled"
+    } else {
+        return None;
+    };
+    if config.mtls.enabled {
+        return None;
+    }
+    match config.server.cleartext_http {
+        CleartextHttp::Refuse => {}
+        CleartextHttp::TlsTerminatedUpstream | CleartextHttp::HostLocalPublish => return None,
+        CleartextHttp::ClusterInternal => {
+            if service_host(config).is_some() {
+                return None;
+            }
+            let named = public_url_host(config)
+                .map_or_else(|| "it is unset".to_string(), |h| format!("it names {h}"));
+            return Some(format!(
+                "refusing to serve HTTP at {exposure}: server.cleartext_http = cluster_internal \
+                 needs server.public_url to name this gateway's Kubernetes Service \
+                 (<svc>.<ns>.svc, optionally followed by .<server.cluster_domain>), and {named}. \
+                 A caller reaching it by another name comes through something that should \
+                 terminate TLS: set server.cleartext_http = tls_terminated_upstream."
+            ));
+        }
+    }
+    Some(format!(
+        "refusing to serve HTTP at {exposure}: {credential}, so bearer tokens and API keys \
+         would cross the network in cleartext. Enable mtls (TLS on this listener), or set \
+         server.cleartext_http = tls_terminated_upstream if a proxy terminates TLS in front \
+         of this gateway."
+    ))
 }
 
 /// The WARN every start logs while `server.cleartext_http` is not `refuse`.

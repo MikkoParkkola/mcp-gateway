@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29 or 30 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30 or 36 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -13,8 +13,10 @@ changes to the license and to a removed CLI surface rather than to running behav
 7 and 8 are decided per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
+Item 36 refuses the start with its own error, which names the setting, so a notice would
+only repeat it.
 
-**Items 2, 8, 12, 13, 27, 29 and 30 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30 and 36 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 36 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -51,6 +53,7 @@ upgrading a running deployment.
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
+| 36 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -396,6 +399,9 @@ storage exists.
 The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
 startup). That is tracked separately.
+
+Both still serve the bearer token over plain HTTP inside the cluster. Item 36 makes that a
+declared choice, `cleartext_http: cluster_internal`, rather than a silent one.
 ## 22. The governance store location is configurable
 
 New `control_plane.store_dir`. When it is unset, the store stays at
@@ -688,6 +694,52 @@ restart, not on a config reload.
   the chart no longer renders those annotations, so a stock install is not scraped to `up=0`.
 - **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
   from the optional Secret `mcp-gateway-metrics` (key `token`).
+
+## 36. A credential over plain HTTP on a network bind refuses the start
+
+In 3.x a gateway with `auth.enabled` bound to `0.0.0.0` served bearer tokens and API keys over
+plain HTTP without a word. It now refuses to serve when all of these hold:
+
+- the listener is reachable from the network: a non-loopback bind, or a `server.public_url`
+  whose host is not loopback;
+- it accepts a credential over HTTP: `auth.enabled`, `agent_auth.enabled` or
+  `key_server.enabled` (the key server takes OIDC ID tokens on this listener);
+- `mtls.enabled` is off, so the listener is not TLS;
+- `server.cleartext_http` is `refuse`, the default.
+
+The error names the exposure and both fixes. Loopback binds with no declared `public_url` are
+unaffected, and so is a gateway with no credential (the open-tools refusal covers that one).
+`server.allow_unauthenticated_network_bind` does not answer it: that says authentication happens
+in front of the gateway, not encryption. The check runs when `serve` starts, because `--host` is
+applied after the config loads, and on every reload: a reload that adds a non-loopback
+`public_url`, or removes the Service-name one `cluster_internal` needs, is refused the same way.
+
+`server.cleartext_http` names who protects the traffic instead. Every value but `refuse` is logged
+at WARN on every start.
+
+- **`tls_terminated_upstream`**: a reverse proxy, ingress or tunnel terminates TLS in front of
+  the gateway. Honest only if nothing reaches the plain-HTTP port except that proxy.
+- **`cluster_internal`**: callers reach the pod only over the cluster network, by its Service
+  name. Accepted only when `server.public_url`'s host is `<svc>.<ns>.svc` or
+  `<svc>.<ns>.svc.<cluster domain>`, whole labels, where the cluster domain is
+  `server.cluster_domain` (default `cluster.local`). An ingress hostname is refused and pointed
+  at `tls_terminated_upstream`.
+- **`host_local_publish`**: a container binds `0.0.0.0` and the host publishes the port on
+  loopback only, as `deploy/single-node/docker-compose.yaml` does. Honest only while every
+  publish is `127.0.0.1:`.
+
+The shipped deployments keep starting (item 21):
+
+- **Helm chart:** credential mode renders `server.cleartext_http` from the new value
+  `server.cleartextHttp`, default `cluster_internal`, and then always renders the chart's
+  NetworkPolicy. The chart fails to render when `cluster_internal` meets a `service.type` other
+  than `ClusterIP` or a `config.server.public_url` that is not a Service name; set
+  `server.cleartextHttp=tls_terminated_upstream` when an ingress terminates TLS in front of the
+  pod. Mesh mode accepts no credential and renders no value.
+- **enterprise-alpha:** `base/configmap.yaml` sets `cleartext_http: cluster_internal` beside its
+  `public_url`. Change both together if an ingress fronts the pod.
+- **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
+  publish.
 
 ## After upgrading
 

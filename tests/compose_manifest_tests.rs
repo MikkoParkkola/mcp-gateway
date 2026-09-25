@@ -35,3 +35,24 @@ fn the_compose_service_declares_the_name_clients_dial() {
         "the declared name must be the one the published port answers on, got {public_url}"
     );
 }
+
+/// C3: `init` writes authentication on, so the container's 0.0.0.0 bind carries
+/// a credential over plain HTTP. Only the loopback publish keeps it off the
+/// network, which is what `host_local_publish` asserts.
+#[test]
+fn the_compose_service_names_its_loopback_publish_as_the_cleartext_boundary() {
+    let compose: Value = serde_yaml::from_str(COMPOSE).expect("compose yaml must parse");
+    let service = &compose["services"]["mcp-gateway"];
+    assert_eq!(
+        service["environment"]["MCP_GATEWAY_SERVER__CLEARTEXT_HTTP"].as_str(),
+        Some("host_local_publish")
+    );
+    let ports = service["ports"].as_sequence().expect("ports is a list");
+    assert!(
+        ports
+            .iter()
+            .filter_map(Value::as_str)
+            .all(|p| p.starts_with("127.0.0.1:")),
+        "host_local_publish is honest only while every publish is loopback: {ports:?}"
+    );
+}

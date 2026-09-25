@@ -67,6 +67,23 @@ auth:
   existingSecret: mcp-gateway-auth
   secretKey: token
 
+# credential mode only. The bearer token crosses the pod's 0.0.0.0 bind in
+# plain HTTP, and the gateway refuses that unless server.cleartext_http names
+# who protects it (UPGRADING-4.0, C3). Rendered as that key:
+#
+#   cluster_internal         (default) callers reach the pod only over the
+#                            cluster network, by its Service name. The chart
+#                            then renders the NetworkPolicy below whatever
+#                            networkPolicy.enabled says, and refuses to render
+#                            a NodePort/LoadBalancer Service or a
+#                            config.server.public_url that is not a Service
+#                            name. Logged at WARN on every start.
+#   tls_terminated_upstream  an ingress or proxy terminates TLS in front of the
+#                            pod. Set this when public_url is an ingress host.
+#   refuse                   no plain HTTP: the pod starts only with mtls on.
+server:
+  cleartextHttp: cluster_internal
+
 # Gateway config rendered into a ConfigMap and mounted read-only.
 config:
   server:
@@ -102,7 +119,10 @@ serviceAccount:
 rbac:
   create: false
 
-# NetworkPolicy is opt-in. When enabled it is WORKLOAD-SCOPED (selects only the
+# NetworkPolicy is opt-in, except that credential mode with
+# server.cleartextHttp: cluster_internal (the default) always renders it: the
+# cluster network is then the trust boundary for the bearer token. It is
+# WORKLOAD-SCOPED (selects only the
 # gateway's own pods) and restrictive: ingress limited to the service port,
 # egress limited to HTTPS + DNS. It is NOT a namespace-wide default-deny — that
 # affects other workloads and is the cluster operator's responsibility.

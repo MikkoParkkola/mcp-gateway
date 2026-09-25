@@ -51,4 +51,22 @@ data:
     {{- if not $cfg.server.public_url }}
     {{- $_ := set $cfg.server "public_url" (printf "http://%s.%s.svc.cluster.local:%v" (include "mcp-gateway.fullname" .) .Release.Namespace .Values.service.port) }}
     {{- end }}
+    {{- /* C3: plain HTTP carrying the bearer token. cluster_internal is honest
+           only while the port stays inside the cluster and callers dial the
+           Service name, so publishing it any other way fails the render. */}}
+    {{- $cleartext := include "mcp-gateway.cleartextHttp" . }}
+    {{- if $cleartext }}
+    {{- $_ := set $cfg.server "cleartext_http" $cleartext }}
+    {{- end }}
+    {{- if eq $cleartext "cluster_internal" }}
+    {{- $fix := "set server.cleartextHttp=tls_terminated_upstream when an ingress or proxy terminates TLS in front of the gateway" }}
+    {{- if ne .Values.service.type "ClusterIP" }}
+    {{- fail (printf "service.type %s publishes the gateway's plain-HTTP port outside the cluster, but server.cleartextHttp is cluster_internal: %s." .Values.service.type $fix) }}
+    {{- end }}
+    {{- $host := regexReplaceAll ":[0-9]+$" (urlParse $cfg.server.public_url).host "" }}
+    {{- $domain := $cfg.server.cluster_domain | default "cluster.local" }}
+    {{- if not (regexMatch (printf "^[^.]+\\.[^.]+\\.svc(\\.%s)?$" (regexQuoteMeta $domain)) $host) }}
+    {{- fail (printf "config.server.public_url host %s is not this gateway's Kubernetes Service name, but server.cleartextHttp is cluster_internal: %s." $host $fix) }}
+    {{- end }}
+    {{- end }}
     {{- toYaml $cfg | nindent 4 }}

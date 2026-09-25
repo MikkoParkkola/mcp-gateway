@@ -61,6 +61,7 @@ sudo chown 1001:1001 gateway.container.yaml
 docker run -d --name mcp-gateway \
   -p 127.0.0.1:39400:39400 \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
+  -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
@@ -71,8 +72,11 @@ docker run -d --name mcp-gateway \
 The container must bind `0.0.0.0` or the published port reaches nothing, and
 the config `init` writes keeps `/mcp` public — a pairing the gateway refuses
 unless `allow_unauthenticated_network_bind` is set. The boundary is the publish
-address: `127.0.0.1:39400` means only this host reaches the port. Publishing on
-`0.0.0.0` instead requires configuring authentication first.
+address: `127.0.0.1:39400` means only this host reaches the port. The same
+boundary is why `server.cleartext_http: host_local_publish` is honest: `init`
+turns authentication on, and its credential crosses the container's `0.0.0.0`
+in plain HTTP, which the gateway otherwise refuses (UPGRADING-4.0 item 36).
+Publishing on `0.0.0.0` instead requires configuring authentication and TLS first.
 
 On Linux, the image runs as UID/GID 1001. Bind-mount an owner-only deployment
 copy that this identity can read; do not change ownership on your working
@@ -100,6 +104,7 @@ services:
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
       MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
+      MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:39400/livez"]
       interval: 30s
@@ -906,6 +911,19 @@ credential, or fronting it with something that authenticates and setting
 a restart would do with the file in front of it, so follow that rather than
 guessing. Set both, then restart — the same start
 that applies the authentication is the one that admits the hostname.
+
+**Then say who encrypts it.** With authentication on, the credential reaches
+this listener in plain HTTP, and a declared tunnel hostname puts that on the
+network. The gateway refuses it unless `mtls` is on or `server.cleartext_http`
+names the protection. A tunnel terminates TLS in front of the gateway, so:
+
+```yaml
+server:
+  public_url: "https://your-tunnel.example.com"
+  cleartext_http: tls_terminated_upstream
+```
+
+It is logged at WARN on every start. See UPGRADING-4.0 item 36.
 
 ### Managing the gateway from your MCP client
 
