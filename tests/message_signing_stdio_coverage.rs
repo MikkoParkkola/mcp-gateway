@@ -242,8 +242,11 @@ async fn stdio_enabled_optional_nonce_omitted_is_signed() {
 }
 
 fn write_yaml(path: &Path, config: &Value) {
-    std::fs::write(path, serde_yaml::to_string(config).expect("config YAML"))
-        .expect("write gateway config");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        path,
+        serde_yaml::to_string(config).expect("config YAML"),
+    )
+    .expect("write gateway config");
 }
 
 fn backend_result() -> Value {

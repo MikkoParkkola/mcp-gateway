@@ -7,6 +7,13 @@ services:
     ports:
       - "127.0.0.1:39400:39400"
     volumes:
+      # The gateway runs as UID 1001 and refuses a config other users can
+      # read (UPGRADING-4.0 item 35). The rule: no world bit, no group write,
+      # and group read only on a file UID 1001 does NOT own. Before `up`:
+      #   chmod 600 gateway.yaml && sudo chown 1001 gateway.yaml
+      # This works for every host user. Keeping your own ownership with
+      #   chmod 640 gateway.yaml && sudo chgrp 1001 gateway.yaml
+      # works only while the owner is not UID 1001; if it is, use chmod 600.
       - ${PWD}/gateway.yaml:/config.yaml:ro
       - ${PWD}/capabilities:/capabilities:ro
     environment:

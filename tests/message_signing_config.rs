@@ -55,7 +55,8 @@ impl ConfigFixture {
                 let _ = writeln!(contents, "{name}={value}");
             }
         }
-        std::fs::write(self.env_path(), contents).expect("write signing env fixture");
+        mcp_gateway::gateway::test_helpers::write_owner_only(self.env_path(), contents)
+            .expect("write signing env fixture");
     }
 
     fn write(&self, enabled: bool, current: &str, previous: &str) {
@@ -67,7 +68,7 @@ impl ConfigFixture {
                 "replay_window": 300
             }}
         });
-        std::fs::write(
+        mcp_gateway::gateway::test_helpers::write_owner_only(
             &self.path,
             serde_yaml::to_string(&value).expect("fixture YAML"),
         )

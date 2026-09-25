@@ -178,7 +178,7 @@ pub fn write_config(root: &Path, port: u16, backend_url: &str) -> PathBuf {
     );
 
     let path = root.join("gateway.yaml");
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
         serde_yaml::to_string(&config).expect("the gateway's own config type serializes to YAML"),
     )
