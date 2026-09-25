@@ -717,11 +717,17 @@
     },
     {
       "id": "MIK-7570.SECRET.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/config/secret_file_ref_tests.rs",
+        "src/config_reload/c9_file_ref_tests.rs",
+        "src/personal_accounts/config/adapter_secret_tests.rs",
+        "src/capability/executor/c4_credential_tests.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (C9, PR #1046, merge commit a607199e7). file:/absolute/path is accepted wherever env:NAME is, under the same fail-closed rules: the file is held to the C2 mode rule on the handle that is read, capped at 64 KiB, must be UTF-8, has one trailing newline stripped, and an empty, missing or unreadable file fails the load; a rotated file is reported restart-required; capability YAMLs keep file: literal. Green: CI run 36192804966 and Docker run 36192804701, both success, on PR head a16bedcc. Red first: throwaway #1049 (tests only, cef4f014), CI run 36179284750 failed on the new secret_file_ref_tests and c9_file_ref_tests cells. Mutants, each CI run failed on its named cell: m1 no-file-arm #1050 run 36179287302; m2 no-mode-check #1051 run 36179291087 (file_ref_group_readable_own_file_refused); m3 strip-all-newlines #1052 run 36179295686 (file_ref_strips_one_newline_only); m4 no-size-cap #1053 run 36179298814 (file_ref_bad_file_refused); m5 alias-raw-text #1054 run 36179301411 (file_alias_through_a_symlink_refused); m6 no-rotation-compare #1055 run 36179313917 (reload_reports_rotated_file); m7 file-cred-as-literal #1056 run 36179318796 (file_material_reuse_refused); m8 capability-via-secretref #1057 run 36183044156 (capability_file_ref_stays_literal). UPGRADING-4.0 item 44. Ledger row written by the docs PR #1119 on the coordinator's ruling; #1046's body left its GREEN_RUN and MUTANTS placeholders unfilled, so the run ids above were read from the runs themselves."
     },
     {
       "id": "MIK-7570.METRICS.1",
