@@ -437,7 +437,7 @@ impl AuthenticatedClient {
     /// Check if this client can access a backend
     #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {
-        self.backends.iter().any(|b| b == "*" || b == backend)
+        self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
     }
 
     /// Check if this client can access a tool (per-client scope).
