@@ -184,7 +184,7 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
 /// sets the child's working directory to this same temporary home — so a file
 /// dropped here is found without depending on `HOME` layout at all.
 fn write_config(home: &Path, backend_url: &str) {
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
             "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"

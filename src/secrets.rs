@@ -237,7 +237,11 @@ mod tests {
         // environment, so a resolver reading only `std::env` cannot see them.
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(&env_file, "SECRETS_OVERLAY_ONLY=from-the-overlay\n").unwrap();
+        crate::gateway::test_helpers::write_owner_only(
+            &env_file,
+            "SECRETS_OVERLAY_ONLY=from-the-overlay\n",
+        )
+        .unwrap();
         let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
         let env = std::sync::Arc::new(crate::config::LiveEnv::new(
             std::sync::Arc::new(overlay),

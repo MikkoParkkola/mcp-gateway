@@ -30,7 +30,7 @@ fn startup_refuses_key_server_with_two_replicas() {
         port = free_port(),
         tasks = dir.path().join("tasks").display(),
     );
-    std::fs::write(&config, yaml).expect("write config");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&config, yaml).expect("write config");
 
     let out = std::fs::File::create(&log).expect("log file");
     let err = out.try_clone().expect("log handle");

@@ -54,10 +54,10 @@ fn fixture(key_value: Option<&str>) -> Fixture {
         Some(value) => format!("{KEY_VAR}={value}\n"),
         None => "ACCOUNTS_INIT_STORE_UNRELATED=1\n".to_string(),
     };
-    fs::write(&env_path, env_body).expect("env file");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&env_path, env_body).expect("env file");
 
     let config = base.join("gateway.yaml");
-    fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
         format!(
             "env_files:\n  - {env}\nserver:\n  port: 18731\naccounts:\n  \
@@ -190,7 +190,8 @@ fn a_nonempty_record_root_is_refused_and_its_file_keeps_its_original_bytes() {
     }
     let stray = fixture.store.join("pre-existing.bin");
     let original: &[u8] = b"records this command must never touch\n";
-    fs::write(&stray, original).expect("pre-existing file");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&stray, original)
+        .expect("pre-existing file");
 
     let output = init_store(&fixture.config);
     assert!(

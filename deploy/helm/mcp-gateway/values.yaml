@@ -37,6 +37,20 @@ service:
   type: ClusterIP
   port: 39400
 
+# These two work as one pair. The gateway refuses a config file that other
+# users can read (UPGRADING-4.0 item 35), and the configMap projection is
+# root-owned. With fsGroup the kubelet makes it root:<fsGroup>, and a 0440 mode
+# lets the gateway read it through that group while no world bit is set.
+# fsGroup must be a group the gateway's UID is in: 1001 is the image's user.
+# Override both if you run another UID, or a mesh injects its own group.
+podSecurityContext:
+  fsGroup: 1001
+
+configVolume:
+  # Decimal, because `--set` and some YAML readers do not take octal: 288 is
+  # 0440. Any world bit, or group write, is refused at startup.
+  defaultMode: 288
+
 resources:
   requests:
     cpu: 100m

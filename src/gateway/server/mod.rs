@@ -2029,7 +2029,6 @@ impl Gateway {
             &self.config,
             &self.backends,
             Some(dashboard_bootstrap.as_ref()),
-            self.config_path.as_deref(),
         );
 
         // Warm-start backends: connect + prefetch tools into cache
@@ -4830,7 +4829,7 @@ mod tests {
         // silently disabled a configured feature.
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             &env_file,
             format!(
                 "{}=from-the-overlay\n{}=overlay-key-id\n",
@@ -5326,7 +5325,7 @@ mod tests {
     async fn gh475_cfg_5_error_budget_section_reaches_running_meta_mcp() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             &path,
             "error_budget:\n  threshold: 0.25\n  window_size: 40\n  window_duration: 30s\n  \
              min_samples: 4\n  capability:\n    threshold: 0.35\n    window_size: 12\n    \

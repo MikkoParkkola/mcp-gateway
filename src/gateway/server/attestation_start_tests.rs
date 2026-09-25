@@ -18,7 +18,11 @@ use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 async fn gateway_with_mode(mode: &str) -> (Gateway, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let env_file = dir.path().join(".env");
-    std::fs::write(&env_file, format!("{ATTESTATION_MODE_ENV}={mode}\n")).expect("env file");
+    crate::gateway::test_helpers::write_owner_only(
+        &env_file,
+        format!("{ATTESTATION_MODE_ENV}={mode}\n"),
+    )
+    .expect("env file");
     let overlay = Arc::new(EnvOverlay::from_paths(&[env_file]));
     let env = Arc::new(LiveEnv::new(overlay, ResolvedEnvFiles::default()));
     let gateway = Gateway::new_with_env(Config::default(), env, None)
