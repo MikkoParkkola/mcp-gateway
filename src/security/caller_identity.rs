@@ -192,6 +192,16 @@ mod caller_identity_config_tests {
             ("empty proxies", proxy(&[], "corp-sso"), true),
             ("blank authority", proxy(&["10.0.0.5"], " "), true),
             (
+                "authority with leading space",
+                proxy(&["10.0.0.5"], " corp-sso"),
+                true,
+            ),
+            (
+                "authority with trailing space",
+                proxy(&["10.0.0.5"], "corp-sso "),
+                true,
+            ),
+            (
                 "authority is an OIDC issuer",
                 proxy(&["10.0.0.5"], issuer),
                 true,
