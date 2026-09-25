@@ -426,7 +426,7 @@ fn until_sealed(l: &TransparencyLogger, path: &Path, seq: u64) {
     while sealed(path).last().is_none_or(|s| *s < seq) {
         gov_event(l, &format!("e{i}"));
         i += 1;
-        assert!(i < 10_000, "no rotation happened");
+        assert!(i < 1_000, "no rotation happened");
     }
 }
 
@@ -574,4 +574,58 @@ fn export_names_the_active_segment_after_a_disk_full_drain() {
     let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
     exp.poll(&sink).expect("drained log exports");
     assert_eq!(exp.cursor().segment_seq, Some(1));
+}
+
+/// The first line after expiry must be an open record whose
+/// `prev_segment_final_hash` is its own `prev_entry_hash`. Every hash after
+/// it is re-chained (an unsigned log allows that), so only the link rule
+/// can reject it.
+#[test]
+fn export_rejects_open_record_whose_link_disagrees_after_expiry() {
+    use crate::security::transparency_log::segments::sealed_path;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 1, "");
+    until_sealed(&l, &log, 2);
+    drop(l);
+    let mut files: Vec<std::path::PathBuf> = sealed(&log)
+        .into_iter()
+        .map(|s| sealed_path(&log, s))
+        .collect();
+    files.push(log.clone());
+    let mut prev: Option<serde_json::Value> = None;
+    for file in &files {
+        let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(file)
+            .unwrap()
+            .lines()
+            .map(|r| serde_json::from_str(r).unwrap())
+            .collect();
+        for row in &mut rows {
+            match &prev {
+                // The oldest file's open record: keep its link to the
+                // expired segment, but name a different seal.
+                None => {
+                    row["prev_segment_final_hash"] = format!("sha256:{}", "0".repeat(64)).into();
+                }
+                Some(p) => {
+                    row["prev_entry_hash"] = p.clone();
+                    if row["event"] == "audit_segment_opened" {
+                        row["prev_segment_final_hash"] = p.clone();
+                    }
+                }
+            }
+            row["entry_hash"] = recompute_entry_hash(row).unwrap().into();
+            prev = Some(row["entry_hash"].clone());
+        }
+        let body = rows
+            .iter()
+            .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+        std::fs::write(file, body).unwrap();
+    }
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
+    let r = exp.poll(&CollectingSink::new());
+    assert!(
+        matches!(&r, Err(ExportError::VerificationFailed(m)) if m.contains("open record")),
+        "{r:?}"
+    );
 }
