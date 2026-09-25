@@ -68,8 +68,76 @@ CASES = [
         '              --certificate-identity "${IDENTITY}" \\\n'
         "              --certificate-oidc-issuer "
         "'https://token.actions.githubusercontent.com' \\\n"
-        '              "${IMAGE}@${d}"\n',
+        '              "${IMAGE}@${d}" > /dev/null\n',
         "",
+        CAUGHT,
+    ),
+    (
+        "verify-attestation-stdout-back-in-the-log",
+        "ci.yml",
+        "              --certificate-oidc-issuer "
+        "'https://token.actions.githubusercontent.com' \\\n"
+        '              "${IMAGE}@${d}" > /dev/null\n'
+        "          done\n",
+        "              --certificate-oidc-issuer "
+        "'https://token.actions.githubusercontent.com' \\\n"
+        '              "${IMAGE}@${d}"\n'
+        "          done\n",
+        CAUGHT,
+    ),
+    (
+        "verify-step-timeout-deleted",
+        "ci.yml",
+        "        timeout-minutes: 10\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        "        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        CAUGHT,
+    ),
+    (
+        "verify-attestation-stdout-repointed-to-stderr",
+        "ci.yml",
+        '              "${IMAGE}@${d}" > /dev/null\n'
+        "          done\n",
+        '              "${IMAGE}@${d}" > /dev/null >&2\n'
+        "          done\n",
+        CAUGHT,
+    ),
+    (
+        "verify-attestation-both-streams-dropped-by-amp",
+        "ci.yml",
+        '              "${IMAGE}@${d}" > /dev/null\n'
+        "          done\n",
+        '              "${IMAGE}@${d}" > /dev/null &> /dev/null\n'
+        "          done\n",
+        CAUGHT,
+    ),
+    (
+        "verify-step-timeout-too-tight",
+        "ci.yml",
+        "        timeout-minutes: 10\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        "        timeout-minutes: 1\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        CAUGHT,
+    ),
+    (
+        "verify-step-stderr-dropped-by-exec",
+        "ci.yml",
+        "          set -euo pipefail\n          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway\n          for d in \"${LIST}\" \"${AMD64}\" \"${ARM64}\" \"${LIST_FULL}\" \"${AMD64_FULL}\" \"${ARM64_FULL}\"; do\n            cosign verify \\\n",
+        "          set -euo pipefail\n          exec 2>/dev/null\n          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway\n          for d in \"${LIST}\" \"${AMD64}\" \"${ARM64}\" \"${LIST_FULL}\" \"${AMD64_FULL}\" \"${ARM64_FULL}\"; do\n            cosign verify \\\n",
+        CAUGHT,
+    ),
+    (
+        "verify-step-timeout-raised-to-hours",
+        "ci.yml",
+        "        timeout-minutes: 10\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        "        timeout-minutes: 360\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        CAUGHT,
+    ),
+    (
+        "verify-attestation-stderr-dropped-too",
+        "ci.yml",
+        '              "${IMAGE}@${d}" > /dev/null\n'
+        "          done\n",
+        '              "${IMAGE}@${d}" > /dev/null 2>&1\n'
+        "          done\n",
         CAUGHT,
     ),
     (

@@ -1885,6 +1885,68 @@ class WorkflowWiring(unittest.TestCase):
         ]
         self.assertEqual(env_of(block), ["DIGEST: real"])
 
+    def test_the_verify_step_is_bounded_and_keeps_payloads_out_of_the_log(self):
+        # v4.0.0-beta.2 (run 36193916273): `cosign verify-attestation` writes
+        # the whole base64 SBOM attestation to stdout — about 52 MB across the
+        # six digests, single lines up to 14.5 MB — and the step never
+        # finished, so the release tags were never published. The verdict is
+        # the exit status and the summary on stderr, so stdout goes to
+        # /dev/null (stderr stays: it is the evidence), and the step carries
+        # its own timeout so a stall fails in minutes rather than in 6 hours.
+        # End-anchored: `> /dev/null >&2` re-points stdout after the drop.
+        stdout_dropped = re.compile(r"(?:^|\s)1?>\s*/dev/null$")
+        verifying = 0
+        for block in steps("ci.yml", "docker-manifest"):
+            pieces = [
+                piece
+                for command in joined(block)
+                for piece in segments(shell(command))
+                if COSIGN_VERIFY.match(piece)
+            ]
+            if not pieces:
+                continue
+            verifying += 1
+            # An `exec 2>…` anywhere in the step redirects every later
+            # command's stderr, which the per-command check cannot see.
+            for command in joined(block):
+                for piece in segments(shell(command)):
+                    self.assertNotRegex(
+                        piece,
+                        r"^exec\b[^|]*\d*>",
+                        f"ci.yml: {block[0].strip()} redirects the whole step: {piece}",
+                    )
+                    # segments() splits `&>` and `>&` at the `&`, so a piece
+                    # that starts with a redirect is the tail of one of them.
+                    self.assertNotRegex(
+                        piece,
+                        r"^\d*>",
+                        f"ci.yml: {block[0].strip()} has a split &>/>& redirect: {piece}",
+                    )
+            # Bounded low: a timeout raised to 360 is the 6-hour stall again.
+            minutes = [
+                int(m.group(1))
+                for line in block
+                if (m := re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line))
+            ]
+            self.assertTrue(minutes, f"ci.yml: {block[0].strip()} has no step timeout-minutes")
+            self.assertLessEqual(max(minutes), 15, f"ci.yml: {block[0].strip()} timeout is not low")
+            # Twelve registry and Rekor round trips need room: a floor keeps a
+            # valid tag push from flaking on a too-tight bound.
+            self.assertGreaterEqual(min(minutes), 5, f"ci.yml: {block[0].strip()} timeout is too tight")
+            for piece in pieces:
+                self.assertRegex(
+                    piece,
+                    stdout_dropped,
+                    f"ci.yml: cosign verify stdout reaches the log: {piece}",
+                )
+                # stderr carries the verification summary: the evidence stays.
+                self.assertNotRegex(
+                    piece,
+                    r"2>",
+                    f"ci.yml: cosign verify stderr is redirected: {piece}",
+                )
+        self.assertTrue(verifying, "ci.yml: docker-manifest verifies nothing")
+
     def test_no_signing_or_gate_step_is_allowed_to_fail(self):
         # `continue-on-error` keeps the job green when the step fails. On a
         # step that signs, verifies, starts the image, or runs the gate, that

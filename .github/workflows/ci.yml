@@ -842,8 +842,17 @@ jobs:
             cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${d}"
           done
 
+      # stdout goes to /dev/null: verify-attestation prints the whole base64
+      # SBOM attestation there (~52 MB over six digests, lines up to 14.5 MB),
+      # and v4.0.0-beta.2's step never finished under that volume (run
+      # 36193916273). The exit status is the verdict and still fails the step
+      # under `set -e`; the verification summary is on stderr and stays in the
+      # log. The redirect is the fix: a runner wedged on log volume did not
+      # enforce step or job timeout-minutes in the repro (#1143). The timeout
+      # bounds a live-runner stall, such as a Rekor or registry fetch.
       - name: Verify the release signature + SBOM attestation
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        timeout-minutes: 10
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -861,11 +870,11 @@ jobs:
             cosign verify \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-              "${IMAGE}@${d}"
+              "${IMAGE}@${d}" > /dev/null
             cosign verify-attestation --type spdxjson \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-              "${IMAGE}@${d}"
+              "${IMAGE}@${d}" > /dev/null
           done
 
       # Only now does a release name exist. Copying an index by digest is a
