@@ -199,7 +199,10 @@ pub(crate) fn build_server_capabilities(
 ) -> ServerCapabilities {
     ServerCapabilities {
         tools: Some(ToolsCapability {
-            list_changed: true,
+            list_changed: {
+                let _ = feed;
+                true
+            },
             #[cfg(feature = "spec-preview")]
             filtering: Some(true),
             #[cfg(feature = "spec-preview")]
