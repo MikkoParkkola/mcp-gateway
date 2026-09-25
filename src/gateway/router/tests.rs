@@ -3701,7 +3701,7 @@ mod openwebui_adapter;
 /// are checked in `meta_mcp_dispatch` for `/mcp`; the direct `/mcp/{name}`
 /// route reaches the same backends, so a guard missing there is an allowlist
 /// a client bypasses by changing the path.
-pub(super) async fn direct_route_state_with_identity(
+pub(crate) async fn direct_route_state_with_identity(
     config: crate::config::AgentIdentityConfig,
 ) -> (Arc<AppState>, tempfile::TempDir) {
     let backend = Arc::new(Backend::new(
