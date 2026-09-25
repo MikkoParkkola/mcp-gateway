@@ -281,7 +281,7 @@ impl Backend {
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +
         // rate limiter + health tracker, so which slot's failsafe to gate on
-        // must be known before the `can_proceed()` check runs -- gating on a
+        // must be known before the `admit()` check runs -- gating on a
         // single backend-wide `Failsafe` let one caller identity's outage trip
         // the breaker for every other identity sharing the backend, the exact
         // cross-tenant blast radius this pool exists to eliminate. A backend
@@ -292,19 +292,10 @@ impl Backend {
         let key = self.pool_key_for(identity_key);
         let entry = self.pooled_entry(&key);
 
-        // Check THIS slot's failsafe, not the backend's. The gauge is set once
-        // from the same decision both branches read, so an open breaker cannot
-        // be reported closed by a later edit to only one of them.
-        let can_proceed = entry.failsafe.can_proceed();
-        telemetry_metrics::gauge!(
-            "mcp_backend_circuit_state",
-            "backend" => self.name.clone()
-        )
-        .set(if can_proceed { 1.0_f64 } else { 0.0_f64 });
-        if !can_proceed {
-            tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
-            return Err(Error::CircuitOpen(self.name.clone()));
-        }
+        // Check THIS slot's failsafe, not the backend's.
+        entry.failsafe.admit(&self.name).inspect_err(|e| {
+            tracing::warn!(backend = %self.name, ?key, "Request rejected: {e}");
+        })?;
 
         // Acquire semaphore
         let _permit = self.semaphore.acquire().await.map_err(|_| {
@@ -369,7 +360,7 @@ impl Backend {
         let latency = start_time.elapsed();
 
         // Record success/failure against the SAME slot's failsafe used for the
-        // `can_proceed()` gate above, so gating and recording are always
+        // `admit()` gate above, so gating and recording are always
         // symmetric even if a concurrent idle-eviction later replaces this
         // slot's `PooledEntry` for `key` (MIK-6735 fix 1).
         self.record_attempt_outcome(&entry, latency, &result);
@@ -528,20 +519,9 @@ impl Backend {
         let key = self.pool_key_for(identity_key);
         let entry = self.pooled_entry(&key);
 
-        if !entry.failsafe.can_proceed() {
-            telemetry_metrics::gauge!(
-                "mcp_backend_circuit_state",
-                "backend" => self.name.clone()
-            )
-            .set(0.0_f64);
-            tracing::warn!(backend = %self.name, ?key, "Notification rejected by circuit breaker");
-            return Err(Error::CircuitOpen(self.name.clone()));
-        }
-        telemetry_metrics::gauge!(
-            "mcp_backend_circuit_state",
-            "backend" => self.name.clone()
-        )
-        .set(1.0_f64);
+        entry.failsafe.admit(&self.name).inspect_err(|e| {
+            tracing::warn!(backend = %self.name, ?key, "Notification rejected: {e}");
+        })?;
 
         let _permit = self.semaphore.acquire().await.map_err(|_| {
             tracing::warn!("Concurrency limit reached");

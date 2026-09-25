@@ -1125,6 +1125,25 @@ control_plane:
       - { issuer: <your-idp-issuer>, group: <your-admin-group>, role: admin }
 ```
 
+## 53. A gateway rate-limit refusal is no longer reported as an open circuit breaker
+
+When a backend's own `failsafe.rate_limit` ran out of tokens, the gateway refused the
+call with "Circuit breaker open for backend 'x'", although the breaker was closed, and
+counted each refusal as a backend failure in the error budgets. One caller's burst past
+the limit could therefore auto-disable a capability, or kill the backend, for every
+caller.
+
+- **The refusal now reads `Rate limit exceeded for backend 'x'`.** The JSON-RPC code is
+  still `-32000`. The recovery hint is `RATE_LIMITED` (back off and retry), not
+  `CIRCUIT_OPEN`. Clients or alerts that matched "Circuit breaker open" to detect
+  throttling must match the new text.
+- **Rate-limit refusals are not sampled by the error budgets**, so they can no longer
+  disable a capability or kill a backend.
+- **`mcp_backend_circuit_state` follows the breaker only.** A rate-limit refusal no
+  longer drops it to 0.
+- A breaker that is really open is unchanged: same message, and it still counts as a
+  failure.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

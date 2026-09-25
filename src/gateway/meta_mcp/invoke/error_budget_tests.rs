@@ -395,16 +395,35 @@ async fn one_callers_burst_does_not_disable_the_capability_for_another() {
         !meta.kill_switch.is_capability_disabled("srv", "read"),
         "A's throttled burst disabled the capability for every caller"
     );
-    assert!(!meta.kill_switch.is_killed("srv"), "A's throttled burst killed the backend");
+    assert!(
+        !meta.kill_switch.is_killed("srv"),
+        "A's throttled burst killed the backend"
+    );
     assert_eq!(
         meta.kill_switch.capability_window_counts("srv", "read").1,
         0,
         "a gateway rate-limit refusal is not a capability failure sample"
     );
     assert!(
-        refused.iter().all(|t| !t.contains("Circuit breaker open")),
-        "a rate-limit refusal must not claim the breaker is open: {:?}",
+        refused
+            .iter()
+            .all(|t| t.contains("Rate limit exceeded for backend 'srv'")),
+        "a rate-limit refusal must say so, not claim the breaker is open: {:?}",
         refused.first()
+    );
+}
+
+/// F23 T3 — the budget classifies the two gateway refusals by variant: the
+/// limiter's is ignored, an open breaker's is a failure.
+#[test]
+fn a_gateway_rate_limit_refusal_is_ignored_and_an_open_breaker_is_a_failure() {
+    assert_eq!(
+        BudgetOutcome::of(&Err::<Value, _>(Error::RateLimited("srv".into()))),
+        BudgetOutcome::IgnoredRateLimit
+    );
+    assert_eq!(
+        BudgetOutcome::of(&Err::<Value, _>(Error::CircuitOpen("srv".into()))),
+        BudgetOutcome::Failure
     );
 }
 
