@@ -195,12 +195,7 @@ impl ControlPlaneRoleMappingConfig {
                 } else {
                     "email"
                 };
-                tracing::warn!(
-                    "control_plane.role_mapping rule {i} (issuer {}, {discriminator}) now grants \
-                     gateway admin on all surfaces (meta-tools, /ui/api/*), not only the \
-                     control plane",
-                    rule.issuer
-                );
+                let _ = discriminator;
             }
         }
         Ok(())
