@@ -19,7 +19,7 @@ this runbook existing closes nothing.
 | Binary | `~/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway`, Mach-O arm64 |
 | Reported version | `/health` → `{"status":"healthy","version":"3.4.0","backends":{"all_healthy":true,"count":32}}` |
 | Symptom | `POST /mcp` with `Origin: http://drift-check.invalid` → **200** with the tool list |
-| Supervised by | `launchd`, `~/Library/LaunchAgents/com.claude.mcp-gateway.plist` |
+| Supervised by | `launchd`, `~/Library/LaunchAgents/com.example.mcp-gateway.plist` |
 | Launcher | `~/.local/bin/start-mcp-gateway` → **symlink** into the version directory; the script hardcodes binary and config on lines 4–5 |
 | Data directory | `~/.mcp-gateway/`, `version.stamp` already `4.0.0` |
 
@@ -269,7 +269,7 @@ readlink ~/.local/bin/start-mcp-gateway   # must name $OLD: the rollback command
 ln -sfn ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway ~/.local/bin/start-mcp-gateway
 
 # 5. Restart under launchd — this interrupts every connected MCP client
-launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
+launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway
 
 # 6. Watch for a restart loop for ~30s (KeepAlive Crashed + ThrottleInterval 10)
 tail -f <log-dir>/mcp-gateway.error.log    # repeating startup banner => roll back
@@ -351,7 +351,7 @@ against it.
 ln -sfn ~/.local/libexec/mcp-gateway/4.0.0-438583c1/start-mcp-gateway ~/.local/bin/start-mcp-gateway
 # or all the way back to 3.4.0
 ln -sfn ~/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway ~/.local/bin/start-mcp-gateway
-launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
+launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway
 ```
 
 Run one `ln` line, then the kickstart.

@@ -46,8 +46,8 @@ that the listening process runs a build that has it.
 
 ## What is actually deployed
 
-`launchctl` label `com.claude.mcp-gateway`, PID 1908, plist at
-`~/Library/LaunchAgents/com.claude.mcp-gateway.plist`. The plist pins no version; it
+`launchctl` label `com.example.mcp-gateway`, PID 1908, plist at
+`~/Library/LaunchAgents/com.example.mcp-gateway.plist`. The plist pins no version; it
 execs a wrapper, and the wrapper pins the version in two lines:
 
 ```zsh
@@ -83,7 +83,7 @@ ones. Steps 5-6 are the operator's.
      without applying them.
    A naive copy without this step risks breaking 33 backends on restart.
 5. Repoint the two `typeset -r` lines in `~/.local/bin/start-mcp-gateway`.
-6. `launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway`
+6. `launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway`
 
 ## Acceptance
 
