@@ -116,9 +116,15 @@ async fn t11_required_refuses_on_meta_and_admits_on_the_backend_route() {
         json!({"name": TOOL, "arguments": {}}),
         false,
     );
+    // F12c: the backend route performs no sync admission, so the un-keyed
+    // call it admits is not counted (UPGRADING §28).
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
     let admitted = post_to_backend_route(&state, "key-a", &call).await;
     assert!(admitted.get("error").is_none(), "{admitted}");
     std::assert_eq!(mock.calls(), 1, "{admitted}");
+    std::assert_eq!(unkeyed_total(&handle), 0, "{}", handle.render());
 }
 
 /// T1 on the HTTP meta route: the default admits the same un-keyed call.
@@ -126,9 +132,14 @@ async fn t11_required_refuses_on_meta_and_admits_on_the_backend_route() {
 async fn t1_default_admits_an_unkeyed_modern_mutation_on_the_meta_route() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
 
     let admitted = post(&state, "key-a", sync_invoke(1103, json!({}))).await;
 
     assert!(admitted.get("error").is_none(), "{admitted}");
     std::assert_eq!(mock.calls(), 1, "{admitted}");
+    // The positive control for T11's zero: this harness does see the counter.
+    std::assert_eq!(unkeyed_total(&handle), 1, "{}", handle.render());
 }
