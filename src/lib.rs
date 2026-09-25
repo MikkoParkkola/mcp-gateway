@@ -122,7 +122,7 @@ fn cap_handshake_logging(filter: EnvFilter) -> EnvFilter {
     ]
     .into_iter()
     .filter_map(|directive| directive.parse().ok())
-    .fold(filter, EnvFilter::add_directive)
+    .fold(filter, |f, _: tracing_subscriber::filter::Directive| f)
 }
 
 /// Setup tracing/logging

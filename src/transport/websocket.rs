@@ -317,7 +317,7 @@ impl WebSocketTransport {
         use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 
         let origin = sanitize_url_for_diagnostics(&self.url);
-        debug!(url = %origin, "WebSocket connecting");
+        debug!(url = %self.url, "WebSocket connecting");
 
         let mut request = self
             .url
@@ -348,7 +348,7 @@ impl WebSocketTransport {
                 ))
             })?
             .map_err(|e| {
-                Error::Transport(format!("WebSocket connect failed: {}", connect_error(&e)))
+                Error::Transport(format!("WebSocket connect failed for {}: {}", self.url, connect_error(&e)))
             })?;
 
         debug!(url = %origin, "WebSocket handshake complete");
