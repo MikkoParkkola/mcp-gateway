@@ -567,11 +567,14 @@
     },
     {
       "id": "MIK-7570.LOGLEVEL.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/log_level_admin_tests.rs",
+        "src/gateway/router/authorization.rs"
+      ],
+      "note": "Graded 2026-09-25 (A7). Green CI run 36099412570 at 739e7af5 (rebased on ada6922f): 5542 passed, 0 failed. Red first, each failing only its new cell: run 36094809399 at 07b3bff0 (meta route, reply was success {}), run 36096313412 at 42e5c774 (direct route), run 36097839586 at f7a26e63 (case variants); pre-rebase SHAs. Gate: require_admin_log_level (src/gateway/router/authorization.rs:165) matches the method case-insensitively (:171) and refuses a caller without admin standing with HTTP 403 / -32600 and audit_refusal, before anything is stored or forwarded; called before dispatch on the meta route (src/gateway/router/handlers.rs:1119) and on every direct-route request (src/gateway/router/backend_handlers.rs:629). Rows in src/gateway/router/log_level_admin_tests.rs: a_non_admin_key_cannot_set_the_gateway_log_level (:131), a_non_admin_key_cannot_set_a_shared_backend_level_on_the_direct_route (:162), a_case_variant_of_set_level_is_refused_to_a_non_admin_on_both_routes (:189), each asserting 403, -32600 and no forward on the recording wire; positive controls an_admin_key_still_sets_the_level_on_shared_backends (:148) and an_admin_key_still_sets_the_level_on_the_direct_route (:178). Delete-the-branch (local Spark runs, no CI id): removing the meta check, removing the direct-route check, or reverting to exact matching each turns its own cell red while shared_credential_routes_never_reach_an_identity_bound_backend stays green. Stdio is the operator's own process and stays ungated by design. The audit line is not asserted (no tracing-capture dev dependency)."
     },
     {
       "id": "MIK-7548.ISOLATION.1",
