@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The outbound WebSocket transport routes backend progress to its caller.**
+  `WebSocketTransport` dropped every inbound notification. It now delivers
+  `notifications/progress` to the call whose request carried that
+  `progressToken`, under the stdio transport's rules: progress only, the token
+  must belong to a live call, and a frame it cannot attribute is dropped.
+
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
   made write tools unusable from standard MCP clients, none of which send the
