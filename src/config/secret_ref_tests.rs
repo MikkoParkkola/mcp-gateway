@@ -223,3 +223,52 @@ fn overlay_only_bearer_resolves_in_try_from_config() {
         Some("tok-from-env-file".to_string())
     );
 }
+
+#[test]
+fn empty_admin_token_refused_at_load() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = load_c4(
+        dir.path(),
+        "key_server:\n  enabled: true\n  admin_token: \"\"\n",
+    )
+    .expect_err("an empty key-server admin token must be refused at load");
+    assert!(
+        err.to_string().contains("key_server.admin_token"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn unset_template_and_bad_env_secret_reported_together() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = load_c4(
+        dir.path(),
+        "auth:\n  enabled: true\n  bearer_token: env:MCP_GW_C4_NOPE_BEARER\nbackends:\n  \
+         a:\n    http_url: http://127.0.0.1:9/mcp\n    headers:\n      \
+         X-A: \"${MCP_GW_C4_NOPE_HDR}\"\n",
+    )
+    .expect_err("unresolved references must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("MCP_GW_C4_NOPE_HDR") && msg.contains("MCP_GW_C4_NOPE_BEARER"),
+        "one load must report the template and the env: secret together: {msg}"
+    );
+}
+
+#[test]
+fn malformed_template_name_refused() {
+    // `${lower}` does not match the variable pattern; it used to pass through
+    // as literal text, so a typo shipped `${github_token}` upstream verbatim.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = load_c4(
+        dir.path(),
+        "backends:\n  a:\n    http_url: http://127.0.0.1:9/mcp\n    headers:\n      \
+         Authorization: \"Bearer ${github_token}\"\n",
+    )
+    .expect_err("a ${...} that is not a variable reference must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("backends.a.headers.Authorization") && msg.contains("github_token"),
+        "got: {msg}"
+    );
+}
