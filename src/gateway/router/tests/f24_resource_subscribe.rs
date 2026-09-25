@@ -9,6 +9,8 @@
 //! gateway that then dropped every `resources/updated` left the client waiting.
 
 use super::*;
+// Both the glob and the prelude bring an `assert_eq`; name the one we mean.
+use pretty_assertions::assert_eq;
 
 /// Records every method that reaches the wire. Answers `server/discover` the
 /// way its era does, and everything else successfully, so "never arrived"

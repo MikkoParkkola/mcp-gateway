@@ -247,6 +247,11 @@ impl HttpGateway {
     }
 
     /// The config file the child was started with; rewriting it drives a reload.
+    #[allow(
+        dead_code,
+        reason = "shared by several test binaries; only the reload probes call it, and \
+                  `expect` would be unfulfilled in those"
+    )]
     pub fn config_path(&self) -> std::path::PathBuf {
         self.directory.path().join("gateway.yaml")
     }
