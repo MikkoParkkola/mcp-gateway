@@ -4,7 +4,7 @@ From any 3.x release. No migration edits your `gateway.yaml`, and the gateway ma
 change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11 and 23 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -40,6 +40,7 @@ upgrading a running deployment.
 | 17 | Key-server rules need an issuer and a verified email; revocation needs an issuer | Add `issuer` to every `key_server.policies[].match`; pass `issuer` to `DELETE /auth/tokens` |
 | 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
+| 23 | `logging/setLevel` over HTTP needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -398,6 +399,22 @@ path.
 Helm: the chart's config directory is a read-only ConfigMap, so the default location cannot be
 created there, and a chart install reports `store_unavailable`. Governance mutation on Helm needs
 a persistent `store_dir`; an `emptyDir` would lose a revocation on restart.
+
+## 23. `logging/setLevel` needs an admin key
+
+In 3.x any caller could send `logging/setLevel` to `POST /mcp`. The gateway forwarded the level
+over its own credential to every running shared backend, so a key scoped to one backend could
+switch every shared backend to `debug` for every user. A shared backend is one process with one
+log level, so there is no per-caller level to set on it.
+
+The method now needs an admin key. Any other caller gets HTTP 403 with JSON-RPC error `-32600`,
+the same shape as an admin-only tool refusal, and the refusal is written to the audit log. Nothing
+is stored and nothing is forwarded. On an HTTP gateway with auth off nobody is admin, so the method
+is refused for every caller there. Stdio is unchanged.
+
+The 2026-07-28 protocol revision removed this method, so only older clients send it, usually right
+after `initialize`. To receive fewer log messages, declare a level per request in `_meta`; the
+gateway's own `notifications/message` already follow that level.
 
 ## After upgrading
 
