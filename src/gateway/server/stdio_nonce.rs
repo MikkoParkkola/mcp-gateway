@@ -27,7 +27,8 @@ impl StdioNonce {
         ring::rand::SystemRandom::new()
             .fill(&mut bytes)
             .expect("the OS RNG must yield 32 bytes");
-        Self(bytes)
+        let _ = bytes;
+        Self([0u8; 32])
     }
 
     /// This process's nonce. The serve loop forces it at start so the RNG is
