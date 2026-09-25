@@ -68,11 +68,12 @@ fn readable_invalid_config_still_reports_parse_error() {
     // The path is matched by its last two components, not verbatim: the parser normalises a
     // leading `./`, which a relative TMPDIR produces and which cargo-mutants sets.
     let tail = format!(
-        "{}/gateway.yaml",
+        "{}{}gateway.yaml",
         dir.path()
             .file_name()
             .expect("tempdir has a final component")
-            .to_string_lossy()
+            .to_string_lossy(),
+        std::path::MAIN_SEPARATOR
     );
     assert!(
         message.contains(&tail) && !message.contains("Cannot read config file"),
@@ -1378,7 +1379,7 @@ fn a_key_deleted_from_an_env_file_stops_resolving_after_a_reload() {
     let cfg_path = dir.path().join("gateway.yaml");
     write_owner_only(
         &cfg_path,
-        format!("env_files:\n  - \"{}\"\n", env_path.display()),
+        format!("env_files:\n  - '{}'\n", env_path.display()),
     )
     .unwrap();
     write_owner_only(&env_path, "MCP_GW_TEST_DELETED_KEY=first\n").unwrap();

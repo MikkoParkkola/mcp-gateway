@@ -172,4 +172,27 @@ mod tests {
         assert_eq!(compute_capability_hash(&pinned), hash);
         assert!(pinned.contains(r"C:\Users\alice\capabilities\foo.yaml"));
     }
+
+    /// A pin survives a checkout or an editor that rewrites line endings.
+    /// YAML reads CRLF and LF as the same line break, so the two files are one
+    /// capability; hashing raw bytes refused every pinned file a Windows
+    /// checkout (`core.autocrlf`) had converted.
+    #[test]
+    fn hash_is_the_same_for_crlf_and_lf_line_endings() {
+        let lf = "sha256: x\nname: foo\ndescription: |\n  two\n  lines\n";
+        let crlf = "sha256: x\r\nname: foo\r\ndescription: |\r\n  two\r\n  lines\r\n";
+        assert_eq!(compute_capability_hash(lf), compute_capability_hash(crlf));
+    }
+
+    /// Only the CRLF pair is a line ending. A lone CR is content, and a file
+    /// that gained one is a different file.
+    #[test]
+    fn a_lone_carriage_return_still_changes_the_hash() {
+        let clean = "name: foo\ndescription: bar\n";
+        let with_cr = "name: foo\ndescription: b\rar\n";
+        assert_ne!(
+            compute_capability_hash(clean),
+            compute_capability_hash(with_cr)
+        );
+    }
 }
