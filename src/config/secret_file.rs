@@ -11,7 +11,7 @@ use std::path::Path;
 use crate::{Error, Result};
 
 /// The UPGRADING-4.0 item that documents this rule. One place to renumber.
-const UPGRADE_ITEM: u32 = 32;
+const UPGRADE_ITEM: u32 = 34;
 
 /// Which kind of file a refusal is about. It only changes the wording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

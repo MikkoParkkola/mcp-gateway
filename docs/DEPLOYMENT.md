@@ -823,7 +823,7 @@ Refusing to load config file <path>: mode 0644 lets other users read it, and it
 can hold credentials. Fix: chmod 600 <path> ...
 ```
 
-See UPGRADING-4.0 item 32 for the full rule, including the group-read case.
+See UPGRADING-4.0 item 34 for the full rule, including the group-read case.
 
 ### Inbound webhooks
 
