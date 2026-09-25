@@ -66,3 +66,78 @@ async fn a_zero_rate_limit_is_unlimited() {
         assert_eq!(post(&router, "/webhooks/a").await, StatusCode::OK);
     }
 }
+
+/// Unsigned requests are refused at the signature check and do not spend the
+/// budget, so junk traffic cannot lock a real sender out for the minute.
+#[tokio::test]
+async fn unsigned_requests_do_not_spend_a_signed_endpoints_budget() {
+    use axum::extract::State;
+    use axum::http::HeaderMap;
+    use axum::response::IntoResponse;
+    use hmac::{KeyInit, Mac as _};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(&env_file, "RL_TEST_SECRET=rl-secret\n")
+        .expect("env file");
+    let env = Arc::new(crate::config::LiveEnv::new(
+        Arc::new(crate::config::EnvOverlay::from_paths(&[env_file])),
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+
+    let mut definition = super::tests::make_definition(false);
+    definition.secret = Some("{env.RL_TEST_SECRET}".to_string());
+    definition.signature_header = Some("X-Signature".to_string());
+    let mut state = super::tests::make_handler_state(make_multiplexer(), definition);
+    state.env = env;
+    state.limiter = Some(Arc::new(governor::RateLimiter::direct(
+        governor::Quota::per_minute(std::num::NonZeroU32::MIN),
+    )));
+
+    let body: &[u8] = br#"{"event":"x"}"#;
+    for _ in 0..3 {
+        let response = super::webhook_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(body),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"rl-secret").expect("key");
+    mac.update(body);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Signature",
+        hex::encode(mac.finalize().into_bytes())
+            .parse()
+            .expect("header"),
+    );
+    let response =
+        super::webhook_handler(State(state), headers, axum::body::Bytes::from_static(body))
+            .await
+            .into_response();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the one signed request in the minute must get the budget"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_request_says_when_to_retry() {
+    let router = router_with(1);
+    assert_eq!(post(&router, "/webhooks/a").await, StatusCode::OK);
+    let request = Request::post("/webhooks/a")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"event":"x"}"#))
+        .expect("request");
+    let response = router.oneshot(request).await.expect("infallible");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.headers().get(axum::http::header::RETRY_AFTER),
+        Some(&axum::http::HeaderValue::from_static("60"))
+    );
+}

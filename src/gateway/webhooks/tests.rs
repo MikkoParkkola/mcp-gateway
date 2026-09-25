@@ -23,7 +23,7 @@ pub(super) fn make_multiplexer() -> Arc<NotificationMultiplexer> {
     ))
 }
 
-fn make_definition(notify: bool) -> WebhookDefinition {
+pub(super) fn make_definition(notify: bool) -> WebhookDefinition {
     WebhookDefinition {
         path: "/test".to_string(),
         method: "POST".to_string(),
@@ -34,7 +34,7 @@ fn make_definition(notify: bool) -> WebhookDefinition {
     }
 }
 
-fn make_handler_state(
+pub(super) fn make_handler_state(
     multiplexer: Arc<NotificationMultiplexer>,
     definition: WebhookDefinition,
 ) -> WebhookHandlerState {
