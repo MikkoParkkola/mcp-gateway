@@ -11,7 +11,7 @@ The rest of the list has no startup notice, for two different reasons. Items 5 a
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
 6-8 are decided per request or per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
-deployment files, not the binary's behaviour on an existing route.
+deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
 **Items 2, 8, 12 and 13 refuse the gateway's start. Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
@@ -36,6 +36,7 @@ upgrading a running deployment.
 | 13 | Identity grants match on `authority` and `subject`; `write` scope is gone | Rewrite `write` grants as `execute` |
 | 14 | Cached and idempotent results are kept per caller | None; expect per-key cache hit rates and a one-TTL idempotency gap |
 | 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
+| 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -269,6 +270,42 @@ Embedders calling `MetaMcp` directly: `handle_initialize`, `handle_tools_list_fo
 `handle_tools_list_with_params`, `handle_tools_list_with_url_override` and `handle_tools_resolve`
 take an `InvokeScope` in place of a `CallerStanding`. `InvokeScope::unscoped(standing)` gives the
 operator's unfiltered view.
+
+## 21. The Helm chart and enterprise-alpha manifests start
+
+The chart has never been able to start, from its introduction (#292, which already had
+`serve --host`; `--host` has been non-global since v2.0.0) up to this release. Three fatal errors
+stood in line, each one hiding the next:
+
+1. The container args were `serve --config … --host 0.0.0.0 --port N`. `--host` and `--port` are
+   top-level flags and `serve` takes only `--stdio`, so the process exited 2. The args now carry
+   no subcommand, which is the form the single-node compose file already uses.
+2. `config.backends: []` is a list, and the gateway reads `backends` as a map, so the config
+   failed to load. The default is now `backends: {}`. If you override `config.backends`, write it
+   as a map keyed by backend name.
+3. The root filesystem is read-only and the task store lives under `$HOME`, so opening it failed.
+   The pod now mounts a `state` volume (`emptyDir`) at `/var/lib/mcp-gateway` and sets
+   `HOME=/var/lib/mcp-gateway`, which covers the task store, the gateway data directory, the
+   upgrade stamp and the npm/uv caches.
+
+A fourth refusal came before any of these on a cluster: the image declares `USER gateway`, a name
+the kubelet cannot check against `runAsNonRoot: true`, so the pod was never created. The pod
+security context now sets `runAsUser: 1001`, the image's gateway user.
+
+Task records live in the `state` volume. An `emptyDir` survives a container restart, and a pod
+that is replaced (rollout, eviction, reschedule) starts empty. This release has no
+chart setting for a persistent volume.
+
+Each pod has its own `state` volume, and both shipped defaults run two pods: `replicaCount: 2`
+in the chart's `values.yaml` and `replicas: 2` in the enterprise-alpha `base/deployment.yaml`.
+The Service has no session affinity. A task created on one pod is unknown to the other, so a
+poll, cancel or result request routed to the other pod answers as if the task did not exist.
+If your clients use the task API, set `replicaCount: 1` (or `replicas: 1`) until shared task
+storage exists.
+
+The control-plane store still sits next to the config on
+the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
+startup). That is tracked separately.
 
 ## After upgrading
 

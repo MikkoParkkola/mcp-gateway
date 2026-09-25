@@ -198,3 +198,49 @@ async fn shared_runtime_restores_task_bindings_before_synchronous_admission() {
 }
 
 mod expiry;
+
+/// The premise of the chart's writable `state` volume, pinned both ways.
+///
+/// A store under a home the process cannot write is a fatal startup error, not
+/// a fallback (`tasks.rs`), which is why a read-only root filesystem with no
+/// writable `HOME` kept every chart pod from starting. The control proves the
+/// same path opens once the parent is writable, so the refusal is about the
+/// parent and nothing else.
+#[cfg(unix)]
+#[tokio::test]
+async fn task_store_under_readonly_home_is_fatal() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().expect("a fixture root");
+    let home = root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    let store_dir = home.join(".mcp-gateway").join("tasks");
+
+    // Root ignores the mode bits, so the premise cannot be observed there.
+    if fs::write(home.join("probe"), b"").is_ok() {
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        // A skip in CI would make this pin pass without testing anything, so
+        // CI must run it unprivileged; only a local root shell may skip.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI runs this test as a uid that ignores directory modes, so it proves nothing"
+        );
+        eprintln!("skipped: running with a uid that ignores directory modes");
+        return;
+    }
+
+    let refused = open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions()).await;
+    assert!(
+        refused.is_err(),
+        "a store under an unwritable home must refuse to open"
+    );
+
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    let (service, _executor) =
+        open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions())
+            .await
+            .expect("the same path opens once its parent is writable");
+    service.shutdown().await.expect("custody is released");
+}

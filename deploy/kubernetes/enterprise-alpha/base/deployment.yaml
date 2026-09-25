@@ -31,14 +31,19 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
+        # The image declares `USER gateway`, a name the kubelet cannot verify
+        # as non-root, so the pod is refused (CreateContainerConfigError)
+        # unless the UID is numeric here. 1001 is the image's gateway user.
+        runAsUser: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: gateway
           image: ghcr.io/mikkoparkkola/mcp-gateway:latest
           imagePullPolicy: IfNotPresent
+          # No `serve`: --host/--port are top-level flags and the subcommand
+          # takes only --stdio, so `serve --host` exits 2 before reading config.
           args:
-            - "serve"
             - "--config"
             - "/etc/mcp-gateway/gateway.yaml"
             - "--host"
@@ -50,6 +55,10 @@ spec:
               containerPort: 39400
               protocol: TCP
           env:
+            # Every `~` writer (task store, gateway data dir, upgrade stamp, npm/uv
+            # caches) lands on the writable `state` volume; the root FS is read-only.
+            - name: HOME
+              value: "/var/lib/mcp-gateway"
             - name: MCP_GATEWAY_LOG_FORMAT
               value: "json"
             - name: MCP_GATEWAY_LOG_LEVEL
@@ -69,6 +78,8 @@ spec:
             - name: config
               mountPath: /etc/mcp-gateway
               readOnly: true
+            - name: state
+              mountPath: /var/lib/mcp-gateway
           readinessProbe:
             httpGet:
               path: /readyz
@@ -107,3 +118,7 @@ spec:
         - name: config
           configMap:
             name: mcp-gateway-config
+        # Pod-lifetime state under HOME: it survives a container restart, and a
+        # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
+        - name: state
+          emptyDir: {}
