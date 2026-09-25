@@ -401,28 +401,15 @@ async fn webhook_handler(
     State(state): State<WebhookHandlerState>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> impl IntoResponse {
+) -> Response {
     let request_id = uuid::Uuid::new_v4().to_string();
-
-    // Before any parsing or HMAC work, so a flood costs the gateway nothing.
-    if let Some(limiter) = &state.limiter
-        && limiter.check().is_err()
-    {
-        warn!(
-            request_id = %request_id,
-            capability = %state.capability_name,
-            webhook = %state.webhook_name,
-            "Webhook rate limit exceeded"
-        );
-        return rate_limited(&request_id);
-    }
 
     // Parse JSON from raw bytes (keep raw bytes for signature validation).
     let payload: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
             warn!(request_id = %request_id, error = %e, "Webhook JSON parse failed");
-            return invalid_json(format!("Invalid JSON: {e}"), &request_id);
+            return invalid_json(format!("Invalid JSON: {e}"), &request_id).into_response();
         }
     };
 
@@ -449,7 +436,21 @@ async fn webhook_handler(
             error = %e,
             "Webhook signature validation failed"
         );
-        return invalid_signature(&request_id);
+        return invalid_signature(&request_id).into_response();
+    }
+
+    // After the signature check, so unsigned traffic cannot spend a real
+    // sender's budget. A flood still costs a JSON parse and an HMAC each.
+    if let Some(limiter) = &state.limiter
+        && limiter.check().is_err()
+    {
+        warn!(
+            request_id = %request_id,
+            capability = %state.capability_name,
+            webhook = %state.webhook_name,
+            "Webhook rate limit exceeded"
+        );
+        return rate_limited(&request_id);
     }
 
     // Transform payload to notification.
@@ -465,7 +466,7 @@ async fn webhook_handler(
                 error = %e,
                 "Failed to transform webhook payload"
             );
-            return transformation_failed(&request_id);
+            return transformation_failed(&request_id).into_response();
         }
     };
 
@@ -486,7 +487,7 @@ async fn webhook_handler(
         );
     }
 
-    webhook_success(&request_id, state.definition.notify, session_count)
+    webhook_success(&request_id, state.definition.notify, session_count).into_response()
 }
 
 // ============================================================================

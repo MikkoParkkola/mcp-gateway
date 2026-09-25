@@ -250,7 +250,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 1. **Always use HMAC validation**: Set `require_signature: true` in production
 2. **Use environment variables for secrets**: Never commit secrets to version control
 3. **Use HTTPS in production**: Webhook payloads should be encrypted in transit
-4. **Rate limiting**: `webhooks.rate_limit` caps each endpoint at that many requests per minute (burst up to the same number) and answers `429` beyond it. Set it above your provider's peak rate: most senders, GitHub included, do not retry a `429`, so the event is lost. It takes effect on restart
+4. **Rate limiting**: `webhooks.rate_limit` caps each endpoint at that many requests per minute (burst up to the same number) and answers `429` with `Retry-After: 60` beyond it. Requests that fail the signature check are refused first and do not count. Set it above your provider's peak rate: most senders, GitHub included, do not retry a `429`, so the event is lost. It takes effect on restart
 5. **Validate payload structure**: Use the transform to extract only expected fields
 6. **Monitor webhook logs**: Check gateway logs for failed signature validations
 

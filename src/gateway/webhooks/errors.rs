@@ -25,12 +25,20 @@ pub(super) fn invalid_signature(request_id: &str) -> (StatusCode, Json<Value>) {
     webhook_error(StatusCode::UNAUTHORIZED, "Invalid signature", request_id)
 }
 
-pub(super) fn rate_limited(request_id: &str) -> (StatusCode, Json<Value>) {
-    webhook_error(
+/// 429 with `Retry-After`: the per-endpoint budget refills within a minute.
+pub(super) fn rate_limited(request_id: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut response = webhook_error(
         StatusCode::TOO_MANY_REQUESTS,
         "Webhook rate limit exceeded",
         request_id,
     )
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("60"),
+    );
+    response
 }
 
 pub(super) fn transformation_failed(request_id: &str) -> (StatusCode, Json<Value>) {

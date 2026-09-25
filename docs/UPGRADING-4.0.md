@@ -949,8 +949,9 @@ running with `/metrics` closed (item 33). No error prints a secret value.
 ## 42. `webhooks.rate_limit` is enforced
 
 Before 4.0 the key was parsed and ignored. Each webhook endpoint now accepts at most
-`rate_limit` requests per minute (burst up to the same number) and answers `429` beyond that,
-before the payload is parsed or its signature checked. The default is 100. `0` means no limit.
+`rate_limit` requests per minute (burst up to the same number) and answers `429` with
+`Retry-After: 60` beyond that. Only requests that pass the signature check count, so unsigned
+traffic cannot use up a real sender's budget. The default is 100. `0` means no limit.
 
 A sender that bursts above the limit loses events: most providers, GitHub included, do not
 retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0`. The value is
