@@ -561,6 +561,16 @@ tool per 10 minutes.
 - Re-authorize OAuth backends at a time you choose rather than on a user's first call.
 - If startup is refused, read the error — item 2 is the one that refuses rather than warns.
 
+## Other behaviour changes
+
+These need no action and have no startup notice.
+
+- **Paginated backends show their whole tool catalogue.** The metadata cache now follows
+  `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
+  and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
+  catalogue longer than that keeps what was read, reports its tool count as "at least", and
+  increments `mcp_backend_list_truncated_total{backend,reason}`.
+
 ## Rolling back
 
 Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade
