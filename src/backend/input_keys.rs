@@ -95,6 +95,7 @@ impl Backend {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use serde_json::json;
@@ -121,5 +122,58 @@ mod tests {
         backend.remember_listed_tools(None, false, &listed).await;
         let refusal = backend.undeclared_key_refusal(None, "edit", &json!({"b": 1}));
         assert!(refusal.is_some(), "the valid tool was not remembered");
+    }
+
+    fn edit_declaring(key: &str) -> serde_json::Value {
+        json!({"name": "edit", "inputSchema": {"type": "object",
+            "properties": {key: {"type": "string"}}}})
+    }
+
+    /// F14a: a fully drained direct list replaces a still-fresh discovery fill
+    /// in the caller's slot, so calls are judged against what the caller was
+    /// last shown. A credentialed page still never reaches the shared slot.
+    #[tokio::test]
+    async fn a_drained_direct_list_overwrites_a_fresh_discovery_fill() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let discovered: crate::protocol::Tool =
+            serde_json::from_value(edit_declaring("a")).expect("a tool");
+        lease
+            .entry()
+            .tools_cache
+            .get_or_fetch_shared(Duration::from_secs(600), || {
+                let tools = vec![discovered.clone()];
+                async move { Ok(tools) }
+            })
+            .await
+            .expect("the discovery fill");
+        lease.entry().tools_truncated.store(true, Ordering::SeqCst);
+
+        backend
+            .remember_listed_tools(None, true, &[edit_declaring("b")])
+            .await;
+        let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
+        assert!(
+            judged("a").is_none(),
+            "a credentialed page reached the shared slot"
+        );
+
+        backend
+            .remember_listed_tools(None, false, &[edit_declaring("b")])
+            .await;
+        assert!(
+            judged("b").is_none(),
+            "the fresh discovery fill still stands"
+        );
+        assert!(judged("a").is_some());
+        assert!(
+            !backend.cached_tools_snapshot_and_truncated().1,
+            "a drained list is complete; the truncated mark must not survive it"
+        );
     }
 }

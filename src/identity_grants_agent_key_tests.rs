@@ -239,3 +239,60 @@ fn assert_agents(file: &IdentityGrantFile) {
         ]
     );
 }
+
+async fn edited_refusal(name: &str, rewrites: &[(&str, &str)]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
+    let mut body = std::fs::read_to_string(fixture(name)).unwrap();
+    for (from, to) in rewrites {
+        assert!(body.contains(from), "{name}: fixture lacks {from}");
+        body = body.replace(from, to);
+    }
+    std::fs::write(&path, body).unwrap();
+    read_identity_grants_file(&path)
+        .await
+        .expect_err("an invalid grants file must not load")
+}
+
+/// F11a: bare rows beside a second defect. Naming only the bare rows sends
+/// the operator round twice; the refusal names the other defect as well.
+#[tokio::test]
+async fn a_bare_row_refusal_also_names_a_second_parse_error() {
+    for (name, from, to) in [
+        ("grants-3.4.0.yaml", "agent: any", "agent: sometimes"),
+        (
+            "grants-3.4.0.json",
+            r#""agent": "any""#,
+            r#""agent": "sometimes""#,
+        ),
+    ] {
+        let error = edited_refusal(name, &[(from, to)]).await;
+        for needle in ["g-runner", "g-bot", "sometimes"] {
+            assert!(error.contains(needle), "{name}: missing {needle}: {error}");
+        }
+    }
+}
+
+/// F11c: an empty proven id matches no caller, so a row naming one is a dead
+/// grant. Refused at load, as the CLI already refuses to write one.
+#[tokio::test]
+async fn an_empty_exact_agent_id_is_refused_at_load() {
+    let yaml = [
+        ("!exact runner", "!exact {source: jwt, id: \"\"}"),
+        ("!exact build-bot", "!exact {source: mtls, id: \"  \"}"),
+    ];
+    let json = [
+        (
+            r#""exact": "runner""#,
+            r#""exact": {"source": "jwt", "id": ""}"#,
+        ),
+        (
+            r#""exact": "build-bot""#,
+            r#""exact": {"source": "mtls", "id": "  "}"#,
+        ),
+    ];
+    for (name, rewrites) in [("grants-3.4.0.yaml", yaml), ("grants-3.4.0.json", json)] {
+        let error = edited_refusal(name, &rewrites).await;
+        assert!(error.contains("empty"), "{name}: {error}");
+    }
+}

@@ -446,7 +446,8 @@ impl MetaMcp {
             "gateway_read_only" => if read_only { "true" } else { "false" }
         )
         .increment(1);
-        if !is_modern || !first_warn(&mut self.unkeyed.warned.lock(), server, tool) {
+        let now = std::time::Instant::now();
+        if !is_modern || !first_warn(&mut self.unkeyed.warned.lock(), server, tool, now) {
             return;
         }
         tracing::warn!(
@@ -460,9 +461,9 @@ impl MetaMcp {
     }
 }
 
-/// Whether (server, tool) is due a warn now, recording it if so.
-fn first_warn(warned: &mut WarnedAt, server: &str, tool: &str) -> bool {
-    let now = std::time::Instant::now();
+/// Whether (server, tool) is due a warn at `now`, recording it if so. `now` is
+/// a parameter so the eviction order can be tested without sleeping.
+fn first_warn(warned: &mut WarnedAt, server: &str, tool: &str, now: std::time::Instant) -> bool {
     let key = (server.to_owned(), tool.to_owned());
     if warned
         .get(&key)

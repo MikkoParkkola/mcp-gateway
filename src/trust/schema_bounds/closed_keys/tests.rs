@@ -292,4 +292,38 @@ fn permissive_schemas_accept_extras() {
 fn required_without_properties_is_a_free_map() {
     let schema = json!({"type": "object", "required": ["a"]});
     assert!(!refused(&schema, &json!({"a": 1})));
+    // F14b: a free map accepts extras too, not only the named key.
+    assert!(!refused(&schema, &json!({"a": 1, "b": 2})));
+}
+
+/// F14d: `additionalItems` governs the elements past a tuple `items`, so an
+/// invented key in one of them is refused like one inside the tuple.
+#[test]
+fn additional_items_are_descended() {
+    let schema = json!({
+        "type": "object",
+        "properties": {"xs": {
+            "type": "array",
+            "items": [{"type": "string"}],
+            "additionalItems": closed(&json!({"a": {}}))
+        }}
+    });
+    assert!(refused(&schema, &json!({"xs": ["s", {"b": 1}]})));
+    assert!(!refused(&schema, &json!({"xs": ["s", {"a": 1}]})));
+}
+
+/// F14e: a `$ref` to a free map is a free map, as the same schema inlined is.
+/// A close on the level holding the `$ref` still refuses.
+#[test]
+fn a_ref_to_a_free_map_is_a_free_map() {
+    let schema = json!({
+        "$defs": {"free": {"type": "object"}},
+        "type": "object",
+        "properties": {
+            "open": {"$ref": "#/$defs/free"},
+            "shut": {"$ref": "#/$defs/free", "additionalProperties": false}
+        }
+    });
+    assert!(!refused(&schema, &json!({"open": {"anything": 1}})));
+    assert!(refused(&schema, &json!({"shut": {"anything": 1}})));
 }
