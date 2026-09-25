@@ -26,7 +26,7 @@ pub enum CircuitState {
 }
 
 impl CircuitState {
-    /// Return the lowercase kebab-case label used in API responses.
+    /// Return the lowercase snake_case label used in API responses.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -514,7 +514,7 @@ mod tests {
     // ── CircuitState::as_str ──────────────────────────────────────────────
 
     #[test]
-    fn circuit_state_as_str_returns_lowercase_kebab() {
+    fn circuit_state_as_str_returns_lowercase_snake_case() {
         assert_eq!(CircuitState::Closed.as_str(), "closed");
         assert_eq!(CircuitState::Open.as_str(), "open");
         assert_eq!(CircuitState::HalfOpen.as_str(), "half_open");

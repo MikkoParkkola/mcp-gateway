@@ -1562,9 +1562,10 @@ mod breaker_tests {
             server_status_from_backend(&closed),
             ControlPlaneServerStatus::Enabled
         );
-        assert_ne!(
+        // Never started, so not running: a closed breaker reads as not yet known.
+        assert_eq!(
             runtime_health_from_backend(&closed),
-            ControlPlaneHealth::Down
+            ControlPlaneHealth::Unknown
         );
 
         backend.trip_circuit_breaker_for_test();

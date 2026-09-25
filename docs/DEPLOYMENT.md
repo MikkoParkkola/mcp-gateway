@@ -567,7 +567,7 @@ Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testin
 # Load balancer probe (/health would pull the gateway for one backend down)
 curl -sf http://127.0.0.1:39400/readyz > /dev/null
 # Alert on broken backends
-curl -s http://localhost:39400/health | jq '.backends | to_entries[] | select(.value.circuit_state != "Closed")'
+curl -s http://localhost:39400/health | jq '.backends | to_entries[] | select(.value.circuit_state != "closed")'
 ```
 
 ## Monitoring and Observability
