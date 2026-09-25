@@ -11,9 +11,9 @@ HELM="${HELM:-helm}"
 echo "== helm lint =="
 "$HELM" lint "$CHART"
 
-echo "== default render: exactly ConfigMap/Deployment/Service/ServiceAccount =="
+echo "== default render: exactly ConfigMap/Deployment/NetworkPolicy/Service/ServiceAccount =="
 got="$("$HELM" template t "$CHART" | grep '^kind:' | awk '{print $2}' | sort -u | paste -sd, -)"
-want="ConfigMap,Deployment,Service,ServiceAccount"
+want="ConfigMap,Deployment,NetworkPolicy,Service,ServiceAccount"
 [ "$got" = "$want" ] || { echo "FAIL: default Kinds = [$got], want [$want]" >&2; exit 1; }
 
 echo "== opt-in render adds NetworkPolicy + Role + RoleBinding =="
@@ -279,6 +279,76 @@ grep -q '/tmp/elsewhere.jsonl' <<<"$moved" && fail "a configured log path moved 
 mesh_all="$("$HELM" template t "$CHART" --set auth.mode=mesh)"
 grep -q 'transparency_log' <<<"$mesh_all" && fail "mesh mode renders an audit log"
 grep -qE '^ *- name: audit$' <<<"$mesh_all" && fail "mesh mode renders an audit volume"
+
+# C3: credential mode serves bearer tokens over plain HTTP on 0.0.0.0, which the
+# gateway refuses unless server.cleartext_http names who protects them. The
+# chart's answer is cluster_internal, honest only while the port stays inside
+# the cluster and is reached by its Service name.
+echo "== helm_credential_mode_renders_cleartext_value =="
+grep -qE '^ *cleartext_http: cluster_internal$' <<<"$cm" \
+  || fail "credential mode does not render cleartext_http: cluster_internal"
+up="$("$HELM" template t "$CHART" --set server.cleartextHttp=tls_terminated_upstream \
+  --set config.server.public_url=https://mcp.example.com --set service.type=LoadBalancer \
+  --show-only templates/configmap.yaml 2>&1)" \
+  && grep -qE '^ *cleartext_http: tls_terminated_upstream$' <<<"$up" \
+  || fail "a tls_terminated_upstream override behind an ingress does not render: $up"
+meshcm="$("$HELM" template t "$CHART" --set auth.mode=mesh --show-only templates/configmap.yaml)"
+! grep -q 'cleartext_http' <<<"$meshcm" \
+  || fail "mesh mode carries no credential, so it must not render cleartext_http"
+
+echo "== cluster_internal_renders_a_network_policy =="
+kinds="$("$HELM" template t "$CHART" | grep '^kind:' | awk '{print $2}' | sort -u | paste -sd, -)"
+grep -q 'NetworkPolicy' <<<"$kinds" \
+  || fail "cluster_internal is the default but no NetworkPolicy renders: [$kinds]"
+# Forced by cluster_internal alone, the policy restricts ingress only: backends
+# listen on any port, and an egress allow-list nobody asked for would cut them
+# off. networkPolicy.enabled keeps the restrictive Ingress+Egress form.
+forced="$("$HELM" template t "$CHART" --show-only templates/networkpolicy.yaml)"
+grep -qE '^ *policyTypes: \["Ingress"\]$' <<<"$forced" \
+  || fail "the cluster_internal NetworkPolicy is not Ingress-only"
+! grep -qE '^ *egress:' <<<"$forced" \
+  || fail "the cluster_internal NetworkPolicy restricts egress; backends on other ports would break"
+optin="$("$HELM" template t "$CHART" --set networkPolicy.enabled=true --show-only templates/networkpolicy.yaml)"
+grep -qE '^ *policyTypes: \["Ingress", "Egress"\]$' <<<"$optin" && grep -qE '^ *egress:' <<<"$optin" \
+  || fail "networkPolicy.enabled no longer renders the Ingress+Egress policy"
+
+echo "== cluster_internal_requires_this_releases_service_host =="
+# The rows the gateway's own test reads (cluster_internal_requires_service_host).
+# Rendered as fullname gw in namespace ns, so accepted rows name gw.ns.svc.
+# Both directions: an accepted row must render, a rejected one must fail.
+accepted=0
+while read -r verdict url domain; do
+  case "$verdict" in ''|'#'*) continue ;; esac
+  args=(--namespace ns --set fullnameOverride=gw --set "config.server.public_url=$url")
+  [ "$domain" = "-" ] || args+=(--set "config.server.cluster_domain=$domain")
+  if "$HELM" template gw "$CHART" "${args[@]}" --show-only templates/configmap.yaml >/dev/null 2>&1; then
+    [ "$verdict" = accept ] || fail "public_url $url (domain $domain) rendered; the gateway refuses it"
+    accepted=$((accepted + 1))
+  else
+    [ "$verdict" = reject ] || fail "public_url $url (domain $domain) failed to render; the gateway accepts it"
+  fi
+done <"$CHART/../../../tests/fixtures/c3_service_hosts.txt"
+[ "$accepted" -ge 3 ] || fail "only $accepted accepted Service-host rows rendered; the fixture lost its acceptances"
+# A blank public_url is not a Service name either (the template fills only a missing one).
+out="$("$HELM" template gw "$CHART" --namespace ns --set fullnameOverride=gw \
+  --set-string 'config.server.public_url= ' 2>&1)" \
+  && fail "a blank public_url rendered under cluster_internal"
+grep -q 'unset or empty' <<<"$out" || fail "a blank public_url failed without saying so: $out"
+# Chart-only: another release's Service is a Service, but not this gateway's.
+if "$HELM" template gw "$CHART" --namespace ns --set fullnameOverride=gw \
+    --set config.server.public_url=http://other.ns.svc:39400 >/dev/null 2>&1; then
+  fail "a public_url naming another release's Service rendered under cluster_internal"
+fi
+
+echo "== cluster_internal_refuses_off_cluster_publishing =="
+for bad in "service.type=NodePort" "service.type=LoadBalancer" \
+    "config.server.public_url=https://mcp.example.com" "server.cleartextHttp=bogus"; do
+  if out="$("$HELM" template t "$CHART" --set "$bad" 2>&1)"; then
+    fail "--set $bad rendered; cluster_internal must refuse it"
+  elif [ "$bad" != "server.cleartextHttp=bogus" ] && ! grep -q 'tls_terminated_upstream' <<<"$out"; then
+    fail "--set $bad failed without naming tls_terminated_upstream: $out"
+  fi
+done
 
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 

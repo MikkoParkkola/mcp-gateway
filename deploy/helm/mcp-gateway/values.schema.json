@@ -309,6 +309,21 @@
           }
         }
       ]
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cleartextHttp": {
+          "type": "string",
+          "enum": [
+            "cluster_internal",
+            "tls_terminated_upstream",
+            "refuse"
+          ],
+          "description": "credential mode only: who protects bearer tokens sent over plain HTTP on the pod's 0.0.0.0 bind (rendered as server.cleartext_http). cluster_internal: callers reach the pod only over the cluster network by its Service name; the chart then renders an ingress-only NetworkPolicy and refuses a non-ClusterIP Service or a public_url other than this release's Service name. tls_terminated_upstream: an ingress or proxy terminates TLS in front of the pod. refuse: the gateway will not start without mTLS."
+        }
+      }
     }
   }
 }

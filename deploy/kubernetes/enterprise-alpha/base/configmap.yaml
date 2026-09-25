@@ -27,6 +27,13 @@ data:
       # Above 1 the gateway refuses to start with the modern protocol on, or with
       # key_server or accounts enabled (UPGRADING-4.0 §37).
       replicas: 1
+      # Bearer tokens reach this pod in plain HTTP over the cluster network,
+      # which the gateway refuses unless told who protects them (C3). Honest
+      # only while public_url above is the Service name and the Service stays
+      # ClusterIP behind the NetworkPolicy. If an ingress fronts the pod,
+      # public_url is its hostname and this must be tls_terminated_upstream.
+      # Logged at WARN on every start.
+      cleartext_http: cluster_internal
     # Reachable by every pod in the cluster, so the tools need a credential or
     # the gateway refuses to open a port at all. MCP_GATEWAY_TOKEN comes from a
     # Secret in the pod spec, never from this ConfigMap. /health stays open, and
