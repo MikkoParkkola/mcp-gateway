@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routing it needs. Omitting `accounts.hosted` mounts no route and changes no
   existing refusal text.
 
+- **With auth on, the tool-call audit log is required and fails closed
+  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
+  true` fails to load, and a log that cannot open stops startup. Every entry
+  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
+  (credential kind, key fingerprint, verified issuer and subject; never an email).
+  Refused and failed calls are recorded. A failed append answers HTTP 503 /
+  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
+  chart and enterprise-alpha mount a writable `audit` volume. The log is not
+  rotated yet. See UPGRADING-4.0.md item 43.
+
 ### Fixed
 
 - **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each

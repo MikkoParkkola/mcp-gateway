@@ -391,6 +391,13 @@ mod identity_propagation_audit {
             "counter",
             "prev_entry_hash",
             "entry_hash",
+            // The D1 envelope, also written by the logger. `who` holds the
+            // subject only, never a credential.
+            "schema_version",
+            "trace_id",
+            "outcome",
+            "error_code",
+            "who",
         ];
         let entries = read_entries(file.path());
         assert_eq!(entries.len(), 2);

@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39 or 40 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 or 43 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39 and 43 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39 and 40 refuse the gateway's start (item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 and 43 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -62,6 +62,7 @@ upgrading a running deployment.
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
+| 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 
 Numbers 18-20 are intentionally unused.
 
@@ -195,6 +196,7 @@ gate refuses on a `0.0.0.0` bind with no `public_url`, so the image reported its
 - `/readyz` answers 200 once the config has loaded and the listener is up. Use it for readiness
   and startup. It deliberately does not fail on a backend: there is no per-backend `required`
   setting, and one unreachable upstream is not a reason to take the gateway out of rotation.
+  Since item 43 it does fail, with 503, while an auth-enabled gateway's audit log cannot append.
 
 Both are public exactly when `/health` is. A config that lists only `/health` under
 `auth.public_paths` exposes all three, and one that omits `/health` requires a credential on all
@@ -953,6 +955,59 @@ before the payload is parsed or its signature checked. The default is 100. `0` m
 A sender that bursts above the limit loses events: most providers, GitHub included, do not
 retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0`. The value is
 read at startup; a reload that changes `webhooks` needs a restart.
+
+## 43. With auth on, the audit log is required and fails closed
+
+An authenticated gateway used to run with no tool-call audit, and when the log did run it
+named an API-key label rather than a person and skipped every refused or failed call.
+
+- **An auth-enabled config without `security.transparency_log.enabled: true` fails to
+  load**, with "auth is enabled, so security.transparency_log must be enabled with a
+  writable path". There is no opt-out. `serve --stdio` obeys the same rule. With auth off
+  nothing changes.
+- **An audit log that cannot open stops startup** when auth is on. It used to warn and
+  serve without one.
+- **Kubernetes needs a writable volume at the log path.** The Helm chart does this for you in
+  credential mode: the log goes to `/var/lib/mcp-gateway/audit/transparency.jsonl` on an
+  `audit` volume. That volume is an `emptyDir` (`audit.sizeLimit`, default `1Gi`) and **dies
+  with the pod**. Set `audit.existingClaim` to a PersistentVolumeClaim to keep it, or ship
+  the log out with `control_plane.export`. `podSecurityContext.fsGroup` (default 1001) makes
+  the claim writable. Each replica writes its own chain. Mesh mode renders none of this. The
+  enterprise-alpha manifests carry the same volume and config.
+- **A failed append now refuses calls** when auth is on. The call whose record failed gets
+  HTTP 503, JSON-RPC `-32005`, "audit log unavailable; the call may have run but its result
+  is withheld". Do not blindly retry it. Later calls, and the direct route `/mcp/{name}`,
+  are refused before dispatch, and `/readyz` returns 503, until one probe append succeeds.
+  `/readyz` itself tries that probe, so a drained pod recovers without traffic; `/livez`
+  stays 200, so the pod is not restarted. Watch `mcp_audit_append_failures_total` and
+  `mcp_audit_degraded`. Probe records carry `type: "audit_probe"`.
+- **The log is not rotated yet, and a full volume stops the gateway.** Rotation is a separate
+  item due before 4.0.0 final. Until then, when the log's volume fills every append fails
+  with `storage_full`: tool calls get 503 and `/readyz` returns 503 (its body names the
+  cause), and the counter reads `mcp_audit_append_failures_total{cause="storage_full"}`.
+  Size the volume for your traffic: a tool call writes one or two records of roughly 1 KiB,
+  so the chart's default 1Gi holds on the order of half a million calls. Archive or export
+  the file before it fills; the gateway recovers on its own once an append succeeds. The
+  chart always writes the log to the `audit` volume, whatever
+  `config.security.transparency_log.path` says, and prints a warning at install while
+  `audit.existingClaim` is unset.
+- **Every record carries `schema_version: 2`**, plus `trace_id`, `outcome`
+  (`ok`, `tool_error`, `denied`, `invalid`, `error`), `error_code` for the last three, and
+  `who`: `credential_kind`, `principal` (12 hex characters of the credential's sha256),
+  `account`, and for a verified caller `authority` and `subject`, the `(issuer, sub)`.
+  An email or a display label is never written. `caller` stays for one major version as a
+  copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
+- **Refused and failed tool calls now write a record**, and so do cache hits. Expect more
+  log volume on a gateway that refuses a lot.
+- **`request_hash` covers the whole `gateway_invoke` params the caller sent**, `_full` and
+  `_claim` included, and **`response_hash` covers the value `gateway_invoke` returned**,
+  after trace, prediction and provenance augmentation. The message-signing `_signature` is
+  added later, at delivery, so it is not under the hash. Both used to cover an intermediate
+  value, so
+  hashes from 3.x records do not compare with 4.0 ones. A failed call has no
+  `response_hash`.
+- **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
+  path `~/.mcp-gateway/transparency/transparency.jsonl`.
 
 ## After upgrading
 
