@@ -79,7 +79,7 @@ impl TransparencyLogger {
         let too_big = active_bytes + line.len() as u64 + 1 > rot.max_segment_bytes;
         let too_old = rot.max_segment_age_secs > 0
             && now >= inner.seg.opened_at.saturating_add(rot.max_segment_age_secs);
-        let rotated = if inner.seg.has_records && (too_big || too_old) {
+        let rotated = if false && inner.seg.has_records && (too_big || too_old) {
             let g = guard(&mut lock, &path)?;
             self.rotate(inner, &path, g, now)
         } else {
