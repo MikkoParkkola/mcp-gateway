@@ -760,11 +760,21 @@
     },
     {
       "id": "MIK-7570.AUDIT.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/security/audit_tests.rs",
+        "src/gateway/meta_mcp/audit_record_tests.rs",
+        "src/gateway/router/audit_degraded_tests.rs",
+        "src/gateway/server/audit_start_tests.rs",
+        "tests/d1_audit_required.rs",
+        "tests/kubernetes_manifest_tests.rs",
+        "scripts/dev/helm-chart-smoke.sh",
+        "docs/UPGRADING-4.0.md",
+        "docs/MULTI_USER.md"
+      ],
+      "note": "Graded 2026-09-25 (D1, PR #979). With auth on, security.transparency_log is required at load (validate_required_by_auth; stdio too) and an unopenable log stops startup. Every entry carries the logger-written envelope: schema_version 2, trace_id, outcome (ok|tool_error|denied|invalid|error), error_code, and who (credential_kind, principal, account, authority, subject). CredentialKind is set at every AuthenticatedClient mint site and carried on MetaMcpCallerContext; who never holds an email or label. One invocation record per gateway_invoke, written around invoke_tool_traced, so refusals, failures and cache hits are recorded; request_hash covers the params sent, response_hash the value returned. Fail-closed under auth: a failed append withholds the result (503/-32005), and invoke, the direct route and /readyz probe once before refusing; mcp_audit_append_failures_total{cause} and mcp_audit_degraded. Tests: src/security/audit_tests.rs (T9 reserved keys, T10 v1+v2 chain, T11 governance envelope, T14 outcome table, T19 trace id), src/gateway/meta_mcp/audit_record_tests.rs (T4 OIDC who, T5 API key no secret, T6 denied, T7 backend error, T8 tool_error, T15 request hash, T16 response hash), src/gateway/router/audit_degraded_tests.rs (T17 fail-closed and recovery, T17b auth-off control, T18 direct route, R3 readiness-driven recovery), src/gateway/server/audit_start_tests.rs (T3), tests/d1_audit_required.rs (T1, T2, T13), init_config_loads_under_d1 (T12), enterprise_alpha_ships_writable_audit_log_with_fsgroup, helm_credential_render_has_writable_audit_path in scripts/dev/helm-chart-smoke.sh (T20). Red CI run 36148301109. Rotation is not included (separate item); UPGRADING-4.0 item 39 documents the fill case. The E1-owned probe sites (admin gate, admin UI layer) land with E1."
     },
     {
       "id": "MIK-7570.APIKEY.1",
