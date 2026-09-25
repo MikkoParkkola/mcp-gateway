@@ -14,9 +14,20 @@ launchd.
 ## Docker Compose
 
 ```bash
+# Linux: gateway.yaml here is a deployment copy, not your working config
+install -m 600 <working-config> gateway.yaml && sudo chown 1001:1001 gateway.yaml
 docker compose -f deploy/single-node/docker-compose.yaml up -d
 curl -sf http://127.0.0.1:39400/readyz
 ```
+
+The gateway refuses a config file other users can read (see
+[UPGRADING-4.0](../../docs/UPGRADING-4.0.md), item 35), and a bind mount keeps
+the host file's mode and owner, so a default `0644` file stops the container.
+
+The checks in this guide use `/readyz`, which answers 200 once the config has
+loaded and the listener is up. It never reads backend health. `/livez` answers
+200 while the process serves, and `/health` answers 503 whenever any backend is
+marked down, so it suits dashboards rather than install checks.
 
 Run Compose from the directory that contains `gateway.yaml` and `capabilities/`.
 The Compose template mounts `$PWD/gateway.yaml` as `/config.yaml` and
