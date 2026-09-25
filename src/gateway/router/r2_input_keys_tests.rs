@@ -348,6 +348,11 @@ async fn code_mode_chain_step_refuses_invented_key() {
         "step 1 was not refused: {body}"
     );
     assert!(
+        body.to_string()
+            .contains("Chain step 0 (edits:edit) failed"),
+        "the chain error does not name the failing step: {body}"
+    );
+    assert!(
         fx.calls.lock().is_empty(),
         "a chain step reached the backend: {body}"
     );

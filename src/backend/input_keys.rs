@@ -91,3 +91,34 @@ impl Backend {
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+
+    /// One malformed entry in a drained `tools/list` must not leave the slot
+    /// cold: the valid tool beside it is still judged, so its invented key is
+    /// refused rather than forwarded unchecked.
+    #[tokio::test]
+    async fn a_malformed_listed_tool_does_not_leave_the_slot_cold() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        let listed = [
+            json!({"name": 5, "inputSchema": "not a schema"}),
+            json!({"name": "edit", "inputSchema": {"type": "object",
+                "properties": {"a": {"type": "string"}}}}),
+        ];
+        backend.remember_listed_tools(None, false, &listed).await;
+        let refusal = backend.undeclared_key_refusal(None, "edit", &json!({"b": 1}));
+        assert!(refusal.is_some(), "the valid tool was not remembered");
+    }
+}
