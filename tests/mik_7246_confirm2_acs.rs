@@ -45,7 +45,11 @@ async fn admin_state() -> (
             enabled: true,
             bearer_token: None,
             api_keys: vec![ApiKeyConfig {
-                key: "admin-key".to_string(),
+                key: None,
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                    "admin-key".as_bytes(),
+                )),
+                expires_at: None,
                 name: "admin-client".to_string(),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],

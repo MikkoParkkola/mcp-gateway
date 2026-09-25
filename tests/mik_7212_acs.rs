@@ -1590,12 +1590,12 @@ use mcp_gateway::protocol::mrtr::RetryFields;
 use serde_json::json;
 
 fn retry(input_responses: Option<serde_json::Value>, request_state: Option<&str>) -> RetryFields {
-    RetryFields {
-        input_responses,
-        request_state: request_state.map(str::to_string),
-        idempotency_key: None,
-        malformed: Vec::new(),
-    }
+    // Assigned field by field: `RetryFields` has a crate-private field, so a
+    // struct literal cannot be written outside the crate.
+    let mut retry = RetryFields::default();
+    retry.input_responses = input_responses;
+    retry.request_state = request_state.map(str::to_string);
+    retry
 }
 
 #[test]

@@ -156,6 +156,13 @@ fn apply_backend_tool_call_security(
     }
 }
 
+/// Remove the attestation token from `params._meta` and return it if a string.
+fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
+    let meta = params?.get_mut("_meta")?.as_object_mut()?;
+    let token = meta.remove(crate::protocol::mrtr::ATTESTATION_META)?;
+    token.as_str().map(str::to_owned)
+}
+
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
 fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
     build_http_error_response(Some(id.clone()), -32600, message, StatusCode::FORBIDDEN)
@@ -323,77 +330,9 @@ fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIde
     )
 }
 
-/// Record an identity-propagation credential decision (`idp_mint` /
-/// `idp_refuse`) into the tamper-evident transparency log (MIK-6740, IDP4).
-///
-/// Takes the logger directly (rather than `&AppState`) so this function is
-/// independently unit-testable against a real [`crate::security::TransparencyLogger`]
-/// over a tempfile, with no need to construct a full `AppState`. `logger` is
-/// `None` when the transparency log is disabled — the call is then a no-op.
-///
-/// Redaction is the load-bearing property here: only `subject`, `backend`,
-/// `audience`, `action`, `reason`, and `timestamp` are ever passed to
-/// [`crate::security::TransparencyLogger::append_event`] — never the resolved
-/// credential header value or a raw assertion.
-///
-/// ponytail: duplicate of `identity_propagation::audit_identity_propagation`;
-/// kept in place to avoid a large-deletion refactor — dedup is follow-up debt.
-///
-/// Fail-closed hardening (mirrors `identity_propagation::audit_identity_propagation`,
-/// MIK-6740 hardening carried forward to this hand-duplicated copy): a
-/// transparency-log write failure is no longer swallowed. It is `warn!`'d AND
-/// returned as `Err(PropagationError::AuditFailed)`.
-///
-/// - **`idp_mint` callers MUST fail-closed**: propagate the `Err` and abort
-///   the mint/request. No mint without a durable audit record.
-/// - **`idp_refuse` callers**: the request is already being refused on other
-///   grounds, so the `Err` does not need to change the outcome, but MUST NOT
-///   be silently dropped (log via `tracing::warn!`).
-///
-/// `logger = None` (transparency log disabled) is `Ok(())` — a no-op, not a
-/// failure.
-///
-/// # Errors
-/// [`crate::identity_propagation::PropagationError::AuditFailed`] when
-/// [`crate::security::TransparencyLogger::append_event`] fails (e.g. disk
-/// full, permission revoked, filesystem gone read-only underneath the
-/// gateway).
-fn audit_identity_propagation(
-    logger: Option<&crate::security::TransparencyLogger>,
-    action: &'static str,
-    subject: &str,
-    backend: &str,
-    audience: Option<&str>,
-    reason: Option<&str>,
-) -> Result<(), crate::identity_propagation::PropagationError> {
-    let Some(logger) = logger else {
-        return Ok(());
-    };
-
-    let mut fields = serde_json::Map::new();
-    fields.insert("action".into(), action.into());
-    fields.insert("subject".into(), subject.into());
-    fields.insert("backend".into(), backend.into());
-    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
-    if let Some(audience) = audience {
-        fields.insert("audience".into(), audience.into());
-    }
-    if let Some(reason) = reason {
-        fields.insert("reason".into(), reason.into());
-    }
-
-    logger.append_event(fields).map(|_| ()).map_err(|e| {
-        warn!(
-            backend,
-            action, error = %e,
-            "Failed to write identity-propagation audit entry (transparency log); \
-             fail-closed on idp_mint"
-        );
-        crate::identity_propagation::PropagationError::AuditFailed(format!(
-            "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
-        ))
-    })
-}
+// One writer for identity-propagation audit on both routes (the direct
+// route used to carry a hand copy of it).
+use crate::identity_propagation::audit_identity_propagation;
 
 /// Resolve just the identity-key session-bucket binding for a notification
 /// (MIK-6735 fix 2), WITHOUT the full propagation/OAuth-isolation enforcement
@@ -493,6 +432,20 @@ pub(super) async fn backend_handler(
 ) -> impl IntoResponse {
     // Track in-flight request for graceful drain
     let _inflight_permit = state.inflight.acquire().await;
+
+    // D1-f: this route writes no invocation record (D2), but while the audit
+    // log is down it must not serve, or it is a second, unaudited route.
+    if let Some(log) = &state.transparency_log
+        && log.admit().await.is_err()
+    {
+        let error = crate::Error::AuditUnavailable;
+        return build_http_error_response(
+            None,
+            error.to_rpc_code(),
+            error.to_string(),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    }
 
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
@@ -600,12 +553,15 @@ pub(super) async fn backend_handler(
     };
 
     // Parse request
-    let (id, method, params) = match parse_request(&json_request) {
+    let (id, method, mut params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return build_http_response(&response, StatusCode::BAD_REQUEST);
         }
     };
+    // Out of the owned params before anything reads or forwards them, so no
+    // arm (sanitized, passthrough, no-tool, other methods) sends it upstream.
+    let attestation = take_attestation_token(params.as_mut());
 
     let protocol_header = inbound_headers
         .get("mcp-protocol-version")
@@ -878,6 +834,21 @@ pub(super) async fn backend_handler(
             e.to_string(),
             StatusCode::FORBIDDEN,
         );
+    }
+
+    // MIK-7570.ATTEST.1: attested like `gateway_invoke`, for every tools/call
+    // shape, and ahead of the idempotency guard so a replay needs a token too.
+    if method == "tools/call" {
+        let tool = params.as_ref().and_then(|p| p.get("name")).cloned();
+        let envelope = json!({"tool": tool, "attestation": attestation});
+        let agent = client.as_ref().map(|c| c.name.as_str());
+        if let Err(e) = state
+            .meta_mcp
+            .check_attestation(&envelope, agent, "direct_route")
+        {
+            let (code, message) = (e.to_rpc_code(), e.to_string());
+            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
+        }
     }
 
     // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the

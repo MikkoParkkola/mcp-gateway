@@ -50,4 +50,10 @@ data:
         enabled: true
         scan_requests: true
         scan_responses: true
+      # Auth on requires the audit log (UPGRADING-4.0). It lives on the
+      # writable `audit` volume in deployment.yaml, an emptyDir that dies with
+      # the pod: swap in a PersistentVolumeClaim to keep it.
+      transparency_log:
+        enabled: true
+        path: /var/lib/mcp-gateway/audit/transparency.jsonl
     backends: {}

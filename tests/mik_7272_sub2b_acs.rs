@@ -804,7 +804,7 @@ fn write_http_config(home: &Path, backend_url: &str, port: u16) {
         home.join("gateway.yaml"),
         format!(
             "server:\n  host: \"127.0.0.1\"\n  port: {port}\n\
-             auth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n\
+             security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n\
              backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
         ),
     )

@@ -99,6 +99,8 @@ spec:
               readOnly: true
             - name: state
               mountPath: /var/lib/mcp-gateway
+            - name: audit
+              mountPath: /var/lib/mcp-gateway/audit
           readinessProbe:
             httpGet:
               path: /readyz
@@ -144,5 +146,10 @@ spec:
         # Bounded like the Helm chart's stateVolume.sizeLimit: a full HOME evicts
         # the pod instead of filling the node's disk.
         - name: state
+          emptyDir:
+            sizeLimit: 1Gi
+        # The audit log (configmap.yaml). fsGroup 1001 above makes a claim
+        # swapped in here writable by the gateway's uid.
+        - name: audit
           emptyDir:
             sizeLimit: 1Gi
