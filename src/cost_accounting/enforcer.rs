@@ -139,6 +139,9 @@ pub struct EnforcerSnapshot {
     pub key_daily: HashMap<String, f64>,
     /// Configured per-key daily limits.
     pub key_limits: HashMap<String, f64>,
+    /// Unix seconds read before the accumulators. A snapshot that straddles
+    /// UTC midnight then dates its spend to the earlier day, never the later.
+    pub taken_at: u64,
 }
 
 // ── BudgetEnforcer ───────────────────────────────────────────────────────────
@@ -347,6 +350,10 @@ impl BudgetEnforcer {
     /// totals, because every recorded spend lands in both.
     pub fn restore(&self, persisted: &super::persistence::PersistedCosts) {
         if persisted.saved_at / 86_400 != current_day() {
+            tracing::info!(
+                saved_at = persisted.saved_at,
+                "Persisted cost data is from an earlier UTC day; budgets start at zero"
+            );
             return;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -367,6 +374,7 @@ impl BudgetEnforcer {
     /// Snapshot current accumulator state for persistence and the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
+        let taken_at = super::persistence::now_secs();
         #[allow(clippy::cast_precision_loss)]
         let global_daily_usd = self.global_daily.current() as f64 / 1_000_000.0;
 
@@ -393,6 +401,7 @@ impl BudgetEnforcer {
             global_daily_limit: self.config.budgets.daily,
             tool_daily,
             tool_limits: self.config.budgets.per_tool.clone(),
+            taken_at,
             key_daily,
             key_limits: self.config.budgets.per_key.clone(),
         }

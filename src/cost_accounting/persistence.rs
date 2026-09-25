@@ -33,7 +33,7 @@ pub struct PersistedCosts {
 pub struct ToolTotal {
     /// Total invocations recorded.
     pub call_count: u64,
-    /// Total cost in USD (all-time).
+    /// Spend in USD on the day of `saved_at`.
     pub total_cost_usd: f64,
     /// Average cost per call (updated on each save).
     pub avg_cost_usd: f64,

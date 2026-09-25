@@ -97,6 +97,29 @@ fn spend_saved_on_an_earlier_day_does_not_count_today() {
     );
 }
 
+/// The save path dates the file by the snapshot, not by the moment it is
+/// written, so spend read before UTC midnight never lands on the next day.
+#[test]
+fn a_save_dates_its_spend_by_when_the_snapshot_was_taken() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = governed();
+    let (_, first) = boot_cost_governance(&cfg, dir.path());
+    let first = first.expect("enforcer");
+    first.record_spend("search", Some("dev"), 0.6);
+    let mut snap = first.snapshot();
+    snap.taken_at -= 2 * 86_400;
+    let persisted = build_persisted_costs(&snap);
+    assert_eq!(persisted.saved_at, snap.taken_at);
+    cost_persistence::save(&dir.path().join("costs.json"), &persisted).expect("save");
+
+    let (_, second) = boot_cost_governance(&cfg, dir.path());
+    let snap = second.expect("enforcer").snapshot();
+    assert!(
+        snap.global_daily_usd.abs() < 1e-12,
+        "spend dated to an earlier day must not count today: {snap:?}"
+    );
+}
+
 #[test]
 fn disabled_governance_builds_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
