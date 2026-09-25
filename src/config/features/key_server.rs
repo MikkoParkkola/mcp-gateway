@@ -214,7 +214,8 @@ impl KeyServerConfig {
         let issuer_only = m.email.is_none() && m.domain.is_none() && m.group.is_none();
         if issuer_only && is_public_multi_tenant_issuer(&m.issuer) {
             return refuse(format!(
-                "issuer-only rule on multi-tenant issuer '{}' admits every account it issues                  for our audience; add a domain, email or group condition",
+                "issuer-only rule on multi-tenant issuer '{}' admits every account it issues \
+                 for our audience; add a domain, email or group condition",
                 m.issuer
             ));
         }

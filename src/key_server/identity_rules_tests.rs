@@ -359,7 +359,9 @@ fn issuer_only_rule_on_public_issuer_fails_to_load() {
         let err = load(&public_issuer_yaml(issuer, ""))
             .expect_err(&format!("issuer-only rule on {issuer} must not load"));
         assert!(
-            err.contains("multi-tenant") && err.contains("policies[0]"),
+            err.contains("multi-tenant")
+                && err.contains("policies[0]")
+                && err.contains("it issues for our audience"),
             "{issuer}: {err}"
         );
     }
