@@ -295,9 +295,6 @@ impl BackendRegistry {
     /// first.  Returns `true` when the backend was present and removed.
     pub fn remove(&self, name: &str) -> bool {
         let removed = self.backends.remove(name).is_some();
-        if removed {
-            self.announce_change(name);
-        }
         removed
     }
 
