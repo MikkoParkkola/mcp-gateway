@@ -199,8 +199,8 @@ impl<'a> Walk<'a> {
             };
             match self.verdict(root, schema, name, depth, false) {
                 Verdict::Accept(req) => faults.extend(self.value(item, &req, &at, depth + 1)),
-                Verdict::Undecided if self.standard || is_free_map(schema) => {}
-                Verdict::Undecided | Verdict::Refuse | Verdict::MatchesNothing => {
+                Verdict::Undecided => {}
+                Verdict::Refuse | Verdict::MatchesNothing => {
                     faults.push(KeyFault::Undeclared(at));
                 }
             }
