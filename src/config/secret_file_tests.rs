@@ -119,7 +119,7 @@ fn reload_refuses_loosened_env_file() {
 #[test]
 fn refusal_fix_depends_on_ownership() {
     let path = Path::new("/etc/mcp-gateway/gateway.yaml");
-    let own = super::refusal_fix(path, true);
+    let own = super::refusal_fix(path, true, super::SecretFile::Config);
     assert!(
         own.contains("chmod 600 /etc/mcp-gateway/gateway.yaml"),
         "{own}"
@@ -130,7 +130,7 @@ fn refusal_fix_depends_on_ownership() {
     );
 
     // chmod on a config another uid owns would lock this process out of it.
-    let other = super::refusal_fix(path, false);
+    let other = super::refusal_fix(path, false, super::SecretFile::Config);
     assert!(
         other.contains("fsGroup") && other.contains("defaultMode"),
         "{other}"
@@ -195,4 +195,17 @@ fn reload_refuses_a_loosened_config() {
         msg.contains("config file") && msg.contains("mode 0644"),
         "{msg}"
     );
+}
+
+/// A `file:` secret (C9) on a Secret volume another uid owns: the fix names the
+/// Secret's own `defaultMode`, not the config volume's.
+#[test]
+fn refusal_fix_for_a_reference_names_the_secret_mount() {
+    let path = Path::new("/run/secrets/gateway/token");
+    let other = super::refusal_fix(path, false, super::SecretFile::Reference);
+    assert!(
+        other.contains("mount the Secret") && other.contains("fsGroup"),
+        "{other}"
+    );
+    assert!(!other.contains("config volume"), "{other}");
 }
