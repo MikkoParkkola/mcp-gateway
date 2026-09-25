@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39 or 40 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 or 46 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39 and 43 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39 and 40 refuse the gateway's start (item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 and 46 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value; item 46 only for `enforce` without a signing key). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -50,7 +50,7 @@ upgrading a running deployment.
 | 27 | Exact agent grants name their proof source | Rewrite each bare `exact` grant as `!exact {source: mtls, id}` or `!exact {source: jwt, id}`; give `known_agents` entries a source |
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
-| 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 30 | Attestation is off by default; unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines |
 | 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
@@ -61,6 +61,9 @@ upgrading a running deployment.
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
+| 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
+| 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 
 Numbers 18-20 are intentionally unused.
 
@@ -194,6 +197,7 @@ gate refuses on a `0.0.0.0` bind with no `public_url`, so the image reported its
 - `/readyz` answers 200 once the config has loaded and the listener is up. Use it for readiness
   and startup. It deliberately does not fail on a backend: there is no per-backend `required`
   setting, and one unreachable upstream is not a reason to take the gateway out of rotation.
+  Since item 43 it does fail, with 503, while an auth-enabled gateway's audit log cannot append.
 
 Both are public exactly when `/health` is. A config that lists only `/health` under
 `auth.public_paths` exposes all three, and one that omits `/health` requires a credential on all
@@ -656,9 +660,7 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
 - **The default is off.** Unset, empty or `off` attaches no validator, so no
   `attestation_observe_reject` audit lines are written. Set `GATEWAY_ATTESTATION_MODE=observe`
   to keep them.
-- **`enforce` fails startup.** It is not available in this build: the direct `/mcp/{name}` route
-  and multi-step plans carry no token, so an enforce limited to `gateway_invoke` would not
-  refuse what it claims to. The error names `observe` and `off`.
+- **`enforce` enforces.** See item 46.
 - **Any other value fails startup** with an error naming the value. The value is still trimmed and
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
 - **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
@@ -943,6 +945,125 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 `server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
+## 41. API keys are configured as sha256 digests, with optional expiry
+
+In 3.x `auth.api_keys[].key` held the key itself, or `env:VAR` whose value was the key. Anyone
+who could read the config, the environment or a debug log could replay it. The gateway only
+ever needs the key's hash, so 4.0 stores the digest instead.
+
+- **A plaintext `key` fails the load.** The error names the key and says to run
+  `mcp-gateway hash-key`. It says the same for `key: env:VAR`, and the variable is not read.
+  Setting both `key` and `key_sha256`, or neither, also fails the load. The file is not
+  rewritten for you: a rewrite would drop comments, and an `env:` key lives outside the file.
+- **Migrate each key.** Run `printf %s "$KEY" | mcp-gateway hash-key` and put the output in
+  `key_sha256`:
+
+  ```yaml
+  auth:
+    api_keys:
+      - name: laptop
+        key_sha256: "sha256:<64 lowercase hex>"
+  ```
+
+  The key is read from stdin, never an argument, so it stays out of shell history. One trailing
+  newline is stripped, so `echo "$KEY" |` gives the same digest. Check a digest with
+  `printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>` (exit 0 match, 1 mismatch,
+  2 malformed).
+- **For `env:` keys, store the digest in the variable or secret instead of the key.** A
+  variable that still holds the key fails the load, and the error names the variable, never
+  its value. Nothing is silently hashed.
+- **Clients keep the same key.** Only the config changes. `principal` values, session owners
+  and log lines are unchanged: the principal is the first 12 hex characters of the digest,
+  which is what 3.x derived from the key.
+- **Optional `expires_at`** (RFC 3339, for example `"2027-01-01T00:00:00Z"`). After it, a
+  matching key is refused with 401 and a `warn` naming the key. An expired key does not stop
+  the gateway from starting; it logs a `warn` at startup instead. Omitting `expires_at` keeps
+  the 3.x behaviour. Removing or renewing a key still needs a config edit and a restart.
+- `auth.bearer_token` and `key_server.admin_token` are unchanged and still plaintext.
+- **Library API:** `ApiKeyConfig::key` is now `Option<String>` and is refused at load;
+  `ApiKeyConfig::resolve_key()` is replaced by `resolve_digest()`, which returns the 32 digest
+  bytes. `ResolvedApiKey::key` is replaced by `digest` and `expires_at`. The new
+  `mcp_gateway::config::api_key_digest_spec(&[u8])` returns the `sha256:<hex>` form.
+
+## 43. With auth on, the audit log is required and fails closed
+
+An authenticated gateway used to run with no tool-call audit, and when the log did run it
+named an API-key label rather than a person and skipped every refused or failed call.
+
+- **An auth-enabled config without `security.transparency_log.enabled: true` fails to
+  load**, with "auth is enabled, so security.transparency_log must be enabled with a
+  writable path". There is no opt-out. `serve --stdio` obeys the same rule. With auth off
+  nothing changes.
+- **An audit log that cannot open stops startup** when auth is on. It used to warn and
+  serve without one.
+- **Kubernetes needs a writable volume at the log path.** The Helm chart does this for you in
+  credential mode: the log goes to `/var/lib/mcp-gateway/audit/transparency.jsonl` on an
+  `audit` volume. That volume is an `emptyDir` (`audit.sizeLimit`, default `1Gi`) and **dies
+  with the pod**. Set `audit.existingClaim` to a PersistentVolumeClaim to keep it, or ship
+  the log out with `control_plane.export`. `podSecurityContext.fsGroup` (default 1001) makes
+  the claim writable. Each replica writes its own chain. Mesh mode renders none of this. The
+  enterprise-alpha manifests carry the same volume and config.
+- **A failed append now refuses calls** when auth is on. The call whose record failed gets
+  HTTP 503, JSON-RPC `-32005`, "audit log unavailable; the call may have run but its result
+  is withheld". Do not blindly retry it. Later calls, and the direct route `/mcp/{name}`,
+  are refused before dispatch, and `/readyz` returns 503, until one probe append succeeds.
+  `/readyz` itself tries that probe, so a drained pod recovers without traffic; `/livez`
+  stays 200, so the pod is not restarted. Watch `mcp_audit_append_failures_total` and
+  `mcp_audit_degraded`. Probe records carry `type: "audit_probe"`.
+- **The log is not rotated yet, and a full volume stops the gateway.** Rotation is a separate
+  item due before 4.0.0 final. Until then, when the log's volume fills every append fails
+  with `storage_full`: tool calls get 503 and `/readyz` returns 503 (its body names the
+  cause), and the counter reads `mcp_audit_append_failures_total{cause="storage_full"}`.
+  Size the volume for your traffic: a tool call writes one or two records of roughly 1 KiB,
+  so the chart's default 1Gi holds on the order of half a million calls. Archive or export
+  the file before it fills; the gateway recovers on its own once an append succeeds. The
+  chart always writes the log to the `audit` volume, whatever
+  `config.security.transparency_log.path` says, and prints a warning at install while
+  `audit.existingClaim` is unset.
+- **Every record carries `schema_version: 2`**, plus `trace_id`, `outcome`
+  (`ok`, `tool_error`, `denied`, `invalid`, `error`), `error_code` for the last three, and
+  `who`: `credential_kind`, `principal` (12 hex characters of the credential's sha256),
+  `account`, and for a verified caller `authority` and `subject`, the `(issuer, sub)`.
+  An email or a display label is never written. `caller` stays for one major version as a
+  copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
+- **Refused and failed tool calls now write a record**, and so do cache hits. Expect more
+  log volume on a gateway that refuses a lot.
+- **`request_hash` covers the whole `gateway_invoke` params the caller sent**, `_full` and
+  `_claim` included, and **`response_hash` covers the value `gateway_invoke` returned**,
+  after trace, prediction and provenance augmentation. The message-signing `_signature` is
+  added later, at delivery, so it is not under the hash. Both used to cover an intermediate
+  value, so
+  hashes from 3.x records do not compare with 4.0 ones. A failed call has no
+  `response_hash`.
+- **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
+  path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 46. Attestation `enforce` enforces on every route
+
+In 3.x `enforce` ran as observe (item 30). In 4.0.0 `GATEWAY_ATTESTATION_MODE=enforce` refuses,
+with JSON-RPC -32002, every call whose token is missing, forged, expired or not scoped to the
+tool.
+
+- **It needs `GATEWAY_ATTESTATION_SIGNING_KEY`.** Enforce with an unset, empty or
+  whitespace-only key fails startup: without a key every call would be refused.
+- **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
+  signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
+  `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
+  `_meta` key before forwarding on the direct route, for every method and for passthrough
+  backends too, so no backend receives the token.
+- **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
+  route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
+  the idempotency guard, so a replayed call needs a valid token as well.
+- **Tasks.** A task-mode `gateway_invoke` re-checks its original token when the worker
+  dispatches it, so a queued task needs a token that outlives the queue. A surfaced tool run
+  as a task has no token at dispatch and is refused. Task recovery reads need a fresh token in
+  `_meta["io.mcp-gateway/recovery"].attestation`.
+- **Playbooks and code mode are refused.** Under enforce, `gateway_run_playbook` and
+  `gateway_execute` answer -32002 "multi-step plans carry no attestation in 4.0.0", keyed
+  or not. Their steps are synthesized and carry no token. Call each tool with its own token.
+- **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
+  other methods are forwarded without an attestation check.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
@@ -953,6 +1074,9 @@ running with `/metrics` closed (item 33). No error prints a secret value.
 
 These need no action and have no startup notice.
 
+- **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
+  `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
+  has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
 - **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
   a private capability checkout under `$HOME/github` if it existed. If you relied on that,
   add the directory to `capabilities.directories`.
@@ -966,7 +1090,9 @@ These need no action and have no startup notice.
 
 ## Rolling back
 
-Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade
+Keep the 3.x `gateway.yaml` you had before migrating API keys (item 41): 3.x reads `key` and
+cannot read `key_sha256`, so a rollback puts that copy back. Beyond that, downgrading loads the
+same file, because 4.0.0 itself never edited it. The upgrade
 leaves the 3.x token files in place — its migration prints the notice and stamps the version,
 and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0

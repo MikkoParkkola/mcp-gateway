@@ -110,7 +110,7 @@ fn literal_empty_api_key_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let err = load_c4(
         dir.path(),
-        "auth:\n  enabled: true\n  api_keys:\n    - key: \"\"\n      name: ci\n      backends: [\"*\"]\n",
+        "auth:\n  enabled: true\n  api_keys:\n    - key_sha256: \"\"\n      name: ci\n      backends: [\"*\"]\n",
     )
     .expect_err("an empty literal api key must be refused");
     assert!(err.to_string().contains("empty"), "got: {err}");

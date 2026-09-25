@@ -37,7 +37,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Attestation mode: off (default) or observe (audits only). Any other value, enforce included, fails startup.",
+          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls; needs GATEWAY_ATTESTATION_SIGNING_KEY). Any other value fails startup.",
           "isRequired": false,
           "isSecret": false
         },
@@ -100,7 +100,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Attestation mode: off (default) or observe (audits only). Any other value, enforce included, fails startup.",
+          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls; needs GATEWAY_ATTESTATION_SIGNING_KEY). Any other value fails startup.",
           "isRequired": false,
           "isSecret": false
         },

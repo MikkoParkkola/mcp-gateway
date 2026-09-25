@@ -70,6 +70,8 @@ use confirmation::{CONFIRMATION_INPUT_KEY, confirmation_refusal_response};
 use confirmation::{GateOutcome, destructive_confirmation_gate};
 
 pub(crate) mod admission;
+#[cfg(test)]
+mod audit_record_tests;
 mod caller_forward;
 mod chain_interim;
 #[cfg(test)]
@@ -137,6 +139,9 @@ pub struct MetaMcpCallerContext<'a> {
     /// Whether a credential was presented and validated. Explicit, never
     /// inferred from `credential_principal` (see [`Authentication`]).
     pub(crate) authentication: Authentication,
+    /// How the credential was presented, for the audit record's `who`
+    /// (D1-c). No `Default`: every construction site names it.
+    pub(crate) credential_kind: crate::security::audit::CredentialKind,
     /// Outer execution owner; an inner step can mark dispatch but cannot settle it.
     pub(crate) execution: Option<&'a admission::SyncLease>,
     /// Private external origin and completed signing admission, never backend metadata.
@@ -259,6 +264,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             protocol_revision: self.protocol_revision,
             credential_principal: self.credential_principal,
             authentication: self.authentication,
+            credential_kind: self.credential_kind,
             execution: self.execution,
             signing: self.signing,
             authorizer: self.authorizer,
@@ -308,6 +314,11 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
         rpc_error.data = match error {
             crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
+            })),
+            // D1-f: the log is down, not the caller wrong. 503 so an operator
+            // and a load balancer read it as unavailability.
+            crate::Error::AuditUnavailable => Some(serde_json::json!({
+                crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
             })),
             // A gateway-authored refusal may carry a recovery payload the
             // client needs: MRTR.9 names the capability an input request would
@@ -2089,11 +2100,8 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
-        let invoke_args = json!({
-            "server": server_name,
-            "tool": tool_name,
-            "arguments": arguments,
-        });
+        let invoke_args =
+            admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
         match self.invoke_tool(&invoke_args, session_id, caller).await {
             Ok(content) => JsonRpcResponse::success_serialized(id, content),
             Err(e) => error_response_preserving_status(id, &e),

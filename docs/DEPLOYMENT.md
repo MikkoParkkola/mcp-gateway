@@ -200,6 +200,7 @@ never refused.
 | Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
+| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown, reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
 
 While any of the three is on, the modern protocol included, the chart renders the
 Deployment with `strategy: Recreate`, because a rolling update runs the old and new
@@ -557,7 +558,7 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and container healthchecks |
-| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. Readiness and startup probes |
+| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, UPGRADING-4.0 item 43). Readiness and startup probes |
 | `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
@@ -805,6 +806,35 @@ auth:
 ```
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
+
+### API keys
+
+Each `auth.api_keys[]` entry names a client and holds the **sha256 digest** of its key, never
+the key itself:
+
+| Field | Meaning |
+|---|---|
+| `name` | Required, unique, unpadded. The key's identity-grant subject (`api_key:<name>`) |
+| `key_sha256` | `sha256:` followed by 64 lowercase hex characters, or `env:VAR` whose value has that form |
+| `expires_at` | Optional RFC 3339 instant. After it the key is refused with 401; startup only warns |
+| `backends` | Backends the key reaches. `["*"]` is all; empty or absent is none |
+| `allowed_tools` / `denied_tools` | Optional glob allowlist and blocklist |
+| `rate_limit` | Requests per minute; 0 is unlimited |
+| `admin` | Admin UI and management tools |
+
+```bash
+printf %s "$KEY" | mcp-gateway hash-key                       # prints sha256:<hex>
+printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>  # exit 0 match, 1 mismatch, 2 malformed
+```
+
+Use a long random key, for example `openssl rand -base64 32`. The digest is an unsalted
+sha256, so a short or guessable key can be recovered from a leaked config by offline
+guessing; a 32-byte random key cannot.
+
+`hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. A
+plaintext `key` field, or an `env:` variable that holds a key rather than a digest, fails the
+load with an error that names the entry or variable but never the value. See
+[UPGRADING-4.0.md](UPGRADING-4.0.md) item 41.
 
 A gateway whose tools already require a native credential is not refused, even
 with `auth.enabled = false`: mTLS with `require_client_cert`, mTLS with a
@@ -1147,7 +1177,7 @@ Two things worth knowing before you shrink it:
 | Secrets | `/etc/mcp-gateway/env` |
 | TLS certs | `/etc/mcp-gateway/tls/` |
 
-The gateway uses no database. Its state is per process (see "Replica Count and per-process state"): key-server tokens, sessions and continuations are lost on restart, and task records survive only as long as their volume. Redeploy the binary with the same config to restore the service. Startup takes ~8ms; backends reconnect automatically; tool caches repopulate on first request.
+The gateway uses no database. Its state is per process (see "Replica Count and per-process state"): key-server tokens, sessions and continuations are lost on restart, and task records survive only as long as their volume. Cost-governance spend for the current UTC day is reloaded from `costs.json`; spend recorded since the last save (at most 5 minutes) is lost on a crash. A `costs.json` that cannot be read or parsed is logged at WARN and the budgets start at zero. Redeploy the binary with the same config to restore the service. Startup takes ~8ms; backends reconnect automatically; tool caches repopulate on first request.
 
 ## Scaling
 

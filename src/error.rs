@@ -46,6 +46,12 @@ pub enum Error {
     #[error("Response blocked by security firewall")]
     ResponseFirewallRefused,
 
+    /// The audit log could not record this call, so its result is withheld
+    /// (4.0.0 item D1-f). HTTP 503, JSON-RPC `-32005`. The call may have run:
+    /// a client must not blindly retry a side effect.
+    #[error("audit log unavailable; the call may have run but its result is withheld")]
+    AuditUnavailable,
+
     /// Configuration validation failure — semantically invalid config.
     ///
     /// Use this instead of `Internal` when a config value fails a semantic
@@ -307,6 +313,7 @@ impl Error {
             Self::Json(_) => -32700, // Parse error
             Self::Protocol(_) | Self::ResponseFirewallRefused => -32600, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
+            Self::AuditUnavailable => -32005,
             Self::BackendUnavailable(_)
             | Self::CircuitOpen(_)
             | Self::BackendTimeout(_)

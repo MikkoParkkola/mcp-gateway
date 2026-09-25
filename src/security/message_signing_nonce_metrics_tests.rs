@@ -307,7 +307,7 @@ fn admission_reclamation_publishes_occupancy_while_the_store_guard_is_held() {
 
 #[test]
 fn quota_key_is_a_full_sha256_not_the_audit_fingerprint() {
-    let key = QuotaPrincipal::api_key("fixture-secret")
+    let key = QuotaPrincipal::api_key(b"fixture-secret")
         .as_store_key()
         .to_owned();
 
@@ -326,7 +326,7 @@ fn quota_key_is_a_full_sha256_not_the_audit_fingerprint() {
     );
     assert_eq!(
         key,
-        QuotaPrincipal::api_key("fixture-secret").as_store_key(),
+        QuotaPrincipal::api_key(b"fixture-secret").as_store_key(),
         "the same validated input must resolve to the same bucket"
     );
 }
@@ -338,7 +338,9 @@ fn quota_kinds_are_domain_separated_for_identical_bytes() {
         QuotaPrincipal::configured_bearer(same)
             .as_store_key()
             .to_owned(),
-        QuotaPrincipal::api_key(same).as_store_key().to_owned(),
+        QuotaPrincipal::api_key(same.as_bytes())
+            .as_store_key()
+            .to_owned(),
         QuotaPrincipal::oidc_identity(same)
             .as_store_key()
             .to_owned(),
@@ -370,7 +372,7 @@ fn quota_kinds_are_domain_separated_for_identical_bytes() {
 #[test]
 fn quota_principal_debug_hides_the_credential_and_its_digest() {
     let secret = "synthetic-fixture-secret";
-    let principal = QuotaPrincipal::api_key(secret);
+    let principal = QuotaPrincipal::api_key(secret.as_bytes());
     let key = principal.as_store_key().to_owned();
 
     let rendered = format!("{principal:?}");
@@ -412,7 +414,7 @@ fn nonce_store_debug_hides_the_admitted_nonce_and_principal() {
 #[test]
 fn authenticated_client_debug_redacts_the_nested_quota_principal() {
     let secret = "synthetic-client-secret";
-    let quota = QuotaPrincipal::api_key(secret);
+    let quota = QuotaPrincipal::api_key(secret.as_bytes());
     let key = quota.as_store_key().to_owned();
     let client = AuthenticatedClient {
         name: "fixture-client".to_string(),
@@ -427,6 +429,7 @@ fn authenticated_client_debug_redacts_the_nested_quota_principal() {
         principal: "0123456789ab".to_string(),
         quota_principal: Some(quota),
         authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     let rendered = format!("{client:?}");

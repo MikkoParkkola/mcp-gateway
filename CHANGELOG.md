@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **API keys are configured as sha256 digests, with an optional expiry
+  (breaking).** `auth.api_keys[].key` is refused at load; set `key_sha256` to the
+  output of the new offline `mcp-gateway hash-key` (key on stdin, `--verify`
+  checks one). An `env:` variable must hold the digest, not the key. The
+  optional `expires_at` refuses a matching key with 401 after that instant.
+  Clients keep their keys, and principals are unchanged. See
+  `docs/UPGRADING-4.0.md` item 41.
+
 ### Fixed
 
 - **A modern-era stdio caller is handed a continuation instead of `-32003`.**
@@ -68,7 +78,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routing it needs. Omitting `accounts.hosted` mounts no route and changes no
   existing refusal text.
 
+- **With auth on, the tool-call audit log is required and fails closed
+  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
+  true` fails to load, and a log that cannot open stops startup. Every entry
+  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
+  (credential kind, key fingerprint, verified issuer and subject; never an email).
+  Refused and failed calls are recorded. A failed append answers HTTP 503 /
+  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
+  chart and enterprise-alpha mount a writable `audit` volume. The log is not
+  rotated yet. See UPGRADING-4.0.md item 43.
+
 ### Fixed
+
+- **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
+  discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
+  is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
+  A budget that has blocked stays blocked across a restart until UTC midnight.
 
 - **The default capability directories no longer include a checkout under `HOME`.**
   `capabilities.directories` defaulted to `capabilities` plus
@@ -163,14 +188,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explanation. `MCP_GATEWAY_*` environment variables are not checked. Reloads
   run the same check and keep the running config on refusal. See
   UPGRADING-4.0.md item 29.
-- **Attestation is off by default, and `enforce` or an unrecognised
+- **Attestation is off by default, and an unrecognised
   `GATEWAY_ATTESTATION_MODE` fails startup (breaking).** An unset mode used to
   attach an observe-mode validator, and every unrecognised value, `enforce`
   included, fell back to observe with a warning, so a deployment that asked
   for enforcement silently ran without it. Unset, empty or `off` now attaches
-  no validator; set `observe` to keep the audit lines. `enforce` is refused at
-  load until it covers the direct route and multi-step plans. See
+  no validator; set `observe` to keep the audit lines. See
   `docs/UPGRADING-4.0.md` item 30.
+- **Attestation `enforce` enforces (breaking).** It refuses, with -32002, a
+  call whose token is missing or invalid: `gateway_invoke` (the `attestation`
+  argument), the direct `/mcp/{backend}` route and surfaced tools
+  (`_meta["io.mcp-gateway/attestation"]`, stripped before forwarding).
+  Playbooks and code-mode plans are refused under enforce. Enforce without
+  `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
+  `docs/UPGRADING-4.0.md` item 46.
 - **A credential over plain HTTP on a network bind refuses the start
   (breaking).** With `auth`, `agent_auth` or the key server on, a non-loopback
   bind or `public_url`, and no mTLS, the gateway refuses to serve, and a reload
