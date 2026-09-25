@@ -38,7 +38,7 @@ upgrading a running deployment.
 | 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
 | 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
-| 23 | `logging/setLevel` over HTTP needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
+| 23 | `logging/setLevel` on `/mcp` and `/mcp/{name}` needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -328,9 +328,11 @@ a persistent `store_dir`; an `emptyDir` would lose a revocation on restart.
 In 3.x any caller could send `logging/setLevel` to `POST /mcp`. The gateway forwarded the level
 over its own credential to every running shared backend, so a key scoped to one backend could
 switch every shared backend to `debug` for every user. A shared backend is one process with one
-log level, so there is no per-caller level to set on it.
+log level, so there is no per-caller level to set on it. The direct route `POST /mcp/{name}`
+forwarded it to that one backend for any key scoped to it, which changes the level for every other
+user of the backend.
 
-The method now needs an admin key. Any other caller gets HTTP 403 with JSON-RPC error `-32600`,
+The method now needs an admin key on both routes. Any other caller gets HTTP 403 with JSON-RPC error `-32600`,
 the same shape as an admin-only tool refusal, and the refusal is written to the audit log. Nothing
 is stored and nothing is forwarded. On an HTTP gateway with auth off nobody is admin, so the method
 is refused for every caller there. Stdio is unchanged.

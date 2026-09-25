@@ -235,8 +235,8 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
 // file), one removes an advertised protocol version, one changes what the
 // error budgets count, one stops caching unidentified revisions, one makes
-// webhook notifications opt-in, and one makes `logging/setLevel` admin-only. A 3.x `gateway.yaml` loads unchanged, so this
-// migration never edits the file — it reports, once, on the first 4.0.0 start.
+// webhook notifications opt-in, and one makes `logging/setLevel` admin-only.
+// A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
 /// The seven 4.0.0 changes, in the order they are printed.
 ///
