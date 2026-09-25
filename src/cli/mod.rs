@@ -269,6 +269,19 @@ pub enum Command {
     #[command(subcommand, about = "Personal account store administration (offline)")]
     Accounts(AccountsCommand),
 
+    /// Print the `sha256:<hex>` digest of an API key read from stdin, for
+    /// `auth.api_keys[].key_sha256`. Offline: reads no config, makes no call.
+    #[command(
+        name = "hash-key",
+        about = "Digest an API key read from stdin (offline)"
+    )]
+    HashKey {
+        /// Check the key against this digest instead: exit 0 on a match, 1 on
+        /// a mismatch, 2 on a malformed digest.
+        #[arg(long, value_name = "DIGEST")]
+        verify: Option<String>,
+    },
+
     /// Generate a starter gateway.yaml with sensible defaults
     #[command(about = "Create a new gateway configuration file")]
     Init {

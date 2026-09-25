@@ -24,10 +24,11 @@ auth:
     success_threshold: 2
     reset_timeout: "30s"
 
-  # API keys with different tool access levels
+  # API keys with different tool access levels. Each variable holds the
+  # key's digest, never the key: printf %s "$KEY" | mcp-gateway hash-key
   api_keys:
     # Frontend app: Only search and read operations
-    - key: "env:FRONTEND_API_KEY"
+    - key_sha256: "env:FRONTEND_API_KEY_SHA256"
       name: "Frontend App"
       rate_limit: 100
       backends: ["*"]        # 4.0: a key reaches only the backends it lists
@@ -40,7 +41,7 @@ auth:
       # Note: When allowlist is set, it acts as a whitelist
 
     # Admin key: Full access (minus global policy blocks)
-    - key: "env:ADMIN_API_KEY"
+    - key_sha256: "env:ADMIN_API_KEY_SHA256"
       name: "Admin"
       rate_limit: 0
       backends: ["*"]        # 4.0: a key reaches only the backends it lists
@@ -48,7 +49,7 @@ auth:
       # All backends and tools (tools still fall back to global policy)
 
     # Restricted bot: No filesystem or execution tools
-    - key: "env:BOT_API_KEY"
+    - key_sha256: "env:BOT_API_KEY_SHA256"
       name: "Bot"
       rate_limit: 50
       backends: ["*"]        # 4.0: a key reaches only the backends it lists
@@ -61,7 +62,7 @@ auth:
       # Note: Denylist is applied ON TOP of global policy denies
 
     # Complex example: Allowlist + Denylist combination
-    - key: "env:DATA_READER_KEY"
+    - key_sha256: "env:DATA_READER_KEY_SHA256"
       name: "Data Reader"
       rate_limit: 200
       backends: ["*"]        # 4.0: a key reaches only the backends it lists
