@@ -30,6 +30,8 @@ const REGEX_SIZE_LIMIT: usize = 1 << 20;
 /// Keywords that do not constrain which keys an object may carry.
 const KEY_NEUTRAL: &[&str] = &[
     "type",
+    // Names keys a caller must send; it declares none as forbidden.
+    "required",
     "title",
     "description",
     "default",
