@@ -9,8 +9,8 @@ Configured pins:
 - `~/.claude.json` `mcpServers.gateway.alwaysLoad = true`
 - `~/.claude.json` direct `mcpServers.hebb.alwaysLoad = true`
 - `~/.codex/mcp.json` `servers.gateway.alwaysLoad = true`
-- `~/.claude/mcp_servers/mcp-gateway-rs/servers.yaml` `meta_mcp.warm_start` includes `hebb`
-- `~/.claude/mcp_servers/mcp-gateway-rs/servers.yaml` `meta_mcp.warm_start` includes `linear`
+- `<gateway-config-dir>/servers.yaml` `meta_mcp.warm_start` includes `hebb`
+- `<gateway-config-dir>/servers.yaml` `meta_mcp.warm_start` includes `linear`
 
 ## Measurement method for the next fresh Claude Code session
 

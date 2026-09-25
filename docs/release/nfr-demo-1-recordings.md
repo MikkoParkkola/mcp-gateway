@@ -268,13 +268,13 @@ and 4 carry their own revision fields in their `versions` blocks.
 
 ### Scenarios 2 and 4 — measured
 
-Built on the Spark box from a tree rsynced out of the recording worktree.
+Built on the bench-host box from a tree rsynced out of the recording worktree.
 `binary_sha256` `8752a4a9…`, debug profile, Linux aarch64. The crate still
 embeds no commit SHA, so the source revision is established by comparing build
 **inputs** rather than trusting a label: the 606 files under `src/`, plus
 `Cargo.toml` and `Cargo.lock`, hash to the same content digest `3104b06e9d33c536`
 on both sides — blob ids from `git ls-tree -r 88e160d2` locally, `git
-hash-object` on the Spark tree. That is what earns
+hash-object` on the bench-host tree. That is what earns
 `build_sha_confidence: measured` for these two, and it is the check the earlier
 pass could not make.
 

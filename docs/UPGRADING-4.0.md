@@ -49,12 +49,15 @@ upgrading a running deployment.
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
+
+Numbers 18-20 are intentionally unused.
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -142,6 +145,34 @@ previously never reached them.
 
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
+
+## 7. An OAuth backend must be on TLS or loopback
+
+The bearer token an OAuth backend's transport attaches is a replayable credential, so it no longer
+goes on the wire in cleartext. `https://` is always accepted; `http://` only when the host is
+loopback (`localhost`, `127.0.0.0/8` or `::1`). Anything else fails the backend with
+`refusing to send an OAuth token in cleartext to <origin>`, and the gateway starts without it.
+`http://[::ffff:127.0.0.1]` counts as non-loopback; use `http://127.0.0.1`.
+
+Put TLS in front of the backend, or move it to a loopback address. There is no opt-out. Backends
+without OAuth may still use plain `http://`.
+
+## 8. A credential-bearing backend on plain `http://` is refused at load
+
+An enabled backend whose `http_url` or `a2a_url` is `http://` to a host off this machine, and
+whose configuration carries a credential, fails the load. Credential-bearing means an `oauth`
+section (even with `enabled: false`), identity propagation, secret injection, any static header,
+or userinfo or a query string in the URL. The error names the backend and never echoes the URL.
+
+Use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. See
+[REMOTE_BACKENDS.md](REMOTE_BACKENDS.md).
+
+## 9. The savings estimates are gone from stats
+
+The `stats --price` flag, the `gateway_get_stats` `price_per_million` argument, and the
+`tokens_saved` and `estimated_savings_usd` response fields are removed. They were estimates with no
+measured basis. Drop `--price` from scripts, and compute cost from `total_cached_tokens` with your
+own price.
 
 ## 10. Probes read `/livez` and `/readyz`, not `/health`
 

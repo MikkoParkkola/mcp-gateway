@@ -81,7 +81,7 @@ observable, which is a second and stronger reason to do it first.
 Restoring the body turns the lib target green; it is verified green locally with that
 body (`cargo test --lib block_1_`, 4 passed). The repair must be built on top of
 `5dfbed58` and pushed as an explicit ref. It must not be delivered by pushing a
-local tip: the worktree at `/Users/mikko/github/.worktrees/mcp-2026-protocol` is
+local tip: the worktree at `<worktrees>/mcp-2026-protocol` is
 39 commits behind the remote and 16 ahead, and pushing its tip would drop the
 peer commits in between.
 

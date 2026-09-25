@@ -89,5 +89,5 @@ the single transport-independent outbound `_meta` writer
 ## Order
 
 Detached worktree at HEAD, so the shared tree's dirty files stay untouched. RED
-tests, implementation, `cargo test --lib` under `~/.claude/bin/lowload`, clippy, then
+tests, implementation, `cargo test --lib` under `<review-tools>/lowload`, clippy, then
 two non-Claude reviewers in parallel. The ledger row moves only after that.

@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.WORKLOAD.1 — the six-rep run, 2026-09-20
 
-`gating-2026-09-20d`, Spark, 30 measured reps (A1-6, B1-6, C1-6, D1-6, E1-6) plus the
+`gating-2026-09-20d`, bench-host, 30 measured reps (A1-6, B1-6, C1-6, D1-6, E1-6) plus the
 A0/B0/C0 warm-ups. Zero voids, zero HTTP errors.
 
 **Recorded verdict: INCONCLUSIVE** (`eval_workload.py` exit 2, `verdict.json`).
@@ -116,7 +116,7 @@ SHA and health version, so the C→D comparison isolates protocol era against a
 byte-identical binary; both are report-only and neither is gated.
 
 The 265 raw artifacts — per-rep `*.summary.json`, `*.meta.json`, `*.health.json`, gateway
-stdout/stderr and k6 output — are archived on Spark at
+stdout/stderr and k6 output — are archived on bench-host at
 `~/perf-workload/results/gating-2026-09-20d/`, outside any checkout so they survive branch
 and worktree cleanup. They were produced in the `mcp-gateway-wt-6rep` worktree and copied
 out; do not cite the worktree path.

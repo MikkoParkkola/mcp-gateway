@@ -35,7 +35,7 @@ half is not a code gap. Every build that has been probed carries the guard:
 | Probed | Build | Result |
 | --- | --- | --- |
 | 2026-09-11 | built from the release tree, `127.0.0.1:39466` | both probes refused 403, legitimate 200, exit 0 |
-| 2026-09-13 | release build of `bd1adbb4` (`origin/main`), spark loopback | `2 probed, 1 uncovered, 0 failing`, exit 0 |
+| 2026-09-13 | release build of `bd1adbb4` (`origin/main`), bench-host loopback | `2 probed, 1 uncovered, 0 failing`, exit 0 |
 | 2026-09-17 | **the listening install**, `127.0.0.1:39401` | `2 probed, 1 uncovered, 2 failing` |
 
 The listening install still answers a foreign `Origin` and a foreign `Host` with the
@@ -51,9 +51,9 @@ that the listening process runs a build that has it.
 execs a wrapper, and the wrapper pins the version in two lines:
 
 ```zsh
-# /Users/mikko/.local/bin/start-mcp-gateway
-typeset -r gateway_binary="/Users/mikko/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway"
-typeset -r gateway_config="/Users/mikko/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml"
+# ~/.local/bin/start-mcp-gateway
+typeset -r gateway_binary="~/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway"
+typeset -r gateway_config="~/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml"
 ```
 
 Those two lines are the whole deployment control point. Note that `~/.local/bin/mcp-gateway`

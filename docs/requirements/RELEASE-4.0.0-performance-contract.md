@@ -100,7 +100,7 @@ warm-up:  A0  B0        (discarded, never reported)
 measured: A1  B1  A2  B2  A3  B3
 ```
 
-A = v3.5.0, B = HEAD. **Interleaved, not blocked.** Spark is a shared machine with other
+A = v3.5.0, B = HEAD. **Interleaved, not blocked.** bench-host is a shared machine with other
 sessions' jobs landing on it; running all of one arm and then all of the other lets drift in
 machine load masquerade as a difference between versions. Interleaving makes that drift appear
 as within-arm variance, where it is visible.
@@ -133,12 +133,12 @@ numbers would be exactly the kind of post-hoc rule this contract exists to preve
 
 | | |
 |---|---|
-| host | `spark` (all benchmarking; a Mac number would be rejected, correctly) |
+| host | `bench-host` (all benchmarking; a Mac number would be rejected, correctly) |
 | cores | 20 |
 | rustc | `1.98.1 (48a229cea 2026-09-01)`, aarch64-unknown-linux-gnu, LLVM 22.1.8 — corrected from the pre-run pin of 1.98.0 per A4.3; both arms build with it, and it is above the `rust-version = "1.95"` both arms require |
 | k6 | `grafana/k6` container image, one image for both arms; exact digest recorded with results |
 | shared? | yes — other sessions' jobs run concurrently. Load recorded per rep; arms interleaved. |
-| transport | both arms delivered to Spark as one git bundle, built in an isolated directory, not in the shared checkout |
+| transport | both arms delivered to bench-host as one git bundle, built in an isolated directory, not in the shared checkout |
 
 ## What this measurement will not establish
 
@@ -159,7 +159,7 @@ Stated in advance, because a benchmark that oversells itself is worse than none:
 
 The contract above forbids edits **once the first measured rep starts**. No rep has
 started: `fd -HI 'k6|perf.*json|summary.*json'` across the repo returns only the load
-script itself, and `~/.claude/data/spark-jobs/jobs.log` carries no run for this contract.
+script itself, and `<bench-host-jobs>/jobs.log` carries no run for this contract.
 So this amendment is legal, and it is recorded as an amendment rather than folded into the
 text above, because silently rewriting a pre-run contract is exactly the move the contract
 exists to prevent. Each item below states what changed and why, and every one of them was
@@ -184,7 +184,7 @@ say plainly that it was branch tip at the time, not that it is branch tip now.
 
 ### A2 — toolchain drift: 1.98.0 -> 1.98.1
 
-The environment table pins `rustc 1.98.0 (88d9e12ae 2026-08-18)`. Spark now carries
+The environment table pins `rustc 1.98.0 (88d9e12ae 2026-08-18)`. bench-host now carries
 `rustc 1.98.1 (48a229cea 2026-09-01)`, and downgrading a shared machine's toolchain for a
 benchmark is not this session's call. Both arms build with **1.98.1**.
 
@@ -211,13 +211,13 @@ forbids is not a cheaper way to answer the question, it is a different and weake
 
 ```
 k6 emits raw samples:  --out json=<rep>.json   (in addition to --summary-export)
-reduction on Spark:    all mcp_tools_call_latency point values for an arm's three measured
+reduction on bench-host:    all mcp_tools_call_latency point values for an arm's three measured
                        reps are concatenated and p50/p99 computed once over that pooled set
 returned to the Mac:   the computed percentiles only, never the sample files
 PASS  iff  HEAD p50 <= 1.05 x v3.5.0 p50   AND   HEAD p99 <= 1.10 x v3.5.0 p99
 ```
 
-Raw sample files are large and stay on Spark; the reduction runs there. Per-rep p50/p99 are
+Raw sample files are large and stay on bench-host; the reduction runs there. Per-rep p50/p99 are
 still reported beside the pooled figures, because that is what makes variance visible, and
 the inconclusive rule now has a definition it can be checked against: if an arm's per-rep
 spread (`max - min`, reported) is wider than the margin the pooled comparison passed by, the
@@ -266,7 +266,7 @@ file matches the tag byte-for-byte.
 ### A6 — k6 image is pinned by digest, not by tag
 
 The environment table promises "exact digest recorded with results". `grafana/k6:latest` is
-already pulled on Spark (image id `388d60cf73b6`). `latest` is a moving tag; the digest is
+already pulled on bench-host (image id `388d60cf73b6`). `latest` is a moving tag; the digest is
 resolved **once**, before the warm-up reps, and that one digest drives every rep of both
 arms. If the resolved digest changes mid-run, the run is void.
 
@@ -287,7 +287,7 @@ per-rep guard it always was.
 ### A8 — the evaluator is frozen before the run, not written after it
 
 A pass rule stated in prose is still applied by a human who has seen the numbers. The rule
-in A3 is implemented as a small script on Spark and frozen **before the warm-up reps**: it
+in A3 is implemented as a small script on bench-host and frozen **before the warm-up reps**: it
 takes the six measured reps' sample files, emits pooled and per-rep p50/p99, the two ratios,
 the spread, and one of `PASS` / `FAIL` / `INCONCLUSIVE` / `VOID`. It refuses — `VOID`, never
 a verdict — on a missing rep, a non-finite value, or an empty metric. Identical inputs give
@@ -344,7 +344,7 @@ plainly so nobody reads a stale finding as an open one:
 
 | finding | disposition |
 |---|---|
-| F1 — median-of-three is not the run's p99 and discards the worst rep | **Died at source.** The committed A3 computes p50/p99 once over the concatenated samples of an arm's measured reps. The reviewer's prescribed fix — compute true pooled percentiles from the raw JSON samples, reduced on Spark itself — is verbatim what A3 now does, arrived at independently. Two vendors converging on the same repair is the strongest signal either produced. |
+| F1 — median-of-three is not the run's p99 and discards the worst rep | **Died at source.** The committed A3 computes p50/p99 once over the concatenated samples of an arm's measured reps. The reviewer's prescribed fix — compute true pooled percentiles from the raw JSON samples, reduced on bench-host itself — is verbatim what A3 now does, arrived at independently. Two vendors converging on the same repair is the strongest signal either produced. |
 | F4 — the inconclusive rule's "margin the comparison passed by" has no units | **Died with F1.** That sentence guarded the median statistic. The rule now reads on the pooled figures, where the spread guard compares per-rep p99 spread in milliseconds against the pooled margin in milliseconds. Units are the same on both sides. |
 | F2 — void condition 3 tolerates a 1% check-failure rate | **Materially closed by void condition 7**, added in Amendment 1 for exactly this reason: any `tools/call` in a measured rep whose response is not a success voids the run, zero tolerance. Residual, named rather than waved away: condition 3 still admits up to 1% of *other* check failures. It is not raised to 100% here, because a single connection reset on a shared box would then void a run whose latency samples are all good. Instead: **any measured rep whose checks rate is below 100% has the names and counts of its failing checks recorded with the results.** A reviewer sees what failed instead of inferring it from an aggregate. |
 | F3 — nothing ties the measured SHA to the commit 4.0.0 actually ships | **Adopted as R1 below.** The one finding neither the author nor the first reviewer raised, and the only one that survives the run. |
@@ -426,7 +426,7 @@ immediately — it cannot silently consume the run.
 `run-reps.sh` sha256 is now `b65e2331085e86d26bbf0ba4425708e8d9512e6aa315644d9ae334f8a4fb56db`,
 superseding the pre-patch value. `eval-nfr1.sh` is **untouched** and still
 `7b3d6225a34d0aab8229b417edb686ead80ffbd109f2f7a1d460831fe4c49d09`, verified by re-hashing it
-on Spark after the patch: the script that decides `PASS`/`FAIL` has not been edited since it
+on bench-host after the patch: the script that decides `PASS`/`FAIL` has not been edited since it
 was frozen, which is the only freeze that guards against choosing a rule after seeing numbers.
 
 ### What Amendment 3 does not change
@@ -485,7 +485,7 @@ the `rust-version = "1.95"` both arms require. 1.98.1 is also above it. Both arm
 satisfies condition 5 exactly.
 
 Environment row corrected to the toolchain actually used, recorded from the candidate
-checkout on Spark:
+checkout on bench-host:
 
 ```
 rustc 1.98.1 (48a229cea 2026-09-01)  host: aarch64-unknown-linux-gnu  LLVM 22.1.8
@@ -567,7 +567,7 @@ under the same gate already reads the way this one now does.
 
 Repo fix, committed as `7a6d752b`: D2 and D3 in `tests/load/k6_gateway.js`.
 
-Runner fix, on Spark: D1 and D4. k6 now writes the JSON-lines stream and the JSON summary to
+Runner fix, on bench-host: D1 and D4. k6 now writes the JSON-lines stream and the JSON summary to
 separate files on a mounted results directory, and its human console output to
 `<tag>.console.txt`; nothing shares a stream with anything. The runner also writes
 `launch-argv.txt` and `checkout-sha.txt` (per-arm `HEAD` plus a dirty-file count, so a modified

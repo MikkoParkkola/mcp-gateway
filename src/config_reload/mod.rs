@@ -3,7 +3,7 @@
 //! Config hot-reload with diff patching.
 //!
 //! This module watches `config.yaml` **and** any env files listed in
-//! `config.env_files` (e.g. `~/.claude/secrets.env`) for changes.  When either
+//! `config.env_files` (e.g. `~/.config/mcp-gateway/secrets.env`) for changes.  When either
 //! file type changes the full [`Config::load`] pipeline is re-run, env vars are
 //! re-expanded, a structural diff is computed, and only the changed sections are
 //! applied in-place.
@@ -1040,7 +1040,7 @@ fn matching_env_file(event: &Event, env_paths: &[PathBuf]) -> Option<PathBuf> {
 // ============================================================================
 
 /// File watcher that triggers config hot-reload on `config.yaml` **and**
-/// env-file changes (e.g. `~/.claude/secrets.env`).
+/// env-file changes (e.g. `~/.config/mcp-gateway/secrets.env`).
 ///
 /// Mirrors the structure of [`crate::capability::CapabilityWatcher`].
 /// Holds the underlying `notify` watcher alive for the lifetime of the struct.

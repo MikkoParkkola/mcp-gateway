@@ -1,7 +1,7 @@
 # NFR.PERF.1 — the bisect cannot resolve the question it is being asked
 
 Status: **finding, measured at source 2026-09-21.** Applies to the running bisect at
-`spark:~/perf-workload/results/bisect-2026-09-21/`.
+`bench-host:~/perf-workload/results/bisect-2026-09-21/`.
 
 ## The claim
 

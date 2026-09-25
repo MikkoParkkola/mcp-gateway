@@ -1,6 +1,6 @@
 # Criterion re-measurement, 2026-09-12
 
-Raw Criterion output for the `NFR.PERF.1` re-measurement, copied off `spark` on
+Raw Criterion output for the `NFR.PERF.1` re-measurement, copied off `bench-host` on
 2026-09-13 so the evidence outlives one machine. `run.sh` is the script that produced
 both logs, verbatim. The logs carry a `.txt` extension because `.gitignore` excludes
 `*.log`; an earlier commit added this directory without them and the exclusion dropped

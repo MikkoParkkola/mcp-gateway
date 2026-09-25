@@ -306,7 +306,7 @@ decision without its reason gets re-litigated by the next reader.
    diff. A gate that cannot read its own artifact is decoration.
 2. **Scenario 2 records on any Unix host, with the synthetic peer**, citing the
    existing pinned-SDK workflow beside it (`.github/workflows/task-sdk-recovery.yml`).
-   Reason: standing up Linux CI or Spark capacity for one row costs more than the
+   Reason: standing up Linux CI or bench-host capacity for one row costs more than the
    row is worth, and the pinned-SDK driver refusing to run off Linux
    (`scripts/test-task-sdk-recovery.sh:8`) is a property of that driver, not of
    the requirement.

@@ -1,6 +1,6 @@
 == NFR.DEMO.1 scenario 4: large-catalogue discovery ==
 gateway:     mcp-gateway 4.0.0
-catalogue:   /home/mikko/scratch/nfr-demo-1/capabilities (production capabilities/, examples/ excluded)
+catalogue:   ~/scratch/nfr-demo-1/capabilities (production capabilities/, examples/ excluded)
 catalogue size counted on disk: 119 capability files
 claimed served meta-tool band: 9-17 tools (README.md:21; lower bound from benchmarks/public_claims.json)
 run dir:     /tmp/nfr-demo-1-4-large-catalogue.Z25va4

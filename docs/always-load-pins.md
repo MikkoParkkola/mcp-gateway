@@ -8,8 +8,8 @@ MIK-3639 captures the first Claude Code v2.1.121 adoption slice for the `alwaysL
 |---|---|---|---|---|
 | Claude Code `gateway` server | `~/.claude.json` `mcpServers.gateway` | `alwaysLoad: true` | Gateway-core meta-tools are the control plane for discovering and invoking the long-tail portfolio tools. Loading this small surface directly avoids a gateway-search loop before gateway use. | Remove the one `alwaysLoad` field. |
 | Codex `gateway` server | `~/.codex/mcp.json` `servers.gateway` | `alwaysLoad: true` | Same control-plane rationale for Codex sessions that route through the local gateway. | Remove the one `alwaysLoad` field. |
-| Gateway backend `hebb` | `~/.claude/mcp_servers/mcp-gateway-rs/servers.yaml` `meta_mcp.warm_start` | warm-started | Hebb memory is mandated by portfolio workflow for meaningful turns, and the HTTP daemon is already resident at `127.0.0.1:39400`. Gateway backend configs do not implement `alwaysLoad`; warm-start is the supported backend prefetch mechanism. | Remove `hebb` from `warm_start`. |
-| Gateway backend `linear` | `~/.claude/mcp_servers/mcp-gateway-rs/servers.yaml` `meta_mcp.warm_start` | warm-started | Linear is the primary backlog surface in elite-loop runs and fires on every `MIK-` issue operation. Gateway backend configs do not implement `alwaysLoad`; warm-start is the supported backend prefetch mechanism. | Remove `linear` from `warm_start`. |
+| Gateway backend `hebb` | `<gateway-config-dir>/servers.yaml` `meta_mcp.warm_start` | warm-started | Hebb memory is mandated by portfolio workflow for meaningful turns, and the HTTP daemon is already resident at `127.0.0.1:39400`. Gateway backend configs do not implement `alwaysLoad`; warm-start is the supported backend prefetch mechanism. | Remove `hebb` from `warm_start`. |
+| Gateway backend `linear` | `<gateway-config-dir>/servers.yaml` `meta_mcp.warm_start` | warm-started | Linear is the primary backlog surface in elite-loop runs and fires on every `MIK-` issue operation. Gateway backend configs do not implement `alwaysLoad`; warm-start is the supported backend prefetch mechanism. | Remove `linear` from `warm_start`. |
 | `apple-calendar` | no gateway backend found in current `servers.yaml` | defer | Apple Calendar is implemented as a skill/local CLI path in this environment, not as a gateway backend in the audited config. | N/A. |
 | Other backends | current `servers.yaml` | defer | Search, browser, media, infra, and provider-specific tools remain long-tail and should keep tool-search deferral. | N/A. |
 
@@ -17,7 +17,7 @@ MIK-3639 captures the first Claude Code v2.1.121 adoption slice for the `alwaysL
 
 - `~/.mcp.json` does not exist on this host; the active Claude Code global MCP config is `~/.claude.json`.
 - Project `.mcp.json` files under `~/github` either configure unrelated legal workspaces or project-local tools such as `trvl` and `nab`; none referenced `gateway`, `hebb`, or `linear`, so no per-project hot-path edit was made.
-- `~/.claude/mcp_servers/mcp-gateway-rs/servers.yaml` is the live gateway backend config on port `39401` and now carries the supported gateway warm-start intent for `hebb` and `linear`.
+- `<gateway-config-dir>/servers.yaml` is the live gateway backend config on port `39401` and now carries the supported gateway warm-start intent for `hebb` and `linear`.
 - Backups were created before global config edits using the suffix `.bak-mik3639-<UTC timestamp>`.
 
 ## Verification boundary

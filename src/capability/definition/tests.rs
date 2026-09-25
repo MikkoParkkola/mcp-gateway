@@ -1142,7 +1142,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Created issue",
-                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "url": "https://linear.app/example/issue/MIK-1/test",
                 "state": { "name": "Backlog" },
                 "team": { "key": "MIK" },
                 "priority": 4,
@@ -1154,7 +1154,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Created issue",
-                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "url": "https://linear.app/example/issue/MIK-1/test",
                 "state": { "name": "Backlog" },
                 "team": { "key": "MIK" },
                 "priority": 4,
@@ -1172,11 +1172,11 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Updated issue",
-                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "url": "https://linear.app/example/issue/MIK-1/test",
                 "state": { "name": "Canceled" },
                 "priority": 4,
                 "priorityLabel": "Low",
-                "assignee": { "name": "mikko.parkkola" }
+                "assignee": { "name": "alice" }
             }
         }),
         serde_json::json!({
@@ -1184,11 +1184,11 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Updated issue",
-                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "url": "https://linear.app/example/issue/MIK-1/test",
                 "state": { "name": "Canceled" },
                 "priority": 4,
                 "priorityLabel": "Low",
-                "assignee": { "name": "mikko.parkkola" }
+                "assignee": { "name": "alice" }
             }
         }),
     );
@@ -1202,7 +1202,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "comment-1",
                 "body": "ok",
                 "createdAt": "2026-04-29T10:13:21.226Z",
-                "user": { "name": "mikko.parkkola@iki.fi" },
+                "user": { "name": "alice@example.com" },
                 "issue": { "identifier": "MIK-1", "title": "Validation" }
             }
         }),
@@ -1211,7 +1211,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "comment-1",
                 "body": "ok",
                 "createdAt": "2026-04-29T10:13:21.226Z",
-                "user": { "name": "mikko.parkkola@iki.fi" },
+                "user": { "name": "alice@example.com" },
                 "issue": { "identifier": "MIK-1", "title": "Validation" }
             }
         }),
@@ -1248,7 +1248,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Validation",
-                "url": "https://linear.app/parm/issue/MIK-1/test"
+                "url": "https://linear.app/example/issue/MIK-1/test"
             }],
             "pageInfo": { "hasNextPage": false, "endCursor": "cursor-1" }
         }),
@@ -1257,7 +1257,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Validation",
-                "url": "https://linear.app/parm/issue/MIK-1/test"
+                "url": "https://linear.app/example/issue/MIK-1/test"
             }]
         }),
     );
@@ -1268,7 +1268,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
         serde_json::json!({
             "nodes": [{
                 "id": "team-1",
-                "name": "Mikko",
+                "name": "Alice",
                 "key": "MIK",
                 "description": null,
                 "states": { "nodes": [] },
@@ -1278,7 +1278,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
         serde_json::json!({
             "teams": [{
                 "id": "team-1",
-                "name": "Mikko",
+                "name": "Alice",
                 "key": "MIK",
                 "description": null,
                 "states": { "nodes": [] },
@@ -1303,7 +1303,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "teams": { "nodes": [] },
                 "lead": null,
                 "projectMilestones": { "nodes": [] },
-                "url": "https://linear.app/parm/project/test"
+                "url": "https://linear.app/example/project/test"
             }]
         }),
         serde_json::json!({
@@ -1319,7 +1319,7 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
                 "teams": { "nodes": [] },
                 "lead": null,
                 "projectMilestones": { "nodes": [] },
-                "url": "https://linear.app/parm/project/test"
+                "url": "https://linear.app/example/project/test"
             }]
         }),
     );
@@ -1329,18 +1329,18 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
         "data.viewer",
         serde_json::json!({
             "id": "user-1",
-            "name": "mikko.parkkola@iki.fi",
-            "email": "mikko.parkkola@iki.fi",
-            "displayName": "mikko.parkkola",
+            "name": "alice@example.com",
+            "email": "alice@example.com",
+            "displayName": "alice",
             "active": true,
             "admin": true,
-            "url": "https://linear.app/parm/profiles/mikko.parkkola"
+            "url": "https://linear.app/example/profiles/alice"
         }),
         serde_json::json!({
             "id": "user-1",
-            "name": "mikko.parkkola@iki.fi",
-            "email": "mikko.parkkola@iki.fi",
-            "displayName": "mikko.parkkola"
+            "name": "alice@example.com",
+            "email": "alice@example.com",
+            "displayName": "alice"
         }),
     );
 }
@@ -1366,7 +1366,7 @@ fn linear_get_issue_projection_spec_maps_canonical_fields() {
                 "id": "user-1",
                 "name": "alice",
                 "displayName": "Alice Example",
-                "email": "alice@iki.fi"
+                "email": "alice@example.com"
             },
             "createdAt": "2026-01-01T00:00:00Z",
             "updatedAt": "2026-01-02T00:00:00Z",
@@ -1384,7 +1384,7 @@ fn linear_get_issue_projection_spec_maps_canonical_fields() {
         out["actor"]["display_name"],
         serde_json::json!("Alice Example")
     );
-    assert_eq!(out["actor"]["email"], serde_json::json!("alice@iki.fi"));
+    assert_eq!(out["actor"]["email"], serde_json::json!("alice@example.com"));
     assert_eq!(
         out["env_time"]["created"],
         serde_json::json!("2026-01-01T00:00:00Z")

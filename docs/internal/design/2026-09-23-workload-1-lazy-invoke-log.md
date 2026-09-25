@@ -21,7 +21,7 @@ The request-level slot is seeded `None`, which means silence (`notification_sink
 so a caller that never declares a level (the NFR.WORKLOAD.1 harness, and most
 clients) pays for building and destroying the notification on every call.
 
-Measured on spark (instructions per `tools/call`, gateway only, six interleaved
+Measured on bench-host (instructions per `tools/call`, gateway only, six interleaved
 rounds, median): tip with #741 704.6K; the same build with both `emit_log` call
 sites compiled out 680.4K. Paired per round the saving was positive in 4 of 6
 rounds (median ~26K). About one point of p50 latency, by the ~25K-per-point scale in

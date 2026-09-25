@@ -1,6 +1,6 @@
 # Rehearsal findings — NFR.WORKLOAD.1
 
-Run: `~/perf-workload/runs/2026-09-13-rehearsal` on Spark. Build exit 0, all five
+Run: `~/perf-workload/runs/2026-09-13-rehearsal` on bench-host. Build exit 0, all five
 arms. Nine reps completed (A0 B0 C0 warm-ups, A1 B1 C1, A2 B2 C2) before the run
 stopped at A3.
 
@@ -59,7 +59,7 @@ helper; only void 4 bypassed it. Fixed, and the fixtures now use k6's spelling.
 ## Finding 3 — the pinned cell ports sit in the ephemeral range
 
 A3 died with `Gateway error: IO error: Address already in use (os error 98)`.
-Spark's `ip_local_port_range` is `32768 60999` and nothing was reserved, so the
+bench-host's `ip_local_port_range` is `32768 60999` and nothing was reserved, so the
 contract's pinned ports 39420-39424 are inside the range the kernel hands out as
 client source ports. k6's connection churn can take 39420 as a source port, after
 which the next gateway cannot bind it.

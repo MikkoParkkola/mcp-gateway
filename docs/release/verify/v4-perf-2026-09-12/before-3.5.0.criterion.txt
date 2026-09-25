@@ -307,9 +307,9 @@
    Compiling axum-server v0.8.0
    Compiling reqwest v0.13.4
    Compiling tokio-tungstenite v0.30.0
-   Compiling mcp-gateway v3.5.0 (/home/mikko/github/.worktrees/perf-remeasure-4.0.0)
+   Compiling mcp-gateway v3.5.0 (~/github/.worktrees/perf-remeasure-4.0.0)
     Finished `bench` profile [optimized] target(s) in 2m 33s
-     Running benches/gateway_benchmarks.rs (/home/mikko/bench-targets/v4-perf/release/deps/gateway_benchmarks-3f23da63941b20d4)
+     Running benches/gateway_benchmarks.rs (~/bench-targets/v4-perf/release/deps/gateway_benchmarks-3f23da63941b20d4)
 Gnuplot not found, using plotters backend
 Benchmarking tool_registry/insert_one
 Benchmarking tool_registry/insert_one: Warming up for 3.0000 s

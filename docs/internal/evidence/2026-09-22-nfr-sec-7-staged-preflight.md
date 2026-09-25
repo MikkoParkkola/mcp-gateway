@@ -94,7 +94,7 @@ build, `launchctl kickstart`, watch ~30s for a restart loop, then re-run step 7 
 
 ```
 $ readlink ~/.local/bin/start-mcp-gateway
-/Users/mikko/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway
+~/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway
 ```
 
 Nothing above proves the row. What a spare-port smoke cannot establish is that `launchd`

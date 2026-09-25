@@ -463,7 +463,7 @@ fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
     use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: an event for a watched env file
-    let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+    let env_path = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![env_path.clone()],
@@ -480,7 +480,7 @@ fn matching_env_file_returns_none_when_path_not_in_watch_list() {
     use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: an event for a file not in the watch list
-    let watched = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+    let watched = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
     let other = std::path::PathBuf::from("/tmp/other.env");
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
@@ -496,7 +496,7 @@ fn matching_env_file_returns_none_for_remove_event() {
     use notify::{EventKind, event::RemoveKind};
 
     // GIVEN: a Remove event on a watched env file
-    let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+    let env_path = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
     let event = notify::Event {
         kind: EventKind::Remove(RemoveKind::File),
         paths: vec![env_path.clone()],

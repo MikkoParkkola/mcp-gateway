@@ -1,6 +1,6 @@
 # NFR.PERF.1 — where the P50 regression comes from: a ramp measurement
 
-**Date:** 2026-09-22 · **Host:** Spark (20 cores, aarch64) · **Status:** COMPLETE — 18 cycles, 15 kept, 108 reps
+**Date:** 2026-09-22 · **Host:** bench-host (20 cores, aarch64) · **Status:** COMPLETE — 18 cycles, 15 kept, 108 reps
 
 **Headline:** a P50 regression is reproduced against **v3.5.0**, the baseline
 `NFR.PERF.1` actually names, at **1.1237 [1.1010, 1.1521]** (k=4, 96.5% coverage,
@@ -663,7 +663,7 @@ with no log line, is a poor failure mode.
 
 ## 2. Environment
 
-Spark carries sustained background load from other tenants. Measured
+bench-host carries sustained background load from other tenants. Measured
 immediately before the run:
 
 - load average 13–22 on 20 cores, **spiking to 48** within ten minutes;
@@ -674,7 +674,7 @@ immediately before the run:
 
 **The load source is not what the earlier write-ups assumed.** `ps` during the
 spike shows it is dominated by **self-hosted GitHub Actions runners on this
-same box** — `actions-runner/claude-elite`, `botnaut-engine-2`,
+same box** — `actions-runner/private-tooling`, `botnaut-engine-2`,
 `botnaut-client` — running `pytest` and `rustc`. The two long-lived processes
 are a floor, not the mechanism. CI is bursty and uncorrelated with anything we
 control, which is a better explanation of the 34% consecutive-rep scatter than
@@ -693,7 +693,7 @@ cancels. G1 is the test of whether that is sufficient; it is not assumed.
 Everything below was verified, not assumed:
 
 - **Harness is the shipped one.** `benchmarks/workload/{k6_workload.js,
-  gateway.workload.yaml, mcp_backend.py}` on Spark are byte-identical
+  gateway.workload.yaml, mcp_backend.py}` on bench-host are byte-identical
   (sha256) to the repo's current files, and are held fixed across every arm.
 - **Builds are reproducible.** Every arm was built from **one worktree**
   with **one identical** `cargo build --release --locked --features

@@ -5,7 +5,7 @@
 per case · **Machine**: the operator's Mac, interactive load present.
 
 > **Superseded 2026-09-03.** The numbers in this section were taken on a loaded Mac and cover only a group that has no
-> 3.5.0 counterpart. A cross-version run on Spark is recorded at the end of this file and carries the verdicts. The
+> 3.5.0 counterpart. A cross-version run on bench-host is recorded at the end of this file and carries the verdicts. The
 > reasoning here still holds; do not quote the values.
 
 ## What the requirements ask
@@ -71,9 +71,9 @@ Named, because a benchmark that oversells itself is worse than none:
 
 ---
 
-# NFR.PERF.1 / NFR.PERF.2 — re-measured on Spark, cross-version
+# NFR.PERF.1 / NFR.PERF.2 — re-measured on bench-host, cross-version
 
-**Date**: 2026-09-03 · **Machine**: `spark`, Linux 6.17.0-1014-nvidia, aarch64, 20 cores, no interactive load
+**Date**: 2026-09-03 · **Machine**: `bench-host`, Linux 6.17.0-1014-nvidia, aarch64, 20 cores, no interactive load
 **Before**: `v3.5.0` = `32f135a61fb50c20a044fb4c2347bc1cf8015d89` · **After**: `5c29494a` (`fix/mrtr2-continuation-handle`)
 **Harness**: `benches/gateway_benchmarks.rs`, criterion, 100 samples per case, default features on both sides
 **Command**: `cargo bench --bench gateway_benchmarks`, both refs in one session, one clone, one target directory,
@@ -153,7 +153,7 @@ distribution and is the more trustworthy of the two where they disagree. Criteri
 | `modern_request_path/validate_headers` | 11.04 ns | [11.03, 11.05] |
 | `modern_request_path/validate_headers_encoded_name` | 27.43 ns | [27.38, 27.48] |
 
-These are the added work of the 2026 request path, measured on Spark. They are **not** a before/after comparison
+These are the added work of the 2026 request path, measured on bench-host. They are **not** a before/after comparison
 and must not be quoted as one.
 
 ## Verdict — NFR.PERF.1
@@ -193,7 +193,7 @@ That is why the row moves ABSENT to PARTIAL and no further, and why it stays blo
 > Header-first routing MUST be justified by measurement against the current full-parse path, or MUST NOT ship.
 > A performance change without a number is not a performance change.
 
-**MET — satisfied in the direction the row was written for, and the Spark numbers confirm the earlier Mac reasoning.**
+**MET — satisfied in the direction the row was written for, and the bench-host numbers confirm the earlier Mac reasoning.**
 
 Header-first routing did not ship. The requirement's own remedy for an unmeasured performance change is that it does not
 ship, so the row is met. The number that would have justified it, now taken on an unloaded machine:
@@ -220,7 +220,7 @@ Method unchanged — one clone (`~/github/.worktrees/perf-remeasure-4.0.0`), one
 `CARGO_TARGET_DIR`, one criterion session, 3.5.0 (`32f135a6`) collected first
 and the candidate minutes later on the same box. Only the after ref changed:
 `chore/v4-reconcile-main` (`5eb6982e`). Harness and logs:
-`spark:~/bench-logs/v4-perf-releaseline/`.
+`bench-host:~/bench-logs/v4-perf-releaseline/`.
 
 56 comparisons, 27 declared regressions, 11 declared improvements. Six exceed
 the criterion's 5% bound and one exceeds its 10% bound:
