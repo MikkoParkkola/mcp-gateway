@@ -73,6 +73,11 @@ pub(super) async fn drain(
         match result.get("nextCursor") {
             Some(next) if !next.is_null() => cursor = Some(next.clone()),
             _ => {
+                // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
+                let credential = !propagated_headers.is_empty();
+                backend
+                    .remember_listed_tools(identity_key, credential, &tools)
+                    .await;
                 return Ok(JsonRpcResponse::success(
                     id.clone(),
                     json!({ "tools": tools }),
