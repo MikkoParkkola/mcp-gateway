@@ -188,7 +188,8 @@ pub(crate) fn verify_segments(
         // `.hwm` is written after its record, so reading it first means a live
         // append can only leave the stream ahead of it, never behind.
         let hw = segments::read_hwm(path, secret, &config.key_id);
-        // Nothing to verify is not a clean log.
+        // Listed after `.hwm` is read, on every pass: a log wiped between
+        // passes is `NotFound`, never a clean result.
         let files = existing_log_files(path)?;
         #[cfg(test)]
         LISTED.with(|h| {
