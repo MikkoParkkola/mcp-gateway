@@ -115,3 +115,84 @@ fn reload_refuses_loosened_env_file() {
         .expect_err("a reload must refuse the loosened env file");
     assert!(err.to_string().contains("mode 0644"), "{err}");
 }
+
+#[test]
+fn refusal_fix_depends_on_ownership() {
+    let path = Path::new("/etc/mcp-gateway/gateway.yaml");
+    let own = super::refusal_fix(path, true);
+    assert!(
+        own.contains("chmod 600 /etc/mcp-gateway/gateway.yaml"),
+        "{own}"
+    );
+    assert!(
+        !own.contains("fsGroup"),
+        "an owned config needs only chmod: {own}"
+    );
+
+    // chmod on a config another uid owns would lock this process out of it.
+    let other = super::refusal_fix(path, false);
+    assert!(
+        other.contains("fsGroup") && other.contains("defaultMode"),
+        "{other}"
+    );
+    assert!(!other.contains("chmod 600"), "{other}");
+}
+
+/// A 0600 config setting port 39170, and an env file at `env_mode` moving it to 39171.
+fn config_with_port_env_file(dir: &Path, env_mode: u32) -> PathBuf {
+    let env = dir.join("port.env");
+    write_mode(&env, "MCP_GATEWAY_SERVER__PORT=39171\n", env_mode);
+    let config = dir.join("gateway.yaml");
+    write_mode(
+        &config,
+        &format!(
+            "server:\n  port: 39170\nenv_files:\n  - \"{}\"\n",
+            env.display()
+        ),
+        0o600,
+    );
+    config
+}
+
+#[test]
+fn serving_loader_refuses_and_tolerant_loader_skips_a_readable_env_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = config_with_port_env_file(dir.path(), 0o644);
+
+    let err = Config::load_evaluated(Some(&config)).expect_err("serving loader refuses");
+    assert!(err.to_string().contains("env file"), "{err}");
+
+    let tolerant = Config::load(Some(&config)).expect("the tolerant loader still loads");
+    assert_eq!(
+        tolerant.server.port, 39170,
+        "the refused env file must not be applied"
+    );
+
+    // Positive control: owner-only, the same env file is applied.
+    std::fs::set_permissions(
+        dir.path().join("port.env"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .expect("tighten");
+    assert_eq!(
+        Config::load(Some(&config)).expect("load").server.port,
+        39171
+    );
+}
+
+#[test]
+fn reload_refuses_a_loosened_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (config, _env) = config_with_env_file(dir.path(), 0o600);
+    let startup = Config::load_evaluated(Some(&config)).expect("0600 files load");
+
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).expect("loosen");
+
+    let err = Config::load_with_overlay(Some(&config), &startup.env_paths)
+        .expect_err("a reload must refuse the loosened config");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("config file") && msg.contains("mode 0644"),
+        "{msg}"
+    );
+}

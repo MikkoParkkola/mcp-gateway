@@ -78,11 +78,21 @@ pub(crate) fn check_secret_file(path: &Path, what: SecretFile) -> Result<()> {
         Refusal::GroupWrite => format!("lets group {gid} change it"),
         Refusal::GroupReadOwned => format!("lets group {gid} read it"),
     };
+    let fix = refusal_fix(path, meta.uid() == euid);
     Err(Error::Config(format!(
         "Refusing to load {noun} {path}: mode {mode:04o} {lets}, and it can hold credentials. \
-         Fix: chmod 600 {path} (the container runs as UID 1001; see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM}).",
+         {fix}",
         path = path.display(),
     )))
+}
+
+/// The fix to print for a refused file, given whether this process owns it.
+fn refusal_fix(path: &Path, owned: bool) -> String {
+    let _ = owned;
+    format!(
+        "Fix: chmod 600 {} (the container runs as UID 1001; see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM}).",
+        path.display()
+    )
 }
 
 #[cfg(test)]
