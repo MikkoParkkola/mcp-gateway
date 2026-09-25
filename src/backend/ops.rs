@@ -268,6 +268,8 @@ impl Backend {
         // below does -- meta-MCP invoke and the router's direct backend route
         // both funnel through this function, and minting in one dispatcher
         // would leave the sibling route forwarding the caller's token.
+        // MUTANT: substitution removed; the reference keeps the fn "used" so -Dwarnings compiles.
+        let _ = substitute_progress_token;
         let params = params;
 
         // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
