@@ -75,7 +75,7 @@ Three endpoints come with it:
 | --- | --- | --- |
 | `POST` | `/auth/token` | Exchange an OIDC token for a gateway token |
 | `DELETE` | `/auth/token/{jti}` | Revoke one issued token |
-| `DELETE` | `/auth/tokens?subject={subject}` | Revoke every token for one subject |
+| `DELETE` | `/auth/tokens?issuer={issuer}&subject={subject}` | Revoke every token for one identity; `issuer` is required (400 without it) |
 
 The two revocation endpoints require `admin_token`. Leave it unset and they
 return 503 — which is safe, but means you have no revocation path. Set it.
@@ -95,20 +95,36 @@ scopes.
 ```yaml
 key_server:
   policies:
-    - match: { group: platform-admins }
+    - match: { issuer: <your-idp-issuer>, group: platform-admins }
       scopes:
         backends: ["*"]
         tools: ["*"]
         rate_limit: 0                  # 0 = unlimited
-    - match: { domain: <your-email-domain> }
+    - match: { issuer: <your-idp-issuer>, domain: <your-email-domain> }
       scopes:
         backends: [github, jira]
         tools: ["*"]
         rate_limit: 120
 ```
 
-`match` accepts `domain`, `issuer`, `email` and `group`; every field you set must
-match. Order matters — put the narrow rules first, because the first rule that
+`match` requires `issuer`, which must equal one of `key_server.oidc[].issuer`,
+and accepts `domain`, `email` and `group`; every field you set must match. A rule
+with no issuer, an unconfigured one, or a blank condition fails to load.
+
+- `email` and `domain` match only a **verified** address: the token must carry
+  `email_verified: true` (or `"true"`). Microsoft Entra ID omits it by default,
+  so use issuer-only or `group` rules there; Keycloak sends it only with the
+  client's `email verified` mapper on. The same applies to `allowed_domains`.
+- Both compare ASCII case-insensitively. `domain` is exact, not a suffix:
+  `corp.com` does not match `eu.corp.com`.
+- An issuer-only rule admits every account the issuer signs for your audience.
+  That is right for a tenant-pinned issuer such as Entra's
+  `https://login.microsoftonline.com/<tenant>/v2.0`, and wrong for a public one:
+  on `https://accounts.google.com` or `https://token.actions.githubusercontent.com`
+  it fails to load. Any other multi-tenant issuer has the same problem, so give
+  it a `domain`, `email` or `group` condition too.
+
+Order matters — put the narrow rules first, because the first rule that
 matches is the only one that applies. There is no implicit allow-all rule at the
 end: an identity that matches nothing gets nothing.
 

@@ -215,6 +215,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: key-server OIDC rules need an issuer and a verified email.**
+  An email or domain rule matched the raw `email` claim whether or not the
+  IdP had verified it, so on a self-service IdP anyone could claim
+  `ceo@corp.com` (the nOAuth pattern). The OIDC verifier now keeps `email`
+  only when `email_verified` is `true` (or `"true"`), which covers
+  `allowed_domains`, key-server policies, control-plane role mapping and the
+  propagated identity assertion at once. Every `key_server.policies[].match`
+  must name a configured `issuer`; blank discriminators and issuer-only rules
+  on `accounts.google.com` or GitHub Actions fail to load. Email and domain
+  compare ASCII case-insensitively, and `domain` is exact rather than a
+  suffix. `DELETE /auth/tokens` requires `issuer`, and revocation and the
+  per-identity cap key on `(issuer, subject)`. See
+  `docs/UPGRADING-4.0.md` item 17.
 - **BREAKING (behaviour): callers stop sharing cached and idempotent results.**
   Two API keys (or the admin bearer and a key) calling the same tool with the
   same arguments shared one response-cache entry and one idempotency key

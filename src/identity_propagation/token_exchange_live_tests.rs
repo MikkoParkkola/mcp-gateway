@@ -134,11 +134,13 @@ fn identity(email: &str) -> VerifiedIdentity {
     }
 }
 
+/// Issuer-only: the gateway's own assertion carries no `email_verified`, so
+/// the verifier drops its email and an email or domain rule cannot match it.
 fn allow_all_policy() -> KeyServerPolicyConfig {
     KeyServerPolicyConfig {
         match_criteria: PolicyMatchConfig {
-            domain: Some("corp.example".to_string()),
-            issuer: None,
+            domain: None,
+            issuer: GATEWAY_ASSERTION_ISSUER.to_string(),
             email: None,
             group: None,
         },
@@ -197,7 +199,11 @@ async fn token_exchange_obtains_scoped_token_and_injects_authorization() {
     assert_eq!(temp.scopes.backends, vec!["mail-svc"]);
     assert_eq!(temp.scopes.tools, vec!["mail_read"]);
     assert_eq!(temp.scopes.rate_limit, 42);
-    assert_eq!(temp.identity.email, "alice@corp.example");
+    assert_eq!(temp.identity.subject, "alice-subject");
+    assert_eq!(
+        temp.identity.email, "",
+        "an assertion without email_verified yields no email"
+    );
 
     live.kill();
 }

@@ -98,7 +98,7 @@ pub fn write_authenticated_config(
         .map(|grant| KeyServerPolicyConfig {
             match_criteria: PolicyMatchConfig {
                 email: Some(grant.owner.email.clone()),
-                issuer: Some(issuer.url.clone()),
+                issuer: issuer.url.clone(),
                 ..PolicyMatchConfig::default()
             },
             scopes: PolicyScopesConfig {

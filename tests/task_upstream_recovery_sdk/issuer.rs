@@ -38,6 +38,7 @@ struct Claims {
     sub: String,
     aud: String,
     email: String,
+    email_verified: bool,
     iat: u64,
     exp: u64,
 }
@@ -232,6 +233,7 @@ impl Issuer {
                 sub: subject.to_string(),
                 aud: AUDIENCE.to_string(),
                 email: email.to_string(),
+                email_verified: true,
                 iat: now,
                 exp: now + 3_600,
             },
