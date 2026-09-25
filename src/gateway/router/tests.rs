@@ -2892,7 +2892,7 @@ async fn authz_playbook_denial_maps_to_forbidden() {
 async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
     let (state, _store) =
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
-    let client = scoped_client("scoped", vec![], None);
+    let client = scoped_client("scoped", vec!["*".into()], None);
 
     let authorizer = super::authorization::RouterAuthorizer {
         state: state.as_ref(),
@@ -3003,7 +3003,7 @@ async fn authz_four_refusal_branches_carry_the_status() {
             },
         ));
     }
-    let unrestricted = scoped_client("scoped", vec![], None);
+    let unrestricted = scoped_client("scoped", vec!["*".into()], None);
     let policy_refusal = Box::pin(run_step_as(
         &policy_state,
         &unrestricted,
@@ -3054,7 +3054,7 @@ async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
             },
         ));
     }
-    let client = scoped_client("scoped", vec![], None);
+    let client = scoped_client("scoped", vec!["*".into()], None);
 
     let response = Box::pin(run_step_as(&state, &client, "alpha", "globally_blocked")).await;
 
@@ -3084,7 +3084,7 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
             },
         ));
     }
-    let client = scoped_client("scoped", vec![], None);
+    let client = scoped_client("scoped", vec!["*".into()], None);
 
     let response = Box::pin(run_step_as(&state, &client, "alpha", "permitted")).await;
 
@@ -3107,7 +3107,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     use crate::gateway::oauth::AgentIdentity;
     use crate::mtls::CertIdentity;
 
-    let api_key = scoped_client("keyed", vec![], None);
+    let api_key = scoped_client("keyed", vec!["*".into()], None);
     assert_eq!(
         super::authorization::refusal_principal(Some(&api_key), None, None).as_deref(),
         Some("keyed"),
@@ -3140,7 +3140,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     let anonymous = AuthenticatedClient {
         quota_principal: None,
         authenticated: false,
-        ..scoped_client("public", vec![], None)
+        ..scoped_client("public", vec!["*".into()], None)
     };
     assert_eq!(
         super::authorization::refusal_principal(Some(&anonymous), None, None),
@@ -3184,7 +3184,7 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
         state_mut.mtls_policy = Arc::clone(&policy);
     }
-    let client = scoped_client("scoped", vec![], None);
+    let client = scoped_client("scoped", vec!["*".into()], None);
     let cert = CertIdentity {
         quota_principal: None,
         common_name: Some("trusted-machine".to_string()),
@@ -3243,7 +3243,7 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
             .backends
             .register(http_backend_at("alpha", "http://127.0.0.1:1/"));
     }
-    let client = scoped_client("scoped", vec![], None);
+    let client = scoped_client("scoped", vec!["*".into()], None);
 
     // Scoped to one tool on one backend.
     let agent = AgentIdentity {
@@ -3317,7 +3317,7 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
 async fn authz_ordinary_error_carries_no_status_stamp() {
     let (state, _store) =
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
-    let client = scoped_client("scoped", vec![], None);
+    let client = scoped_client("scoped", vec!["*".into()], None);
 
     let authorizer = super::authorization::RouterAuthorizer {
         state: state.as_ref(),
