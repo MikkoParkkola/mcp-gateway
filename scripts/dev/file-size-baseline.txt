@@ -19,7 +19,7 @@
 2049 tests/mik_7212_mrtr7_bridge_acs.rs
 2304 src/config_reload/mod.rs
 2037 tests/webui_management_tests.rs
-2001 src/gateway/auth.rs
+2015 src/gateway/auth.rs
 1929 src/transport/http/mod.rs
 1894 src/commands/trust.rs
 1890 src/backend/tests.rs
@@ -41,7 +41,7 @@
 1357 src/capability/backend.rs
 1329 tests/security_tests.rs
 1329 tests/openwebui_adapter_config.rs
-1332 src/commands/upgrade.rs
+1258 src/commands/upgrade.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1277 src/oauth/client/mod.rs
 1272 tests/mik_7212_mrtr7_stdio_acs.rs

@@ -84,7 +84,7 @@ impl TransparencyLogConfig {
         if false && auth_enabled && (!self.enabled || self.path.trim().is_empty()) {
             return Err(crate::Error::ConfigValidation(
                 "auth is enabled, so security.transparency_log must be enabled with a writable \
-                 path (docs/UPGRADING-4.0.md section 39)"
+                 path (docs/UPGRADING-4.0.md section 43)"
                     .to_string(),
             ));
         }
@@ -281,27 +281,13 @@ impl MessageSigningConfig {
     ) -> crate::Result<String> {
         let missing =
             || Self::signing_config_error(field, "requires an available environment value");
-        let resolved = if let Some(name) = literal.strip_prefix("env:") {
-            overlay.resolve(name).ok_or_else(missing)?
-        } else {
-            // Match the existing config expansion grammar, but refuse a missing
-            // required variable instead of silently substituting an empty key.
-            let pattern = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
-                .expect("constant signing environment pattern");
-            let mut result = String::with_capacity(literal.len());
-            let mut end = 0;
-            for captures in pattern.captures_iter(literal) {
-                let matched = captures.get(0).expect("matched environment reference");
-                result.push_str(&literal[end..matched.start()]);
-                let value = overlay
-                    .resolve(&captures[1])
-                    .or_else(|| captures.get(2).map(|default| default.as_str().to_owned()))
-                    .ok_or_else(missing)?;
-                result.push_str(&value);
-                end = matched.end();
+        let resolved = match crate::config::secret_ref::SecretRef::parse(literal) {
+            crate::config::secret_ref::SecretRef::Literal(text) => {
+                crate::config::secret_ref::expand_template(text, overlay).map_err(|_| missing())?
             }
-            result.push_str(&literal[end..]);
-            result
+            reference @ crate::config::secret_ref::SecretRef::Env(_) => {
+                reference.resolve(field, overlay).map_err(|_| missing())?
+            }
         };
         if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
             return Err(Self::signing_config_error(

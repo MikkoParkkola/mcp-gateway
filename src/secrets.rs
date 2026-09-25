@@ -98,7 +98,22 @@ impl SecretResolver {
             let var_name = &caps[1];
             let placeholder = &caps[0];
 
-            let value = env.resolve(var_name).unwrap_or_default();
+            // `{env.X:-}` allows empty on purpose, as `${VAR:-}` does in config.
+            if let Some(name) = var_name.strip_suffix(":-") {
+                let value = env.resolve(name).unwrap_or_default();
+                result = result.replace(placeholder, &value);
+                continue;
+            }
+            // Empty is refused like unset, as `SecretRef::resolve` does (C4).
+            let value = env
+                .resolve(var_name)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "{{env.{var_name}}} is not set or is empty{}",
+                        env.absent_files_hint()
+                    ))
+                })?;
             result = result.replace(placeholder, &value);
         }
 
@@ -226,9 +241,8 @@ mod tests {
     #[test]
     fn test_resolve_missing_env_var() {
         let resolver = SecretResolver::new();
-        // Missing env var should resolve to empty string
-        let result = resolver.resolve("Value: {env.NONEXISTENT_VAR}").unwrap();
-        assert_eq!(result, "Value: ");
+        // C4: an unset variable is an error, never an empty credential.
+        assert!(resolver.resolve("Value: {env.NONEXISTENT_VAR}").is_err());
     }
 
     #[test]
@@ -292,12 +306,12 @@ mod tests {
     #[test]
     fn test_mixed_patterns() {
         let resolver = SecretResolver::new();
-        let result = resolver
-            .resolve("Path: {env.PATH}, Missing: {env.NONEXISTENT_VAR_12345}")
-            .unwrap();
-
-        assert!(result.contains("Path: /") || result.contains("Path: C"));
-        assert!(result.contains("Missing: "));
+        // One unset variable fails the whole value (C4).
+        assert!(
+            resolver
+                .resolve("Path: {env.PATH}, Missing: {env.NONEXISTENT_VAR_12345}")
+                .is_err()
+        );
     }
 
     #[test]
@@ -317,5 +331,50 @@ mod tests {
 
         // Should replace both occurrences
         assert!(!result.contains("{env.PATH}"));
+    }
+}
+
+#[cfg(test)]
+mod c4_tests {
+    use super::*;
+
+    #[test]
+    fn env_template_unset_errors() {
+        let err = SecretResolver::new()
+            .resolve("Bearer {env.MCP_GW_C4_NOPE}")
+            .expect_err("an unset {env.X} must not become an empty credential");
+        assert!(err.to_string().contains("MCP_GW_C4_NOPE"), "got: {err}");
+    }
+
+    #[test]
+    fn env_template_empty_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("c4.env");
+        std::fs::write(&path, "MCP_GW_C4_BLANK_TPL=\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        let overlay = crate::config::EnvOverlay::from_paths(&[path]);
+        let env = std::sync::Arc::new(crate::config::LiveEnv::new(
+            std::sync::Arc::new(overlay),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+        let err = SecretResolver::new()
+            .with_env(env)
+            .resolve("Bearer {env.MCP_GW_C4_BLANK_TPL}")
+            .expect_err("an empty {env.X} must not become an empty credential");
+        assert!(
+            err.to_string().contains("MCP_GW_C4_BLANK_TPL"),
+            "got: {err}"
+        );
+        // `{env.X:-}` is the explicit escape, as `${VAR:-}` is for config.
+        assert_eq!(
+            SecretResolver::new()
+                .resolve("a{env.MCP_GW_C4_UNSET_TPL:-}b")
+                .expect("explicit empty"),
+            "ab"
+        );
     }
 }

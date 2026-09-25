@@ -112,7 +112,7 @@ fn apply_cli_overrides_preserves_other_config_fields() {
     config
         .backends
         .insert("test".to_string(), BackendConfig::default());
-    config.server.request_timeout = std::time::Duration::from_secs(60);
+    config.server.shutdown_timeout = std::time::Duration::from_secs(60);
 
     let cli = make_cli(Some(3000), None, false);
     apply_cli_overrides(&mut config, &cli);
@@ -120,7 +120,7 @@ fn apply_cli_overrides_preserves_other_config_fields() {
     assert_eq!(config.server.port, 3000);
     assert!(config.backends.contains_key("test"));
     assert_eq!(
-        config.server.request_timeout,
+        config.server.shutdown_timeout,
         std::time::Duration::from_secs(60)
     );
 }

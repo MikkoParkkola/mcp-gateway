@@ -81,7 +81,7 @@ observable, which is a second and stronger reason to do it first.
 Restoring the body turns the lib target green; it is verified green locally with that
 body (`cargo test --lib block_1_`, 4 passed). The repair must be built on top of
 `5dfbed58` and pushed as an explicit ref. It must not be delivered by pushing a
-local tip: the worktree at `/Users/mikko/github/.worktrees/mcp-2026-protocol` is
+local tip: the worktree at `<worktrees>/mcp-2026-protocol` is
 39 commits behind the remote and 16 ahead, and pushing its tip would drop the
 peer commits in between.
 
@@ -1355,7 +1355,7 @@ evidence about the criterion; it is evidence about the cases chosen.
 
 Consequence for the release gate: `ABSENT` stands. Closing this row needs the minted
 token and the translate-back, not a commit of what is on disk. The uncommitted diff is
-snapshotted at `~/github/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
+snapshotted at `<repos>/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
 so the parked lane's work survives, and the owning lane has been asked to commit it
 under an honest subject — the routing half landing, not the criterion closing.
 

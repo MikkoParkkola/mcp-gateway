@@ -42,7 +42,7 @@ The MCP ecosystem treats "connect N servers" as a feature. It's also the entire 
 A hard-fork of [Goose v1.30.0](https://github.com/block/goose) hardened into a coding agent I actually trust to run unattended on my own work:
 
 - **Hook system** — 8 Claude-Code-compatible events (`PreToolUse`, `PostToolUse`, `SessionStart`, etc.). Hooks are JSON-over-stdin, language-agnostic, and fail-closed: any unhandled exception in a hook blocks the tool call.
-- **YAML-frontmatter skills** ported from my own claude-elite rules tree. Skills are auto-discovered and route by keyword, not by "tell Claude to invoke the skill", so they compose.
+- **YAML-frontmatter skills** ported from my own private-tooling rules tree. Skills are auto-discovered and route by keyword, not by "tell Claude to invoke the skill", so they compose.
 - **Two-pass plan mode** — draft a plan, show it, require approval, then execute. Wired into the live agent loop (not a separate CLI).
 - **Constitutional gate wired as a `PreToolUse` hook** — every tool call flows through a deny-by-default policy before execution. More on this below.
 - **hebb + metacognition as default MCP extensions** — persistent memory and reasoning verification are on by default, not an afterthought.

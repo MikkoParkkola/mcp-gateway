@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use axum::{
-    Router, middleware,
+    Router,
+    extract::DefaultBodyLimit,
+    middleware,
     routing::{get, post},
 };
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
@@ -58,6 +60,8 @@ mod well_known;
 
 #[cfg(test)]
 mod audit_degraded_tests;
+#[cfg(test)]
+mod body_limit_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
@@ -452,6 +456,12 @@ pub(crate) fn create_router_with_accounts(
     if let Some(accounts_router) = accounts_router {
         app = app.merge(accounts_router);
     }
+
+    // `server.max_body_size` caps every body read, the /mcp handlers included
+    // (they buffer through `helpers::read_body`). Like the origin gate it must
+    // wrap the FULLY MERGED router: a layer covers only the routes merged
+    // before it, and the key server, webhooks and accounts are merged above.
+    app = app.layer(DefaultBodyLimit::max(startup_config.server.max_body_size));
 
     // Origin/Host validation wraps the FULLY MERGED router, and does so last so
     // it runs first. Two properties depend on that placement:

@@ -1,4 +1,4 @@
-sha256: c68fa1ba6fe04b80c8175d5ad57f8c21bdce9b6b91e719e2d1e04515b04fd538
+sha256: bd8bf613ef4ff9cfac794636f29ae1eec5bcb295d47a86497a9a577156aa8058
 fulcrum: "1.0"
 name: linear_attach_url
 description: "Attach an external URL (GitHub PR, commit, doc) to a Linear issue. Shows as rich link in issue sidebar."
@@ -52,7 +52,7 @@ providers:
               title: $title
               subtitle: $subtitle
               iconUrl: $iconUrl
-              createAsUser: "Claude Elite"
+              createAsUser: "mcp-gateway"
             }) {
               success
               attachment { id url title subtitle }

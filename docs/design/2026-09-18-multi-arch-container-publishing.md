@@ -159,7 +159,7 @@ tag no signature covers.
 ## Review record
 
 Both non-Claude reviewers returned SHIP on the startup gate that precedes this design
-(`~/.claude/data/reviews/runs/kimi-20260918T165900Z-35177.md`,
+(`<review-archive>/runs/kimi-20260918T165900Z-35177.md`,
 `grok-20260918T165900Z-34980.md`). Three findings, all folded in rather than deferred:
 
 | finding | reviewer | disposition |
@@ -173,7 +173,7 @@ finding survives there. It is out of this criterion's scope: `main` images are n
 artifacts and `NFR.PKG.1` names the published release image.
 
 This design was itself reviewed before any workflow edit. `kimi-review` returned
-SHIP-WITH-FIXES (`~/.claude/data/reviews/runs/kimi-20260918T171203Z-58559.md`):
+SHIP-WITH-FIXES (`<review-archive>/runs/kimi-20260918T171203Z-58559.md`):
 
 | finding | disposition |
 |---|---|
@@ -181,7 +181,7 @@ SHIP-WITH-FIXES (`~/.claude/data/reviews/runs/kimi-20260918T171203Z-58559.md`):
 | GHCR retains untagged digests, so a failed leg's blob is not collected on its own | folded in: acceptance 4 asserts no tag, and untagged pruning is named as separate work |
 
 `grok-review` returned SHIP-WITH-FIXES on a re-run after its first attempt was killed by the
-wrapper's watchdog (`~/.claude/data/reviews/runs/grok-20260918T171841Z-96126.md`). It read the
+wrapper's watchdog (`<review-archive>/runs/grok-20260918T171841Z-96126.md`). It read the
 repository, and its headline finding is the one the amendment above records — reached
 independently here before implementation:
 

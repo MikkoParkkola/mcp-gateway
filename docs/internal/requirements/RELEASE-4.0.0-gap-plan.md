@@ -700,7 +700,7 @@ the path that produced thirty-five review rounds elsewhere in this repo's histor
 
 Two things run in parallel with the three remaining blocking rows, and neither waits on them:
 
-- **Cluster E is measurement, not code, and it is Spark-only.** No run against 3.5.0 exists. It
+- **Cluster E is measurement, not code, and it is bench-host-only.** No run against 3.5.0 exists. It
   needs no design and blocks nothing else, so it can start immediately; a Mac number would be worse
   than no number.
 - **Cluster B's consuming side** is a small change once someone decides what reads the era, and it
@@ -887,7 +887,7 @@ nothing else.
 ### What did not move
 
 Everything else. The ledger is unchanged, no blocking row flipped to MET, and section 4's ordering
-stands: cluster A first, with E (Spark measurement), B's consuming side and F's operator decisions
+stands: cluster A first, with E (bench-host measurement), B's consuming side and F's operator decisions
 running alongside; C and D after A, because they need a served modern request path to test against.
 
 ### Later the same day — cluster G is green, and the reviewer diagnosis above is weaker than it reads

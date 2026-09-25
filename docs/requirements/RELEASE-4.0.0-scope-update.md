@@ -41,7 +41,7 @@ protocol requirements additionally use the pinned specifications linked below.
 | MIK-7311.LIFECYCLE.5 | Task creation, retained results and lifetime have enforced bounds; cancellation races cannot rewrite settled outcomes or promise undo. | TASKS |
 | MIK-6744.STORE.1 | Gateway-managed fallback credentials are keyed by principal/backend/resource for load, save and refresh, protected at rest, with readable/migrated single-user data and no silent loss. | ACCOUNTS |
 | MIK-6744.STORE.2 | Revocation and restart preserve credential isolation and cannot leave an old refresh job or cached credential usable under a new grant. | ACCOUNTS |
-| MIK-6745.JOURNEY.1 | Open WebUI on Spark completes connect, use, refresh, revoke and cancelled-consent journeys through the gateway against Google Workspace. | ACCOUNTS |
+| MIK-6745.JOURNEY.1 | Open WebUI on bench-host completes connect, use, refresh, revoke and cancelled-consent journeys through the gateway against Google Workspace. | ACCOUNTS |
 | MIK-6745.JOURNEY.2 | Two users reach their own personal accounts concurrently; an unconnected user gets an actionable refusal and cannot fall back to an operator/shared account. | ACCOUNTS |
 | MIK-6745.JOURNEY.3 | List/search, calls, prompts/resources where supported, MCP backends and REST capabilities apply consistent personal-account authorization on their public entry points. | ACCOUNTS |
 | MIK-6746.CONTRACT.1 | Gateway and downstream authorization boundaries conform to the current audience rules; document and test supported client mechanisms and route parity before expanding credential forwarding. | ACCOUNTS |
