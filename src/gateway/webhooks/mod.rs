@@ -6,6 +6,7 @@
 //! validates HMAC signatures, transforms payloads, and routes as MCP notifications.
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,7 +26,9 @@ use tracing::{debug, error, info, warn};
 use hmac::{KeyInit, Mac as _};
 use sha2::Sha256;
 
-use self::errors::{invalid_json, invalid_signature, transformation_failed, webhook_success};
+use self::errors::{
+    invalid_json, invalid_signature, rate_limited, transformation_failed, webhook_success,
+};
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
 use crate::capability::{CapabilityDefinition, WebhookDefinition};
 use crate::config::WebhookConfig;
@@ -48,6 +51,8 @@ pub struct EndpointStats {
     pub signature_failures: AtomicU64,
     /// Events that failed payload transformation
     pub transform_failures: AtomicU64,
+    /// Signed events refused because the endpoint's `rate_limit` was spent
+    pub rate_limited: AtomicU64,
     /// Unix timestamp (seconds) of the most recent received event
     pub last_received_at: AtomicU64,
 }
@@ -62,6 +67,7 @@ impl EndpointStats {
             delivered: self.delivered.load(Ordering::Relaxed),
             signature_failures: self.signature_failures.load(Ordering::Relaxed),
             transform_failures: self.transform_failures.load(Ordering::Relaxed),
+            rate_limited: self.rate_limited.load(Ordering::Relaxed),
             last_received_at: if last_ts > 0 { Some(last_ts) } else { None },
         }
     }
@@ -87,6 +93,9 @@ pub struct EndpointStatsSnapshot {
     pub signature_failures: u64,
     /// Payload transformation failures
     pub transform_failures: u64,
+    /// Events refused by the endpoint's `rate_limit`
+    #[serde(default)]
+    pub rate_limited: u64,
     /// Unix timestamp of last received event (`None` if never received)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_received_at: Option<u64>,
@@ -122,6 +131,9 @@ pub struct WebhookRegistry {
     webhooks: HashMap<String, (String, String, WebhookDefinition, Arc<EndpointStats>)>,
     /// Global webhook configuration
     config: WebhookConfig,
+    /// Per-endpoint `rate_limit` buckets, keyed like `webhooks`. Absent when
+    /// `rate_limit` is 0 (unlimited).
+    limiters: HashMap<String, Arc<EndpointLimiter>>,
     /// Where a `{env.VAR}` webhook secret is looked up.
     env: Arc<crate::config::LiveEnv>,
     /// The backend that serves these capabilities: a session receives a
@@ -136,6 +148,7 @@ impl WebhookRegistry {
         Self {
             webhooks: HashMap::new(),
             config,
+            limiters: HashMap::new(),
             env: Arc::new(crate::config::LiveEnv::default()),
             backend: String::new(),
         }
@@ -168,6 +181,15 @@ impl WebhookRegistry {
                 method = %webhook_def.method,
                 "Registered webhook endpoint"
             );
+
+            if let Some(per_minute) = NonZeroU32::new(self.config.rate_limit) {
+                self.limiters.insert(
+                    full_path.clone(),
+                    Arc::new(governor::RateLimiter::direct(governor::Quota::per_minute(
+                        per_minute,
+                    ))),
+                );
+            }
 
             self.webhooks.insert(
                 full_path,
@@ -244,6 +266,7 @@ impl WebhookRegistry {
                 stats: Arc::clone(stats),
                 env: Arc::clone(&self.env),
                 backend: self.backend.clone(),
+                limiter: self.limiters.get(path).cloned(),
             };
 
             let method_filter = method_to_filter(&webhook_def.method);
@@ -292,7 +315,12 @@ struct WebhookHandlerState {
     stats: Arc<EndpointStats>,
     env: Arc<crate::config::LiveEnv>,
     backend: String,
+    /// This endpoint's `rate_limit` bucket; `None` when unlimited.
+    limiter: Option<Arc<EndpointLimiter>>,
 }
+
+/// A per-endpoint request budget (`webhooks.rate_limit` per minute).
+type EndpointLimiter = governor::DefaultDirectRateLimiter;
 
 /// State for the dynamic webhook dispatcher.
 #[derive(Clone)]
@@ -348,12 +376,13 @@ async fn dynamic_webhook_handler(
             .into_response();
     }
 
-    let (config, env, backend) = {
+    let (config, env, backend, limiter) = {
         let registry = state.registry.read();
         (
             registry.config.clone(),
             Arc::clone(&registry.env),
             registry.backend.clone(),
+            registry.limiters.get(&path).cloned(),
         )
     };
     let handler_state = WebhookHandlerState {
@@ -365,6 +394,7 @@ async fn dynamic_webhook_handler(
         stats: webhook_stats,
         env,
         backend,
+        limiter,
     };
 
     webhook_handler(State(handler_state), headers, body)
@@ -377,7 +407,7 @@ async fn webhook_handler(
     State(state): State<WebhookHandlerState>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> impl IntoResponse {
+) -> Response {
     let request_id = uuid::Uuid::new_v4().to_string();
 
     // Parse JSON from raw bytes (keep raw bytes for signature validation).
@@ -385,7 +415,7 @@ async fn webhook_handler(
         Ok(v) => v,
         Err(e) => {
             warn!(request_id = %request_id, error = %e, "Webhook JSON parse failed");
-            return invalid_json(format!("Invalid JSON: {e}"), &request_id);
+            return invalid_json(format!("Invalid JSON: {e}"), &request_id).into_response();
         }
     };
 
@@ -412,7 +442,22 @@ async fn webhook_handler(
             error = %e,
             "Webhook signature validation failed"
         );
-        return invalid_signature(&request_id);
+        return invalid_signature(&request_id).into_response();
+    }
+
+    // After the signature check, so unsigned traffic cannot spend a real
+    // sender's budget. A flood still costs a JSON parse and an HMAC each.
+    if let Some(limiter) = &state.limiter
+        && limiter.check().is_err()
+    {
+        state.stats.rate_limited.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            request_id = %request_id,
+            capability = %state.capability_name,
+            webhook = %state.webhook_name,
+            "Webhook rate limit exceeded"
+        );
+        return rate_limited(&request_id);
     }
 
     // Transform payload to notification.
@@ -428,7 +473,7 @@ async fn webhook_handler(
                 error = %e,
                 "Failed to transform webhook payload"
             );
-            return transformation_failed(&request_id);
+            return transformation_failed(&request_id).into_response();
         }
     };
 
@@ -449,7 +494,7 @@ async fn webhook_handler(
         );
     }
 
-    webhook_success(&request_id, state.definition.notify, session_count)
+    webhook_success(&request_id, state.definition.notify, session_count).into_response()
 }
 
 // ============================================================================
@@ -611,5 +656,7 @@ fn extract_json_path<'a>(path: &str, payload: &'a Value) -> Option<&'a Value> {
 // Tests
 // ============================================================================
 
+#[cfg(test)]
+mod rate_limit_tests;
 #[cfg(test)]
 mod tests;

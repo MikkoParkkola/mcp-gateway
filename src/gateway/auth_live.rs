@@ -7,8 +7,7 @@
 //! granting access after the token behind it is revoked or expires.
 
 use super::{
-    AuthState, AuthenticatedClient, anonymous_client, dashboard_client, key_server_credential,
-    session_cookie_value,
+    AuthState, AuthenticatedClient, anonymous_client, dashboard_client, session_cookie_value,
 };
 
 /// What a request authenticated with, kept for re-validation: a dashboard
@@ -103,6 +102,45 @@ pub(crate) async fn delivery(
     }
 }
 
+/// Resolve a presented bearer against the key server, in the order the
+/// protected path has always used: the opaque temporary token first (an O(1)
+/// store lookup), then a raw OIDC ID token presented directly as a bearer
+/// (delegated auth, MIK-6648).
+///
+/// One function so the protected and public branches recognise exactly the same
+/// credentials. They did not, and the public path is where it mattered: a
+/// verified caller was handed the anonymous identity, and so shared the
+/// anonymous nonce quota with every unauthenticated request on the box.
+///
+/// The `via` label exists only so each caller keeps its own log line; it is a
+/// fixed string, never anything the caller sent.
+pub(super) async fn key_server_credential(
+    state: &AuthState,
+    token: &str,
+) -> Option<(
+    AuthenticatedClient,
+    crate::key_server::oidc::VerifiedIdentity,
+    &'static str,
+)> {
+    let ks = state.key_server.as_ref()?;
+    let (mut client, identity, via) =
+        if let Some((client, temporary)) = ks.validate_token(token).await {
+            (client, temporary.identity.clone(), "temporary token")
+        } else if ks.config.delegated_bearer && super::looks_like_jwt(token) {
+            // Gated on config and a cheap JWT-shape check so JWKS verification
+            // never runs on an opaque or static token.
+            let (client, identity) = ks.verify_bearer_identity(token).await?;
+            (client, identity, "delegated OIDC bearer")
+        } else {
+            return None;
+        };
+    // E1-a: admin comes from the live role mapping on every request; no mint
+    // site stores it, so a reload that removes the rule revokes it.
+    let config = state.live_config.get();
+    client.admin = config.control_plane.role_mapping.grants_admin(&identity);
+    Some((client, identity, via))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +166,9 @@ mod tests {
             key_server: Some(key_server),
             dashboard_bootstrap: Arc::new(super::super::DashboardBootstrap::new()),
             tls_enabled: false,
+            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config::Config::default(),
+            )),
         }
     }
 
