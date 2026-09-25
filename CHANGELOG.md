@@ -144,6 +144,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source it must declare, and a `source: declared` entry refuses load when
   agent identity is enabled without `allow_unverified_agent_identity`.
   See `docs/UPGRADING-4.0.md` item 27.
+- **Tool calls with undeclared argument keys are refused (breaking, security).**
+  A key the tool's `inputSchema` does not declare, at the top level or nested
+  inside objects and arrays, now returns `isError: true` without reaching the
+  backend, on `/mcp` and on the direct `/mcp/{name}` route, `passthrough`
+  included. MCP backends previously received such keys unchecked, so a model
+  that invented a field sent it straight through. The schema is the caller's
+  own catalogue entry; an unlisted tool is forwarded and counted. Capabilities
+  refuse nested keys too, and now honour a top-level `additionalProperties:
+  true`. The per-backend `input_schema_enforcement: closed | standard | off`
+  (default `closed`) is the escape hatch. See `docs/UPGRADING-4.0.md` item 28.
+  (MIK-7570.SCHEMA.1)
+
 - **`notifications/tools/list_changed` from an admin backend edit reaches only
   callers of that backend (breaking).** Adding, removing or reviving a backend
   told every session on the legacy GET stream, so a caller learned when an
