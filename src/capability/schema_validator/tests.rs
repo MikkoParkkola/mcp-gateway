@@ -570,3 +570,29 @@ fn permissive_schemas_still_forward_extras() {
     assert_eq!(result.coerced["extra"], json!(1));
     assert_eq!(result.coerced["opts"]["b"], json!(2));
 }
+
+/// The MCP refusal's footer lists the schema's parameters; a backend schema
+/// with hundreds of long parameters must not turn one refusal into a huge
+/// payload. Bounded like the key paths.
+#[test]
+fn mcp_refusal_text_is_bounded_for_a_huge_schema() {
+    let mut properties = serde_json::Map::new();
+    for i in 0..500 {
+        properties.insert(
+            format!("param_{i}_{}", "p".repeat(200)),
+            json!({"type": "string", "description": "d".repeat(500)}),
+        );
+    }
+    let schema = json!({"type": "object", "properties": properties});
+    let text = crate::capability::undeclared_key_refusal(
+        &json!({"invented": 1}),
+        &schema,
+        crate::config::InputSchemaEnforcement::Closed,
+    )
+    .expect("the invented key is refused");
+    assert!(text.len() <= 8 * 1024, "{} bytes", text.len());
+    assert!(
+        text.contains("invented"),
+        "the violation itself must survive the cap"
+    );
+}

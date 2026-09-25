@@ -285,3 +285,11 @@ fn permissive_schemas_accept_extras() {
         );
     }
 }
+
+/// Grok MEDIUM on #890: `required` names keys; it does not close a level. A
+/// schema listing only `required` is a free map that accepts the required key.
+#[test]
+fn required_without_properties_is_a_free_map() {
+    let schema = json!({"type": "object", "required": ["a"]});
+    assert!(!refused(&schema, &json!({"a": 1})));
+}
