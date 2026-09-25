@@ -746,6 +746,23 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
 
+## 38. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
+
+In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
+backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
+other route, webhooks included, used the framework's 2 MiB default.
+
+- **`server.request_timeout` is removed and now stops startup; delete it.** It never did
+  anything. Set per-backend `timeout` to bound calls. The load fails, on start and on reload,
+  with `server.request_timeout` is retired: ... it was never enforced. ... Remove
+  server.request_timeout.
+- **`server.max_body_size` is now enforced on every route**, read once at startup
+  (default 10 MiB).
+- **An oversize body on `/mcp` and `/mcp/{name}` now gets HTTP 413**, where it used to get 400
+  with JSON-RPC -32700. Clients that matched on -32700 must also handle 413.
+- **Routes that parsed with a framework extractor (webhooks, key server, admin UI) now accept up
+  to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

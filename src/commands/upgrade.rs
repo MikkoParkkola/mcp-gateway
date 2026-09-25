@@ -236,7 +236,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The sixteen 4.0.0 changes, in the order they are printed.
+/// The seventeen 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -301,6 +301,9 @@ refused). A missing `env:` variable does not stop startup. Scrape with a dedicat
 chart's ServiceMonitor, never a generic annotation-driven one.",
     "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` now \
 FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
+    "`server.request_timeout`, never enforced, is removed and now FAILS the config load; bound \
+calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
+body on `/mcp` gets HTTP 413 (was 400, JSON-RPC -32700), and webhooks now accept up to it.",
 ];
 
 /// Emit the one-time 4.0.0 notice.

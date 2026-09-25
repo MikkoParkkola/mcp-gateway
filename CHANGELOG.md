@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`server.max_body_size` is enforced on every route (breaking).** It was read
+  nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
+  webhooks included, used the framework's 2 MiB default. An oversize body now
+  gets HTTP 413 everywhere, including `/mcp` (was 400, JSON-RPC -32700).
+  See UPGRADING-4.0.md item 38.
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
   made write tools unusable from standard MCP clients, none of which send the
@@ -236,6 +241,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
+  its backend's `timeout`. A config that still sets it now fails to load with an
+  explanation. See UPGRADING-4.0.md item 38.
 - **The inbound WebSocket listener and `server.ws_port` (breaking).** The
   listener only echoed text frames back; it served no MCP, ran outside the
   Origin/Host guard and had no auth. A config that still sets `server.ws_port`

@@ -333,7 +333,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 
 ## Limitations
 
-- Maximum payload size: Configured by `server.max_body_size` (default 10MB)
+- Maximum payload size: `server.max_body_size` (default 10 MiB), the cap on every route; a larger body gets HTTP 413
 - Rate limiting applies per endpoint (not globally)
 - Signature validation uses HMAC-SHA256 only (no other algorithms)
 - Template extraction uses simple dot-notation (not full JSONPath)
