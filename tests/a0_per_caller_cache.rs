@@ -11,15 +11,18 @@
 //! Every backend answer carries its delivery number (`call-N`), so a replay is
 //! proved by content as well as by the delivery count.
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use mcp_gateway::backend::{Backend, BackendRegistry};
 use mcp_gateway::cache::ResponseCache;
 use mcp_gateway::config::{
-    ApiKeyConfig, AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig,
+    ApiKeyConfig, AuthConfig, BackendConfig, CallerIdentityConfig, CallerIdentityMode, Config,
+    FailsafeConfig, TransportConfig,
 };
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{
@@ -43,6 +46,9 @@ const BACKEND: &str = "backend";
 const TOOL: &str = "tool";
 const ALICE: &str = "alice-secret";
 const BOB: &str = "bob-secret";
+/// The one proxy `Setup::trusted_proxy` trusts, and a peer it does not.
+const PROXY: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)), 40000);
+const OUTSIDER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)), 40000);
 
 // ── Fixture ─────────────────────────────────────────────────────────────────
 
@@ -115,7 +121,7 @@ fn two_keys() -> AuthConfig {
 struct Setup {
     auth: AuthConfig,
     response_cache: bool,
-    trust_identity_headers: bool,
+    caller_identity: CallerIdentityConfig,
 }
 
 impl Setup {
@@ -123,7 +129,7 @@ impl Setup {
         Self {
             auth: Config::default().auth,
             response_cache: false,
-            trust_identity_headers: false,
+            caller_identity: CallerIdentityConfig::default(),
         }
     }
 
@@ -131,7 +137,20 @@ impl Setup {
         Self {
             auth: two_keys(),
             response_cache,
-            trust_identity_headers: false,
+            caller_identity: CallerIdentityConfig::default(),
+        }
+    }
+
+    /// Auth off, identity headers honoured from [`PROXY`] under `corp-sso`.
+    fn trusted_proxy() -> Self {
+        Self {
+            caller_identity: CallerIdentityConfig {
+                mode: CallerIdentityMode::TrustedProxy,
+                trusted_proxies: vec![PROXY.ip()],
+                authority: "corp-sso".to_string(),
+                ..CallerIdentityConfig::default()
+            },
+            ..Self::auth_off()
         }
     }
 }
@@ -158,7 +177,7 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         None,
         std::time::Duration::from_secs(300),
     )
-    .with_trusted_identity_headers(setup.trust_identity_headers);
+    .with_caller_identity(setup.caller_identity);
     meta.enable_idempotency(
         Arc::new(mcp_gateway::idempotency::IdempotencyCache::new()),
         mcp_gateway::idempotency::CLEANUP_INTERVAL,
@@ -243,6 +262,8 @@ struct Caller {
     cert: Option<CertIdentity>,
     agent: Option<AgentIdentity>,
     headers: Vec<(&'static str, &'static str)>,
+    /// The TCP peer the serve path would install as `ConnectInfo`.
+    peer: Option<SocketAddr>,
 }
 
 fn with_key(key: &'static str) -> Caller {
@@ -276,13 +297,20 @@ fn agent(client_id: &str) -> Caller {
     }
 }
 
+/// An identity header as the trusted proxy forwards it.
 fn trusted_header(subject: &'static str) -> Caller {
     Caller {
-        headers: vec![
-            ("x-gateway-identity-subject", subject),
-            ("x-gateway-identity-authority", "corp-sso"),
-        ],
+        headers: vec![("x-gateway-identity-subject", subject)],
+        peer: Some(PROXY),
         ..Caller::default()
+    }
+}
+
+/// The same header sent straight to the gateway, around the proxy.
+fn untrusted_header(subject: &'static str) -> Caller {
+    Caller {
+        peer: Some(OUTSIDER),
+        ..trusted_header(subject)
     }
 }
 
@@ -317,6 +345,9 @@ async fn send(
     }
     if let Some(agent) = caller.agent {
         request.extensions_mut().insert(agent);
+    }
+    if let Some(peer) = caller.peer {
+        request.extensions_mut().insert(ConnectInfo(peer));
     }
     let response = create_router(Arc::clone(state))
         .oneshot(request)
@@ -641,10 +672,7 @@ async fn direct_route_same_oauth_agent_still_deduplicates() {
 /// T6 (ii) control — one trusted subject sending one key twice is deduplicated.
 #[tokio::test]
 async fn direct_route_same_trusted_header_still_deduplicates() {
-    let setup = Setup {
-        trust_identity_headers: true,
-        ..Setup::auth_off()
-    };
+    let setup = Setup::trusted_proxy();
     let (calls, second) =
         direct_pair(setup, trusted_header("alice"), trusted_header("alice")).await;
     assert_eq!(calls, 1, "the keyed repeat ran twice: {second}");
@@ -654,12 +682,67 @@ async fn direct_route_same_trusted_header_still_deduplicates() {
 /// T6 (ii) — trusted identity headers, trust ON, auth off, no credential.
 #[tokio::test]
 async fn direct_route_idempotency_separates_trusted_headers() {
-    let setup = Setup {
-        trust_identity_headers: true,
-        ..Setup::auth_off()
-    };
+    let setup = Setup::trusted_proxy();
     let (calls, second) = direct_pair(setup, trusted_header("alice"), trusted_header("bob")).await;
     assert_eq!(calls, 2, "two trusted subjects shared one entry: {second}");
+}
+
+/// A8-T1 (HTTP) — the meta route answers an identity header from a peer
+/// that is not a trusted proxy with 403, and the call never reaches the
+/// backend; the same header through the proxy does.
+#[tokio::test]
+async fn meta_route_refuses_untrusted_peer_identity_header() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    // Auth on: a modern keyed call needs a verified principal, and the header
+    // only selects the end user under it.
+    let setup = Setup {
+        caller_identity: Setup::trusted_proxy().caller_identity,
+        ..Setup::two_keys(false)
+    };
+    let (state, _dir) = gateway(setup, &calls).await;
+    let keyed = |caller: Caller| Caller {
+        bearer: Some(ALICE),
+        ..caller
+    };
+    let (status, body) = post_meta(&state, 1, Some("k-1"), keyed(untrusted_header("alice"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a refused caller reached the backend"
+    );
+    ok(
+        "trusted",
+        &post_meta(&state, 2, Some("k-2"), keyed(trusted_header("alice"))).await,
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// A8-T13 — the direct route refuses an identity header from a peer that is
+/// not a trusted proxy, before the idempotency guard: both sends are 403, the
+/// backend never runs, and the key was not reserved, so the same key from
+/// the proxy afterwards runs the backend rather than replaying anything.
+#[tokio::test]
+async fn direct_route_refuses_untrusted_peer_identity_header() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (state, _dir) = gateway(Setup::trusted_proxy(), &calls).await;
+    for id in [1, 2] {
+        let (status, body) = post_direct(&state, id, "shared", untrusted_header("alice")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "send {id}: {body}");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a refused caller reached the backend"
+    );
+    let trusted = post_direct(&state, 3, "shared", trusted_header("alice")).await;
+    ok("trusted", &trusted);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the refused sends reserved the key"
+    );
+    assert_eq!(delivery(&trusted.1).as_deref(), Some("call-1"));
 }
 
 /// T6 control — trust OFF: the headers are ignored, both requests are the

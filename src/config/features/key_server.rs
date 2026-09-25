@@ -255,8 +255,20 @@ pub struct PolicyScopesConfig {
 /// Runtime OIDC verification parameters (derived from `KeyServerConfig`).
 #[derive(Debug, Clone)]
 pub struct KeyServerOidcConfig {
-    /// Maximum age of an incoming OIDC token (seconds).
-    pub max_token_age_secs: u64,
+    /// How old an incoming token's `iat` may be.
+    pub token_age: TokenAgeCap,
+}
+
+/// The age bound a verifier applies on top of `exp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenAgeCap {
+    /// Refuse a token whose `iat` is more than this many seconds ago
+    /// (replay bound for key-server and delegated-bearer tokens).
+    MaxIat(u64),
+    /// `exp` (with the verifier's leeway) is the only bound. A Cloudflare
+    /// Access assertion's `iat` is the session start, so an `iat` cap would
+    /// lock every Access user out minutes after login.
+    ExpOnly,
 }
 
 #[cfg(test)]

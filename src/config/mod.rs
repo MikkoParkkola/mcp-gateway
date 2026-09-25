@@ -34,14 +34,15 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdempotencyConfig,
-    IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
+    CacheConfig, CallerIdentityConfig, CallerIdentityMode, CapabilityConfig,
+    CapabilityErrorBudgetSection, CircuitBreakerConfig, CloudflareAccessConfig, CodeModeConfig,
+    ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS, ErrorBudgetSection,
+    FailsafeConfig, HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool,
+    IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
+    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
+    RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
+    StreamingConfig, TasksConfig, TokenAgeCap, ToolContractConfig, WebhookConfig,
 };
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
@@ -802,6 +803,9 @@ impl Config {
         self.auth.validate_api_key_names()?;
         self.security.message_signing.resolve_with_env(overlay)?;
         self.key_server.validate()?;
+        self.security
+            .caller_identity
+            .validate(self.auth.enabled, &self.key_server)?;
         self.error_budget.validate()?;
         self.tasks.validate()?;
         // Descriptor structure first, and separately: a `personal_managed`

@@ -1035,12 +1035,7 @@ impl Gateway {
         .with_exposed_meta_tools(&self.config.meta_mcp.exposed_meta_tools)
         .with_expose_stats_tool(self.config.meta_mcp.expose_stats_tool)
         .with_prompts_resources_fetch_timeout(self.config.meta_mcp.prompts_resources_fetch_timeout)
-        .with_trusted_identity_headers(
-            self.config
-                .security
-                .identity_grants
-                .trust_caller_identity_headers,
-        );
+        .with_caller_identity(self.config.security.caller_identity.clone());
 
         #[cfg(feature = "cost-governance")]
         if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
@@ -4703,7 +4698,6 @@ mod tests {
             enabled: true,
             path: path.display().to_string(),
             fail_on_error: true,
-            trust_caller_identity_headers: false,
         };
         let (loaded_path, store) = load_configured_identity_grants(&config)
             .await
@@ -4722,7 +4716,6 @@ mod tests {
             enabled: true,
             path: missing.display().to_string(),
             fail_on_error: true,
-            trust_caller_identity_headers: false,
         };
 
         let err = load_configured_identity_grants(&config).await.unwrap_err();

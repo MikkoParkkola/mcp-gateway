@@ -24,7 +24,7 @@ use super::helpers::{
     extract_tools_call_params, merge_client_meta, parse_elicitation_params, parse_request,
     parse_sampling_params,
 };
-use super::identity::caller_grant_subject;
+use super::identity::{caller_grant_subject, identity_refusal_response};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
@@ -535,6 +535,28 @@ async fn meta_mcp_dispatch(
                 .into_response();
         }
     }
+
+    // The caller as a grant subject, resolved once and before the body is
+    // read, so a refused identity header reaches no dispatch, cache or
+    // idempotency work. The peer is the direct TCP peer only.
+    let peer = http_request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
+    let grant_subject = match caller_grant_subject(
+        verified_identity.as_ref(),
+        &headers,
+        peer,
+        state.meta_mcp.caller_identity(),
+        state.meta_mcp.access_verifier(),
+        cert_identity.as_ref(),
+        oauth_agent_identity.as_ref(),
+    )
+    .await
+    {
+        Ok(subject) => subject,
+        Err(refusal) => return identity_refusal_response(refusal).into_response(),
+    };
 
     // Parse JSON body
     let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
@@ -1084,13 +1106,6 @@ async fn meta_mcp_dispatch(
             cert_identity.as_ref(),
         ),
     };
-    let grant_subject = caller_grant_subject(
-        verified_identity.as_ref(),
-        &headers,
-        state.meta_mcp.trust_caller_identity_headers(),
-        cert_identity.as_ref(),
-        oauth_agent_identity.as_ref(),
-    );
     let invoke_scope = InvokeScope {
         authorizer: &router_authorizer,
         is_admin: client.as_ref().is_some_and(|c| c.admin),
@@ -1831,13 +1846,7 @@ async fn meta_mcp_dispatch(
                     // `check_invocation_policy` running on this read. So it
                     // reads the proven principal, never the declared label.
                     agent_id: agent_identity.proven_agent_id(),
-                    grant_subject: caller_grant_subject(
-                        verified_identity.as_ref(),
-                        &headers,
-                        state.meta_mcp.trust_caller_identity_headers(),
-                        cert_identity.as_ref(),
-                        oauth_agent_identity.as_ref(),
-                    ),
+                    grant_subject: grant_subject.clone(),
                     verified_identity: verified_identity.as_ref(),
                     is_admin: client.as_ref().is_some_and(|client| client.admin),
                     input_capabilities: declared_capabilities,

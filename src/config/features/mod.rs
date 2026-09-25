@@ -31,14 +31,14 @@ pub use failsafe::{
 pub use idempotency::{IdempotencyConfig, IdempotencyReadOnlyTool};
 pub use key_server::{
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
-    PolicyMatchConfig, PolicyScopesConfig,
+    PolicyMatchConfig, PolicyScopesConfig, TokenAgeCap,
 };
 pub use playbooks::PlaybooksConfig;
 pub use runtime::{RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
-    AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
-    ToolContractConfig,
+    AgentIdentityConfig, CallerIdentityConfig, CallerIdentityMode, CloudflareAccessConfig,
+    ContextIntegrityConfig, ContextIntegrityPresetConfig, IdentityGrantsConfig,
+    RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig, ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
 pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
