@@ -18,7 +18,20 @@ pub struct GrantAgentKey {
     /// The namespace `id` belongs to.
     pub source: ProofSource,
     /// The proven id: SAN URI or bare CN for mTLS, `sub` for JWT.
+    #[serde(deserialize_with = "non_empty_id")]
     pub id: String,
+}
+
+/// An empty proven id matches no caller, so a row naming one is a dead grant.
+/// Refused wherever a key is read, as the CLI refuses to write one.
+fn non_empty_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let id = String::deserialize(deserializer)?;
+    if id.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "an exact agent id is empty; it would match no caller",
+        ));
+    }
+    Ok(id)
 }
 
 impl std::fmt::Display for GrantAgentKey {
@@ -38,51 +51,162 @@ impl GrantAgent {
     }
 }
 
-/// The refusal for a grants file holding 3.x bare `exact` rows, naming every
-/// one, or `None` when there are none.
+/// Why a grants file failed its typed parse; `yaml_error` is the fallback
+/// parser's. The file is read once as an untyped [`Tree`].
 ///
-/// Called only after the typed parse failed, so it explains a refusal and
-/// never admits a row: `GrantAgent` has no bare variant for one to reach
-/// `matches` through. All rows at once, because the CLI's read-modify-write
-/// goes through the same reader and N rows must not cost N attempts. No
-/// source is defaulted and nothing becomes `any`: each would be a guess, and
-/// both widen.
-pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Option<String> {
-    use serde_yaml::Value;
-    // JSON is YAML, so one parse covers both encodings. 3.x wrote YAML rows
-    // as a tag (`agent: !exact runner`) and JSON rows as `{"exact": "runner"}`.
-    let file: Value = serde_yaml::from_str(content).ok()?;
-    let rows: Vec<String> = file
-        .get("grants")
-        .and_then(Value::as_sequence)
+/// A file holding 3.x bare `exact` rows is refused naming every one. This
+/// explains a refusal and never admits a row: `GrantAgent` has no bare
+/// variant for one to reach `matches` through. All rows at once, because the
+/// CLI's read-modify-write goes through the same reader and N rows must not
+/// cost N attempts. No source is defaulted and nothing becomes `any`: each
+/// would be a guess, and both widen.
+///
+/// Otherwise the error is a text parse's, which alone knows line and column:
+/// `serde_json`'s for a JSON file rather than YAML's view of JSON, else
+/// `yaml_error`.
+pub(super) fn parse_refusal(
+    path: &std::path::Path,
+    content: &str,
+    yaml_error: &serde_yaml::Error,
+) -> String {
+    let tree = Tree::parse(content);
+    let bare = tree.as_ref().map(Tree::bare_rows).unwrap_or_default();
+    if bare.is_empty() {
+        let error = match tree {
+            Some(Tree::Json(_)) => serde_json::from_str::<super::IdentityGrantFile>(content)
+                .err()
+                .map(|e| e.to_string()),
+            _ => None,
+        }
+        .unwrap_or_else(|| yaml_error.to_string());
+        return format!(
+            "failed to parse identity grants file {}: {error}",
+            path.display()
+        );
+    }
+    let rows: Vec<String> = bare
+        .iter()
+        .map(|(grant_id, id)| format!("grant '{grant_id}' (exact {id})"))
+        .collect();
+    let remainder = tree
+        .and_then(Tree::remainder_error)
+        .map(|e| format!(" Apart from those rows the file also fails to parse: {e}"))
+        .unwrap_or_default();
+    format!(
+        "identity grants file {} keys {} agent binding(s) by a bare id, which does not say \
+         which proof source it came from: {}. Rewrite each as `agent: !exact {{source: mtls, \
+         id: <SAN URI or bare CN>}}` or `agent: !exact {{source: jwt, id: <client_id>}}` \
+         (JSON: `\"agent\": {{\"exact\": {{\"source\": \"jwt\", \"id\": ...}}}}`), or as \
+         `agent: any` only if every agent of that subject is meant. The gateway will not \
+         choose.{remainder}",
+        path.display(),
+        rows.len(),
+        rows.join(", "),
+    )
+}
+
+/// A grants file read once as an untyped tree, in its own encoding. JSON is
+/// tried first: JSON is also YAML, but `serde_yaml` refuses the JSON map form
+/// of `exact`, so a JSON file stays JSON.
+enum Tree {
+    Json(serde_json::Value),
+    Yaml(serde_yaml::Value),
+}
+
+impl Tree {
+    fn parse(content: &str) -> Option<Self> {
+        serde_json::from_str(content)
+            .map(Self::Json)
+            .ok()
+            .or_else(|| serde_yaml::from_str(content).ok().map(Self::Yaml))
+    }
+
+    /// `(grant_id, id)` of every 3.x bare `exact` row. 3.x wrote YAML rows as
+    /// a tag (`agent: !exact runner`) and JSON rows as `{"exact": "runner"}`.
+    fn bare_rows(&self) -> Vec<(String, String)> {
+        let named = |grant_id: Option<&str>, id: &str| {
+            (
+                grant_id.unwrap_or("<no grant_id>").to_owned(),
+                id.to_owned(),
+            )
+        };
+        match self {
+            Self::Json(file) => json_rows(file)
+                .filter_map(|row| {
+                    let id = row.pointer("/agent/exact")?.as_str()?;
+                    Some(named(
+                        row.get("grant_id").and_then(serde_json::Value::as_str),
+                        id,
+                    ))
+                })
+                .collect(),
+            Self::Yaml(file) => yaml_rows(file)
+                .filter_map(|row| {
+                    let id = bare_yaml_id(row)?;
+                    Some(named(
+                        row.get("grant_id").and_then(serde_yaml::Value::as_str),
+                        id,
+                    ))
+                })
+                .collect(),
+        }
+    }
+
+    /// Why the file still fails its typed parse with the bare rows removed,
+    /// so a refusal naming them does not hide a second defect behind them.
+    /// Parsed from a value, so it carries no line or column.
+    fn remainder_error(self) -> Option<String> {
+        match self {
+            Self::Json(mut file) => {
+                if let Some(rows) = file
+                    .get_mut("grants")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    rows.retain(|row| {
+                        !row.pointer("/agent/exact")
+                            .is_some_and(serde_json::Value::is_string)
+                    });
+                }
+                serde_json::from_value::<super::IdentityGrantFile>(file)
+                    .err()
+                    .map(|e| e.to_string())
+            }
+            Self::Yaml(mut file) => {
+                if let Some(rows) = file
+                    .get_mut("grants")
+                    .and_then(serde_yaml::Value::as_sequence_mut)
+                {
+                    rows.retain(|row| bare_yaml_id(row).is_none());
+                }
+                serde_yaml::from_value::<super::IdentityGrantFile>(file)
+                    .err()
+                    .map(|e| e.to_string())
+            }
+        }
+    }
+}
+
+fn json_rows(file: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+    file.get("grants")
+        .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|row| {
-            let id = match row.get("agent")? {
-                Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
-                agent @ Value::Mapping(_) => agent.get("exact").and_then(Value::as_str),
-                _ => None,
-            }?;
-            let grant_id = row
-                .get("grant_id")
-                .and_then(Value::as_str)
-                .unwrap_or("<no grant_id>");
-            Some(format!("grant '{grant_id}' (exact {id})"))
-        })
-        .collect();
-    (!rows.is_empty()).then(|| {
-        format!(
-            "identity grants file {} keys {} agent binding(s) by a bare id, which does not say \
-             which proof source it came from: {}. Rewrite each as `agent: !exact {{source: mtls, \
-             id: <SAN URI or bare CN>}}` or `agent: !exact {{source: jwt, id: <client_id>}}` \
-             (JSON: `\"agent\": {{\"exact\": {{\"source\": \"jwt\", \"id\": ...}}}}`), or as \
-             `agent: any` only if every agent of that subject is meant. The gateway will not \
-             choose.",
-            path.display(),
-            rows.len(),
-            rows.join(", ")
-        )
-    })
+}
+
+fn yaml_rows(file: &serde_yaml::Value) -> impl Iterator<Item = &serde_yaml::Value> {
+    file.get("grants")
+        .and_then(serde_yaml::Value::as_sequence)
+        .into_iter()
+        .flatten()
+}
+
+/// The id of a bare YAML row: `!exact runner` or `{exact: runner}`.
+fn bare_yaml_id(row: &serde_yaml::Value) -> Option<&str> {
+    match row.get("agent")? {
+        serde_yaml::Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
+        agent @ serde_yaml::Value::Mapping(_) => agent.get("exact")?.as_str(),
+        _ => None,
+    }
 }
 
 // Identity is `(authority, subject)`. The label is whatever each side had to

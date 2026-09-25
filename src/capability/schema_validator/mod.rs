@@ -129,6 +129,8 @@ const MAX_KEY_VIOLATIONS: usize = 5;
 const MAX_KEY_PATH_CHARS: usize = 64;
 /// Longest MCP refusal text, in bytes.
 const MAX_REFUSAL_BYTES: usize = 4096;
+/// Appended after a refusal cut at [`MAX_REFUSAL_BYTES`].
+const TRUNCATION_SUFFIX: &str = "\n... (parameter list truncated)";
 
 /// [`validate_arguments`] under an explicit enforcement mode (MIK-7570.SCHEMA.1).
 ///
@@ -187,7 +189,7 @@ pub(crate) fn undeclared_key_refusal(
             cut -= 1;
         }
         text.truncate(cut);
-        text.push_str("\n... (parameter list truncated)");
+        text.push_str(TRUNCATION_SUFFIX);
     }
     Some(text)
 }
