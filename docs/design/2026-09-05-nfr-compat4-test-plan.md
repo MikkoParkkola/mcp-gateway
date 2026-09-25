@@ -63,8 +63,8 @@ unnoticed. The reviewer who wants the wider reading should refuse the §P0 scope
 - The revision axis is the UNION of `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:48`, four legacy
   revisions) and `MODERN_VERSIONS` (`2026-07-28`). Two constants, not one list with a hole.
 - Transports: client-side implementors of `trait Transport` (`src/transport/mod.rs:22`) are http,
-  stdio and websocket; the serving side binds an HTTP listener, spawns a WebSocket listener
-  (`src/gateway/server/mod.rs:1321`) and runs stdio (`:1495`). Same three names, different code.
+  stdio and websocket; the serving side binds an HTTP listener and runs stdio (`src/gateway/server/mod.rs`). (The inbound
+  WebSocket echo listener this line once named was removed in 4.0, F15.) Same names, different code.
 - The design records that a mechanical witness check passes on "a hundred cells … code present,
   witness present" without the witness being *true* (design:149). No case below closes that;
   case 12 states the bar the tests do enforce.

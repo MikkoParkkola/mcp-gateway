@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29 or 30 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30 or 34 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29 and 30 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30 and 34 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -50,6 +50,7 @@ upgrading a running deployment.
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
+| 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -660,6 +661,18 @@ so the two are told apart. Each such rule is warned about at startup with its in
 A token request whose `backends:` scope names none of the rule's backends is also refused with
 `no_backends_granted`. Tool lists are unchanged: an empty `tools` still means every tool on the
 granted backends.
+
+## 34. The inbound WebSocket listener is removed, and `server.ws_port` fails the load
+
+In 3.x, `server.ws_port` spawned a WebSocket listener beside the HTTP server. It only echoed
+text frames back: it never served MCP, sat outside the Origin/Host guard and had no
+authentication, so no client could reach a tool through it.
+
+- **The listener is gone.** Clients connect via stdio or HTTP (`POST /mcp`).
+- **`server.ws_port` is a retired key and refuses the load**, on start and on reload, with
+  `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0; ... Remove
+  server.ws_port. Delete the key, including a `ws_port: null` line.
+- **The outbound WebSocket client transport (`src/transport/websocket.rs`) is unchanged.**
 
 ## After upgrading
 

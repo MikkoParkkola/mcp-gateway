@@ -1994,28 +1994,6 @@ impl Gateway {
             return Err(Error::Config(reason));
         }
 
-        // Optionally spawn a WebSocket listener alongside the HTTP server.
-        if let Some(ws_port) = self.config.server.ws_port {
-            let ws_addr = SocketAddr::new(
-                self.config
-                    .server
-                    .host
-                    .parse()
-                    .map_err(|e| Error::Config(format!("Invalid host for WS: {e}")))?,
-                ws_port,
-            );
-            let ws_shutdown = shutdown_tx.subscribe();
-            tokio::spawn(super::ws_listener::run_websocket_listener(
-                ws_addr,
-                ws_shutdown,
-            ));
-            info!(
-                host = %self.config.server.host,
-                port = ws_port,
-                "WebSocket listener spawned"
-            );
-        }
-
         // Warned on EVERY start while the escape hatch is set, and not only when
         // authentication is off. The narrower condition missed the shape the
         // hatch is most often reached from: authentication enabled with `/mcp`
