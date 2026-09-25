@@ -30,7 +30,12 @@ struct RecordingWire {
 
 impl RecordingWire {
     fn forwarded(&self, method: &str) -> bool {
-        self.seen.lock().iter().any(|m| m == method)
+        // Case-insensitive: a backend that matches method names loosely acts on
+        // a case variant, so any spelling reaching the wire is a forward.
+        self.seen
+            .lock()
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(method))
     }
 }
 
@@ -69,6 +74,11 @@ const DIRECT: &str = "/mcp/shared";
 /// `logging/setLevel {"level":"debug"}` sent to `uri`, and whether the wire
 /// saw the forward.
 async fn set_level_as(admin: bool, uri: &str) -> (StatusCode, Value, bool) {
+    send_as(admin, uri, "logging/setLevel").await
+}
+
+/// [`set_level_as`] with the method name spelled as given.
+async fn send_as(admin: bool, uri: &str, method: &str) -> (StatusCode, Value, bool) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
@@ -104,7 +114,7 @@ async fn set_level_as(admin: bool, uri: &str) -> (StatusCode, Value, bool) {
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "logging/setLevel",
+                "method": method,
                 "params": { "level": "debug" }
             })
             .to_string(),
@@ -171,4 +181,24 @@ async fn an_admin_key_still_sets_the_level_on_the_direct_route() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.get("error").is_none(), "admin must succeed: {body}");
     assert!(forwarded, "an admin's level never reached the backend");
+}
+
+/// A case variant of the method name is the same request to a backend that
+/// matches names loosely, so it must meet the same gate on both routes.
+#[tokio::test]
+async fn a_case_variant_of_set_level_is_refused_to_a_non_admin_on_both_routes() {
+    for (uri, method) in [
+        (DIRECT, "Logging/setLevel"),
+        (DIRECT, "logging/SETLEVEL"),
+        (META, "LOGGING/SETLEVEL"),
+    ] {
+        let (status, body, forwarded) = send_as(false, uri, method).await;
+
+        assert_eq!(
+            body["error"]["code"], -32600,
+            "{method} on {uri} must be refused in the admin-denial shape: {body}"
+        );
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} on {uri}: {body}");
+        assert!(!forwarded, "{method} on {uri} reached the backend");
+    }
 }
