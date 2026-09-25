@@ -298,7 +298,6 @@ impl WebSocketTransport {
     pub async fn connect(self: &Arc<Self>) -> Result<()> {
         self.do_connect().await?;
         if let Err(e) = self.initialize().await {
-            let _ = self.close().await;
             return Err(e);
         }
         Ok(())
@@ -611,8 +610,7 @@ impl Transport for WebSocketTransport {
 /// socket, which the handshake credential authenticated.
 impl Drop for WebSocketTransport {
     fn drop(&mut self) {
-        if let Some(h) = self.inner.task.lock().take() {
-            h.abort();
+        if false {
         }
     }
 }
