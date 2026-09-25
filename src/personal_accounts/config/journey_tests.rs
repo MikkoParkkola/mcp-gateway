@@ -15,13 +15,23 @@ const KEY_B64: &str = "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=";
 /// Synthetic material only; never written to the process environment.
 struct Overlay;
 
-impl SecretOverlay for Overlay {
-    fn resolve(&self, name: &str) -> Option<String> {
+impl Overlay {
+    fn resolve(name: &str) -> Option<String> {
         match name {
             "JOURNEY_KEY" => Some(KEY_B64.to_string()),
             "ADAPTER_A" => Some("a".repeat(40)),
             "ADAPTER_B" => Some("b".repeat(40)),
             _ => None,
+        }
+    }
+}
+
+impl SecretOverlay for Overlay {
+    fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        // `env:` through this fake; `file:` and literals as production does.
+        match reference.strip_prefix("env:") {
+            Some(name) => Ok(Self::resolve(name)),
+            None => crate::config::EnvOverlay::none().resolve_reference(field, reference),
         }
     }
 }

@@ -44,10 +44,20 @@ impl FakeOverlay {
     }
 }
 
-impl SecretOverlay for FakeOverlay {
+impl FakeOverlay {
     fn resolve(&self, name: &str) -> Option<String> {
         self.reads.borrow_mut().push(name.to_string());
         self.values.get(name).cloned()
+    }
+}
+
+impl SecretOverlay for FakeOverlay {
+    fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        // `env:` through this fake; `file:` and literals as production does.
+        match reference.strip_prefix("env:") {
+            Some(name) => Ok(self.resolve(name)),
+            None => crate::config::EnvOverlay::none().resolve_reference(field, reference),
+        }
     }
 }
 

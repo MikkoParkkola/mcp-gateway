@@ -1395,6 +1395,7 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
         .map(ToString::to_string)
         .collect();
     let mut keys: Vec<String> = keys.into_iter().collect();
+    keys.extend(evaluated.overlay.rotated_secret_files(startup));
     // A `~` entry is expanded against the `HOME` in force AT THAT POINT in the
     // sequence (`Config::evaluate`), not the one left standing at the end, so
     // an env file can move where a LATER entry reads while the final value is

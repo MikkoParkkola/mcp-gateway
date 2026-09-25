@@ -76,13 +76,23 @@ impl CountingOverlay {
     }
 }
 
-impl SecretOverlay for CountingOverlay {
+impl CountingOverlay {
     fn resolve(&self, name: &str) -> Option<String> {
         self.looked_up.borrow_mut().push(name.to_string());
         self.values
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
+    }
+}
+
+impl SecretOverlay for CountingOverlay {
+    fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        // `env:` through this fake; `file:` and literals as production does.
+        match reference.strip_prefix("env:") {
+            Some(name) => Ok(self.resolve(name)),
+            None => crate::config::EnvOverlay::none().resolve_reference(field, reference),
+        }
     }
 }
 

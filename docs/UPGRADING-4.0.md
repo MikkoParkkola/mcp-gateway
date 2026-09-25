@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 or 43 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 or 44 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 and 43 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 and 44 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -63,6 +63,7 @@ upgrading a running deployment.
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 44 | `file:` secret references; a literal starting `file:` is now a reference | Point `file:` at an absolute, owner-only (or group-read via `fsGroup`) file; change a literal secret that starts with `file:` |
 
 Numbers 18-20 are intentionally unused.
 
@@ -943,7 +944,7 @@ An `env:` reference to a variable that was set but empty passed validation, and 
   now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
   up next to the variable it failed to supply.
 
-`server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
+`server.metrics_token` is unchanged: an unset or empty variable (or an unreadable `file:`, item 44) there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
 ## 41. API keys are configured as sha256 digests, with optional expiry
@@ -1038,6 +1039,61 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 44. Secrets can be read from files with `file:`, and a literal starting `file:` is now a reference
+
+Wherever a whole-value secret takes `env:NAME`, it now also takes `file:/absolute/path`:
+`auth.bearer_token`, `auth.api_keys[].key_sha256` (the file holds the digest), `agent_auth.agents[].hs256_secret`,
+`key_server.admin_token`, `security.message_signing.shared_secret` and `previous_secret`,
+`server.metrics_token`, `accounts.keys`, `accounts.adapters[].hmac_secret_ref` and
+`accounts.descriptors[].client_secret_ref`. The secret is the file's content. A descriptor's
+`client_secret_ref` is read each time the client secret is used, as its `env:` form is; every other
+field is read once, at startup.
+
+- **The path must be absolute.** `~`, relative paths and `${VAR}` inside the path are not expanded;
+  `file:secrets/token` fails with `... is not an absolute path.`
+- **The file is held to the item 35 rule**: a file other users can read or change fails the load,
+  and so does a group-readable file this process owns. It must be UTF-8 and at most 64 KiB.
+- **Exactly one trailing newline is stripped** (`\n` or `\r\n`), as `kubectl create secret
+  --from-file` and `echo` add one. Anything beyond that one is part of the secret. A file that is
+  empty after the strip fails, as an empty `env:` value does (item 40).
+- **Breaking:** a literal secret that happens to start with `file:` is now read as a reference.
+  There is no escape syntax; change the secret.
+- **Rotation needs a restart** (except `client_secret_ref`, which picks up the new file on its next
+  use). A reload whose `file:` secret has new content reports
+  `restart required for: file:/path` (the path, never the value) and keeps the running secret.
+- **Aliasing:** an adapter `hmac_secret_ref` and a gateway credential that name the same file (after
+  symlinks resolve), or two files with the same content, are refused, as two `env:` references to
+  one variable are.
+
+Capability YAMLs are unchanged: their `file:/path.json:field` form keeps its own meaning, and a
+capability cannot use `file:` to read a whole file as a secret.
+
+On Kubernetes, mount the Secret as a volume and point the field at the key's file:
+
+```yaml
+# pod spec
+securityContext:
+  fsGroup: 1001            # a group the gateway process is in
+volumes:
+  - name: gateway-secrets
+    secret:
+      secretName: gateway-secrets
+      defaultMode: 0440    # 288 in JSON; group read is how a non-owner reads it
+# container
+volumeMounts:
+  - name: gateway-secrets
+    mountPath: /run/secrets/gateway
+    readOnly: true
+```
+
+```yaml
+# gateway.yaml
+auth:
+  bearer_token: file:/run/secrets/gateway/bearer-token
+```
+
+The Helm chart does not yet mount extra Secret volumes for you.
 
 ## After upgrading
 

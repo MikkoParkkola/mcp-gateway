@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
 
+### Added
+
+- `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
+  item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
+  the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
+  A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
+  (C9, MIK-7570.SECRET.2)
+
 ## [4.0.0-beta.1] - 2026-09-25
 
 > **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final
