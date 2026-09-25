@@ -602,11 +602,15 @@
     },
     {
       "id": "MIK-7570.ADMINGRANT.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/ui/control_plane.rs",
+        "src/gateway/ui/control_plane_authority_tests.rs",
+        "tests/e2min_control_plane_authority.rs"
+      ],
+      "note": "Graded 2026-09-25 (E2-min). Green CI run 36102695546 at 7def85f3 (pre-rebase SHA of the fix branch, on 90d328b3): 5547 lib passed, 0 failed. Red first: run 36101856220 at bffd58a8 (pre-rebase SHA of the test commit), exactly four failures, each its own row: the grant mask row (the store's Revoked beat the enforced Approved), the policy mask row (the store's enforced:false won), the admin write row (200, not 409) and the advertise row (route.read_only false). Write routes enumerated at source: grants, policies, decisions only (src/gateway/ui/control_plane.rs:45-47; :48 is the export-status GET), and the store is opened only at startup (src/gateway/server/control_plane_store.rs:65) and read or written only by this UI module. Refusal: apply_mutation (src/gateway/ui/control_plane.rs:431) and resolve_decision_core (:321) return 409 after validate_for_actor and before any store or audit write, with reason codes grants_managed_in_identity_grants_file (:415) and policies_managed_in_gateway_config (:421) naming config keys, never a path. merge_store_into_snapshot (:626) no longer merges store grants or policies, only the audit log; mutation_enabled is the constant false (:140); authority is added (:792); current_limits drops no_persistence while a store is open (design Revision 3). Rows: src/gateway/ui/control_plane_authority_tests.rs a_store_row_cannot_mask_an_enforced_grant_in_the_view (:57), a_store_row_cannot_mask_an_enforced_policy_in_the_view (:91); tests/e2min_control_plane_authority.rs admin_grant_and_policy_writes_are_refused_and_point_at_config (:137), the_snapshot_does_not_advertise_mutation (:188). Controls: a_non_admin_write_is_still_refused_by_rbac (:172) gets 403 CONTROL_RBAC_MUTATION_DENIED on all four writes; store_audit_events_still_reach_the_view (:122). Delete-the-branch via CI, each mutation turning its own row red: restoring the grant merge reddens the grant mask row, restoring the policy merge the policy mask row, restoring mutation_enabled = store.is_some() the advertise row, and a grant or policy refusal arm that returns 200 without writing the write row. Two runs so each red row had one cause: 36102699686 (grant merge, mutation_enabled, policy arm) and 36102704766 (policy merge, grant arm). UI: the page only GETs this API, so the refusal is visible as the Read Only badge; not exercised in a browser."
     },
     {
       "id": "MIK-7570.AGENTGRANT.1",

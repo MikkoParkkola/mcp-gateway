@@ -4,7 +4,7 @@ From any 3.x release. No migration edits your `gateway.yaml`, and the gateway ma
 change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23 and 24 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11 and 23-25 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -42,6 +42,7 @@ upgrading a running deployment.
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
 | 23 | `logging/setLevel` on `/mcp` and `/mcp/{name}` needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
 | 24 | `notifications/tools/list_changed` from backend edits reaches only callers of that backend | None; a key that must hear about every backend needs `backends: ["*"]` |
+| 25 | Admin-panel grant, policy and decision writes return 409 | Change grants with `mcp-gateway identity grants`, policies in `security.*`; keep the old store files |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -440,6 +441,30 @@ session is told, as before.
 Nothing errors: a client that is no longer told keeps its cached tool list until it next calls
 `tools/list`. Listeners on `subscriptions/listen` are still told about every edit; scoping that
 stream is a separate change.
+
+## 25. Admin-panel grant and policy edits are refused
+
+In 3.x, `POST /ui/api/control-plane/grants`, `…/policies` and `…/decisions` wrote to the
+control-plane store (`store/` under the directory from item 22) and answered 200. Dispatch never
+read that store. A grant revoked there was still enforced and a grant added there was never
+enforced; the same held for policies. The page then showed the store's rows, which could hide an
+enforced grant, or show SSRF protection as off while it was on, and it called itself "Mutating".
+
+Those three routes now check RBAC and then return **409** with `reason_code`
+`grants_managed_in_identity_grants_file` or `policies_managed_in_gateway_config`. Nothing is
+written, including the audit log. A caller without admin still gets 403. The page shows
+"Read Only", lists `no_mutation_endpoint` in `current_limits`, reports `GovernanceMutation` as
+unavailable, and adds `authority`, which names where each kind is enforced.
+
+What is enforced has not changed. Grants come from the file at `security.identity_grants.path`,
+edited with `mcp-gateway identity grants grant|revoke|list`. Policies come from
+`security.sanitize_input` and `security.ssrf_protection`. The store still holds the governance
+audit log, which the page and SIEM export read, so the note in item 22 about a persistent
+`store_dir` now applies to the audit log only.
+
+Existing rows in `store/grants.json` and `store/policies.json` are no longer shown. Leave them on
+disk: 4.1 will bring them back as unenforced drafts that need re-approval. **Do not delete or
+hand-edit them.**
 
 ## After upgrading
 

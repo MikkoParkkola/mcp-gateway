@@ -36,8 +36,9 @@ use crate::hashing::canonical_json_sha256;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::trust::TrustCard;
 
-/// Build the control-plane API router: a read-only snapshot plus governance
-/// mutation routes (grants/policies) gated by RBAC + mandatory audit (MIK-6686).
+/// Build the control-plane API router: a read-only snapshot plus the grant,
+/// policy and decision write routes, which apply RBAC (MIK-6686) and then
+/// refuse with 409 because dispatch never reads the store (E2-min).
 pub fn control_plane_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/ui/api/control-plane", get(control_plane_snapshot))
@@ -133,7 +134,10 @@ async fn control_plane_snapshot(
         decision_queue,
         shadow_radar,
         &ControlPlaneResponseFlags {
-            mutation_enabled: state.control_plane_store.is_some(),
+            // Dispatch reads grants and policies from config, never from the
+            // store, so no write here is ever enforced: the route is read-only
+            // even while the store is open for the audit log (E2-min).
+            mutation_enabled: false,
             mutation_disabled_reason: mutation_disabled_reason(&state),
             base_source: state
                 .control_plane_base
@@ -176,8 +180,8 @@ struct MutationResponse {
     reason: String,
 }
 
-/// POST a grant upsert: RBAC plus mandatory audit via `validate_for_actor`,
-/// then persist to the control-plane store and append the audit event.
+/// POST a grant upsert: RBAC via `validate_for_actor`, then 409. Dispatch
+/// enforces grants from the identity-grants file, never from this store.
 async fn mutate_grant(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -198,11 +202,12 @@ async fn mutate_grant(
         format!("upsert grant {}", req.grant.grant_id),
         req.reason,
         req.rollback,
-        |store, event| store.commit_grant_audited(req.grant.clone(), event),
+        &GRANT_WRITES_REFUSED,
     )
 }
 
-/// POST a policy upsert: same RBAC plus audit contract as [`mutate_grant`].
+/// POST a policy upsert: same RBAC-then-409 contract as [`mutate_grant`].
+/// Dispatch enforces policies from gateway config, never from this store.
 async fn mutate_policy(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -223,7 +228,7 @@ async fn mutate_policy(
         format!("upsert policy {}", req.policy.policy_id),
         req.reason,
         req.rollback,
-        |store, event| store.commit_policy_audited(req.policy.clone(), event),
+        &POLICY_WRITES_REFUSED,
     )
 }
 
@@ -310,25 +315,31 @@ fn store_unavailable(reason: String) -> axum::response::Response {
 }
 
 /// Sync core of [`resolve_decision`] (testable without a router). Authorizes
-/// FIRST (before any store read, so 403-vs-404 cannot leak target existence),
-/// then applies a field-only, audited status change through the store's
-/// re-read-under-lock primitive (no stale-clone lost update). Kinds without a
-/// durable store target return 422.
+/// FIRST, so a non-admin still gets RBAC's 403, then refuses a grant or policy
+/// decision with 409 before any store read or audit write: the store is not
+/// what dispatch enforces (E2-min). Other kinds return 422.
 fn resolve_decision_core(
     store: Result<&Arc<dyn ControlPlaneStore>, String>,
     actor: &ControlPlaneActor,
     req: DecisionRequest,
 ) -> axum::response::Response {
-    let store = match store {
-        Ok(store) => store,
-        Err(reason) => return store_unavailable(reason),
-    };
+    if let Err(reason) = store {
+        return store_unavailable(reason);
+    }
 
     // Map kind -> action; reject unsupported kinds with a static 422 (no
     // resource lookup, so no information leak).
-    let (action, kind_label) = match req.target_kind {
-        ControlPlaneDecisionTargetKind::Grant => (ControlPlaneAction::MutateGrant, "grant"),
-        ControlPlaneDecisionTargetKind::Policy => (ControlPlaneAction::MutatePolicy, "policy"),
+    let (action, kind_label, refusal) = match req.target_kind {
+        ControlPlaneDecisionTargetKind::Grant => (
+            ControlPlaneAction::MutateGrant,
+            "grant",
+            &GRANT_WRITES_REFUSED,
+        ),
+        ControlPlaneDecisionTargetKind::Policy => (
+            ControlPlaneAction::MutatePolicy,
+            "policy",
+            &POLICY_WRITES_REFUSED,
+        ),
         other => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -346,8 +357,8 @@ fn resolve_decision_core(
     let approve = req.decision == Decision::Approve;
     let verb = if approve { "approve" } else { "deny" };
 
-    // Build the audited mutation and authorize BEFORE touching the store, so a
-    // non-admin cannot use 403-vs-404 as an existence oracle.
+    // Build the audited mutation and authorize it first, so a non-admin gets
+    // RBAC's 403 rather than the 409 below.
     let event = ControlPlaneAuditEvent {
         event_id: format!("cpa-{}-{}", Utc::now().timestamp_millis(), req.target_id),
         actor_id: actor.actor_id.clone(),
@@ -360,7 +371,7 @@ fn resolve_decision_core(
         action,
         target_id: req.target_id.clone(),
         summary: format!("{verb} {kind_label} {}", req.target_id),
-        audit_event: Some(event.clone()),
+        audit_event: Some(event),
     };
     let report = mutation.validate_for_actor(actor);
     if !report.allowed {
@@ -375,51 +386,47 @@ fn resolve_decision_core(
             .into_response();
     }
 
-    // Apply the field-only, audited status change (re-read under the store lock).
-    let applied = match req.target_kind {
-        ControlPlaneDecisionTargetKind::Grant => {
-            let status = if approve {
-                ControlPlaneGrantStatus::Approved
-            } else {
-                ControlPlaneGrantStatus::Revoked
-            };
-            store.set_grant_status_audited(&req.target_id, status, &event)
-        }
-        ControlPlaneDecisionTargetKind::Policy => {
-            store.set_policy_enforced_audited(&req.target_id, approve, &event)
-        }
-        _ => unreachable!("non grant/policy kinds returned 422 above"),
-    };
-    match applied {
-        Ok(true) => (
-            StatusCode::OK,
+    refusal.response()
+}
+
+/// Why an authorized grant or policy write is refused, and where to make it.
+///
+/// Names config keys, never a resolved filesystem path, because authenticated
+/// non-admins can read this API.
+struct WriteRefusal {
+    reason_code: &'static str,
+    reason: &'static str,
+}
+
+impl WriteRefusal {
+    fn response(&self) -> axum::response::Response {
+        (
+            StatusCode::CONFLICT,
             Json(MutationResponse {
-                ok: true,
-                reason_code: report.reason_code,
-                reason: report.reason,
+                ok: false,
+                reason_code: self.reason_code.to_string(),
+                reason: self.reason.to_string(),
             }),
         )
-            .into_response(),
-        Ok(false) => decision_not_found(kind_label, &req.target_id),
-        Err(e) => internal_error("CONTROL_STORE_WRITE_FAILED", &e),
+            .into_response()
     }
 }
 
-fn decision_not_found(kind: &str, id: &str) -> axum::response::Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(MutationResponse {
-            ok: false,
-            reason_code: "CONTROL_DECISION_TARGET_NOT_FOUND".to_string(),
-            reason: format!("no {kind} '{id}' in the control-plane store"),
-        }),
-    )
-        .into_response()
-}
+const GRANT_WRITES_REFUSED: WriteRefusal = WriteRefusal {
+    reason_code: "grants_managed_in_identity_grants_file",
+    reason: "Grants are enforced from the file named by security.identity_grants.path; \
+             change them with `mcp-gateway identity grants`. This store is not enforced.",
+};
 
-/// Shared mutation path: build the audited mutation, authorize it with
-/// `validate_for_actor`, then commit it as one audited unit (write-ahead audit
-/// plus persistence under a single lock, provided by the store).
+const POLICY_WRITES_REFUSED: WriteRefusal = WriteRefusal {
+    reason_code: "policies_managed_in_gateway_config",
+    reason: "Policies are enforced from gateway config: set security.sanitize_input and \
+             security.ssrf_protection. This store is not enforced.",
+};
+
+/// Shared write path: build the audited mutation and authorize it with
+/// `validate_for_actor`, so a non-admin gets RBAC's 403; then refuse with 409
+/// before any store or audit write, because dispatch never reads this store.
 #[allow(clippy::too_many_arguments)]
 fn apply_mutation(
     store: Result<&Arc<dyn ControlPlaneStore>, String>,
@@ -429,18 +436,12 @@ fn apply_mutation(
     summary: String,
     reason: String,
     rollback: ControlPlaneRollbackPlan,
-    commit: impl FnOnce(
-        &Arc<dyn ControlPlaneStore>,
-        &ControlPlaneAuditEvent,
-    ) -> Result<(), crate::control_plane::StoreError>,
+    refusal: &WriteRefusal,
 ) -> axum::response::Response {
-    let store = match store {
-        Ok(store) => store,
-        Err(reason) => return store_unavailable(reason),
-    };
+    if let Err(reason) = store {
+        return store_unavailable(reason);
+    }
 
-    // event_id embeds a millisecond timestamp, giving both a unique id and a
-    // coarse time for the audit trail (the hash chain provides ordering).
     let event = ControlPlaneAuditEvent {
         event_id: format!("cpa-{}-{target_id}", Utc::now().timestamp_millis()),
         actor_id: actor.actor_id.clone(),
@@ -453,7 +454,7 @@ fn apply_mutation(
         action,
         target_id,
         summary,
-        audit_event: Some(event.clone()),
+        audit_event: Some(event),
     };
 
     let report = mutation.validate_for_actor(actor);
@@ -468,37 +469,7 @@ fn apply_mutation(
         )
             .into_response();
     }
-
-    // The store commits the write-ahead audit and the persistence as one
-    // serialized, ordered unit (see `commit_grant_audited`).
-    if let Err(e) = commit(store, &event) {
-        return internal_error("CONTROL_MUTATION_WRITE_FAILED", &e);
-    }
-
-    (
-        StatusCode::OK,
-        Json(MutationResponse {
-            ok: true,
-            reason_code: report.reason_code,
-            reason: report.reason,
-        }),
-    )
-        .into_response()
-}
-
-/// Log the underlying error server-side and return a generic client message, so
-/// filesystem paths and other internals are not leaked in the HTTP response.
-fn internal_error(code: &str, err: &crate::control_plane::StoreError) -> axum::response::Response {
-    tracing::error!(reason_code = code, error = %err, "control-plane mutation failed");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(MutationResponse {
-            ok: false,
-            reason_code: code.to_string(),
-            reason: "Control-plane mutation could not be persisted".to_string(),
-        }),
-    )
-        .into_response()
+    refusal.response()
 }
 
 /// Resolve the control-plane actor.
@@ -632,12 +603,11 @@ fn local_runtime_snapshot(
             .push(control_plane_grant_from_identity(grant, now));
     }
 
-    // Reflect the durable governance store (MIK-6701): persisted grants/policies
-    // are merged in (store rows win by id over the local projection), and the
-    // audit-events view is populated from the store. Read errors degrade to the
-    // local projection rather than breaking the whole snapshot (fail-soft read),
-    // and the degraded flag is surfaced so an empty view is not mistaken for an
-    // authoritative empty result.
+    // The durable governance store populates the audit-events view (MIK-6701).
+    // Its grant and policy rows are not merged: dispatch never reads them, so
+    // showing them would present unenforced rows as live, or mask an enforced
+    // row with the same id (E2-min). A read error leaves the audit view empty
+    // and is surfaced so an empty view is not mistaken for an authoritative one.
     let store_read_degraded = state
         .control_plane_store
         .as_ref()
@@ -646,58 +616,18 @@ fn local_runtime_snapshot(
     (snapshot, store_read_degraded)
 }
 
-/// Merge persisted control-plane store rows into a runtime snapshot: grants and
-/// policies upsert by id (store wins), and `audit_events` are taken from the
-/// store's tamper-evident log.
+/// Fill a runtime snapshot's `audit_events` from the store's tamper-evident
+/// log. Grants and policies are left as the enforced projections: the store's
+/// rows for those kinds are never enforced (E2-min).
 ///
-/// Returns `true` if any store read failed (the view is then degraded: it falls
-/// back to the local projection and the audit view may be incomplete). The
-/// caller surfaces this so a client cannot mistake a failed read for an
-/// authoritative empty result (MIK-6701).
+/// Returns `true` if the audit read failed, so a client cannot mistake a failed
+/// read for an authoritative empty result (MIK-6701).
 #[must_use]
 fn merge_store_into_snapshot(
     store: &dyn ControlPlaneStore,
     snapshot: &mut ControlPlaneSnapshot,
 ) -> bool {
     let mut degraded = false;
-    match store.list_grants() {
-        Ok(grants) => {
-            for g in grants {
-                if let Some(existing) = snapshot
-                    .grants
-                    .iter_mut()
-                    .find(|x| x.grant_id == g.grant_id)
-                {
-                    *existing = g;
-                } else {
-                    snapshot.grants.push(g);
-                }
-            }
-        }
-        Err(e) => {
-            degraded = true;
-            tracing::warn!(error = %e, "control-plane store list_grants failed; using local projection");
-        }
-    }
-    match store.list_policies() {
-        Ok(policies) => {
-            for p in policies {
-                if let Some(existing) = snapshot
-                    .policies
-                    .iter_mut()
-                    .find(|x| x.policy_id == p.policy_id)
-                {
-                    *existing = p;
-                } else {
-                    snapshot.policies.push(p);
-                }
-            }
-        }
-        Err(e) => {
-            degraded = true;
-            tracing::warn!(error = %e, "control-plane store list_policies failed; using local projection");
-        }
-    }
     // One bounded page: the newest 200 events, newest first. The view never
     // walks the whole log, however long it has grown.
     match store.read_audit(&AuditFilter::new(200)) {
@@ -832,13 +762,13 @@ struct ControlPlaneApiResponse {
     coverage_complete: bool,
     inventory_counts: ControlPlaneInventoryCounts,
     shadow_radar: ControlPlaneShadowRadar,
-    /// `true` when a durable store is configured but a read failed, so `view`,
-    /// `inventory_counts`, and `decision_queue` fell back to the local
-    /// projection and may be incomplete. Distinguishes "no rows" from
+    /// `true` when a durable store is configured but its audit read failed, so
+    /// `view.audit_events` may be incomplete. Distinguishes "no rows" from
     /// "store unreadable" (MIK-6701).
     store_read_degraded: bool,
-    /// Why governance mutation is off: `auth_off` or `store_unavailable`
-    /// (MIK-7570 F6). Absent while mutation is enabled.
+    /// Why no store is open: `auth_off` or `store_unavailable` (MIK-7570 F6).
+    /// Absent when a store is open; writes are then refused with 409, and
+    /// `authority` says where to make them (E2-min).
     #[serde(skip_serializing_if = "Option::is_none")]
     mutation_disabled_reason: Option<&'static str>,
     /// Whether the store base came from `control_plane.store_dir` (`explicit`)
@@ -847,12 +777,27 @@ struct ControlPlaneApiResponse {
     view: ControlPlaneReadOnlyView,
     decision_queue: ControlPlaneDecisionQueue,
     current_limits: Vec<&'static str>,
+    /// Where grants and policies are enforced from. The control-plane store is
+    /// not an authority for either (E2-min).
+    authority: ControlPlaneAuthority,
 }
+
+/// The config each governance kind is enforced from, for the API response.
+#[derive(Debug, Serialize)]
+struct ControlPlaneAuthority {
+    grants: &'static str,
+    policies: &'static str,
+}
+
+const AUTHORITY: ControlPlaneAuthority = ControlPlaneAuthority {
+    grants: "security.identity_grants.path",
+    policies: "security.sanitize_input, security.ssrf_protection",
+};
 
 /// Boolean flags threaded into the control-plane API response, grouped to keep
 /// [`ControlPlaneApiResponse::from_snapshot`] within the argument-count budget.
 struct ControlPlaneResponseFlags {
-    /// Governance mutation endpoint is active (a store is configured).
+    /// Governance mutation endpoint is active. Always `false` since E2-min.
     mutation_enabled: bool,
     /// A durable store read failed; the view fell back to the local projection.
     store_read_degraded: bool,
@@ -889,13 +834,18 @@ impl ControlPlaneApiResponse {
                 "no_enterprise_export",
             ]
         } else {
-            vec![
+            let mut limits = vec![
                 "read_only_api",
                 "local_runtime_only",
                 "no_persistence",
                 "no_mutation_endpoint",
                 "no_enterprise_export",
-            ]
+            ];
+            // An open store (no disabled reason) still persists the audit log.
+            if mutation_disabled_reason.is_none() {
+                limits.retain(|limit| *limit != "no_persistence");
+            }
+            limits
         };
         Self {
             schema_version: "control_plane.api.v1",
@@ -918,6 +868,7 @@ impl ControlPlaneApiResponse {
             view,
             decision_queue,
             current_limits,
+            authority: AUTHORITY,
         }
     }
 }
@@ -1171,6 +1122,10 @@ mod grant_projection_tests {
 mod mutation_tests;
 
 #[cfg(test)]
+#[path = "control_plane_authority_tests.rs"]
+mod authority_tests;
+
+#[cfg(test)]
 mod role_wiring_tests {
     use super::actor_from_client;
     use crate::control_plane::{
@@ -1381,10 +1336,11 @@ mod read_reflect_tests {
         }
     }
 
-    // MIK-6701.CP.READ.1/2 — persisted store rows are reflected in the snapshot:
-    // grants/policies upsert by id (store wins), audit_events come from the store.
+    // MIK-6701.CP.READ.1/2, narrowed by E2-min — audit_events come from the
+    // store; its grant and policy rows are not merged, so the local projection
+    // of g1 is kept as it was and p1 does not appear.
     #[test]
-    fn store_rows_reflected_and_upserted() {
+    fn store_audit_reflected_and_store_rows_not_merged() {
         let store = InMemoryControlPlaneStore::new();
         store
             .put_grant(ControlPlaneGrant {
@@ -1429,25 +1385,13 @@ mod read_reflect_tests {
         let degraded = merge_store_into_snapshot(&store, &mut snapshot);
         assert!(!degraded, "a healthy store read must not report degraded");
 
-        // Store row wins by id — no duplicate, status reflects the store.
+        assert_eq!(snapshot.grants.len(), 1);
         assert_eq!(
-            snapshot
-                .grants
-                .iter()
-                .filter(|g| g.grant_id == "g1")
-                .count(),
-            1
+            snapshot.grants[0].status,
+            ControlPlaneGrantStatus::Requested
         );
-        let g = snapshot.grants.iter().find(|g| g.grant_id == "g1").unwrap();
-        assert_eq!(g.status, ControlPlaneGrantStatus::Approved);
-        assert_eq!(g.subject_id, "store-user");
-        // Policy + audit reflected.
-        assert!(
-            snapshot
-                .policies
-                .iter()
-                .any(|p| p.policy_id == "p1" && p.enforced)
-        );
+        assert_eq!(snapshot.grants[0].subject_id, "local-projection");
+        assert!(snapshot.policies.is_empty());
         assert_eq!(snapshot.audit_events.len(), 1);
         assert_eq!(snapshot.audit_events[0].event_id, "e1");
         // AuditFilter is exercised via read_audit inside the merge.
@@ -1471,13 +1415,11 @@ mod read_reflect_tests {
         assert!(snapshot.grants.iter().any(|g| g.grant_id == "local-1"));
     }
 
-    // MIK-6701.CP.READ.1 (API contract) — the store's approved grant + enforced
-    // policy are exposed as ROWS in the read-only view (not just as a count).
-    // This is the API contract the direct-helper test above cannot see: before
-    // the fix the view had no grants/policies fields, so a persisted approved
-    // grant/enforced policy was invisible on GET except in derived counts.
+    // MIK-6701.CP.READ.1, inverted by E2-min — the view keeps its grants and
+    // policies row arrays, but a store-only grant or policy is not a row in
+    // them: nothing enforces it, so showing it would present it as live.
     #[test]
-    fn read_only_view_exposes_store_grants_and_policies_as_rows() {
+    fn read_only_view_omits_store_only_grants_and_policies() {
         let store = InMemoryControlPlaneStore::new();
         store
             .put_grant(ControlPlaneGrant {
@@ -1503,21 +1445,13 @@ mod read_reflect_tests {
         let view = snapshot
             .read_only_view(&auditor())
             .expect("auditor can read inventory + evidence");
-        assert!(
-            view.grants.iter().any(|g| g.grant_id == "g-approved"),
-            "approved grant must be a row in the view"
-        );
-        assert!(
-            view.policies.iter().any(|p| p.policy_id == "p-enforced"),
-            "enforced policy must be a row in the view"
-        );
+        assert!(view.grants.is_empty(), "{:?}", view.grants);
+        assert!(view.policies.is_empty(), "{:?}", view.policies);
 
-        // The serialized JSON must carry the row arrays (not just counts).
+        // The serialized JSON still carries the row arrays.
         let json = serde_json::to_value(&view).unwrap();
         assert!(json["grants"].is_array());
         assert!(json["policies"].is_array());
-        assert_eq!(json["grants"][0]["grant_id"], "g-approved");
-        assert_eq!(json["policies"][0]["policy_id"], "p-enforced");
     }
 
     // MIK-6701.CP.READ.2 (failure mode) — a store read failure sets the degraded
