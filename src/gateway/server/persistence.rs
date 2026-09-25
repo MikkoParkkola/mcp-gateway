@@ -49,6 +49,36 @@ pub(super) fn save_with_logging<F, E>(
     }
 }
 
+/// Build the cost registry and budget enforcer when governance is enabled,
+/// seeded from `costs.json` in `data_dir` so a restart keeps today's spend.
+///
+/// `costs.json` is per-process state: every replica keeps its own copy.
+#[cfg(feature = "cost-governance")]
+pub(super) fn boot_cost_governance(
+    cfg: &crate::cost_accounting::config::CostGovernanceConfig,
+    data_dir: &Path,
+) -> (
+    Option<std::sync::Arc<crate::cost_accounting::registry::CostRegistry>>,
+    Option<std::sync::Arc<crate::cost_accounting::enforcer::BudgetEnforcer>>,
+) {
+    use crate::cost_accounting::{enforcer::BudgetEnforcer, persistence, registry::CostRegistry};
+    use std::sync::Arc;
+
+    if !cfg.enabled {
+        return (None, None);
+    }
+    let registry = Arc::new(CostRegistry::new(cfg));
+    let enforcer = Arc::new(BudgetEnforcer::new(cfg.clone(), Arc::clone(&registry)));
+    load_if_exists(
+        &data_dir.join("costs.json"),
+        |path| persistence::load(path).map(|_persisted| ()),
+        "Failed to load persisted cost data",
+        "Loaded persisted cost data",
+    );
+    info!("Cost governance enabled");
+    (Some(registry), Some(enforcer))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

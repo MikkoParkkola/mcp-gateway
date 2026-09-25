@@ -9,6 +9,8 @@ pub(crate) mod account_bindings;
 #[cfg(test)]
 mod attestation_start_tests;
 mod control_plane_store;
+#[cfg(all(test, feature = "cost-governance"))]
+mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod persistence;
@@ -50,9 +52,7 @@ use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher
 use crate::config::Config;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
 #[cfg(feature = "cost-governance")]
-use crate::cost_accounting::{
-    enforcer::BudgetEnforcer, persistence as cost_persistence, registry::CostRegistry,
-};
+use crate::cost_accounting::persistence as cost_persistence;
 use crate::key_server::{KeyServer, store::spawn_reaper};
 use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
@@ -936,24 +936,8 @@ impl Gateway {
 
         // ── Cost governance (feature-gated) ──────────────────────────────────
         #[cfg(feature = "cost-governance")]
-        let (cost_registry_opt, budget_enforcer_opt) = {
-            let cg_cfg = self.config.cost_governance.clone();
-            if cg_cfg.enabled {
-                let registry = Arc::new(CostRegistry::new(&cg_cfg));
-                let costs_path = data_dir.join("costs.json");
-                persistence::load_if_exists(
-                    &costs_path,
-                    |path| cost_persistence::load(path).map(|_persisted| ()),
-                    "Failed to load persisted cost data",
-                    "Loaded persisted cost data",
-                );
-                let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
-                info!("Cost governance enabled");
-                (Some(registry), Some(enforcer))
-            } else {
-                (None, None)
-            }
-        };
+        let (cost_registry_opt, budget_enforcer_opt) =
+            persistence::boot_cost_governance(&self.config.cost_governance, &data_dir);
 
         // ── MetaMcp builder ──────────────────────────────────────────────────
         #[allow(unused_mut)]
