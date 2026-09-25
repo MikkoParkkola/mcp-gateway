@@ -27,9 +27,6 @@ impl MetaMcp {
         }
         // Keyed plans are checked step by step below, before the handler's own
         // refusal runs; refuse first so enforce answers with the plan message.
-        if matches!(tool, "gateway_execute" | "gateway_run_playbook") {
-            self.refuse_unattested_plan()?;
-        }
         match tool {
             "gateway_execute" => {
                 self.authorize_code_mode_plan(caller, arguments, session)?;
