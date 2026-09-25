@@ -36,6 +36,7 @@ upgrading a running deployment.
 | 13 | Identity grants match on `authority` and `subject`; `write` scope is gone | Rewrite `write` grants as `execute` |
 | 14 | Cached and idempotent results are kept per caller | None; expect per-key cache hit rates and a one-TTL idempotency gap |
 | 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
+| 16 | `trust_caller_identity_headers` is replaced by `security.caller_identity` | Choose a mode; list your proxies and an authority, or configure Cloudflare Access |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -269,6 +270,43 @@ Embedders calling `MetaMcp` directly: `handle_initialize`, `handle_tools_list_fo
 `handle_tools_list_with_params`, `handle_tools_list_with_url_override` and `handle_tools_resolve`
 take an `InvokeScope` in place of a `CallerStanding`. `InvokeScope::unscoped(standing)` gives the
 operator's unfiltered view.
+
+## 16. Caller identity headers need a proven source
+
+In 3.x, `security.identity_grants.trust_caller_identity_headers: true` let any client that could
+reach the gateway pick its own grant subject and authority with `X-Gateway-Identity-*` or
+`Cf-Access-Authenticated-User-*`. Nothing checked that the request came through the proxy, and
+a caller that sent `X-Gateway-Identity-Authority: https://accounts.google.com` with a victim's
+`sub` held the victim's OIDC grants.
+
+- **The old key fails to load.** Remove it and set `security.caller_identity` instead
+  (`docs/identity_grants.md`). `true` becomes `mode: trusted_proxy` with `trusted_proxies`
+  (the exact IPs of the proxies that connect to the gateway) and an `authority`, or
+  `mode: cloudflare_access` with `team_domain` and `audiences`. `false` needs no change.
+- **Proxy obligation.** In `trusted_proxy` mode each proxy MUST strip or overwrite every
+  client-supplied `X-Gateway-Identity-*` header. The IP allowlist proves the request came
+  through the proxy, not that the proxy wrote the header. Startup logs this at `warn`.
+- **Headers from any other peer are refused with 403.** The peer is the direct TCP peer;
+  `X-Forwarded-For` is never read, so a proxy chain lists its last hop.
+- **`X-Gateway-Identity` and `X-Gateway-Identity-Authority` are gone.** Proxies send
+  `X-Gateway-Identity-Subject` (and optionally `-Label`); either removed header gets 400. The
+  authority is always the configured one, and it may not be `mtls`, `agent_oauth`, `api_key`,
+  a `key_server.oidc` issuer or the Access issuer.
+- **Loopback proxies need `auth.enabled: true`;** `0.0.0.0` and `::` are always refused. A
+  same-host `cloudflared` moves to `cloudflare_access`.
+- **Cloudflare Access is verified.** `Cf-Access-Jwt-Assertion` is checked against
+  `https://<team_domain>/cdn-cgi/access/certs`, `aud` and `exp`. `Cf-Access-Authenticated-User-*`
+  is never read; sent without a valid assertion it gets 401.
+- **Rewrite grants.** Grants for the `trusted_header` authority, or for an authority a proxy used
+  to send, move to the configured `authority`. Access grants key on
+  `(https://<team_domain>, <Access sub>)`, not on email.
+- **Stricter values.** A repeated identity header, a non-UTF-8 one, or one over 512 bytes is
+  refused with 400 instead of truncated or first-wins.
+
+Embedders: `MetaMcp::with_trusted_identity_headers(bool)` and
+`MetaMcp::trust_caller_identity_headers()` are replaced by
+`with_caller_identity(CallerIdentityConfig)`, and `KeyServerOidcConfig.max_token_age_secs` by
+`token_age: TokenAgeCap` (`MaxIat(secs)` keeps the old behaviour).
 
 ## After upgrading
 
