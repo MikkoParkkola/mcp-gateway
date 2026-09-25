@@ -269,16 +269,13 @@ impl<'a> Walk<'a> {
         let mut parts = vec![self.own(root, map, key)];
         // `{$ref: X, ...siblings}` is `allOf: [X, {...siblings}]` (2020-12).
         if let Some(Value::String(pointer)) = map.get("$ref") {
-            parts.push(match resolve(root, pointer) {
-                Some(target) => match self.verdict(root, target, key, hops + 1, false) {
-                    Verdict::MatchesNothing => Verdict::Refuse,
-                    other => other,
-                },
-                None => {
-                    count("unresolved_ref");
-                    Verdict::Undecided
-                }
-            });
+            // `combine` reads a match-nothing target as Refuse; an unresolved
+            // one adds nothing, so it neither opens nor closes the level.
+            if let Some(target) = resolve(root, pointer) {
+                parts.push(self.verdict(root, target, key, hops + 1, false));
+            } else {
+                count("unresolved_ref");
+            }
         }
         if let Some(Value::Array(branches)) = map.get("allOf") {
             parts.push(self.all_of(root, branches, key, hops));
