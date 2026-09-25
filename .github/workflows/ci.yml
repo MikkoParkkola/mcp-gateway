@@ -421,11 +421,16 @@ jobs:
     # the gate ratchets off a recorded baseline: a listed file may shrink,
     # never grow, and no file may newly cross 800 lines. Splitting the existing
     # offenders is sequenced after the release to avoid mass merge conflicts.
+    # A module declaration (`mod child;` and the inert attributes above it) is
+    # not counted, so attaching an extracted file is not scored as growth (#609).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the 800-line ceiling
         run: python3 scripts/dev/check-file-size.py
+      # The exemption must not become the way to grow a file with code.
+      - name: Check the gate refuses what it claims to
+        run: python3 scripts/dev/test_check_file_size.py
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
