@@ -262,6 +262,8 @@ async fn admin_meta_tool_refused_while_degraded() {
         "admit wrote no probe: {new:#?}"
     );
     assert_record(&new[1], "meta_tool", "ok", None);
+    let recorded = new.iter().filter(|e| e["event"] == "admin_action").count();
+    assert_eq!(recorded, 1, "one call, one record: {new:#?}");
 }
 
 /// E1-T13c (meta): admit passes, the record append fails, and the result is
@@ -427,16 +429,18 @@ async fn control_plane_post_refused_while_degraded() {
     assert_audit_unavailable_ui(status, &body);
 }
 
-/// E1-T13c (UI): admit passes, the record append fails, the result is withheld.
+/// E1-T13c (UI): admit passes, the handler runs (the tripped breaker is
+/// reset), then the record append fails and the result is withheld.
 #[tokio::test]
 async fn failed_admin_record_withholds_ui_result() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    fx.alpha.trip_circuit_breaker("e1-t13c");
     fx.log.fail_next_append_for_test();
-    let (status, body) = fx
-        .send(ui("POST", PREVIEW, &fx.alice(), &preview_body()))
-        .await;
+    let uri = "/ui/api/backends/alpha/revive";
+    let (status, body) = fx.send(ui("POST", uri, &fx.alice(), &json!({}))).await;
     assert_audit_unavailable_ui(status, &body);
-    assert!(body.get("tools").is_none(), "{body}");
+    assert!(body.get("backend").is_none(), "{body}");
+    assert!(!fx.alpha.is_circuit_tripped(), "the handler was refused, not withheld");
 }
 
 /// E1-T13d: under `BestEffort` a failed record append is counted and both
