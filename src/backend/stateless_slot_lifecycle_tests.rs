@@ -15,7 +15,9 @@
 //! survived a complete mutation table because every fixture was `per_user`, so
 //! no mutation could reach the broken arm. The fixture is the coverage.
 
-use super::{ALPHA_TOOL, BETA_TOOL, PerIdentityTools, STATIC_TOOL, minted, names, wired};
+use super::{
+    ALPHA_TOOL, BETA_TOOL, PerIdentityTools, STATIC_TOOL, bind, minted, names, prefix, wired,
+};
 use crate::backend::PoolKey;
 use std::sync::Arc;
 
@@ -262,15 +264,6 @@ async fn resend_permission_follows_the_stateless_slot_that_derived_it() {
 /// the gateway never authenticated.
 #[tokio::test]
 async fn revocation_evicts_a_stateless_backends_per_identity_slot() {
-    let subject = |name: &str| {
-        crate::identity_grants::GrantSubject::new("https://issuer.example.invalid", name, None)
-    };
-    let prefix = |name: &str| {
-        crate::identity_propagation::identity_binding_prefix(&subject(name))
-            .expect("an issuer authority yields a prefix")
-    };
-    let bind = |name: &str| format!("{}{}:{}", prefix(name), "ledger".len(), "ledger");
-
     let wire = PerIdentityTools::new();
     let backend = super::stateless_backend();
     let clone = || Arc::clone(&wire) as Arc<dyn crate::transport::Transport>;
