@@ -572,7 +572,7 @@ async fn backend_handler_inner(
         Err(refusal) => return refusal,
     };
 
-    let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
+    let json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
             return build_http_error_response(
@@ -590,7 +590,7 @@ async fn backend_handler_inner(
 
     // After the audit hash (D2-e: params as sent), before anything else reads
     // the request: parse, telemetry and every forwarding arm see no token.
-    let attestation = take_attestation_token(json_request.get_mut("params"));
+    let attestation = take_attestation_token(json_request.clone().get_mut("params"));
 
     // Parse request
     let (id, method, params) = match parse_request(&json_request) {
