@@ -114,6 +114,7 @@ impl<T> CachedMetadata<T> {
     /// than anything cached or in flight: the generation moves, so a fill
     /// already on the wire lands for its own caller but cannot overwrite this.
     /// `on_stored` runs under the write guard, as in [`Self::store_if_current`].
+    #[allow(dead_code)]
     pub(crate) fn replace(&self, value: T, on_stored: impl FnOnce()) {
         let mut state = self.state.write();
         on_stored();
