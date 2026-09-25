@@ -62,6 +62,8 @@ fn world_readable_config_refused_at_load() {
     let err = Config::load_evaluated(Some(&path)).expect_err("a 0644 config must be refused");
     let msg = err.to_string();
     assert!(msg.contains("mode 0644"), "the error names the mode: {msg}");
+    // Refused for its world bit, not merely for group read on an own file.
+    assert!(msg.contains("lets other users read it"), "{msg}");
     assert!(
         msg.contains(&path.display().to_string()),
         "the error names the path: {msg}"
