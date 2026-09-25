@@ -13,6 +13,7 @@ mod features;
 mod input_schema;
 #[cfg(unix)]
 mod secret_file;
+mod secret_ref;
 mod strict_keys;
 
 use std::{
@@ -25,7 +26,6 @@ use figment::{
     Figment, Metadata, Profile, Provider,
     value::{Dict, Map, Tag, Value},
 };
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::mtls::MtlsConfig;
@@ -36,6 +36,7 @@ use config_file::ConfigFile;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 pub use input_schema::InputSchemaEnforcement;
+use secret_ref::SecretRef;
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
@@ -575,7 +576,7 @@ impl Config {
         }
         let secret_refs = match expansion {
             Expansion::Resolve => {
-                let refs = config.expand_env_vars(&overlay);
+                let refs = config.expand_env_vars(&overlay)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 refs
@@ -605,23 +606,40 @@ impl Config {
     }
 
     /// Expand `${VAR}` and `${VAR:-default}` patterns in config values.
-    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
-        let re = Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").unwrap();
-
-        for backend in self.backends.values_mut() {
-            for value in backend.headers.values_mut() {
-                *value = Self::expand_string(&re, value, overlay);
+    ///
+    /// An unset variable with no default is refused (C4) for enabled backends
+    /// and `capabilities.directories`. A disabled backend keeps its text
+    /// verbatim: auth validation skips it too, and enabling it goes through
+    /// reload, which runs this again.
+    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<BTreeSet<String>> {
+        // Every unresolved reference in one error: fixing them one restart at a
+        // time is the experience this replaces.
+        let mut unresolved = Vec::new();
+        let mut expand = |field: String, value: &mut String| match secret_ref::expand_field(
+            &field, value, overlay,
+        ) {
+            Ok(expanded) => *value = expanded,
+            Err(message) => unresolved.push(message),
+        };
+        for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
+            for (key, value) in &mut backend.headers {
+                expand(format!("backends.{name}.headers.{key}"), value);
             }
-            for value in backend.env.values_mut() {
-                *value = Self::expand_string(&re, value, overlay);
+            for (key, value) in &mut backend.env {
+                expand(format!("backends.{name}.env.{key}"), value);
             }
         }
-
-        for dir in &mut self.capabilities.directories {
-            *dir = Self::expand_string(&re, dir, overlay);
+        for (i, dir) in self.capabilities.directories.iter_mut().enumerate() {
+            expand(format!("capabilities.directories[{i}]"), dir);
+        }
+        if !unresolved.is_empty() {
+            // The env: secrets are checked later, in validation; report them
+            // here too so one load names every unresolved reference.
+            unresolved.extend(self.required_reference_errors(overlay));
+            return Err(Self::unresolved_error(&unresolved, overlay));
         }
 
-        self.resolve_secret_refs(overlay)
+        Ok(self.resolve_secret_refs(overlay))
     }
 
     /// Substitute `env:NAME` secret references with the value the overlay holds.
@@ -633,17 +651,17 @@ impl Config {
     /// value a holder captured is the value the file held when the process
     /// started, and a reload cannot revise it.
     ///
-    /// A name the overlay cannot resolve is left verbatim. `validate_with_env`
-    /// reports it as a missing reference, which is a better diagnostic than a
+    /// A reference that does not resolve (unset or empty) is left verbatim.
+    /// `validate_with_env` reports it, which is a better diagnostic than a
     /// silently empty secret.
     fn resolve_secret_refs(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
         let mut seen = BTreeSet::new();
         let mut subst = |slot: &mut String| {
             if let Some(name) = slot.strip_prefix("env:") {
                 seen.insert(name.to_string());
-                if let Some(value) = overlay.resolve(name) {
-                    *slot = value;
-                }
+            }
+            if let Ok(value) = SecretRef::parse(slot).resolve("", overlay) {
+                *slot = value;
             }
         };
 
@@ -683,17 +701,6 @@ impl Config {
             }
         }
         seen
-    }
-
-    fn expand_string(re: &Regex, value: &str, overlay: &EnvOverlay) -> String {
-        re.replace_all(value, |caps: &regex::Captures| {
-            let var_name = &caps[1];
-            let default = caps.get(2).map_or("", |m| m.as_str());
-            overlay
-                .resolve(var_name)
-                .unwrap_or_else(|| default.to_string())
-        })
-        .into_owned()
     }
 
     /// Get enabled backends only.
@@ -798,11 +805,11 @@ impl Config {
     /// The gateway authentication credentials AS CONFIGURED, for the adapter
     /// separation checks.
     ///
-    /// Borrowed spec text, never a resolved value: `resolve_bearer_token` and
-    /// `resolve_key` read `std::env` directly rather than the overlay this load
-    /// was evaluated against, and the `auto` bearer mints a fresh random token
-    /// per call. Handing over the configured text lets the checks resolve
-    /// through the overlay and skip `auto` deliberately.
+    /// Borrowed spec text, never a resolved value: the `auto` bearer mints a
+    /// fresh random token on every `resolve_bearer_token` call, so a resolved
+    /// value would compare against a token nobody holds. Handing over the
+    /// configured text lets the checks resolve through the overlay themselves
+    /// and skip `auto` deliberately.
     fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
         use crate::personal_accounts::config::GatewayCredential;
 
@@ -893,16 +900,10 @@ impl Config {
                     agent.client_id
                 )));
             };
-            let resolved = match raw.strip_prefix("env:") {
-                Some(var) => overlay.resolve(var).ok_or_else(|| {
-                    Error::ConfigValidation(format!(
-                        "agent_auth.agents['{}'].hs256_secret references missing \
-                         environment variable '{var}'",
-                        agent.client_id
-                    ))
-                })?,
-                None => raw.to_string(),
-            };
+            let resolved = SecretRef::parse(raw).resolve(
+                &format!("agent_auth.agents['{}'].hs256_secret", agent.client_id),
+                overlay,
+            )?;
             if resolved.len() < MIN_HS256_SECRET_BYTES {
                 return Err(Error::ConfigValidation(format!(
                     "agent_auth.agents['{}'].hs256_secret resolves to {} bytes; \
@@ -1142,54 +1143,12 @@ impl Config {
     }
 
     fn validate_required_env_references(&self, overlay: &EnvOverlay) -> Result<()> {
-        if self.auth.enabled {
-            if let Some(token) = self.auth.bearer_token.as_deref() {
-                Self::validate_env_reference("auth.bearer_token", token, overlay)?;
-            }
-            for key in &self.auth.api_keys {
-                Self::validate_env_reference("auth.api_keys[].key", &key.key, overlay)?;
-            }
+        let errors = self.required_reference_errors(overlay);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Self::unresolved_error(&errors, overlay))
         }
-
-        if self.agent_auth.enabled {
-            for agent in &self.agent_auth.agents {
-                if let Some(secret) = agent.hs256_secret.as_deref() {
-                    Self::validate_env_reference(
-                        "agent_auth.agents[].hs256_secret",
-                        secret,
-                        overlay,
-                    )?;
-                }
-            }
-        }
-
-        if self.key_server.enabled
-            && let Some(token) = self.key_server.admin_token.as_deref()
-        {
-            Self::validate_env_reference("key_server.admin_token", token, overlay)?;
-        }
-
-        Ok(())
-    }
-
-    fn validate_env_reference(field: &str, value: &str, overlay: &EnvOverlay) -> Result<()> {
-        let Some(var_name) = value.strip_prefix("env:") else {
-            return Ok(());
-        };
-
-        if var_name.is_empty() {
-            return Err(Error::ConfigValidation(format!(
-                "{field} uses an empty env: reference"
-            )));
-        }
-
-        if overlay.resolve(var_name).is_none() {
-            return Err(Error::ConfigValidation(format!(
-                "{field} references missing environment variable '{var_name}'"
-            )));
-        }
-
-        Ok(())
     }
 
     fn validate_backend_runtime_profiles(&self) -> Result<()> {
@@ -1924,6 +1883,8 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod secret_ref_tests;
 #[cfg(test)]
 mod tests;
 

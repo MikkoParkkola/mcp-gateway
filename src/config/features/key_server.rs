@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Key Server configuration — OIDC identity to temporary scoped API keys.
 
-use std::env;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
@@ -132,18 +130,16 @@ impl KeyServerConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
-    pub fn resolve_admin_token(&self) -> Result<Option<String>> {
+    /// Returns an error if the value is an empty literal, or an `env:VAR_NAME`
+    /// reference whose variable is unset or empty in `overlay` (C4).
+    pub fn resolve_admin_token(
+        &self,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Option<String>> {
         self.admin_token.as_ref().map_or(Ok(None), |t| {
-            if let Some(var) = t.strip_prefix("env:") {
-                env::var(var).map(Some).map_err(|_| {
-                    Error::ConfigValidation(format!(
-                        "key_server.admin_token references missing environment variable '{var}'"
-                    ))
-                })
-            } else {
-                Ok(Some(t.clone()))
-            }
+            crate::config::secret_ref::SecretRef::parse(t)
+                .resolve("key_server.admin_token", overlay)
+                .map(Some)
         })
     }
 
