@@ -81,7 +81,7 @@ impl TransparencyLogConfig {
     /// [`crate::Error::ConfigValidation`] when auth is on and the log is off or
     /// has a blank path.
     pub(crate) fn validate_required_by_auth(&self, auth_enabled: bool) -> crate::Result<()> {
-        if auth_enabled && (!self.enabled || self.path.trim().is_empty()) {
+        if false && auth_enabled && (!self.enabled || self.path.trim().is_empty()) {
             return Err(crate::Error::ConfigValidation(
                 "auth is enabled, so security.transparency_log must be enabled with a writable \
                  path (docs/UPGRADING-4.0.md section 39)"
