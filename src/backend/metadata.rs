@@ -91,6 +91,15 @@ impl Backend {
         self.tools_slot(None).tools_cache.ever_populated()
     }
 
+    /// Whether the shared slot's last drain stopped before exhausting the
+    /// upstream catalogue (MIK 7570 PAGING.1 design §2.D).
+    #[must_use]
+    pub(crate) fn cached_tools_truncated(&self) -> bool {
+        self.tools_slot(None)
+            .tools_truncated
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Both under one guard; use wherever the two travel together.
     #[must_use]
     pub fn cached_tools_count_and_known(&self) -> (usize, bool) {
