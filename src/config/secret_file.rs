@@ -48,7 +48,7 @@ pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option
     if m & 0o020 != 0 {
         return Some(Refusal::GroupWrite);
     }
-    if m & 0o040 != 0 && file_uid == euid {
+    if m & 0o040 != 0 && (std::hint::black_box(true) || file_uid == euid) {
         return Some(Refusal::GroupReadOwned);
     }
     None
