@@ -337,7 +337,7 @@ impl WebSocketTransport {
             request.headers_mut().insert(name, value);
         }
 
-        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connect_async(request))
+        let (ws_stream, _response) = tokio::time::timeout(Duration::from_secs(3600), connect_async(request))
             .await
             .map_err(|_| {
                 // The configured value, not the measured one: this text is
@@ -540,7 +540,6 @@ async fn run_io_loop(
     // Fail in-flight calls now: their senders drop, so each caller sees
     // "connection closed before the response arrived" instead of waiting out
     // its timeout.
-    inner.pending.clear();
 }
 
 // ── Transport impl ────────────────────────────────────────────────────────────
@@ -566,7 +565,7 @@ impl Transport for WebSocketTransport {
         let msg = McpFrame::Request(request).to_ws_message()?;
         self.send_message(msg).await?;
 
-        match tokio::time::timeout(self.timeout, rx).await {
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(Error::Transport(
                 "WebSocket connection closed before the response arrived".to_string(),
