@@ -391,3 +391,36 @@ async fn direct_route_attested_subscribe_relays_no_resource_update() {
         "no update may reach the client: {json}"
     );
 }
+
+/// `logging/setLevel` needs an authentic token, but only an admin reaches the
+/// attestation check: the admin gate refuses everyone else first (-32600).
+#[tokio::test]
+async fn direct_route_enforce_set_level_needs_only_an_authentic_token() {
+    let (router, _transport, _store) = enforced().await;
+    let admin = AuthenticatedClient {
+        admin: true,
+        ..scoped_client("ops", vec!["demo".to_string()], None)
+    };
+    let set_level = |token: &str| {
+        let body = json!({"jsonrpc": "2.0", "id": 7, "method": "logging/setLevel",
+            "params": {"level": "info", "_meta": {(ATTESTATION_META): token}}});
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp/demo")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        request.extensions_mut().insert(admin.clone());
+        request
+    };
+    for (token, admitted) in [(token_for(TOOL), true), ("forged.token".to_string(), false)] {
+        let response = router.clone().oneshot(set_level(&token)).await.unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        if admitted {
+            assert_admitted("admin setLevel with a tool token", &json);
+        } else {
+            assert_attestation_refused("admin setLevel with a forged token", &json);
+        }
+    }
+}

@@ -1151,9 +1151,10 @@ tool.
 - **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
   signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
   `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
-  `_meta` key on the direct route before anything but the audit hash reads the request, for
-  every method and for passthrough backends too, so neither protocol telemetry nor any
-  backend receives the token.
+  `_meta` key on the direct route right after the audit record hashes the params as sent,
+  and before parsing, telemetry and forwarding, for every method and for passthrough
+  backends too. Only the audit hash and the attestation check see the token; neither
+  protocol telemetry nor any backend receives it.
 - **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
   route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
   identity-propagation minting and before the idempotency guard, so an unattested call
