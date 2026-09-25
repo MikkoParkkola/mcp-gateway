@@ -13,6 +13,8 @@ mod control_plane_store;
 mod gh475_budget_decides_tests;
 mod persistence;
 #[cfg(test)]
+mod replica_state_tests;
+#[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
 mod stdio_catalogue;
@@ -23,7 +25,7 @@ mod support;
 // would be IN FORCE, so it goes through the overlay. A restart-only edit asks
 // what the NEXT START does with the file, which is the startup check itself —
 // the same function the bind path calls, named here for the caller.
-pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
+pub(crate) use support::{reload_posture_refusal, start_refusal as next_start_refusal};
 mod warmstart;
 
 use std::net::SocketAddr;
@@ -1992,7 +1994,7 @@ impl Gateway {
         // between them, which spawned a listener on the same host for a config
         // the next line refused — a port opened by a start that then failed,
         // contradicting the guarantee this comment makes.
-        if let Some(reason) = support::network_bind_refusal(&self.config) {
+        if let Some(reason) = support::start_refusal(&self.config) {
             error!("{reason}");
             return Err(Error::Config(reason));
         }

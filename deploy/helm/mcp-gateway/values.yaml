@@ -8,13 +8,21 @@
 # nameOverride: ""
 # fullnameOverride: ""
 
-# Two replicas are correct for the default configuration, which has the gateway's
-# `server.modern_protocol` switch ON as of 4.0.0. Continuation key material is
-# generated per process and never shared, so a continuation cannot be spent twice
-# across replicas. The cost is that a retry succeeds only on the replica that minted
-# it and is refused elsewhere; set this to 1 if you need every retry to be served.
-# See docs/DEPLOYMENT.md, "Replica Count and `server.modern_protocol`".
-replicaCount: 2
+# One replica. More than one fails the render while any state lives in a single
+# process (UPGRADING-4.0 §37):
+# - config.server.modern_protocol, on by default, serves the tasks extension, and
+#   each pod has its own task store, so a task created on one pod is not found on
+#   another;
+# - config.key_server.enabled keeps issued tokens and revocations in one process;
+# - config.accounts.enabled holds single_process custody.
+# With modern_protocol false and neither feature on, more replicas render; a retry
+# is then served by any of them. The chart writes config.server.replicas from this
+# value, and the gateway refuses to start on the same rules. `kubectl scale` and an
+# HPA change the pod count without the declaration: don't.
+# While any of the three is on, the Deployment uses Recreate: a surge pod would be a
+# second store beside the old one, so an upgrade has a short outage.
+# See docs/DEPLOYMENT.md, "Replica Count and per-process state".
+replicaCount: 1
 
 image:
   registry: ghcr.io
@@ -31,19 +39,28 @@ service:
   type: ClusterIP
   port: 39400
 
-# These two work as one pair. The gateway refuses a config file that other
-# users can read (UPGRADING-4.0 item 35), and the configMap projection is
-# root-owned. With fsGroup the kubelet makes it root:<fsGroup>, and a 0440 mode
-# lets the gateway read it through that group while no world bit is set.
-# fsGroup must be a group the gateway's UID is in: 1001 is the image's user.
-# Override both if you run another UID, or a mesh injects its own group.
+# The pod's identity. The image's gateway user and group are both 1001, and the
+# chart refuses to render any other value, root (0) included: a different UID
+# cannot write HOME, and a different GID or fsGroup cannot read what the
+# image's group owns. fsGroup is also how the gateway reads its config: the
+# configMap projection is root-owned, the kubelet makes it root:<fsGroup>, and
+# configVolume.defaultMode 0440 lets the gateway read it through that group
+# with no world bit set (UPGRADING-4.0 item 35). A mesh that injects its own
+# group is not supported by this chart.
 podSecurityContext:
+  runAsUser: 1001
+  runAsGroup: 1001
   fsGroup: 1001
 
 configVolume:
   # Decimal, because `--set` and some YAML readers do not take octal: 288 is
   # 0440. Any world bit, or group write, is refused at startup.
   defaultMode: 288
+
+# The `state` emptyDir holds HOME (task store, npm/uv caches). Past this size
+# the kubelet evicts the pod instead of letting it fill the node's disk.
+stateVolume:
+  sizeLimit: 1Gi
 
 resources:
   requests:
