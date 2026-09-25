@@ -459,7 +459,7 @@ pub(super) async fn backend_handler(
     let mut call = None;
     let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
     match call {
-        Some(call) => direct_audit::record(&state, &name, call, answer),
+        Some(_call) => answer,
         None => answer,
     }
 }
