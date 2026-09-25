@@ -30,7 +30,7 @@ impl Backend {
         }
         let Some(cached) = self.get_cached_tool_for(identity_key, tool) else {
             crate::trust::closed_keys::count("input_schema_unknown");
-            return None;
+            return Some("schema unknown".to_owned());
         };
         let empty = Value::Object(serde_json::Map::new());
         let arguments = if arguments.is_null() {
