@@ -486,7 +486,7 @@ impl WebSocketTransport {
 /// filter), and a frame with no token, or a token no live call registered, is
 /// dropped rather than given an invented owner.
 fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
-    let token = (notification.method == "notifications/progress")
+    let token = (!notification.method.is_empty())
         .then(|| {
             notification
                 .params
