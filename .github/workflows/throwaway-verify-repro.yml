@@ -1,0 +1,49 @@
+name: throwaway verify repro
+# Throwaway: reproduces the v4.0.0-beta.2 "Verify the release signature" hang
+# against the already-signed beta.2 digests. Never merged.
+on:
+  pull_request:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [stdout-to-log, stdout-to-null]
+    name: verify (${{ matrix.arm }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.5.2
+      - name: Verify the release signature + SBOM attestation
+        timeout-minutes: 10
+        env:
+          ARM: ${{ matrix.arm }}
+          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@refs/tags/v4.0.0-beta.2
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          if [ "${ARM}" = stdout-to-null ]; then OUT=/dev/null; else OUT=/dev/stdout; fi
+          for d in \
+            sha256:1471cafc9f2a88855fd8997da8316b8122335bef3d3886a3bbb64768aebc9638 \
+            sha256:e6f42fff9d678367a500d3d3d0177d77edbb6c6d96086c7f8dd7e74952a44cfc \
+            sha256:50ec31205c65ed27a1d30c056960f2b31de34b72bb7efb98440fbf5d4465bdef \
+            sha256:ce949392883b14034db9ec60ffb2f808c5458f5ce4bb26402ffa42eb45a47a8e \
+            sha256:9c4712b85974f150874d16ec1b7b7e72c858673093eed33732f91e9b2adde4c5 \
+            sha256:d267a3477aeec6f8702b2851e93d9e29ba8fd94cd13920dd158d8cb43e929da9; do
+            echo "::group::${d} $(date -u +%T)"
+            cosign verify \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${IMAGE}@${d}" > "${OUT}"
+            cosign verify-attestation --type spdxjson \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${IMAGE}@${d}" > "${OUT}"
+            echo "::endgroup::"
+          done
+          echo "all six verified at $(date -u +%T)"
