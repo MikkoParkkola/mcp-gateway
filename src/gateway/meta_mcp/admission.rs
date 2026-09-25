@@ -127,6 +127,7 @@ impl MetaMcp {
             },
             representation,
             self.read_only_target(server, tool),
+            (server, tool),
             request_id,
         )
     }
@@ -146,6 +147,8 @@ impl MetaMcp {
         operation: impl FnOnce() -> Value,
         representation: &Value,
         read_only: bool,
+        // (backend, tool) for the un-keyed warn only; never an identity.
+        target: (&str, &str),
         request_id: &RequestId,
     ) -> Result<SyncAdmission> {
         if retry.is_malformed() {
@@ -155,14 +158,25 @@ impl MetaMcp {
             ));
         }
         let Some(key) = retry.idempotency_key.as_deref() else {
-            return if !is_modern || read_only {
-                Ok(SyncAdmission::Unprotected)
-            } else {
-                Err(Error::json_rpc(
+            // A call carrying no key cannot be recognised as a re-issue, so a
+            // refusal protects nothing; it is admitted unprotected, as legacy
+            // frames always were. `required` restores the refusal for
+            // deployments whose modern clients all send keys (F10, ADR-012).
+            if is_modern
+                && !read_only
+                && *self.idempotency_key_mode.read() == crate::config::IdempotencyKeyMode::Required
+            {
+                return Err(Error::json_rpc(
                     -32602,
-                    "An explicit idempotency key is required",
-                ))
-            };
+                    format!(
+                        "An explicit idempotency key is required: set _meta \"{}\" \
+                         (server.idempotency_key: required)",
+                        crate::protocol::mrtr::IDEMPOTENCY_KEY_META
+                    ),
+                ));
+            }
+            record_unkeyed(is_modern, read_only, target);
+            return Ok(SyncAdmission::Unprotected);
         };
         let principal = verified_identity
             .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
@@ -335,6 +349,7 @@ impl MetaMcp {
             || operation,
             &self.meta_representation(tool_name, false, session),
             read_only,
+            ("gateway", tool_name),
             id,
         )?;
         if let SyncAdmission::Owned(lease) = &mut admission {
@@ -408,6 +423,51 @@ impl MetaMcp {
         Ok(())
     }
 }
+
+/// Count every un-keyed admission, and warn about a MODERN one at most once per
+/// (backend, tool) per [`UNKEYED_WARN_INTERVAL`]. Labels carry no identity.
+fn record_unkeyed(is_modern: bool, read_only: bool, (server, tool): (&str, &str)) {
+    telemetry_metrics::counter!(
+        "mcp_unkeyed_calls_total",
+        "era" => if is_modern { "modern" } else { "legacy" },
+        "read_only_hint" => if read_only { "true" } else { "false" }
+    )
+    .increment(1);
+    if !is_modern {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let mut warned = UNKEYED_WARNED.lock();
+    let key = (server.to_owned(), tool.to_owned());
+    if warned
+        .get(&key)
+        .is_some_and(|last| now.duration_since(*last) < UNKEYED_WARN_INTERVAL)
+    {
+        return;
+    }
+    // `gateway_invoke` names come from caller arguments: bound the map.
+    // ponytail: wholesale clear at the cap, an LRU if the re-warn burst matters.
+    if warned.len() >= UNKEYED_WARN_CAP {
+        warned.clear();
+    }
+    warned.insert(key, now);
+    drop(warned);
+    tracing::warn!(
+        backend = server,
+        tool,
+        read_only_hint = read_only,
+        "modern tools/call admitted without an idempotency key: a re-issue after a \
+         broken stream may execute twice; set server.idempotency_key: required once \
+         clients send _meta \"io.mcp-gateway/idempotency-key\""
+    );
+}
+
+const UNKEYED_WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+const UNKEYED_WARN_CAP: usize = 1024;
+
+type WarnedAt = std::collections::HashMap<(String, String), std::time::Instant>;
+static UNKEYED_WARNED: std::sync::LazyLock<Mutex<WarnedAt>> =
+    std::sync::LazyLock::new(|| Mutex::new(WarnedAt::new()));
 
 #[cfg(test)]
 #[path = "admission_tests.rs"]

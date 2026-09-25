@@ -178,6 +178,32 @@ reaches the backend once. And the flag's default is stated rather than implied:
 **deny at both resend sites**, because HTTP session recovery resends traffic
 that is not a `tools/call` at all and therefore carries no annotation to consult.
 
+## Addendum: calls carrying no key (2026-09-25, F10)
+
+The sync admission refused a modern-era `tools/call` carrying no idempotency key
+to a tool not marked read-only (landed `8c4196b06`). No standard client sends the
+vendor key, so every such write was refused while its legacy twin was admitted.
+
+Decision:
+
+1. A modern call with no key and no task is admitted as `Unprotected`, the same
+   as legacy. A malformed key is still `-32602`.
+2. `server.idempotency_key: optional | required`, default `optional`. `required`
+   refuses only modern calls carrying no key and no task, to tools not marked
+   read-only, on the sync-admission routes (meta and stdio). It is a contract for
+   cooperating clients, not a security boundary: the era marker is client-chosen.
+3. `mcp_unkeyed_calls_total{era, read_only_hint}` counts every un-keyed
+   admission, and a warn rate-limited to once per tool per 10 minutes names the
+   backend and tool of a modern one. Neither carries identity; neither fires on a
+   refusal.
+
+The guarantee is restated: at-most-once holds for calls carrying an idempotency
+key or a task. A call carrying neither cannot be identified as a re-issue. The
+prior refusal never enforced the MUST reliably, because a client could present
+as legacy. Rejected: minting a key from the request id (a re-issue has a new id)
+and deriving one from the argument hash (it silently collapses two intended
+identical writes, which this ADR already rejects).
+
 ## Consequences
 
 **What the client sees.** A retry after an uncertain failure gets the recorded
