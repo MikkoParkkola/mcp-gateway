@@ -388,13 +388,12 @@ mod http {
     use axum::http::{Request, StatusCode};
     use mcp_gateway::backend::BackendRegistry;
     use mcp_gateway::config::{ApiKeyConfig, AuthConfig, Config};
-    use mcp_gateway::gateway::auth::ResolvedAuthConfig;
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
     use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
     use mcp_gateway::gateway::test_helpers::{
-        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+        AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
     };
     use mcp_gateway::key_server::oidc::VerifiedIdentity;
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
@@ -560,7 +559,9 @@ mod http {
 
         // One registry, shared between the state the router reads and the
         // executor that publishes through it.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY));
+        let authorizer = auth_state(&config.auth);
+        let auth_config = Arc::clone(&authorizer.auth_config);
+        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY, authorizer));
         let tasks_dir = store_root.join("tasks");
         let deadline = tokio::time::Instant::now() + fixture::BOUND;
         let (tasks, task_executor) = loop {
@@ -602,7 +603,7 @@ mod http {
             multiplexer,
             proxy_manager,
             streaming_config: config.streaming.clone(),
-            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+            auth_config,
             key_server: None,
             tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -1569,30 +1570,18 @@ mod ownership {
     }
 
     // =======================================================================
-    // MIK-7272.TASK.1.19 — the subscription path is EXCLUDED from the refusal:
-    // an unattributed listen is answered, never told that the id resolves.
+    // MIK-7272.TASK.1.19 — an unattributed listen never says whether an id
+    // resolves.
     // =======================================================================
 
-    /// The stream is the one arm that must not refuse. `subscriptions/listen`
-    /// naming a task nobody may see returns a quiet stream, exactly as it does
-    /// for a task owned by another principal — an error here would tell the
-    /// caller that the id resolves to something. The id it names now really
-    /// does resolve, for A, which is what gives the silence something to hide.
-    ///
-    /// FORWARD GUARD, and stated as one: this case is green with the
-    /// `2c522f53` production hunk reverted, because before that commit no arm
-    /// refused at all. It cannot catch a regression of the fix; it fires when
-    /// someone LATER widens the refusal over `subscriptions/listen` — the one
-    /// change that would turn silence into disclosure. The other half of the
-    /// criterion, that the caller is silently narrowed to no ids, has NO
-    /// observable surface to assert against: `ListenRequest::from_params`
-    /// (`src/protocol/subscriptions.rs:100`) reads only `params.notifications`
-    /// and never `taskIds`, so the narrowing at `handlers.rs:1015` reaches no
-    /// consumer. Assertable once task notifications become a
-    /// `NotificationKind` — that is `MIK-7272.TASK.1.12`'s work, not this
-    /// case's.
+    /// Amended by A5c (MIK-7570.NOTIFY.2): with authentication on, a
+    /// credential-less `subscriptions/listen` is refused 401 before any task id
+    /// is read, so "never refused" no longer holds. What survives is the point
+    /// of the row: the answer must not depend on the id. A listen naming a task
+    /// that resolves, for A, and one naming an id nobody holds get the same
+    /// status, code and message, so the refusal discloses nothing.
     #[tokio::test]
-    async fn ac_task_1_19_unattributed_subscription_is_quiet_not_refused() {
+    async fn ac_task_1_19_unattributed_subscription_discloses_nothing() {
         let fixture = state_public_mcp().await;
         let (_, created) = post_against(
             Arc::clone(&fixture.state),
@@ -1602,20 +1591,28 @@ mod ownership {
         .await;
         let owned_id = task_id_of(&created);
 
-        let (_, listened) = post_unattributed(
-            Arc::clone(&fixture.state),
+        let listen = |id: i64, task: &str| {
             modern(
-                37,
+                id,
                 "subscriptions/listen",
-                json!({ "taskIds": [owned_id] }),
+                json!({ "taskIds": [task] }),
                 true,
-            ),
-        )
-        .await;
+            )
+        };
+        let owned = post_unattributed(Arc::clone(&fixture.state), listen(37, &owned_id)).await;
+        let absent =
+            post_unattributed(Arc::clone(&fixture.state), listen(38, "no-such-task")).await;
 
-        assert!(
-            listened.get("error").is_none(),
-            "an unattributed subscription is narrowed in silence, never refused: {listened}"
+        assert_eq!(owned.0, axum::http::StatusCode::UNAUTHORIZED, "{}", owned.1);
+        assert_eq!(owned.0, absent.0, "the status must not depend on the id");
+        assert_eq!(
+            owned.1["error"]["code"], absent.1["error"]["code"],
+            "{}",
+            owned.1
+        );
+        assert_eq!(
+            owned.1["error"]["message"], absent.1["error"]["message"],
+            "an id that resolves must be indistinguishable from one that does not"
         );
     }
 

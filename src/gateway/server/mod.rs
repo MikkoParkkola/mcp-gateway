@@ -1777,9 +1777,19 @@ impl Gateway {
         // set no client is on.
         self.config.tasks.validate()?;
         let task_store_dir = expand_home_path(&self.config.tasks.store_dir);
+        // The registry re-validates every listener against the same credential
+        // stores the request middleware reads, so the two cannot disagree.
+        let dashboard_bootstrap = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+                crate::gateway::auth::AuthState {
+                    auth_config: Arc::clone(&auth_config),
+                    key_server: key_server.clone(),
+                    dashboard_bootstrap: Arc::clone(&dashboard_bootstrap),
+                    // Only the session cookie reads this; re-validation sets none.
+                    tls_enabled: false,
+                },
             ),
         );
         // The runtime shares meta-MCP's admission authority rather than opening
@@ -1911,9 +1921,7 @@ impl Gateway {
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
-            dashboard_bootstrap: std::sync::Arc::new(
-                crate::gateway::auth::DashboardBootstrap::new(),
-            ),
+            dashboard_bootstrap,
         });
 
         // Webhook routes are built BEFORE the router and handed to it, so the
