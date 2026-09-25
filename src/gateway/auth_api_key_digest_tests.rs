@@ -18,7 +18,7 @@ fn hex_of(key: &str) -> String {
     crate::hashing::sha256_hex(key.as_bytes())
 }
 
-fn resolved(key: serde_json::Value) -> ResolvedAuthConfig {
+fn resolved(key: &serde_json::Value) -> ResolvedAuthConfig {
     let config: AuthConfig = serde_json::from_value(serde_json::json!({
         "enabled": true,
         "api_keys": [key]
@@ -36,7 +36,7 @@ fn digest_key(expires_at: Option<String>) -> ResolvedAuthConfig {
     if let Some(at) = expires_at {
         key["expires_at"] = serde_json::Value::String(at);
     }
-    resolved(key)
+    resolved(&key)
 }
 
 // E4-T2

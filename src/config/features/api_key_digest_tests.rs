@@ -4,6 +4,7 @@
 //! expiry. Every cell loads a real YAML file through `Config::load`, so the
 //! refusal is proven reachable on the path a deployment takes.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::Error;
@@ -31,7 +32,7 @@ fn load(auth_body: &str, env: Option<&str>) -> (tempfile::TempDir, crate::Result
     if let Some(env) = env {
         let env_path: PathBuf = dir.path().join("keys.env");
         crate::gateway::test_helpers::write_owner_only(&env_path, env).expect("env file");
-        yaml.push_str(&format!("env_files:\n  - {}\n", quoted(&env_path)));
+        writeln!(yaml, "env_files:\n  - {}", quoted(&env_path)).expect("String write");
     }
     yaml.push_str("auth:\n  enabled: false\n  api_keys:\n");
     yaml.push_str(auth_body);
