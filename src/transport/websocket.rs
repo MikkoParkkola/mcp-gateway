@@ -38,7 +38,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use super::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
@@ -199,11 +198,6 @@ struct Inner {
     /// Handle to the background I/O task (reader + writer loop). A sync lock
     /// so `Drop` can abort it.
     task: parking_lot::Mutex<Option<JoinHandle<()>>>,
-    /// Where to deliver a progress notification, keyed by the token the call
-    /// supplied. One socket carries every call, so -- as on stdio's stdout --
-    /// the token is the whole correlation. See `StdioTransport`'s field of the
-    /// same name for why this holds destinations rather than payloads.
-    progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
 }
 
 impl Inner {
@@ -215,7 +209,6 @@ impl Inner {
             connected: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
             task: parking_lot::Mutex::new(None),
-            progress_destinations: dashmap::DashMap::new(),
         })
     }
 }
@@ -441,17 +434,9 @@ impl WebSocketTransport {
             McpFrame::Pong => {
                 debug!("Received application-level pong");
             }
-            McpFrame::Notification { method, params } => {
-                route_progress(
-                    inner,
-                    JsonRpcNotification {
-                        jsonrpc: "2.0".to_string(),
-                        method,
-                        params,
-                    },
-                );
+            McpFrame::Notification { method, .. } => {
+                debug!(method = %method, "Received WebSocket notification");
             }
-            // Not relayed mid-call; the 2026 input bridge (`gateway::input_bridge`) is the path.
             McpFrame::Request(_) => {
                 warn!("Received unexpected server-initiated request over WebSocket");
             }
@@ -473,99 +458,6 @@ impl WebSocketTransport {
             session_id: s.session_id.clone(),
             messages_received: s.messages_received,
             messages_sent: s.messages_sent,
-        }
-    }
-}
-
-// ── Progress routing (stdio parity) ──────────────────────────────────────────
-
-/// Deliver a `notifications/progress` to the call that supplied its token.
-///
-/// Same rules as `StdioTransport::capture_notification`: progress only (a
-/// token stamped on `notifications/message` must not bypass the caller's level
-/// filter), and a frame with no token, or a token no live call registered, is
-/// dropped rather than given an invented owner.
-fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
-    let token = (notification.method == "notifications/progress")
-        .then(|| {
-            notification
-                .params
-                .as_ref()
-                .and_then(|p| p.get("progressToken"))
-                .and_then(progress_token_string)
-        })
-        .flatten();
-    // `deliver` uses `try_send`: this runs on the I/O task, which must never
-    // park on a slow caller.
-    if let Some(destination) = token.and_then(|t| inner.progress_destinations.get(&t)) {
-        destination.deliver(notification);
-    } else {
-        debug!(method = %notification.method, "Ignoring WebSocket notification");
-    }
-}
-
-/// A progress token is a string or a number on the wire; the map is keyed by
-/// its string form so both spellings of one token agree.
-fn progress_token_string(token: &Value) -> Option<String> {
-    match token {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
-/// Hold a call's progress registration exactly as long as its request future,
-/// so success, error, timeout and cancellation all retire it.
-///
-/// Vacant-only: a token already live belongs to another call, and overwriting
-/// it would reroute that call's progress here. The loser owns nothing and
-/// must remove nothing. Mirrors stdio's `ProgressRegistrationGuard`.
-struct ProgressRegistration<'a> {
-    destinations: &'a dashmap::DashMap<String, DeliveryHandle>,
-    token: Option<String>,
-}
-
-impl<'a> ProgressRegistration<'a> {
-    /// Register the token under `params._meta.progressToken`, if any.
-    ///
-    /// Must run on the caller's task: `DeliveryHandle::capture` reads the
-    /// caller's task-locals, which the I/O task does not have.
-    fn register(
-        destinations: &'a dashmap::DashMap<String, DeliveryHandle>,
-        params: Option<&Value>,
-    ) -> Self {
-        let wanted = params
-            .and_then(|p| p.get("_meta"))
-            .and_then(|meta| meta.get("progressToken"))
-            .and_then(progress_token_string);
-        let token = match wanted {
-            None => None,
-            Some(token) => match destinations.entry(token.clone()) {
-                dashmap::mapref::entry::Entry::Vacant(slot) => {
-                    slot.insert(DeliveryHandle::capture(&token));
-                    Some(token)
-                }
-                dashmap::mapref::entry::Entry::Occupied(_) => {
-                    // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
-                    warn!(
-                        token = %token,
-                        "progress token is already registered to a live call; refusing to reroute it"
-                    );
-                    None
-                }
-            },
-        };
-        Self {
-            destinations,
-            token,
-        }
-    }
-}
-
-impl Drop for ProgressRegistration<'_> {
-    fn drop(&mut self) {
-        if let Some(token) = &self.token {
-            self.destinations.remove(token);
         }
     }
 }
@@ -663,13 +555,6 @@ impl Transport for WebSocketTransport {
             method: method.to_string(),
             params,
         };
-
-        // Register before the send: the I/O task can route progress back
-        // before `send_message` returns, and an unregistered token is dropped.
-        let _progress_cleanup = ProgressRegistration::register(
-            &self.inner.progress_destinations,
-            request.params.as_ref(),
-        );
 
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(id.to_string(), tx);
