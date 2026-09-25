@@ -1373,19 +1373,19 @@ async fn a_refused_reload_applies_nothing_at_all() {
 async fn a_reload_that_does_not_open_the_tools_still_applies() {
     // GIVEN: a gateway whose RUNNING config already closes the tool surface.
     //
-    // Taken from the running config and not from the file on purpose: reading it
-    // from the file is the mistake the refusal exists to prevent, so a
-    // regression case written that way would pass by making it.
+    // From the running config, not the file: reading it from the file is the
+    // mistake the refusal prevents, and a case written that way passes by it.
     let mut running = Config::default();
     running.auth.enabled = true;
     running.auth.bearer_token = Some("secret".to_string());
+    running.server.cleartext_http = crate::config::CleartextHttp::TlsTerminatedUpstream;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: the same public URL is declared, over tools that need a credential
     std::fs::write(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1611,7 +1611,7 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
     // half needs a restart while the public_url half would take effect at once.
     std::fs::write(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, clean_running());
@@ -1651,7 +1651,7 @@ async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
     // halves of the correct fix, written together
     std::fs::write(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1685,7 +1685,7 @@ async fn a_refusal_reads_as_a_sentence_on_both_branches() {
     // next start too, the second is accepted by one.
     for file in [
         "server:\n  public_url: \"https://gw.example.com\"\n",
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");

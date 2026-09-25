@@ -524,7 +524,7 @@ fn dashboard_link_refusal(config: &Config) -> Option<String> {
 /// `public_url` to a running gateway reaches the state this refusal exists to
 /// prevent, without passing through it.
 ///
-/// [`reload_posture_refusal`] closes that: a reload which would enter the state
+/// `cleartext::reload_posture_refusal` closes that: a reload which would enter the state
 /// is refused rather than applied. This function stays the single place that
 /// decides what the state IS, and is called from both.
 #[must_use]
@@ -543,19 +543,8 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     //
     // Keyed on the declared reachability rather than the bind address, because
     // the bind address is not where such a request arrives from.
-    let declared_public_host = config
-        .server
-        .public_url
-        .as_deref()
-        .and_then(|u| url::Url::parse(u).ok())
-        .and_then(|u| u.host_str().map(str::to_string))
-        .filter(|h| !crate::gateway::router::is_loopback_bind(h));
-
-    if crate::gateway::router::is_loopback_bind(&config.server.host)
-        && declared_public_host.is_none()
-    {
-        return None;
-    }
+    let declared_public_host = super::cleartext::declared_public_host(config);
+    let exposure = super::cleartext::network_exposure(config)?;
 
     // `auth.enabled` alone is not the question. What matters is whether a
     // caller can invoke tools without a credential: a public path covering the
@@ -651,10 +640,6 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     // Two ways to be reachable, and the remedy differs. A wide bind is fixed by
     // narrowing it; a declared public_url cannot be — the operator wants that
     // reachability — so there the only fix is to stop leaving tools open.
-    let exposure = declared_public_host.as_deref().map_or_else(
-        || format!("the bind address {}", config.server.host),
-        |h| format!("the declared public_url host {h}"),
-    );
     let remedy = if declared_public_host.is_some() && config.auth.enabled {
         "Remove the tool paths from auth.public_paths: a gateway published by \
          name is reached by more than the client on this machine."
@@ -677,68 +662,6 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
          of this gateway (a sidecar, a service mesh, or a reverse proxy), set \
          server.allow_unauthenticated_network_bind = true."
     ))
-}
-
-/// The refusal a config reload must answer: [`network_bind_refusal`] applied to
-/// the configuration that will be IN FORCE if this reload publishes.
-///
-/// `running` is what the process actually applied, fixed at startup; `wanted` is
-/// the file. Only fields a reload applies live are taken from `wanted`, and
-/// today that is `server.public_url` alone. Everything else — `auth`, the
-/// override, `host` — comes from `running`, because a reload does not apply
-/// them: the router snapshots `auth_config` at construction and `config_reload`
-/// never touches it.
-///
-/// That distinction is the whole function. Judging the FILE instead lets an
-/// operator who declares a `public_url` and enables authentication in one edit
-/// — the remediation this project recommends everywhere — produce a config that
-/// reads as safe while the request path is still running the old, permissive
-/// auth. The same masking works with `allow_unauthenticated_network_bind`, and
-/// with any restart-only input [`network_bind_refusal`] grows later. Overlaying
-/// the live fields onto the running config removes the class: a field that is
-/// not applied cannot influence a decision about what is in force.
-///
-/// Lives here, beside the refusal, because the two must agree about which
-/// fields are live and the failure to agree is silent — the overlay would
-/// simply judge the wrong config. `config_reload` calls this and not the
-/// refusal directly.
-///
-/// Returns `None` when `running` would ALREADY have been refused, so a reload is
-/// only refused for a state it would itself cause. Unreachable on the HTTP path,
-/// where startup refused it; reachable off it, since `run_stdio` never runs the
-/// check.
-///
-/// Design: `docs/design/unauthenticated-network-posture.md`, Decision C.
-#[must_use]
-pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<ReloadPostureRefusal> {
-    if network_bind_refusal(running).is_some() {
-        return None;
-    }
-    let mut effective = running.clone();
-    effective
-        .server
-        .public_url
-        .clone_from(&wanted.server.public_url);
-    network_bind_refusal(&effective).map(|reason| ReloadPostureRefusal {
-        reason,
-        restart_would_also_refuse: network_bind_refusal(wanted).is_some(),
-    })
-}
-
-/// Why a reload was refused, and what a restart on the same file would do.
-///
-/// The second answer is not cosmetic. A file that declares a `public_url` AND
-/// enables authentication cannot be applied by a reload — the authentication
-/// half needs a restart, so applying it would open the origin gate over a
-/// request path still running without a credential — and yet it is exactly
-/// right on a restart. Telling that operator to revert would be telling them to
-/// undo the fix. Telling the one who declared only a `public_url` that a
-/// restart applies it would be worse: their next start would refuse to serve.
-pub struct ReloadPostureRefusal {
-    /// What is wrong with the configuration that would be in force.
-    pub reason: String,
-    /// `true` when starting fresh on this same file would refuse to serve.
-    pub restart_would_also_refuse: bool,
 }
 
 #[cfg(test)]

@@ -11,9 +11,9 @@ HELM="${HELM:-helm}"
 echo "== helm lint =="
 "$HELM" lint "$CHART"
 
-echo "== default render: exactly ConfigMap/Deployment/Service/ServiceAccount =="
+echo "== default render: exactly ConfigMap/Deployment/NetworkPolicy/Service/ServiceAccount =="
 got="$("$HELM" template t "$CHART" | grep '^kind:' | awk '{print $2}' | sort -u | paste -sd, -)"
-want="ConfigMap,Deployment,Service,ServiceAccount"
+want="ConfigMap,Deployment,NetworkPolicy,Service,ServiceAccount"
 [ "$got" = "$want" ] || { echo "FAIL: default Kinds = [$got], want [$want]" >&2; exit 1; }
 
 echo "== opt-in render adds NetworkPolicy + Role + RoleBinding =="
@@ -166,6 +166,37 @@ mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingS
   --show-only templates/configmap.yaml)"
 grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$mesh" \
   || fail "mesh mode drops server.metrics_token"
+
+# C3: credential mode serves bearer tokens over plain HTTP on 0.0.0.0, which the
+# gateway refuses unless server.cleartext_http names who protects them. The
+# chart's answer is cluster_internal, honest only while the port stays inside
+# the cluster and is reached by its Service name.
+echo "== helm_credential_mode_renders_cleartext_value =="
+grep -qE '^ *cleartext_http: cluster_internal$' <<<"$cm" \
+  || fail "credential mode does not render cleartext_http: cluster_internal"
+up="$("$HELM" template t "$CHART" --set server.cleartextHttp=tls_terminated_upstream \
+  --set config.server.public_url=https://mcp.example.com --set service.type=LoadBalancer \
+  --show-only templates/configmap.yaml 2>&1)" \
+  && grep -qE '^ *cleartext_http: tls_terminated_upstream$' <<<"$up" \
+  || fail "a tls_terminated_upstream override behind an ingress does not render: $up"
+meshcm="$("$HELM" template t "$CHART" --set auth.mode=mesh --show-only templates/configmap.yaml)"
+! grep -q 'cleartext_http' <<<"$meshcm" \
+  || fail "mesh mode carries no credential, so it must not render cleartext_http"
+
+echo "== cluster_internal_renders_a_network_policy =="
+kinds="$("$HELM" template t "$CHART" | grep '^kind:' | awk '{print $2}' | sort -u | paste -sd, -)"
+grep -q 'NetworkPolicy' <<<"$kinds" \
+  || fail "cluster_internal is the default but no NetworkPolicy renders: [$kinds]"
+
+echo "== cluster_internal_refuses_off_cluster_publishing =="
+for bad in "service.type=NodePort" "service.type=LoadBalancer" \
+    "config.server.public_url=https://mcp.example.com" "server.cleartextHttp=bogus"; do
+  if out="$("$HELM" template t "$CHART" --set "$bad" 2>&1)"; then
+    fail "--set $bad rendered; cluster_internal must refuse it"
+  elif [ "$bad" != "server.cleartextHttp=bogus" ] && ! grep -q 'tls_terminated_upstream' <<<"$out"; then
+    fail "--set $bad failed without naming tls_terminated_upstream: $out"
+  fi
+done
 
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 
