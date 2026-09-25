@@ -27,6 +27,9 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 
+use crate::config::InputSchemaEnforcement;
+use crate::trust::closed_keys;
+
 /// A single validation violation with a human-readable, LLM-actionable message.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationViolation {
@@ -117,7 +120,111 @@ impl SchemaValidationResult {
 pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaValidationResult {
     // Inputs are strict: an unrecognised parameter is almost always a caller
     // typo or a hallucinated field, so it is reported as a violation.
-    validate_object(arguments, input_schema, true)
+    validate_arguments_with(arguments, input_schema, InputSchemaEnforcement::Closed)
+}
+
+/// Most undeclared-key violations reported in one refusal.
+const MAX_KEY_VIOLATIONS: usize = 5;
+/// Longest key path echoed back, in characters, before escaping.
+const MAX_KEY_PATH_CHARS: usize = 64;
+
+/// [`validate_arguments`] under an explicit enforcement mode (MIK-7570.SCHEMA.1).
+///
+/// Undeclared keys are found at every depth by the schema walker; `off` skips
+/// that walk and leaves the type checks. Keys the schema admits beyond its
+/// `properties` are carried into `coerced` rather than dropped.
+#[must_use]
+pub(crate) fn validate_arguments_with(
+    arguments: &Value,
+    input_schema: &Value,
+    mode: InputSchemaEnforcement,
+) -> SchemaValidationResult {
+    let faults = closed_keys::undeclared_keys(arguments, input_schema, mode);
+    if !faults.is_empty() {
+        return SchemaValidationResult {
+            violations: key_violations(&faults, input_schema),
+            coerced: arguments.clone(),
+        };
+    }
+    let mut result = validate_object(arguments, input_schema, false);
+    if result.is_valid()
+        && let (Value::Object(coerced), Value::Object(original)) = (&mut result.coerced, arguments)
+    {
+        for (key, value) in original {
+            coerced.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    result
+}
+
+/// The refusal text for undeclared argument keys, or `None` when every key is
+/// declared. The MCP-backend gate (MIK-7570.SCHEMA.1): keys only, so a call
+/// the backend would accept on types is never refused here on types, and the
+/// original arguments, not a coerced copy, are what the caller forwards.
+#[must_use]
+pub(crate) fn undeclared_key_refusal(
+    arguments: &Value,
+    input_schema: &Value,
+    mode: InputSchemaEnforcement,
+) -> Option<String> {
+    let faults = closed_keys::undeclared_keys(arguments, input_schema, mode);
+    if faults.is_empty() {
+        return None;
+    }
+    let result = SchemaValidationResult {
+        violations: key_violations(&faults, input_schema),
+        coerced: Value::Null,
+    };
+    Some(result.format_error(input_schema))
+}
+
+/// Bounded, escaped violations: at most five, each path cut to 64 characters
+/// and escaped so no control character or quote reaches the caller raw.
+fn key_violations(faults: &[closed_keys::KeyFault], schema: &Value) -> Vec<ValidationViolation> {
+    let known: Vec<&str> = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|p| p.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    let shown = |path: &str| -> String {
+        let cut: String = path.chars().take(MAX_KEY_PATH_CHARS).collect();
+        cut.escape_debug().to_string()
+    };
+    let mut out: Vec<_> = faults
+        .iter()
+        .take(MAX_KEY_VIOLATIONS)
+        .map(|fault| match fault {
+            // A top-level key names the tool's own parameters; a nested one
+            // is left to the footer `format_error` appends.
+            closed_keys::KeyFault::Undeclared(path) if !path.contains(['.', '[']) => {
+                ValidationViolation::new(
+                    shown(path),
+                    format!(
+                        "unknown parameter — valid parameters are: {}",
+                        known.join(", ")
+                    ),
+                )
+            }
+            closed_keys::KeyFault::Undeclared(path) => {
+                ValidationViolation::new(shown(path), "unknown parameter")
+            }
+            closed_keys::KeyFault::WrongType(path, ty) => {
+                ValidationViolation::new(shown(path), format!("expected {ty}"))
+            }
+            closed_keys::KeyFault::TooDeep => {
+                ValidationViolation::new("", "schema nesting too deep")
+            }
+            closed_keys::KeyFault::TooComplex => ValidationViolation::new("", "schema too complex"),
+        })
+        .collect();
+    if faults.len() > MAX_KEY_VIOLATIONS {
+        let more = faults.len() - MAX_KEY_VIOLATIONS;
+        out.push(ValidationViolation::new(
+            "",
+            format!("{more} more not shown"),
+        ));
+    }
+    out
 }
 
 /// Core object validator shared by [`validate_arguments`] and [`validate_output`].
