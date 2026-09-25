@@ -317,6 +317,13 @@ source = "src/security/transparency_log.rs"
 probe = "none"
 reason = "an audit record, not a refusal; its absence leaves no signal in any response"
 
+[[control]]
+id = "caller-identity-headers"
+description = "an identity header from an unproven source is refused: trusted_proxy headers from a peer outside trusted_proxies (403), the removed X-Gateway-Identity/-Authority (400), and Cf-Access user headers without a verified assertion (401); unsafe caller_identity configs refuse to load"
+source = "src/security/caller_identity.rs"
+probe = "none"
+reason = "config-gated on `security.caller_identity.mode`, off by default, and the refusals run in `src/gateway/router/identity.rs`; a probe cannot tell `off` from absent, and cannot pose as a trusted proxy peer"
+
 # --- build-time ---
 
 [[control]]
