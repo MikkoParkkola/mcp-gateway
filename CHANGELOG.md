@@ -516,12 +516,14 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   the process it replaced. This binds only when `server.modern_protocol` is on;
   with it off, scale as before.
 
-  **The tasks extension is not implemented.** `io.modelcontextprotocol/tasks` is
-  never advertised, so no client negotiates it. The types in the tree are short
-  of the specification — three statuses of five, two required fields missing, a
-  string where a JSON-RPC error object belongs — and turning the advertisement
-  on before that is fixed would break a client that trusted the identifier.
-  MIK-7311 owns the conformant implementation.
+  **The tasks extension is advertised on the 2026-07-28 surface.**
+  `server/discover` lists `io.modelcontextprotocol/tasks` in its capabilities, so a
+  modern client can run a long `tools/call` as a task and poll it with `tasks/get`,
+  `tasks/update` and `tasks/cancel`. A task belongs to the caller that created it,
+  and a returned handle still resolves after a restart within its retention window.
+  The legacy `initialize` result does not carry the extension. The task model is
+  knowingly short of the full extension specification in 4.0.0; MIK-7311 owns
+  completing it.
 
 ### Changed
 
