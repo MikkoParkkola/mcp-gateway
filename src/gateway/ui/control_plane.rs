@@ -1171,6 +1171,10 @@ mod grant_projection_tests {
 mod mutation_tests;
 
 #[cfg(test)]
+#[path = "control_plane_authority_tests.rs"]
+mod authority_tests;
+
+#[cfg(test)]
 mod role_wiring_tests {
     use super::actor_from_client;
     use crate::control_plane::{
