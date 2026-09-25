@@ -45,8 +45,9 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
 
     // ── Rug-pull guard: SHA-256 pin verification ────────────────────────────
     //
-    // Computed over the raw file content with the top-level `sha256:` line
-    // stripped, so pinning is stable across `cap pin` rewrites.
+    // Computed over the file content with CRLF read as LF and the top-level
+    // `sha256:` line stripped, so pinning is stable across `cap pin` rewrites
+    // and line-ending conversion.
     let actual_hash = compute_capability_hash(&content);
     match capability.sha256.as_deref() {
         Some(expected) if !expected.eq_ignore_ascii_case(&actual_hash) => {
