@@ -585,11 +585,20 @@
     },
     {
       "id": "MIK-7548.ISOLATION.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/backend/mid_fill_eviction_tests.rs",
+        "tests/a0_per_caller_cache.rs",
+        "src/backend/stateless_tools_slot_tests.rs",
+        "src/gateway/router/identity_header_tests.rs",
+        "src/key_server/identity_rules_tests.rs",
+        "src/gateway/streaming.rs",
+        "src/gateway/proxy_scope_tests.rs",
+        "src/transport/http/tests.rs"
+      ],
+      "note": "Graded 2026-09-25 (MIK-7548). Green CI run 36102194721 at 3f7cbdb7 (draft #804), rebased on 90d328b3 after A5b. SCOPE: MIK-7548 as filed pins one race, a revocation landing while a caller's catalogue fill is on the wire; every other clause of this row is met by already-merged cells, cited below. CACHED RESULTS: revocation_during_a_stateless_fill_is_not_served_afterwards and its per_user twin revocation_during_a_per_user_fill_is_not_served_afterwards (src/backend/mid_fill_eviction_tests.rs) hold alpha's fill on the wire, evict on the production prefix, release, and assert alpha's catalogue is served by neither get_cached_tool_names_for nor get_cached_tool_for; control an_unrevoked_stateless_fill_is_served_afterwards. A0 (MIK-7570.CACHE.1): meta_route_cache_does_not_serve_one_api_key_callers_result_to_another, meta_route_idempotency_key_does_not_replay_across_api_keys, direct_route_idempotency_separates_api_key_callers, _mtls_callers, _oauth_agents and _trusted_headers (tests/a0_per_caller_cache.rs). A grant rotation evicts the rotated subject's slots (CATALOGUE.1 note; src/config_reload/mod.rs:1527-1529, :1878). CREDENTIALS: each_identity_fills_its_own_stateless_tools_slot and a_stateless_fill_without_a_binding_drops_minted_headers (src/backend/stateless_tools_slot_tests.rs); A8 (MIK-7570.IDHEADER.1) src/gateway/router/identity_header_tests.rs; A9 (MIK-7570.OIDC.1) src/key_server/identity_rules_tests.rs. SESSION: a_caller_cannot_join_another_identity_session and two_keys_sharing_a_display_name_are_different_owners (src/gateway/streaming.rs:612, :627), stateful_backend_partitions_sessions_across_identities (src/transport/http/tests.rs:1487), cost_report_refuses_another_callers_session_for_a_non_admin (src/gateway/meta_mcp/tests.rs:2031), resolve_pending_from_other_session_is_refused_and_does_not_race (src/gateway/proxy.rs:633); session-scoped notifications by A5b (MIK-7570.NOTIFY.1, met): tools_list_changed_reaches_only_sessions_in_scope_for_the_changed_backend and a_revoked_session_is_not_told_about_tools_list_changes (src/gateway/proxy_scope_tests.rs:103, :121). DELETE-THE-BRANCH (throwaway edit to evict_identity_slots, skip the pool removal while in_flight > 0): scoped to Stateless, backend:: 145 passed, 1 failed, only the stateless cell, message 'landed in a slot alpha can still read: [\"alpha_private_ledger\"]'; unscoped, 142 passed, 4 failed: both twins, c3_eviction_does_not_decline_against_a_busy_slot and c12_eviction_removes_a_busy_slot_without_closing_its_transport; restored, 146 passed, 0 failed."
     },
     {
       "id": "MIK-7570.ADMINGRANT.1",
