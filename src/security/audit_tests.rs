@@ -89,7 +89,7 @@ fn v1_and_v2_entries_verify_in_one_chain() {
     let v2 = logger(&path);
     append(&v2, fields(&[("event", json!("v2"))])).expect("v2 append");
     let result = verify_log(&path).expect("verify");
-    assert!(result.ok, "mixed chain must verify: {result:?}");
+    assert!(result.ok, "mixed chain must verify");
     assert_eq!(entries(&path).len(), 3);
 }
 
@@ -146,12 +146,15 @@ fn forbidden(code: i32) -> Error {
     }
 }
 
+/// An expected `(outcome, error_code)`; `None` means no record.
+type Row = (&'static str, Option<i32>);
+
 /// D1-T14. One row per line of the D1-d.2 table, matched on the variant: the
 /// -32001 refusal and `BackendNotFound` share a code and not an outcome.
 #[test]
 fn outcome_mapping_covers_every_row() {
     let json_err = serde_json::from_str::<Value>("{").unwrap_err();
-    let rows: Vec<(crate::Result<Value>, Option<(&str, Option<i32>)>)> = vec![
+    let rows: Vec<(crate::Result<Value>, Option<Row>)> = vec![
         (Ok(json!({"isError": false})), Some(("ok", None))),
         (Ok(json!({"content": []})), Some(("ok", None))),
         (Ok(json!({"isError": true})), Some(("tool_error", None))),

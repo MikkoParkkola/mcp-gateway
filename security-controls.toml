@@ -41,6 +41,10 @@ module = "src/security/data_flow.rs"
 reason = "argument-flow tracing emits an audit record; it classifies and hashes, it never refuses a request"
 
 [[coverage.not_a_control]]
+module = "src/security/audit.rs"
+reason = "the audit envelope's types (who, outcome, credential kind); it shapes records and refuses nothing"
+
+[[coverage.not_a_control]]
 module = "src/security/response_policy.rs"
 reason = "server-owned correlation shared by the response path and the transport adapters; a helper, not a gate"
 
@@ -316,6 +320,13 @@ description = "completed tool invocations are committed to a hash-chain append-o
 source = "src/security/transparency_log.rs"
 probe = "none"
 reason = "an audit record, not a refusal; its absence leaves no signal in any response"
+
+[[control]]
+id = "audit-fail-closed"
+description = "with auth on, a failed audit append withholds the call's result (503/-32005), refuses later calls and the direct route, and unreadies /readyz until an append succeeds (D1-f)"
+source = "src/security/transparency_log_degraded.rs"
+probe = "none"
+reason = "fires only when the log's storage fails; a live probe cannot induce that without breaking the install it probes"
 
 [[control]]
 id = "caller-identity-headers"
