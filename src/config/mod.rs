@@ -9,6 +9,8 @@
 pub(crate) mod account_bindings;
 mod env_overlay;
 mod features;
+#[cfg(unix)]
+mod secret_file;
 mod strict_keys;
 
 use std::{
@@ -353,6 +355,11 @@ impl Config {
                 "Cannot read config file {}: {error}. {detail}",
                 config_path.display()
             )));
+        }
+
+        #[cfg(unix)]
+        if let Some(config_path) = resolved.as_deref() {
+            secret_file::check_secret_file(config_path, secret_file::SecretFile::Config)?;
         }
 
         Ok(resolved)

@@ -373,6 +373,10 @@ impl EnvOverlay {
             tracing::debug!("Env file not found (skipped): {}", path.display());
             return Ok(());
         }
+        // A refusal here is fatal on the serving loaders and a WARN on the
+        // tolerant ones, which route through `apply_file_tolerant`.
+        #[cfg(unix)]
+        super::secret_file::check_secret_file(path, super::secret_file::SecretFile::EnvFile)?;
         let text = std::fs::read_to_string(path)
             .map_err(|e| Self::describe(path, &dotenvy::Error::Io(e), None))?;
         let iter = dotenvy::from_read_iter(std::io::Cursor::new(text.as_bytes()));
