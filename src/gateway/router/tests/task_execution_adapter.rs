@@ -70,11 +70,11 @@ mod refusals;
 mod result_shapes;
 mod settlement;
 mod signing_joint;
+#[cfg(feature = "metrics")]
+mod unkeyed_task;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided
 /// before the first `tools/call` rather than after the handle comes back.
 mod upstream_descriptor;
-#[cfg(feature = "metrics")]
-mod unkeyed_task;
 mod x1_dispatch;
 
 mod notifications;

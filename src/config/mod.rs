@@ -1376,14 +1376,8 @@ pub struct ServerConfig {
     /// every start while it remains set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_unauthenticated_network_bind: bool,
-    /// Whether a modern `tools/call` must carry the vendor `_meta` key
-    /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, F10).
-    ///
-    /// `optional` (default) admits an un-keyed call unprotected, as legacy
-    /// frames always were. `required` refuses, with -32602, only a modern call
-    /// carrying no key and no task, to a tool not marked read-only, on the
-    /// meta and stdio routes. The era marker is client-chosen, so `required`
-    /// is a contract for cooperating clients, not a security boundary.
+    /// Whether a modern `tools/call` must carry `_meta`
+    /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §27).
     pub idempotency_key: IdempotencyKeyMode,
 }
 
