@@ -81,7 +81,7 @@ fn keys_of_an_unselected_transport_refused() {
 }
 
 /// The gateway's YAML reader never applied merge keys, so `<<:` was a key
-/// nothing read. It is refused like any other, where UPGRADING item 28 says.
+/// nothing read. It is refused like any other, where UPGRADING item 29 says.
 #[test]
 fn merge_key_refused_at_root() {
     refusal(
@@ -270,7 +270,7 @@ fn env_root_keys_and_shipped_examples_load() {
 }
 
 /// A reload that meets an unrecognised key is refused, and the running config
-/// stays as it was: UPGRADING item 28 and the CHANGELOG promise both.
+/// stays as it was: UPGRADING item 29 and the CHANGELOG promise both.
 #[tokio::test]
 async fn refused_reload_keeps_the_running_config() {
     use std::{sync::Arc, time::Duration};
