@@ -33,11 +33,11 @@ auth:
   #   - key: "env:CLIENT_A_KEY"
   #     name: "Client A"
   #     rate_limit: 100           # Requests per minute (0 = unlimited)
-  #     backends: ["tavily"]      # Restrict to specific backends (empty = all)
+  #     backends: ["tavily"]      # Backends this key reaches; empty or omitted = none
   #     admin: false              # Set true only for UI/config management keys
   #   - key: "my-literal-key"
   #     name: "Client B"
-  #     backends: []              # All backends
+  #     backends: ["*"]           # All backends ("*" is the only wildcard)
 
   # Paths that bypass authentication.
   public_paths:

@@ -192,11 +192,23 @@ async fn api_key_without_backends_is_forbidden_on_tools_call() {
     .await;
     assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], json!(-32003), "{body}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        body.to_string()
-            .contains("not authorized for backend 'alpha'"),
-        "the backend grant refused it: {body}"
+        message.contains("no backends") && message.contains("UPGRADING-4.0.md section 32"),
+        "the refusal names the empty grant and the upgrade note: {body}"
     );
+    // The same refusal for a backend that does not exist: the message must not
+    // tell a caller with no grant which backends are configured.
+    let (status, absent) = post(
+        &f.router,
+        "/mcp/no-such-backend",
+        Some("bare-key"),
+        "tools/call",
+        call.clone(),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{absent}");
+    assert_eq!(absent["error"], body["error"], "existence leaked: {absent}");
 
     let (status, body) = post(
         &f.router,

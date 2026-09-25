@@ -57,7 +57,23 @@ fn wildcard_and_list_scoping() {
 }
 
 #[test]
-fn unrestricted_key_warns_once() {
+fn api_key_with_backends_omitted_from_yaml_reaches_no_backend() {
+    // The field left out entirely, not `[]`: serde's default must also be none.
+    let auth: AuthConfig = serde_yaml::from_str(
+        "enabled: true\napi_keys:\n  - key: omitted-secret\n    name: omitted\n",
+    )
+    .expect("auth YAML parses");
+    assert!(auth.api_keys[0].backends.is_empty());
+    let config = ResolvedAuthConfig::try_from_config(&auth).expect("literal key resolves");
+    let client = config
+        .validate_token("omitted-secret")
+        .expect("key is valid");
+    assert!(!client.can_access_backend("brave"));
+    assert!(!client.can_access_backend("*"));
+}
+
+#[test]
+fn key_without_backends_warns_once() {
     let (_, logs) = capture_warnings(|| {
         resolved(vec![
             key("bare", &[], false),
@@ -65,14 +81,22 @@ fn unrestricted_key_warns_once() {
             key("scoped", &["tavily"], false),
         ])
     });
-    assert_eq!(
-        logs.matches("auth.api_keys['bare'] lists no backends")
-            .count(),
-        1,
-        "one WARN for the non-admin key with no backends: {logs}"
+    // An admin key is warned too: a UI-only admin key may ignore it, and the
+    // wording says when it matters.
+    for name in ["bare", "root"] {
+        let line = format!("auth.api_keys['{name}'] lists no backends and reaches none");
+        assert_eq!(
+            logs.matches(&line).count(),
+            1,
+            "one WARN for {name}: {logs}"
+        );
+    }
+    assert!(
+        logs.contains("if this key needs backend access"),
+        "the WARN says when it can be ignored: {logs}"
     );
     assert!(
-        !logs.contains("'root'") && !logs.contains("'scoped'"),
-        "no WARN for an admin key or a key that lists backends: {logs}"
+        !logs.contains("'scoped'"),
+        "no WARN for a key that lists backends: {logs}"
     );
 }
