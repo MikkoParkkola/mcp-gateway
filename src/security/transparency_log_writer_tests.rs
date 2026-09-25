@@ -432,3 +432,25 @@ fn verify_fails_when_every_sealed_segment_is_deleted_by_hand() {
         assert!(!r.ok, "{mode:?}: a hand-deleted history passed");
     }
 }
+
+/// grok final review on #1060: the start-of-append retention writes an
+/// expiry record, and on a full disk that write must take the same
+/// `expire_oldest` path as any other append failure, not refuse the call.
+#[test]
+fn start_of_append_retention_on_a_full_disk_frees_space() {
+    use super::rotation::WriteFault;
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 4);
+    drop(l);
+    let l = TransparencyLogger::open(cfg(&path, 1, false))
+        .unwrap()
+        .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed);
+    l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+    let r = l.log_invocation("s", "c", "srv", "tiny", "a", "b");
+    l.arm_write_fault(None);
+    assert!(r.is_ok(), "{r:?}");
+    assert!(l.write_faults_fired() > 0, "the fault never fired");
+    assert!(verify(&path, false).ok);
+}
