@@ -96,7 +96,7 @@ impl Harness {
 
     async fn verify(&self, token: &str) -> Result<VerifiedIdentity, OidcError> {
         let cfg = KeyServerOidcConfig {
-            max_token_age_secs: 300,
+            token_age: crate::key_server::TokenAgeCap::MaxIat(300),
         };
         self.ks.oidc.verify(token, &cfg).await
     }
