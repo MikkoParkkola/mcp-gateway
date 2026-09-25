@@ -204,27 +204,25 @@ fn assert_attempt(event: &Value, response: &JsonRpcResponse) {
     assert_eq!(event["caller"], "known-caller");
     assert_eq!(event["server"], "gateway");
     assert_eq!(event["tool"], "gateway_invoke");
+    // Sorted, as a serde_json map iterates. The D1 envelope is the logger's.
     let allowed = [
-        "event",
-        "response_stage",
-        "response_hash_encoding",
-        "response_hash",
-        "session_id",
         "caller",
-        "server",
-        "tool",
-        "timestamp",
         "counter",
-        "prev_entry_hash",
         "entry_hash",
+        "event",
+        "prev_entry_hash",
+        "response_hash",
+        "response_hash_encoding",
+        "response_stage",
+        "server",
+        "session_id",
+        "timestamp",
+        "tool",
     ];
-    for key in event.as_object().unwrap().keys() {
-        assert!(
-            allowed.contains(&key.as_str()),
-            "unexpected attempt field {key}"
-        );
-    }
-    assert_eq!(event.as_object().unwrap().len(), allowed.len());
+    let envelope = crate::security::audit::AuditEnvelope::RESERVED;
+    let keys = event.as_object().unwrap().keys().map(String::as_str);
+    let domain: Vec<&str> = keys.filter(|k| !envelope.contains(k)).collect();
+    assert_eq!(domain, allowed, "attempt fields besides the envelope");
     assert!(event["counter"].as_u64().is_some());
     assert!(event["prev_entry_hash"].is_string());
     assert!(event["entry_hash"].as_str().unwrap().starts_with("sha256:"));

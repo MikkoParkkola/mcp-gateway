@@ -124,6 +124,7 @@ pub enum AuditFailurePolicy {
 pub struct AuditWho {
     /// How the credential was presented; absent when the writer cannot know.
     #[serde(skip_serializing_if = "Option::is_none")]
+    // ci-allow-secret-debug: an enum naming how a credential was presented; it holds no secret bytes.
     pub(crate) credential_kind: Option<CredentialKind>,
     /// 12 hex characters of `sha256(secret)`; empty when none was presented.
     pub(crate) principal: String,

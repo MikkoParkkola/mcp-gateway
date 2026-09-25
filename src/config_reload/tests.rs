@@ -2738,7 +2738,7 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_HS256",
-            "agent_security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  agents:\n    - client_id: a\n      name: a\n      audience: mcp-gateway-test\n      hs256_secret: \"env:MCP_GW_TEST_ENVFILE10C_HS256\"\n",
+            "agent_auth:\n  enabled: true\n  agents:\n    - client_id: a\n      name: a\n      audience: mcp-gateway-test\n      hs256_secret: \"env:MCP_GW_TEST_ENVFILE10C_HS256\"\n",
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_ADMIN",

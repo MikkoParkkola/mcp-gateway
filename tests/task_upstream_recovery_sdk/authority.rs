@@ -76,6 +76,9 @@ pub fn write_authenticated_config(
     // `/health` only, so `/mcp` demands a credential and an unauthenticated
     // caller cannot fall through to the public identity.
     config.auth.public_paths = vec!["/health".to_string()];
+    // Auth on requires the audit log (UPGRADING-4.0 item 39).
+    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.path = root.join("audit.jsonl").to_string_lossy().into_owned();
 
     config.key_server.enabled = true;
     // The production delegated path: a raw OIDC bearer verified against the

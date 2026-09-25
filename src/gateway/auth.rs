@@ -437,6 +437,7 @@ pub struct AuthenticatedClient {
     pub authenticated: bool,
     /// How the credential was presented, for the audit record's `who`
     /// (4.0.0 item D1-c). Set at each mint site; it has no `Default`.
+    // ci-allow-secret-debug: an enum naming how a credential was presented; it holds no secret bytes.
     pub credential_kind: CredentialKind,
 }
 
