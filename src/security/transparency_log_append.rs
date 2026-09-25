@@ -81,16 +81,18 @@ impl TransparencyLogger {
             && now >= inner.seg.opened_at.saturating_add(rot.max_segment_age_secs);
         // Retention also runs before the append, not only after a rotation:
         // a log opened over the limit (retain_segments lowered, or a crash
-        // mid-retention) is trimmed on its first write.
+        // mid-retention) is trimmed on its first write. Its expiry records
+        // are appends too, so a full disk here takes the path below.
+        let mut staged = Ok(());
         if false && inner.seg.sealed > rot.retain_segments as usize {
             let g = guard(&mut lock, &path)?;
-            self.apply_retention(inner, &path, g)?;
+            staged = self.apply_retention(inner, &path, g);
         }
-        let rotated = if inner.seg.has_records && (too_big || too_old) {
+        let rotated = if staged.is_ok() && inner.seg.has_records && (too_big || too_old) {
             let g = guard(&mut lock, &path)?;
             self.rotate(inner, &path, g, now)
         } else {
-            Ok(())
+            staged
         };
         // A failed rotation step is an append failure like any other; on
         // ENOSPC it takes the same rebuild-then-expire path (F23).
@@ -362,6 +364,7 @@ impl TransparencyLogger {
             .store(false, std::sync::atomic::Ordering::Release);
         written?;
         std::fs::remove_file(&seg.path)?;
+        inner.seg.sealed = inner.seg.sealed.saturating_sub(1);
         segments::sync_dir(path)?;
         telemetry_metrics::counter!("mcp_audit_segments_expired_total", "reason" => reason)
             .increment(1);
