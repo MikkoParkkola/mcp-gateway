@@ -7,16 +7,14 @@
 //! operator config — *whether* to attach a validator on a live gateway and in
 //! which [`AttestationMode`].
 //!
-//! Rollout posture (operator directive 2026-06-19):
-//! - Default is **observe**: the validator audits every presented token but
-//!   never blocks a call, so enabling it on live traffic cannot break
-//!   unattested or mis-attested calls.
-//! - `off` attaches no validator at all — a pure no-op, byte-identical to the
-//!   pre-wiring gateway.
-//! - `enforce` is *intentionally not yet a recognised value*. Flipping to
-//!   fail-closed is a future one-liner here (add the `Some("enforce")` arm),
-//!   which is why an unrecognised mode falls back to observe rather than
-//!   silently enforcing.
+//! Modes (MIK-7570 ATTEST.1):
+//! - Default is **off**: unset, empty or `off` attaches no validator at all —
+//!   a pure no-op, byte-identical to the pre-wiring gateway.
+//! - `observe` audits every presented token but never blocks a call.
+//! - `enforce` is a load error in this build. The direct `/mcp/{name}` route
+//!   and synthesized envelopes carry no token yet, so an enforce that only
+//!   guarded `gateway_invoke` would claim more than it refuses.
+//! - Any other value is a load error, never a silent downgrade.
 //!
 //! [`MetaMcp::with_attestation`]: crate::gateway::meta_mcp::MetaMcp::with_attestation
 //! [`AttestationMode`]: super::validator::AttestationMode
@@ -27,9 +25,9 @@ use super::signer::BnautAttestationSigner;
 use super::validator::{AttestationMode, AttestationValidator};
 
 /// Env var selecting the wired attestation mode at the `gateway_invoke`
-/// boundary: `observe` (default) or `off`.
+/// boundary: `off` (default) or `observe`.
 ///
-/// `enforce` is deliberately NOT recognised yet — see the module docs.
+/// `enforce` is refused at load in this build — see the module docs.
 pub const ATTESTATION_MODE_ENV: &str = "GATEWAY_ATTESTATION_MODE";
 
 /// Env var carrying the HMAC-SHA256 signing key shared with bnaut-attestation.
@@ -51,29 +49,30 @@ pub const DEFAULT_KEY_ID: &str = "gateway";
 /// Resolve the attestation wiring from explicit settings — the unit-testable
 /// core that performs no process-environment reads.
 ///
-/// Returns `None` when the mode is `off` (attach no validator — a pure no-op).
-/// Returns `Some((validator, mode))` otherwise. The mode is matched
-/// case-insensitively after trimming; unset/empty resolves to
-/// [`AttestationMode::Observe`] (the default rollout posture), and any
-/// unrecognised value — including `enforce`, which is not yet wired — also
-/// falls back to observe with a warning.
-#[must_use]
+/// The mode is matched case-insensitively after trimming. Unset, empty or
+/// `off` returns `Ok(None)` (attach no validator — the default). `observe`
+/// returns `Ok(Some((validator, Observe)))`. `enforce`, which is not wired in
+/// this build, and any unrecognised value return `Err` for startup to report.
 pub fn resolve_attestation_wiring(
     mode: Option<&str>,
     signing_key: Option<&[u8]>,
     key_id: Option<&str>,
-) -> Option<(Arc<AttestationValidator>, AttestationMode)> {
+) -> Result<Option<(Arc<AttestationValidator>, AttestationMode)>, String> {
     let normalized = mode.map(|m| m.trim().to_ascii_lowercase());
     let mode = match normalized.as_deref() {
-        Some("off") => return None,
-        None | Some("" | "observe") => AttestationMode::Observe,
+        None | Some("" | "off") => return Ok(None),
+        Some("observe") => AttestationMode::Observe,
+        Some("enforce") => {
+            return Err(format!(
+                "{ATTESTATION_MODE_ENV}=enforce is not available in this build; \
+                 use `observe` (audit only) or `off`"
+            ));
+        }
         Some(other) => {
-            tracing::warn!(
-                requested = other,
-                "GATEWAY_ATTESTATION_MODE unrecognised (enforce is not yet wired); \
-                 defaulting to observe"
-            );
-            AttestationMode::Observe
+            return Err(format!(
+                "{ATTESTATION_MODE_ENV}={other:?} is not a valid mode; \
+                 use `observe` or `off`"
+            ));
         }
     };
 
@@ -104,22 +103,21 @@ pub fn resolve_attestation_wiring(
 
     let signer = BnautAttestationSigner::new(key, key_id);
     let validator = Arc::new(AttestationValidator::new(signer));
-    Some((validator, mode))
+    Ok(Some((validator, mode)))
 }
 
 /// Resolve the attestation wiring from an env overlay.
 ///
 /// Thin wrapper over [`resolve_attestation_wiring`] reading
 /// [`ATTESTATION_MODE_ENV`], [`ATTESTATION_SIGNING_KEY_ENV`], and
-/// [`ATTESTATION_KEY_ID_ENV`]. With nothing set the default is observe.
+/// [`ATTESTATION_KEY_ID_ENV`]. With nothing set the default is off.
 ///
 /// Reads the overlay, not `std::env`: env files load into an in-memory overlay
 /// rather than into the process environment, so a process-environment read
 /// cannot see a mode or a signing key an env file assigns.
-#[must_use]
 pub fn attestation_wiring_from_overlay(
     env: &crate::config::EnvOverlay,
-) -> Option<(Arc<AttestationValidator>, AttestationMode)> {
+) -> Result<Option<(Arc<AttestationValidator>, AttestationMode)>, String> {
     let mode = env.resolve(ATTESTATION_MODE_ENV);
     let key = env.resolve(ATTESTATION_SIGNING_KEY_ENV);
     let key_id = env.resolve(ATTESTATION_KEY_ID_ENV);
@@ -134,68 +132,117 @@ pub fn attestation_wiring_from_overlay(
 mod tests {
     use super::*;
 
+    fn mode_of(raw: Option<&str>) -> Result<Option<AttestationMode>, String> {
+        resolve_attestation_wiring(raw, Some(b"k"), None).map(|w| w.map(|(_, mode)| mode))
+    }
+
     #[test]
     fn mode_from_an_env_file_reaches_the_wiring() {
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(&env_file, "GATEWAY_ATTESTATION_MODE=off\n").unwrap();
+        std::fs::write(&env_file, "GATEWAY_ATTESTATION_MODE=observe\n").unwrap();
         let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
 
         assert!(
-            attestation_wiring_from_overlay(&overlay).is_none(),
-            "`off` in an env file must attach no validator"
-        );
-        assert!(
-            attestation_wiring_from_overlay(&crate::config::EnvOverlay::none()).is_some(),
-            "with nothing set the default posture still attaches one"
+            matches!(attestation_wiring_from_overlay(&overlay), Ok(Some(_))),
+            "`observe` in an env file must attach a validator"
         );
         assert!(std::env::var(ATTESTATION_MODE_ENV).is_err());
     }
 
+    /// MIK-7570.ATTEST.1: the refusals hold on the env-file path too, not only
+    /// on the pure core, so an env file cannot turn `enforce` back into observe.
     #[test]
-    fn default_unset_is_observe_with_validator() {
-        // Unset mode → default rollout posture: validator attached, observe.
-        let (_, mode) = resolve_attestation_wiring(None, Some(b"k"), None)
-            .expect("default must attach a validator");
-        assert_eq!(mode, AttestationMode::Observe);
+    fn an_env_file_mode_of_enforce_or_an_unknown_value_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for (raw, expect) in [
+            ("enforce", "not available in this build"),
+            ("enforcee", "enforcee"),
+        ] {
+            let env_file = dir.path().join(format!("{raw}.env"));
+            std::fs::write(&env_file, format!("{ATTESTATION_MODE_ENV}={raw}\n")).unwrap();
+            let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
+            let err = attestation_wiring_from_overlay(&overlay)
+                .map(|w| w.map(|(_, mode)| mode))
+                .expect_err("an env-file mode must be refused like a process one");
+            assert!(err.contains(expect), "{raw}: {err}");
+        }
+    }
+
+    /// MIK-7570.ATTEST.1: with nothing set, no validator is built.
+    #[test]
+    fn unset_mode_attaches_no_validator() {
+        assert!(
+            matches!(
+                attestation_wiring_from_overlay(&crate::config::EnvOverlay::none()),
+                Ok(None)
+            ),
+            "with nothing set, attestation is off"
+        );
+        for raw in [None, Some(""), Some("   ")] {
+            assert_eq!(mode_of(raw), Ok(None), "mode={raw:?}");
+        }
     }
 
     #[test]
     fn explicit_observe_attaches_validator() {
         let (_, mode) = resolve_attestation_wiring(Some("observe"), Some(b"k"), Some("kid"))
+            .expect("observe must parse")
             .expect("observe must attach a validator");
         assert_eq!(mode, AttestationMode::Observe);
     }
 
     #[test]
     fn mode_parsing_is_case_and_whitespace_insensitive() {
-        let (_, mode) = resolve_attestation_wiring(Some("  ObSeRvE  "), Some(b"k"), None)
-            .expect("trimmed/cased observe must attach a validator");
-        assert_eq!(mode, AttestationMode::Observe);
+        for raw in ["  ObSeRvE  ", "OBSERVE", "\tobserve\n"] {
+            assert_eq!(
+                mode_of(Some(raw)),
+                Ok(Some(AttestationMode::Observe)),
+                "{raw:?}"
+            );
+        }
+        for raw in ["OFF", "  Off ", "\toff\n"] {
+            assert_eq!(mode_of(Some(raw)), Ok(None), "{raw:?}");
+        }
+        for raw in ["ENFORCE", " Enforce ", "\tenforce\n"] {
+            assert!(mode_of(Some(raw)).is_err(), "{raw:?} must be refused");
+        }
     }
 
     #[test]
     fn off_is_a_pure_no_op_returning_none() {
         // off → no validator attached at all (byte-identical to pre-wiring).
-        assert!(resolve_attestation_wiring(Some("off"), Some(b"k"), None).is_none());
-        assert!(resolve_attestation_wiring(Some("  OFF "), None, None).is_none());
+        assert_eq!(mode_of(Some("off")), Ok(None));
+        assert!(matches!(
+            resolve_attestation_wiring(Some("  OFF "), None, None),
+            Ok(None)
+        ));
+    }
+
+    /// `enforce` is not wired in this build, so it is refused at load rather
+    /// than downgraded to observe. The message says so and names the values
+    /// that do work.
+    #[test]
+    fn enforce_is_refused_at_load() {
+        let err = mode_of(Some("enforce")).expect_err("enforce must be a load error");
+        assert!(err.contains("not available in this build"), "{err}");
+        assert!(err.contains("observe") && err.contains("off"), "{err}");
     }
 
     #[test]
-    fn unrecognised_mode_falls_back_to_observe_not_enforce() {
-        // enforce (and any unknown value) must NOT silently enable fail-closed;
-        // it falls back to the safe observe posture.
-        for raw in ["enforce", "block", "true", "1"] {
-            let (_, mode) = resolve_attestation_wiring(Some(raw), Some(b"k"), None)
-                .unwrap_or_else(|| panic!("{raw} should still attach an observe validator"));
-            assert_eq!(mode, AttestationMode::Observe, "mode={raw}");
+    fn unknown_mode_is_refused() {
+        for raw in ["enforcee", "block", "true", "1"] {
+            let err = mode_of(Some(raw)).expect_err("an unknown mode must be a load error");
+            assert!(err.contains(raw), "error must name the value: {err}");
+            assert!(err.contains("observe") && err.contains("off"), "{err}");
+            assert!(!err.contains("not available in this build"), "{err}");
         }
     }
 
     #[test]
     fn missing_signing_key_still_initialises_validator() {
         // No key configured → validator still inits (observe will audit-only).
-        let wiring = resolve_attestation_wiring(Some("observe"), None, None);
+        let wiring = resolve_attestation_wiring(Some("observe"), None, None).unwrap();
         assert!(wiring.is_some(), "validator must init even without a key");
         let (validator, _) = wiring.unwrap();
         // A token cannot verify against the empty key, so observe would audit it;
@@ -216,6 +263,7 @@ mod tests {
         use chrono::{TimeDelta, Utc};
 
         let (validator, _) = resolve_attestation_wiring(Some("observe"), Some(b"   "), Some("kid"))
+            .unwrap()
             .expect("whitespace-only key must still attach an observe validator");
 
         let request = TokenRequest {
