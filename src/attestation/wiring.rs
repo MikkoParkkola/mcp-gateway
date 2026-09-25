@@ -68,12 +68,7 @@ pub fn resolve_attestation_wiring(
                  use `observe` (audit only) or `off`"
             ));
         }
-        Some(other) => {
-            return Err(format!(
-                "{ATTESTATION_MODE_ENV}={other:?} is not a valid mode; \
-                 use `observe` or `off`"
-            ));
-        }
+        Some(_) => AttestationMode::Observe,
     };
 
     let key = signing_key.unwrap_or_default();
