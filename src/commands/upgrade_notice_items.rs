@@ -80,5 +80,5 @@ enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on
 Without the chart, set `server.replicas` to the processes you run: 1 is a declaration, not a detection.",
     "`server.request_timeout`, never enforced, is removed and now FAILS the config load; bound \
 calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
-body on `/mcp` gets HTTP 413 (was 400, JSON-RPC -32700), and webhooks now accept up to it.",
+body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks now accept up to it.",
 ];

@@ -731,6 +731,14 @@ impl Config {
         if self.server.port == 0 {
             tracing::warn!("Server port is 0; OS will assign an ephemeral port");
         }
+        // The router caps every body at this (C8), so 0 would refuse all of them.
+        if self.server.max_body_size == 0 {
+            return Err(Error::ConfigValidation(
+                "server.max_body_size is 0, which refuses every request body; \
+                 set a positive byte count (default 10485760)"
+                    .into(),
+            ));
+        }
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;

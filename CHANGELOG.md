@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`server.max_body_size` is enforced on every route (breaking).** It was read
   nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
   webhooks included, used the framework's 2 MiB default. An oversize body now
-  gets HTTP 413 everywhere, including `/mcp` (was 400, JSON-RPC -32700).
+  gets HTTP 413 everywhere; on `/mcp` and `/mcp/{name}` the JSON-RPC code is
+  -32600 (was 400, JSON-RPC -32700). `max_body_size: 0` now fails the load.
   See UPGRADING-4.0.md item 38.
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which

@@ -782,12 +782,17 @@ other route, webhooks included, used the framework's 2 MiB default.
 
 - **`server.request_timeout` is removed and now stops startup; delete it.** It never did
   anything. Set per-backend `timeout` to bound calls. The load fails, on start and on reload,
-  with `server.request_timeout` is retired: ... it was never enforced. ... Remove
-  server.request_timeout.
+  and the error includes:
+
+  ```text
+  `server.request_timeout` is retired: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  ```
 - **`server.max_body_size` is now enforced on every route**, read once at startup
-  (default 10 MiB).
-- **An oversize body on `/mcp` and `/mcp/{name}` now gets HTTP 413**, where it used to get 400
-  with JSON-RPC -32700. Clients that matched on -32700 must also handle 413.
+  (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
+  count.
+- **An oversize body on `/mcp` and `/mcp/{name}` now gets HTTP 413 with JSON-RPC -32600**
+  ("Request body exceeds server.max_body_size"), where it used to get 400 with JSON-RPC -32700.
+  Clients that matched on -32700 must also handle 413 / -32600.
 - **Routes that parsed with a framework extractor (webhooks, key server, admin UI) now accept up
   to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
 

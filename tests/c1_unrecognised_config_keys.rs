@@ -443,4 +443,11 @@ fn removed_request_timeout_is_refused() {
             "retired request_timeout refusal must say `{part}`; got: {message}"
         );
     }
+    // UPGRADING item 38 quotes the refusal verbatim; a reworded message must
+    // update the guide too.
+    let quote = "`server.request_timeout` is retired: the server-wide request timeout was \
+                 removed in 4.0; it was never enforced. Calls are bounded by the per-backend \
+                 `timeout`. Remove server.request_timeout.";
+    assert!(message.contains(quote), "got: {message}");
+    assert!(include_str!("../docs/UPGRADING-4.0.md").contains(quote));
 }
