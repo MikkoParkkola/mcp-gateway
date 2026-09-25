@@ -147,3 +147,21 @@ fn tls_crl_group_writable_refused() {
     let err = refusal(&config);
     assert!(err.contains("certificate revocation list"), "{err}");
 }
+
+/// F18 A1: rewriting over a cert that umask 002 left `0664` must leave `0644`,
+/// or the gateway's own `serve` refuses the output of its own `tls` commands.
+#[test]
+fn write_to_dir_overwrites_loose_cert_to_0644() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("tls");
+    let ca = CertGenerator::init_ca(&CaParams {
+        cn: "Test CA",
+        validity_days: 365,
+    })
+    .unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    write_mode(&out.join("x.crt"), "stale", 0o664);
+    CertGenerator::write_to_dir(&ca, &out, "x").unwrap();
+    let mode = std::fs::metadata(out.join("x.crt")).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o644);
+}
