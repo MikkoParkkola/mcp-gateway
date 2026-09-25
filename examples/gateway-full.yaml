@@ -18,6 +18,12 @@ server:
   max_body_size: 10485760         # Max request body size in bytes on every route (10 MiB; 413 above)
   replicas: 1                     # Declared process count, not observed. Above 1, startup refuses with
                                   # key_server, accounts or modern_protocol on (UPGRADING-4.0 item 37)
+  # With auth on and a non-loopback bind or public_url, plain HTTP is refused
+  # unless mtls is on or this names who protects it: tls_terminated_upstream,
+  # cluster_internal (public_url must be <svc>.<ns>.svc[.<cluster_domain>]) or
+  # host_local_publish. See docs/UPGRADING-4.0.md item 38.
+  # cleartext_http: refuse
+  # cluster_domain: cluster.local
 
 # --- Authentication ---
 

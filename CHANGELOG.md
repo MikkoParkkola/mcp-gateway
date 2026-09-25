@@ -141,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no validator; set `observe` to keep the audit lines. `enforce` is refused at
   load until it covers the direct route and multi-step plans. See
   `docs/UPGRADING-4.0.md` item 30.
+- **A credential over plain HTTP on a network bind refuses the start
+  (breaking).** With `auth`, `agent_auth` or the key server on, a non-loopback
+  bind or `public_url`, and no mTLS, the gateway refuses to serve, and a reload
+  into that state is refused. `server.cleartext_http` names the protection
+  instead: `tls_terminated_upstream`, `cluster_internal` (Service-name
+  `public_url` only) or `host_local_publish`, each logged at WARN on every
+  start. The Helm chart (`server.cleartextHttp`), enterprise-alpha and compose
+  set it. See `docs/UPGRADING-4.0.md` item 38.
 - **`/metrics` requires a dedicated scrape token (breaking).** It sat outside
   authentication and its labels name your backends. It now answers only
   `Bearer <server.metrics_token>` and returns 401 otherwise, the admin bearer

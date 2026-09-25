@@ -262,6 +262,7 @@ security:
     scan_requests: true
     scan_responses: true
 server:
+  cleartext_http: cluster_internal
   host: 0.0.0.0
   port: 39400
   public_url: http://mcp-gateway.default.svc.cluster.local:39400
@@ -286,6 +287,7 @@ const ENTERPRISE_ALPHA: &str = "server:
   host: 0.0.0.0
   port: 39400
   public_url: \"http://mcp-gateway.mcp-gateway.svc.cluster.local:39400\"
+  cleartext_http: cluster_internal
 auth:
   enabled: true
   bearer_token: \"env:MCP_GATEWAY_TOKEN\"
