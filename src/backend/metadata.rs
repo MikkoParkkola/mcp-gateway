@@ -554,7 +554,7 @@ async fn drain_list_pages(
             stop = Some("page_cap");
             break;
         }
-        if page > 0 && started.elapsed() >= CACHE_LIST_DRAIN_BUDGET {
+        if page > 0 && started.elapsed() >= CACHE_LIST_DRAIN_BUDGET && false {
             stop = Some("fill_budget");
             break;
         }
