@@ -375,6 +375,11 @@ mcp-gateway tls issue-client \
   --cn "claude-code-agent" --out /etc/mcp-gateway/tls/clients
 ```
 
+The keys are written `0600`, and the gateway refuses a key other users can read. The
+certificates are written at your umask; the gateway refuses a certificate, CA or CRL that
+other users can change, so under umask `002` run `chmod go-w` on the `.crt` files
+(UPGRADING-4.0 item 54).
+
 Enable mTLS in config:
 
 ```yaml
