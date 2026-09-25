@@ -1326,7 +1326,9 @@ pub struct ServerConfig {
     /// literal or `env:VAR`, resolved by [`ServerConfig::resolve_metrics_token`].
     /// Under `server`, not `auth`, because a mesh deployment has no `auth`
     /// section and still needs scraping. The admin bearer never opens
-    /// `/metrics`, and this token never opens anything else.
+    /// `/metrics`, and this token never opens anything else. It serializes only
+    /// for the config-file round trip (`config_persistence::write_config`),
+    /// which must keep it; any new export of this struct must redact it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_token: Option<String>,
 }
@@ -1403,7 +1405,7 @@ impl ServerConfig {
                 field = "server.metrics_token",
                 variable = var,
                 "server.metrics_token references an unset or empty environment variable; \
-                 /metrics answers 401 until it is set"
+                 /metrics answers 401 until it is set and the gateway restarted"
             );
         }
         value

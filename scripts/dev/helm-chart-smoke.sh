@@ -157,6 +157,9 @@ grep -q 'key: "\?tok"\?' <<<"$bts" \
 menv="$(grep -A4 'name: MCP_GATEWAY_METRICS_TOKEN' <<<"$scraped" || true)"
 grep -q 'name: "\?scrape-sec"\?' <<<"$menv" \
   || fail "MCP_GATEWAY_METRICS_TOKEN is not read from metrics.existingSecret"
+menv="$(grep -A6 'name: MCP_GATEWAY_METRICS_TOKEN' <<<"$scraped" || true)"
+grep -q 'optional: true' <<<"$menv" \
+  || fail "a missing metrics Secret must not stop the pod (optional: true)"
 grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$scraped" \
   || fail "rendered gateway.yaml does not set server.metrics_token"
 mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingSecret=scrape-sec \

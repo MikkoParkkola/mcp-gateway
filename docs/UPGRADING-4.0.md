@@ -649,7 +649,9 @@ error".
 In 3.x `/metrics` sat outside authentication and answered anyone who could reach the port,
 and its labels name your backends. It now answers only `Authorization: Bearer <token>` where
 the token is `server.metrics_token`, a literal or `env:VAR`, and returns 401 with
-`WWW-Authenticate: Bearer` until it is set.
+`WWW-Authenticate: Bearer` until it is set. Prefer the `env:VAR` form, so the token stays out of
+the config file. The token is resolved at startup: setting or changing it takes effect after a
+restart, not on a config reload.
 
 - **A missing `env:` variable does not stop startup.** Unset, missing or empty all mean no
   token: the gateway starts, logs a WARN naming the field and the variable, and `/metrics`

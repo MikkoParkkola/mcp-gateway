@@ -88,12 +88,14 @@ spec:
             {{- end }}
             {{- if .Values.metrics.existingSecret }}
             # The scrape token /metrics answers (server.metrics_token). A
-            # missing value does not stop startup; /metrics then answers 401.
+            # missing value, or a missing Secret, does not stop startup;
+            # /metrics then answers 401.
             - name: MCP_GATEWAY_METRICS_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.metrics.existingSecret | quote }}
                   key: {{ .Values.metrics.secretKey | quote }}
+                  optional: true
             {{- end }}
           volumeMounts:
             - name: config
