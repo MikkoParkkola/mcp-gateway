@@ -94,6 +94,9 @@ fn test_subscriptions(
         key_server,
         dashboard_bootstrap: Arc::default(),
         tls_enabled: false,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     };
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer))
 }

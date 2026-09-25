@@ -81,6 +81,9 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
         key_server: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
+        live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     };
     let mut router = axum::Router::new()
         .route(

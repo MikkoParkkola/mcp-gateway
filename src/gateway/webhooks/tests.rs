@@ -548,6 +548,9 @@ fn authorizer(
         key_server,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tls_enabled: false,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     }
 }
 

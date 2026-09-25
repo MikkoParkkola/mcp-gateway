@@ -177,6 +177,31 @@ impl ControlPlaneRoleMappingConfig {
                     rule.issuer, rule.role
                 )));
             }
+            if rule.role == ControlPlaneRole::Admin {
+                // E1-b: "everyone at corp.com is a gateway admin" is almost
+                // never the intent, the same class of mistake as A9 D3a.
+                if rule.group.is_none() && rule.email.is_none() {
+                    return Err(Error::ConfigValidation(format!(
+                        "control_plane.role_mapping rule {i} (issuer '{}') grants admin by \
+                         email domain alone; name the IdP's admin group (group) or an exact \
+                         email instead",
+                        rule.issuer
+                    )));
+                }
+                // E1-g: announce the widening. Kind only: an email value is
+                // personal data and never reaches the log.
+                let discriminator = if rule.group.is_some() {
+                    "group"
+                } else {
+                    "email"
+                };
+                tracing::warn!(
+                    "control_plane.role_mapping rule {i} (issuer {}, {discriminator}) now grants \
+                     gateway admin on all surfaces (meta-tools, /ui/api/*), not only the \
+                     control plane",
+                    rule.issuer
+                );
+            }
         }
         Ok(())
     }
@@ -189,6 +214,13 @@ impl ControlPlaneRoleMappingConfig {
             .iter()
             .find(|rule| rule.matches(identity))
             .map(|rule| rule.role)
+    }
+
+    /// Whether `identity` is a gateway admin: the first matching rule says
+    /// `role: admin` (E1-a).
+    #[must_use]
+    pub fn grants_admin(&self, identity: &VerifiedIdentity) -> bool {
+        self.resolve_role(identity) == Some(ControlPlaneRole::Admin)
     }
 }
 
@@ -472,7 +504,9 @@ mod tests {
                 admin_by_domain(),
             ],
         };
-        let error = m.validate().expect_err("a domain-only admin rule is refused");
+        let error = m
+            .validate()
+            .expect_err("a domain-only admin rule is refused");
         let text = error.to_string();
         assert!(
             text.contains("rule 1") && text.contains("domain"),
@@ -560,7 +594,10 @@ mod tests {
             logs.contains("rule 2 (issuer https://other.idp, email)"),
             "{logs}"
         );
-        assert!(!logs.contains("rule 1"), "an auditor rule is silent: {logs}");
+        assert!(
+            !logs.contains("rule 1"),
+            "an auditor rule is silent: {logs}"
+        );
         assert!(!logs.contains("boss@corp.com"), "no email value: {logs}");
     }
 }

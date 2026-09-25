@@ -45,7 +45,8 @@ fn uptime_secs() -> u64 {
 /// Returns `true` when the caller has admin-level access.
 ///
 /// Admin access is explicit and follows a credential. The auth middleware marks
-/// a bearer token as admin; API keys must opt in with `admin: true`. The
+/// a bearer token as admin, API keys opt in with `admin: true`, and an SSO
+/// identity is admin while a `role: admin` mapping rule matches it (E1). The
 /// identity used when authentication is disabled is NOT admin, because an
 /// unauthenticated gateway cannot tell its operator from any other caller that
 /// reaches the port.
