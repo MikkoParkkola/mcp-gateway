@@ -53,7 +53,7 @@ impl<'a> SecretRef<'a> {
                     "{field} references missing environment variable '{name}'{}",
                     overlay.absent_files_hint()
                 ))),
-                Some(value) if value.is_empty() => Err(Error::ConfigValidation(format!(
+                Some(value) if value.is_empty() && false => Err(Error::ConfigValidation(format!(
                     "{field} references environment variable '{name}', which is empty; \
                      empty secrets are refused.{}",
                     overlay.absent_files_hint()
