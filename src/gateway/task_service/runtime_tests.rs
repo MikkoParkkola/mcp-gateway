@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use super::{ServiceError, StoreLimits, open_runtime};
+#[cfg(unix)]
+use super::ServiceError;
+use super::{StoreLimits, open_runtime};
 
 /// Startup recovery of records a previous process left mid-flight.
 mod recovery;
