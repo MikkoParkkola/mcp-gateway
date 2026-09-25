@@ -178,6 +178,7 @@ impl LogExporter {
 }
 
 /// `prev_segment_final_hash` of an `audit_segment_opened` record.
+#[allow(dead_code)]
 fn opened_link(entry: &serde_json::Value) -> Option<String> {
     (entry.get("event").and_then(|v| v.as_str()) == Some("audit_segment_opened"))
         .then(|| {
