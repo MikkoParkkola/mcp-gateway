@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory (every Helm install) served governance read-only, and the admin API
   gave the same "not configured" answer as for auth being off. A new
   `control_plane.store_dir` places the store; when it is set, it must be
-  absolute and writable or the gateway refuses to start. When it is unset, the
+  absolute, and with auth on writable, or the gateway refuses to start. When it is unset, the
   location is unchanged and an unwritable directory still degrades to
   read-only, but `GET /ui/api/control-plane` now reports
   `mutation_disabled_reason` (`auth_off` or `store_unavailable`) and

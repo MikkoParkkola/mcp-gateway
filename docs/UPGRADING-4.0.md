@@ -275,7 +275,8 @@ operator's unfiltered view.
 
 New `control_plane.store_dir`. When it is unset, the store stays at
 `<config dir>/<config stem>-control-plane`, so existing installs do not move. When it is set, it
-must be absolute after `~` expansion, and a gateway that cannot write it refuses to start. The
+must be absolute after `~` expansion, and with auth on a gateway that cannot write it refuses to
+start. The
 store has no lease: one gateway process per `store_dir`. The admin API
 (`GET /ui/api/control-plane`) adds `mutation_disabled_reason` (`auth_off` or `store_unavailable`)
 and `base_source` (`explicit` or `default`), and a 503 mutation answer names the cause and the
