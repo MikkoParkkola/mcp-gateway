@@ -31,10 +31,10 @@ auth:
   bearer_token: fixture-bearer-only
   api_keys:
     - name: owui
-      key: fixture-named-api-key
+      key_sha256: "sha256:84065040774b729687518e297256e67e4c5d1084521656d4fa587a6fc317159d"
       backends: ["*"]
     - name: other
-      key: fixture-other-api-key
+      key_sha256: "sha256:ac3121ad6ecc277a2a32b26480f75e3cf3cb49fdc0b9747e9f16f360d8e38b6f"
       backends: ["*"]
 accounts:
   schema_version: accounts.v1
@@ -204,7 +204,7 @@ auth:
   bearer_token: fixture-bearer-only
   api_keys:
     - name: owui
-      key: fixture-named-api-key
+      key_sha256: "sha256:84065040774b729687518e297256e67e4c5d1084521656d4fa587a6fc317159d"
       backends: ["*"]
 accounts:
   schema_version: accounts.v1

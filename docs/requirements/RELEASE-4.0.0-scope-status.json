@@ -789,11 +789,19 @@
     },
     {
       "id": "MIK-7570.APIKEY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/config/features/api_key.rs",
+        "src/config/features/api_key_digest_tests.rs",
+        "src/gateway/auth_api_key_digest_tests.rs",
+        "src/personal_accounts/config/adapter_secret_tests.rs",
+        "tests/e4_hash_key_cli.rs",
+        "docs/DEPLOYMENT.md",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-25 (E4). auth.api_keys[] stores key_sha256 (sha256:<64 lowercase hex> or env:VAR holding it); a plaintext key, both fields, neither, or a malformed digest fails the load before any env: inlining, naming the entry or variable and never the value. Validation hashes the presented key once and compares digests with ct_eq; principal is hex(digest)[..12], unchanged from 3.x. Optional expires_at refuses a matching key with 401 after that instant and only warns at startup. Offline `mcp-gateway hash-key` reads the key from stdin, strips one line ending, and --verify exits 0/1/2. The no-reuse rule hashes the adapter secret against the digest. Cells: plaintext_api_key_fails_to_load, malformed_digest_fails_to_load, both_key_and_digest_fails_to_load, neither_key_nor_digest_fails_to_load, env_digest_reference_authenticates, env_reference_holding_plaintext_is_refused, expired_key_does_not_block_startup, api_key_config_debug_redacts, digest_key_authenticates_plaintext_token, digest_itself_is_not_a_credential, principal_unchanged_across_migration, expired_key_is_refused, unexpired_key_is_accepted, resolved_auth_config_debug_shows_no_digest, adapter_secret_equal_to_api_key_is_refused, hash_key_cli_prints_digest, hash_key_verify_exit_codes."
     },
     {
       "id": "MIK-7570.ADMINSSO.1",

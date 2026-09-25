@@ -9,7 +9,11 @@ use crate::security::firewall::response_tests::audit::capture_warnings;
 
 fn key(name: &str, backends: &[&str], admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
-        key: format!("{name}-secret"),
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(
+            format!("{name}-secret").as_bytes(),
+        )),
+        expires_at: None,
         name: name.to_string(),
         rate_limit: 0,
         backends: backends.iter().map(|b| (*b).to_string()).collect(),
@@ -63,7 +67,7 @@ fn wildcard_and_list_scoping() {
 fn api_key_with_backends_omitted_from_yaml_reaches_no_backend() {
     // The field left out entirely, not `[]`: serde's default must also be none.
     let auth: AuthConfig = serde_yaml::from_str(
-        "enabled: true\napi_keys:\n  - key: omitted-secret\n    name: omitted\n",
+        "enabled: true\napi_keys:\n  - key_sha256: sha256:411525617cc97c2811e4b9cf0ce326619095bec63da7ef4d342d18de8c3ef086\n    name: omitted\n",
     )
     .expect("auth YAML parses");
     assert!(auth.api_keys[0].backends.is_empty());

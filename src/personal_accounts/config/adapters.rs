@@ -50,7 +50,7 @@
 //!   check alone cannot do.
 //!
 //! Neither one calls `AuthConfig::resolve_bearer_token` or
-//! `ApiKeyConfig::resolve_key`: those read `std::env` directly, bypassing the
+//! `ApiKeyConfig::resolve_digest`: those read `std::env` directly, bypassing the
 //! overlay this slice resolves against, and the `auto` bearer MINTS A FRESH
 //! RANDOM TOKEN on every call, so "comparing" against it would compare against a
 //! value no running gateway holds. An `auto` bearer is therefore skipped by
@@ -359,7 +359,7 @@ fn resolve_material(
 }
 
 /// One gateway authentication credential AS CONFIGURED — the literal text of
-/// `auth.bearer_token` or of an `auth.api_keys[].key`, never a resolved value
+/// `auth.bearer_token` or of an `auth.api_keys[].key_sha256`, never a resolved value
 /// and never the whole `AuthConfig`.
 ///
 /// A borrowed view rather than an owned copy so that constructing the list
@@ -377,8 +377,9 @@ fn resolve_material(
 pub(crate) enum GatewayCredential<'a> {
     /// `auth.bearer_token`, including the sentinel `auto`.
     BearerToken(&'a str),
-    /// `auth.api_keys[index]`, with the operator's own label.
-    ApiKey {
+    /// `auth.api_keys[index]`, with the operator's own label. `spec` is the
+    /// configured `key_sha256`: a `sha256:` digest or an `env:` reference to one.
+    ApiKeyDigest {
         index: usize,
         name: &'a str,
         spec: &'a str,
@@ -389,7 +390,7 @@ impl<'a> GatewayCredential<'a> {
     /// The configured text: `auto`, `env:VARIABLE`, or a literal credential.
     fn spec(self) -> &'a str {
         match self {
-            Self::BearerToken(spec) | Self::ApiKey { spec, .. } => spec,
+            Self::BearerToken(spec) | Self::ApiKeyDigest { spec, .. } => spec,
         }
     }
 
@@ -398,10 +399,12 @@ impl<'a> GatewayCredential<'a> {
     fn label(self) -> String {
         match self {
             Self::BearerToken(_) => "auth.bearer_token".to_string(),
-            Self::ApiKey { index, name, .. } if name.trim().is_empty() => {
+            Self::ApiKeyDigest { index, name, .. } if name.trim().is_empty() => {
                 format!("auth.api_keys[{index}]")
             }
-            Self::ApiKey { index, name, .. } => format!("auth.api_keys[{index}] (name {name})"),
+            Self::ApiKeyDigest { index, name, .. } => {
+                format!("auth.api_keys[{index}] (name {name})")
+            }
         }
     }
 
@@ -482,7 +485,9 @@ pub(crate) fn validate_no_gateway_material_reuse(
 ) -> Result<(), AccountsConfigError> {
     // Resolved once, before any adapter is looked at, so the comparison set is
     // the same for every index.
-    let mut gateway: Vec<(String, Vec<u8>)> = Vec::new();
+    // A key is configured as its digest, so its entry holds the digest bytes
+    // and the adapter secret is hashed before comparing (E4-f).
+    let mut gateway: Vec<(String, Vec<u8>, bool)> = Vec::new();
     for credential in credentials {
         if credential.is_auto_bearer() {
             // Independently generated randomness: no configured material to
@@ -496,9 +501,15 @@ pub(crate) fn validate_no_gateway_material_reuse(
             // gateway authenticates with, so it is compared as material.
             None => Some(credential.spec().to_string()),
         };
+        let is_digest = matches!(credential, GatewayCredential::ApiKeyDigest { .. });
         match material {
+            Some(value) if is_digest => {
+                if let Some(digest) = crate::config::parse_api_key_digest(&value) {
+                    gateway.push((credential.label(), digest.to_vec(), true));
+                }
+            }
             Some(value) if !value.is_empty() => {
-                gateway.push((credential.label(), value.into_bytes()));
+                gateway.push((credential.label(), value.into_bytes(), false));
             }
             _ => {}
         }
@@ -514,10 +525,17 @@ pub(crate) fn validate_no_gateway_material_reuse(
             continue;
         };
         let material = secret.into_bytes();
+        let hashed = <sha2::Sha256 as sha2::Digest>::digest(&material).to_vec();
         // Compared on RESOLVED BYTES, never on the reference string: two
         // differently named variables holding one value are one secret, and
         // that is exactly the case a name-only check cannot see.
-        if let Some((credential, _)) = gateway.iter().find(|(_, value)| value == &material) {
+        if let Some((credential, _, _)) = gateway.iter().find(|(_, value, is_digest)| {
+            let candidate = if *is_digest { &hashed } else { &material };
+            bool::from(subtle::ConstantTimeEq::ct_eq(
+                value.as_slice(),
+                candidate.as_slice(),
+            ))
+        }) {
             return Err(AccountsConfigError::AdapterSecretReusesGatewayAuth {
                 index,
                 credential: credential.clone(),
