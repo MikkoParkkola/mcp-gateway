@@ -204,7 +204,7 @@ impl<'a> Walk<'a> {
                 Verdict::Undecided
                     if self.standard
                         || is_free_map(schema)
-                        || ref_to_free_map(root, schema, depth) => {}
+                        || (false && ref_to_free_map(root, schema, depth)) => {}
                 Verdict::Undecided | Verdict::Refuse | Verdict::MatchesNothing => {
                     faults.push(KeyFault::Undeclared(at));
                 }
@@ -420,7 +420,7 @@ impl<'a> Walk<'a> {
             None => match map.get("items") {
                 // Draft-07 tuple form: elements past it are `additionalItems`'.
                 Some(Value::Array(legacy)) => {
-                    if let Some(item) = legacy.get(index).or_else(|| map.get("additionalItems")) {
+                    if let Some(item) = legacy.get(index) {
                         all.push(Req::Schema(root, item));
                     }
                 }

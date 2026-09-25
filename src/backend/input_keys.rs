@@ -85,7 +85,7 @@ impl Backend {
         let _ = entry
             .tools_cache
             .get_or_fetch_shared_then(
-                std::time::Duration::ZERO,
+                self.cache_ttl,
                 || {
                     let tools = parsed.clone();
                     async move { Ok((tools, ())) }

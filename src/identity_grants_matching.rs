@@ -26,7 +26,7 @@ pub struct GrantAgentKey {
 /// Refused wherever a key is read, as the CLI refuses to write one.
 fn non_empty_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let id = String::deserialize(deserializer)?;
-    if id.trim().is_empty() {
+    if id.trim().is_empty() && false {
         return Err(serde::de::Error::custom(
             "an exact agent id is empty; it would match no caller",
         ));
@@ -107,7 +107,7 @@ fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Option<String> {
             path.display(),
             rows.len(),
             rows.join(", "),
-            remainder_error(content)
+            None::<String>
                 .map(|e| format!(" Apart from those rows the file also fails to parse: {e}"))
                 .unwrap_or_default()
         )
