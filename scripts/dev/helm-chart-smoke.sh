@@ -167,6 +167,38 @@ mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingS
 grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$mesh" \
   || fail "mesh mode drops server.metrics_token"
 
+echo "== helm_replicas_guard_per_process_state =="
+# UPGRADING-4.0 §37: key-server tokens, accounts custody and task records live in
+# one process, so more than one replica fails the render when any is on. The
+# modern protocol (on unless config.server.modern_protocol is false) reaches the
+# task store.
+grep -qE '^  replicas: 1$' <<<"$dep" || fail "default replicaCount is not 1"
+grep -qE '^      replicas: 1$' <<<"$cm" || fail "rendered gateway.yaml does not declare server.replicas: 1"
+# Recreate whenever per-process state is on, the default modern protocol
+# included: a surge pod holds its own task store, tokens or custody.
+grep -qE '^    type: Recreate$' <<<"$dep" || fail "a default install (modern protocol on) does not render Recreate"
+grep -q 'rollingUpdate' <<<"$dep" && fail "the default Recreate still renders a rollingUpdate block"
+two=(--set replicaCount=2 --set config.server.modern_protocol=false)
+for case in "key_server.enabled=true:InMemoryTokenStore" "accounts.enabled=true:single_process"; do
+  out="$("$HELM" template t "$CHART" "${two[@]}" --set "config.${case%%:*}" 2>&1)" \
+    && fail "config.${case%%:*} with replicaCount=2 rendered"
+  grep -q "Error:.*${case##*:}" <<<"$out" || fail "config.${case%%:*} refusal does not name ${case##*:}"
+done
+out="$("$HELM" template t "$CHART" --set replicaCount=2 2>&1)" \
+  && fail "replicaCount=2 with the modern protocol on rendered"
+grep -q 'Error:.*task store' <<<"$out" || fail "modern-protocol refusal does not name the task store"
+out="$("$HELM" template t "$CHART" --set config.server.replicas=3 2>&1)" \
+  && fail "config.server.replicas disagreeing with replicaCount rendered"
+multi="$("$HELM" template t "$CHART" "${two[@]}" 2>&1)" \
+  || fail "replicaCount=2 with modern_protocol=false did not render"
+grep -qE '^      replicas: 2$' <<<"$multi" || fail "server.replicas does not follow replicaCount=2"
+grep -qE '^    type: RollingUpdate$' <<<"$multi" || fail "no per-process state, yet no RollingUpdate"
+ks="$("$HELM" template t "$CHART" --set config.key_server.enabled=true --show-only templates/deployment.yaml 2>&1)"
+grep -qE '^    type: Recreate$' <<<"$ks" || fail "key_server does not render strategy Recreate"
+grep -q 'rollingUpdate' <<<"$ks" && fail "Recreate still renders a rollingUpdate block"
+acc="$("$HELM" template t "$CHART" --set config.accounts.enabled=true --show-only templates/deployment.yaml 2>&1)"
+grep -qE '^    type: Recreate$' <<<"$acc" || fail "accounts does not render strategy Recreate"
+
 echo "== helm_config_file_mode_is_readable_without_a_world_bit =="
 # CONFIG.2 refuses a config with a world bit; the projection is root-owned, so
 # the gateway reads it through fsGroup. Both defaults render, and both overrides win.
