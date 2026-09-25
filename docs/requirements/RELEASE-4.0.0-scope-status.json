@@ -540,11 +540,14 @@
     },
     {
       "id": "MIK-7570.OIDC.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/key_server/identity_rules_tests.rs",
+        "src/key_server/store.rs"
+      ],
+      "note": "Graded 2026-09-25 (A9). Green CI run 36097402185 at 9d60a504 (rebased on 150e5367): 45 pass, 5 skipped, 0 failed. Red first: run 36089678699 at 8a554353 failed exactly the 13 new cells (5492 passed, 13 failed), each for its stated reason; the 4 positive controls passed. An unverified email is dropped at the verifier: unverified_email_does_not_match_email_rule (403 at /auth/token), missing_email_verified_is_unverified, unverified_email_fails_allowed_domains, role_mapping_ignores_unverified_email; verified_email_matches keeps true and \"true\". Email and domain compare ASCII case-insensitively with exactly one @: email_and_domain_compare_case_insensitively, allowed_domains_compare_case_insensitively, role_mapping_email_domain_case_insensitive, address_without_single_at_has_no_domain. Every rule names a configured issuer, and an issuer-only rule on Google or GitHub Actions fails to load: rule_without_issuer_fails_to_load, issuer_only_rule_on_public_issuer_fails_to_load, issuer_rule_with_domain_on_public_issuer_loads, issuer_only_rule_matches_any_verified_account, rule_for_issuer_a_ignores_issuer_b. Revocation and the token cap key on (issuer, subject): revoke_is_scoped_to_issuer, token_cap_is_scoped_to_issuer, revoke_without_issuer_is_400, store revoke_and_count_are_scoped_to_issuer. Delete-the-branch at 9d60a504, 8 mutations, each target run by exact name (1 run, 1 failed): D1 guard removed reddens T1/T2/T3/T11; exact compare reddens T5/T13/T14; last-@ split reddens T6; optional issuer reddens T7; sub-only revocation reddens T9 and the store cell; rejecting every email reddens T4; requiring a discriminator reddens T12; dropping the public-issuer list reddens T15. RESIDUAL: the A9.7 real-token checks (Google, Entra or Keycloak, and the Keycloak mapper) are not done; the provider matrix stays (I)."
     },
     {
       "id": "MIK-7570.NOTIFY.1",
