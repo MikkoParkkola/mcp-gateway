@@ -87,7 +87,9 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
     let mut file = std::fs::File::open(path).map_err(cannot)?;
     let meta = file.metadata().map_err(cannot)?;
     let euid = rustix::process::geteuid().as_raw();
-    if let Some(refusal) = secret_file_refusal(meta.mode(), meta.uid(), euid) {
+    if let Some(refusal) =
+        secret_file_refusal(meta.mode(), meta.uid(), euid).filter(|_| what != SecretFile::Reference)
+    {
         let mode = meta.mode() & 0o777;
         let gid = meta.gid();
         let lets = match refusal {
