@@ -10,7 +10,7 @@
 2854 src/transport/http/tests.rs
 2743 src/gateway/meta_mcp/mod.rs
 2352 tests/mik_7272_task_1_acs.rs
-2327 src/config/mod.rs
+2342 src/config/mod.rs
 2304 src/gateway/router/handlers.rs
 2226 src/config/tests.rs
 2192 src/backend/pool_tests.rs

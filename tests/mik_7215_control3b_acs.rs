@@ -240,10 +240,11 @@ fn call_body(meta: Value) -> Value {
     let mut meta = meta;
     meta["io.modelcontextprotocol/protocolVersion"] = json!("2026-07-28");
     meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
-    // A modern `tools/call` carries an explicit idempotency key or it is
-    // refused -32602 before the invocation runs, and a refused call writes no
-    // log entry — which is the one way an assertion about the correlation key
-    // passes on an empty log. Spelled literally rather than imported: the
+    // Under `server.idempotency_key: required` a modern `tools/call` without
+    // an explicit idempotency key is refused -32602 before the invocation
+    // runs, and a refused call writes no log entry — which is the one way an
+    // assertion about the correlation key passes on an empty log. The key
+    // keeps this frame valid in both modes. Spelled literally rather than imported: the
     // gateway's own constant would make a rename invisible here.
     meta["io.mcp-gateway/idempotency-key"] = json!("control-3b");
     json!({

@@ -1376,6 +1376,20 @@ pub struct ServerConfig {
     /// every start while it remains set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_unauthenticated_network_bind: bool,
+    /// Whether a modern `tools/call` must carry `_meta`
+    /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §28).
+    pub idempotency_key: IdempotencyKeyMode,
+}
+
+/// `server.idempotency_key`: see [`ServerConfig::idempotency_key`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdempotencyKeyMode {
+    /// Admit an un-keyed modern call unprotected.
+    #[default]
+    Optional,
+    /// Refuse an un-keyed modern call to a tool not marked read-only.
+    Required,
 }
 
 impl Default for ServerConfig {
@@ -1392,6 +1406,7 @@ impl Default for ServerConfig {
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
             allow_unauthenticated_network_bind: false,
+            idempotency_key: IdempotencyKeyMode::Optional,
         }
     }
 }

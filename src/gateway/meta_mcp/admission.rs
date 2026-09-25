@@ -127,6 +127,7 @@ impl MetaMcp {
             },
             representation,
             self.read_only_target(server, tool),
+            (server, tool),
             request_id,
         )
     }
@@ -146,6 +147,8 @@ impl MetaMcp {
         operation: impl FnOnce() -> Value,
         representation: &Value,
         read_only: bool,
+        // (backend, tool) for the un-keyed warn only; never an identity.
+        target: (&str, &str),
         request_id: &RequestId,
     ) -> Result<SyncAdmission> {
         if retry.is_malformed() {
@@ -155,14 +158,25 @@ impl MetaMcp {
             ));
         }
         let Some(key) = retry.idempotency_key.as_deref() else {
-            return if !is_modern || read_only {
-                Ok(SyncAdmission::Unprotected)
-            } else {
-                Err(Error::json_rpc(
+            // A call carrying no key cannot be recognised as a re-issue, so a
+            // refusal protects nothing; it is admitted unprotected, as legacy
+            // frames always were. `required` restores the refusal for
+            // deployments whose modern clients all send keys (F10, ADR-012).
+            if is_modern
+                && !read_only
+                && *self.unkeyed.mode.read() == crate::config::IdempotencyKeyMode::Required
+            {
+                return Err(Error::json_rpc(
                     -32602,
-                    "An explicit idempotency key is required",
-                ))
-            };
+                    format!(
+                        "An explicit idempotency key is required: set _meta \"{}\" \
+                         (server.idempotency_key: required)",
+                        crate::protocol::mrtr::IDEMPOTENCY_KEY_META
+                    ),
+                ));
+            }
+            self.record_unkeyed(is_modern, read_only, target);
+            return Ok(SyncAdmission::Unprotected);
         };
         let principal = verified_identity
             .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
@@ -335,6 +349,7 @@ impl MetaMcp {
             || operation,
             &self.meta_representation(tool_name, false, session),
             read_only,
+            ("gateway", tool_name),
             id,
         )?;
         if let SyncAdmission::Owned(lease) = &mut admission {
@@ -408,6 +423,74 @@ impl MetaMcp {
         Ok(())
     }
 }
+
+/// `server.idempotency_key`, restart-scoped like the rest of `server`, and the
+/// last warn time per (backend, tool) for un-keyed admissions.
+#[derive(Default)]
+pub(crate) struct UnkeyedPolicy {
+    mode: parking_lot::RwLock<crate::config::IdempotencyKeyMode>,
+    warned: Mutex<WarnedAt>,
+}
+
+impl MetaMcp {
+    pub(crate) fn set_idempotency_key_mode(&self, mode: crate::config::IdempotencyKeyMode) {
+        *self.unkeyed.mode.write() = mode;
+    }
+
+    /// Count every un-keyed admission, and warn about a MODERN one at most once
+    /// per (backend, tool) per [`UNKEYED_WARN_INTERVAL`]. Labels carry no identity.
+    fn record_unkeyed(&self, is_modern: bool, read_only: bool, (server, tool): (&str, &str)) {
+        telemetry_metrics::counter!(
+            "mcp_unkeyed_calls_total",
+            "era" => if is_modern { "modern" } else { "legacy" },
+            "gateway_read_only" => if read_only { "true" } else { "false" }
+        )
+        .increment(1);
+        if !is_modern || !first_warn(&mut self.unkeyed.warned.lock(), server, tool) {
+            return;
+        }
+        tracing::warn!(
+            backend = server,
+            tool,
+            gateway_read_only = read_only,
+            "modern tools/call admitted without an idempotency key: a re-issue after a \
+             broken stream may execute twice; set server.idempotency_key: required once \
+             clients send _meta \"io.mcp-gateway/idempotency-key\""
+        );
+    }
+}
+
+/// Whether (server, tool) is due a warn now, recording it if so.
+fn first_warn(warned: &mut WarnedAt, server: &str, tool: &str) -> bool {
+    let now = std::time::Instant::now();
+    let key = (server.to_owned(), tool.to_owned());
+    if warned
+        .get(&key)
+        .is_some_and(|last| now.duration_since(*last) < UNKEYED_WARN_INTERVAL)
+    {
+        return false;
+    }
+    // `gateway_invoke` names come from caller arguments: bound the map. Expired
+    // entries go first; a map still full of live ones loses its oldest.
+    if warned.len() >= UNKEYED_WARN_CAP {
+        warned.retain(|_, last| now.duration_since(*last) < UNKEYED_WARN_INTERVAL);
+    }
+    if warned.len() >= UNKEYED_WARN_CAP
+        && let Some(oldest) = warned
+            .iter()
+            .min_by_key(|(_, last)| **last)
+            .map(|(k, _)| k.clone())
+    {
+        warned.remove(&oldest);
+    }
+    warned.insert(key, now);
+    true
+}
+
+const UNKEYED_WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+const UNKEYED_WARN_CAP: usize = 1024;
+
+type WarnedAt = std::collections::HashMap<(String, String), std::time::Instant>;
 
 #[cfg(test)]
 #[path = "admission_tests.rs"]

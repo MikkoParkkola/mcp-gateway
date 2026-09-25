@@ -362,6 +362,8 @@ pub struct MetaMcp {
     /// storage, every constant namespace has to be revisited first.
     pub(super) execution_admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
     pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
+    /// `server.idempotency_key` and the un-keyed admission warn limit (F10).
+    pub(super) unkeyed: admission::UnkeyedPolicy,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built
@@ -625,6 +627,7 @@ impl MetaMcp {
             idempotency_cache: None,
             execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
+            unkeyed: admission::UnkeyedPolicy::default(),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,
