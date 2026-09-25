@@ -2001,6 +2001,8 @@ impl Gateway {
         // hatch is most often reached from: authentication enabled with `/mcp`
         // public, which is exactly the exposure it is suppressing. An operator
         // reading their logs then saw no sign that the control was disarmed.
+        // Mutant: the refusal is referenced but never asked.
+        let _ = support::replica_state_refusal;
         if self.config.server.allow_unauthenticated_network_bind {
             warn!(
                 host = %self.config.server.host,
