@@ -168,8 +168,7 @@ impl CapabilityWatcher {
                                                 capabilities = count,
                                                 "Hot-reload complete"
                                             );
-                                            if let Some(changes) = &changes {
-                                            }
+                                            let _ = &changes;
                                         }
                                         Err(e) => {
                                             error!(
