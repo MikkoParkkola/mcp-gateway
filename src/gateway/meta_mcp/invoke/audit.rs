@@ -76,6 +76,9 @@ impl MetaMcp {
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
+        if result.is_err() {
+            return result;
+        }
         let Some(outcome) = AuditOutcome::from_result(&result) else {
             return result;
         };
