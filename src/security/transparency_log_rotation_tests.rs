@@ -196,7 +196,11 @@ fn verify_fails_on_swapped_segment_names() {
     let r = verify(&path, false);
     assert!(!r.ok);
     let msg = r.error_message.unwrap();
-    assert!(msg.contains("segment_seq"), "the seq seam decides: {msg}");
+    // `.1` now holds segment 2: the seq seam, not the prev link, must decide.
+    assert!(
+        msg.contains("holds segment_seq Some(2)"),
+        "the seq seam decides: {msg}"
+    );
 }
 
 #[test]
