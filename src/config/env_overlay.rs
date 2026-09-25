@@ -92,6 +92,22 @@ pub struct EnvOverlay {
     /// Listed env files that did not exist. Still legal; named in any
     /// unresolved-reference error so the operator sees why a variable is unset.
     absent: Vec<PathBuf>,
+    /// Every `file:` secret the config evaluated against this overlay names,
+    /// with a SHA-256 of the value read (`None`: unreadable). Reload compares
+    /// these to report a rotated file no running holder can take (C9).
+    secret_files: SecretFileDigests,
+}
+
+/// `file:` reference paths and a digest of each value read. Never printed.
+pub(crate) type SecretFileDigests = BTreeMap<PathBuf, Option<[u8; 32]>>;
+
+/// The `env:` names and `file:` digests one evaluation recorded.
+pub(crate) type SecretRefsRead = (BTreeSet<String>, SecretFileDigests);
+
+/// SHA-256 of a secret value, kept only to compare two reads of one file.
+pub(crate) fn digest(value: &str) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(value.as_bytes()).into()
 }
 
 impl std::fmt::Debug for EnvOverlay {
@@ -101,13 +117,50 @@ impl std::fmt::Debug for EnvOverlay {
             .field("var_count", &self.vars.len())
             .field("source_count", &self.sources.len())
             .field("absent_files", &self.absent)
+            // Paths only: a digest of a short secret is a guessing oracle.
+            .field(
+                "secret_files",
+                &self.secret_files.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
 
 impl crate::personal_accounts::config::SecretOverlay for EnvOverlay {
-    fn resolve(&self, name: &str) -> Option<String> {
-        EnvOverlay::resolve(self, name)
+    fn resolve_reference(
+        &self,
+        field: &str,
+        reference: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        EnvOverlay::resolve_reference(self, field, reference)
+    }
+}
+
+impl EnvOverlay {
+    /// A whole-value secret in the one grammar (C4, C9), for callers outside
+    /// `config`: `env:NAME` looks `NAME` up (`Ok(None)` when unset), `file:PATH`
+    /// reads the file under the C2 mode rule, and anything else is the literal.
+    ///
+    /// # Errors
+    ///
+    /// The operator-facing message naming `field` and the path when a `file:`
+    /// reference cannot be read or is refused. Never contains a value.
+    pub(crate) fn resolve_reference(
+        &self,
+        field: &str,
+        reference: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        use super::secret_ref::SecretRef;
+        match SecretRef::parse(reference) {
+            SecretRef::Env(name) => Ok(self.resolve(name)),
+            SecretRef::File(path) => super::secret_ref::read_file_ref(field, path)
+                .map(Some)
+                .map_err(|error| match error {
+                    Error::ConfigValidation(message) => message,
+                    other => other.to_string(),
+                }),
+            SecretRef::Literal(text) => Ok(Some(text.to_owned())),
+        }
     }
 }
 
@@ -306,6 +359,22 @@ impl EnvOverlay {
             .get(name)
             .cloned()
             .or_else(|| std::env::var(name).ok())
+    }
+
+    /// Records the `file:` secrets a config evaluated against this overlay read.
+    pub(crate) fn record_secret_files(&mut self, files: SecretFileDigests) {
+        self.secret_files = files;
+    }
+
+    /// Each `file:` secret this evaluation read whose content differs from
+    /// what `startup` read (C9), as `file:PATH`. Named by path, never by value;
+    /// compared by digest because the path alone cannot see a rotation.
+    pub(crate) fn rotated_secret_files(&self, startup: &Self) -> Vec<String> {
+        self.secret_files
+            .iter()
+            .filter(|(path, now)| startup.secret_files.get(*path).copied().flatten() != **now)
+            .map(|(path, _)| format!("file:{}", path.display()))
+            .collect()
     }
 
     /// ` (env files listed but not found: <paths>)`, or empty when every
