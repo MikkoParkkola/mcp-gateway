@@ -815,7 +815,7 @@ printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>  # exit 0 match, 1
 `hash-key` reads the key from stdin, strips one trailing newline, and reads no config. A
 plaintext `key` field, or an `env:` variable that holds a key rather than a digest, fails the
 load with an error that names the entry or variable but never the value. See
-[UPGRADING-4.0.md](UPGRADING-4.0.md) item 39.
+[UPGRADING-4.0.md](UPGRADING-4.0.md) item 40.
 
 A gateway whose tools already require a native credential is not refused, even
 with `auth.enabled = false`: mTLS with `require_client_cert`, mTLS with a

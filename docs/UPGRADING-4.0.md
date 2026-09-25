@@ -55,7 +55,7 @@ upgrading a running deployment.
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
-| 39 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
+| 40 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -793,7 +793,7 @@ reaches one pod, and a task created on one pod is not found on another.
   the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
   per-process state".
 
-## 39. API keys are configured as sha256 digests, with optional expiry
+## 40. API keys are configured as sha256 digests, with optional expiry
 
 In 3.x `auth.api_keys[].key` held the key itself, or `env:VAR` whose value was the key. Anyone
 who could read the config, the environment or a debug log could replay it. The gateway only
@@ -828,6 +828,10 @@ ever needs the key's hash, so 4.0 stores the digest instead.
   the gateway from starting; it logs a `warn` at startup instead. Omitting `expires_at` keeps
   the 3.x behaviour. Removing or renewing a key still needs a config edit and a restart.
 - `auth.bearer_token` and `key_server.admin_token` are unchanged and still plaintext.
+- **Library API:** `ApiKeyConfig::key` is now `Option<String>` and is refused at load;
+  `ApiKeyConfig::resolve_key()` is replaced by `resolve_digest()`, which returns the 32 digest
+  bytes. `ResolvedApiKey::key` is replaced by `digest` and `expires_at`. The new
+  `mcp_gateway::config::api_key_digest_spec(&[u8])` returns the `sha256:<hex>` form.
 
 ## After upgrading
 
