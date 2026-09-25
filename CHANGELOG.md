@@ -206,6 +206,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaching these six until the corresponding feature is configured. See
   `docs/design/2026-09-16-meta-tool-surface-compaction.md`.
 
+### Removed
+
+- **The inbound WebSocket listener and `server.ws_port` (breaking).** The
+  listener only echoed text frames back; it served no MCP, ran outside the
+  Origin/Host guard and had no auth. A config that still sets `server.ws_port`
+  now fails to load with an explanation. Clients connect over HTTP
+  (`POST /mcp`) or stdio. The outbound WebSocket backend transport is
+  unchanged. See UPGRADING-4.0.md item 31.
+
 ## [4.0.0] - 2026-09-19
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). No migration edits a

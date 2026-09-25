@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29 or 30 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30 or 31 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29 and 30 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30 and 31 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -49,6 +49,7 @@ upgrading a running deployment.
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 31 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -617,6 +618,18 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
 - **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
   `GATEWAY_ATTESTATION_MODE=observe`. Deleting the variable turns attestation off.
+
+## 31. The inbound WebSocket listener is removed, and `server.ws_port` fails the load
+
+In 3.x, `server.ws_port` spawned a WebSocket listener beside the HTTP server. It only echoed
+text frames back: it never served MCP, sat outside the Origin/Host guard and had no
+authentication, so no client could reach a tool through it.
+
+- **The listener is gone.** Clients connect via stdio or HTTP (`POST /mcp`).
+- **`server.ws_port` is a retired key and refuses the load**, on start and on reload, with
+  `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0; ... Remove
+  server.ws_port. Delete the key, including a `ws_port: null` line.
+- **The outbound WebSocket client transport (`src/transport/websocket.rs`) is unchanged.**
 
 ## After upgrading
 
