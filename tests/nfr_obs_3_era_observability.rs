@@ -250,11 +250,8 @@ impl Fixture {
             headers: HashMap::default(),
             oauth: None,
             secrets: Vec::new(),
-            passthrough: false,
-            allow_cleartext_credentials: false,
-            runtime_profile: None,
-            identity_propagation: None,
-            account: None,
+            // Every other field keeps its default.
+            ..BackendConfig::default()
         };
         Backend::new(
             name,

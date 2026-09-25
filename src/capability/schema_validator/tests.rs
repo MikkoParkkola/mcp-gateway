@@ -523,3 +523,76 @@ fn coerced_args_used_in_valid_result() {
     assert_eq!(result.coerced["query"], json!("test"));
     assert_eq!(result.coerced["count"], json!(5));
 }
+
+// ── MIK-7570.SCHEMA.1 (R2) ──────────────────────────────────────────────
+
+/// R2-T7: a capability's nested object input refuses an invented key.
+#[test]
+fn capability_nested_invented_key_refused() {
+    let schema = json!({"type": "object", "properties": {"filter": {"type": "object",
+        "properties": {"from": {"type": "string"}}}}});
+    let result = validate_arguments(&json!({"filter": {"from": "a", "cc": "b"}}), &schema);
+    assert!(!result.is_valid());
+    assert_eq!(result.violations[0].param, "filter.cc");
+}
+
+/// R2-T10: at most five violations, each path at most 64 characters with no
+/// raw newline.
+#[test]
+fn refusal_text_is_bounded_and_escaped() {
+    let schema = json!({"type": "object", "properties": {"a": {"type": "string"}}});
+    let mut args = serde_json::Map::new();
+    // The long key sorts first and is inserted first, so it is among the
+    // violations shown whatever the map's ordering.
+    args.insert(format!("a\n{}", "y".repeat(10_000)), json!(1));
+    for i in 0..20 {
+        args.insert(format!("k{i}"), json!(1));
+    }
+    let result = validate_arguments(&Value::Object(args), &schema);
+    assert!(result.violations.len() <= 6, "{}", result.violations.len());
+    for v in &result.violations {
+        assert!(!v.param.contains('\n'), "raw newline in {:?}", v.param);
+        assert!(v.param.chars().count() <= 2 * 64, "{} chars", v.param.len());
+    }
+    let text = result.format_error(&schema);
+    assert!(text.len() < 4_096, "{} bytes", text.len());
+}
+
+/// N1 (capability half): admitted extras are carried into `coerced`.
+#[test]
+fn permissive_schemas_still_forward_extras() {
+    let schema = json!({"type": "object", "properties": {"q": {"type": "string"},
+        "opts": {"type": "object", "properties": {"a": {}}, "additionalProperties": true}},
+        "additionalProperties": true});
+    let args = json!({"q": "x", "extra": 1, "opts": {"a": 1, "b": 2}});
+    let result = validate_arguments(&args, &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["extra"], json!(1));
+    assert_eq!(result.coerced["opts"]["b"], json!(2));
+}
+
+/// The MCP refusal's footer lists the schema's parameters; a backend schema
+/// with hundreds of long parameters must not turn one refusal into a huge
+/// payload. Bounded like the key paths.
+#[test]
+fn mcp_refusal_text_is_bounded_for_a_huge_schema() {
+    let mut properties = serde_json::Map::new();
+    for i in 0..500 {
+        properties.insert(
+            format!("param_{i}_{}", "p".repeat(200)),
+            json!({"type": "string", "description": "d".repeat(500)}),
+        );
+    }
+    let schema = json!({"type": "object", "properties": properties});
+    let text = crate::capability::undeclared_key_refusal(
+        &json!({"invented": 1}),
+        &schema,
+        crate::config::InputSchemaEnforcement::Closed,
+    )
+    .expect("the invented key is refused");
+    assert!(text.len() <= 8 * 1024, "{} bytes", text.len());
+    assert!(
+        text.contains("invented"),
+        "the violation itself must survive the cap"
+    );
+}

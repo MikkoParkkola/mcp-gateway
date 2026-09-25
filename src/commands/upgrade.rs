@@ -235,7 +235,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The twelve 4.0.0 changes, in the order they are printed.
+/// The thirteen 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -293,15 +293,15 @@ then personal capabilities fail closed. `identity grants grant --agent` takes \
     "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set: an unset mode no longer \
 writes `attestation_observe_reject` audit lines (set `observe` to keep them), and `enforce` or \
 any unrecognised value now FAILS STARTUP instead of falling back to observe.",
+    "A tool call carrying an argument key its schema does not declare, at any depth, is \
+refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Reads nothing, because none of the twelve items depends on what the config
-/// says. It marks the webhook item as delivered so a later start does not
-/// repeat it.
-///
-/// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
+/// Reads nothing: no item depends on the config. It marks the webhook item as
+/// delivered so a later start does not repeat it. The `Result` is dictated by
+/// `Migration::apply`, not by anything this can fail at.
 #[allow(clippy::unnecessary_wraps)]
 fn migrate_4_0_0_release_notice(data_dir: &Path) -> std::io::Result<()> {
     let body = NOTICE_4_0_0_ITEMS

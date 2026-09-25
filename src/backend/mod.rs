@@ -26,6 +26,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 mod annotations;
 mod cached_metadata;
 mod era;
+mod input_keys;
 mod lifecycle;
 mod metadata;
 mod ops;

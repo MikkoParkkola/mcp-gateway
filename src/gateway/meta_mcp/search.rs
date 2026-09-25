@@ -537,7 +537,8 @@ impl MetaMcp {
                 .invoke_tool(&invoke_args, session_id, &step_caller)
                 .await
             {
-                Ok(result) => Ok(result),
+                // A tool error in the success channel is still an error.
+                Ok(result) => chain_step_result(idx, &tool_ref, result),
                 // A refusal stays a refusal. Flattening it into -32603 told
                 // the caller their chain hit an internal error when in fact
                 // they were not allowed to run that step — and it hid the
@@ -858,6 +859,26 @@ impl MetaMcp {
         self.scan_tool_list_value(&mut out);
         Ok(out)
     }
+}
+
+/// A step's result, or the chain failure for one that is `isError: true`,
+/// spelled as the error path spells it. The chain contract stops at the first
+/// error, and a tool error returned in the success channel is still one: later
+/// steps were written assuming this one ran (MIK-7570.SCHEMA.1).
+fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value> {
+    if result.get("isError").and_then(Value::as_bool) != Some(true) {
+        return Ok(result);
+    }
+    let detail: String = result["content"][0]["text"]
+        .as_str()
+        .map_or_else(|| result.to_string(), str::to_owned)
+        .chars()
+        .take(2048)
+        .collect();
+    Err(Error::json_rpc(
+        -32603,
+        format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
+    ))
 }
 
 #[cfg(test)]
