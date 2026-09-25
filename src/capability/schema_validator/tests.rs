@@ -542,10 +542,12 @@ fn capability_nested_invented_key_refused() {
 fn refusal_text_is_bounded_and_escaped() {
     let schema = json!({"type": "object", "properties": {"a": {"type": "string"}}});
     let mut args = serde_json::Map::new();
+    // The long key sorts first and is inserted first, so it is among the
+    // violations shown whatever the map's ordering.
+    args.insert(format!("a\n{}", "y".repeat(10_000)), json!(1));
     for i in 0..20 {
         args.insert(format!("k{i}"), json!(1));
     }
-    args.insert(format!("x\n{}", "y".repeat(10_000)), json!(1));
     let result = validate_arguments(&Value::Object(args), &schema);
     assert!(result.violations.len() <= 6, "{}", result.violations.len());
     for v in &result.violations {
