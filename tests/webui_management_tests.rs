@@ -121,7 +121,15 @@ async fn make_app_state(
 
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(
+        64,
+        mcp_gateway::gateway::AuthState {
+            auth_config: Arc::clone(&auth_config),
+            key_server: None,
+            dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+            tls_enabled: false,
+        },
+    ));
     let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
     let state = Arc::new(AppState {
@@ -206,7 +214,15 @@ async fn make_app_state_with_reload(
 
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(
+        64,
+        mcp_gateway::gateway::AuthState {
+            auth_config: Arc::clone(&auth_config),
+            key_server: None,
+            dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+            tls_enabled: false,
+        },
+    ));
     let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
     (

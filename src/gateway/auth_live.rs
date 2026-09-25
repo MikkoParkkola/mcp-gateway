@@ -62,3 +62,148 @@ pub(crate) async fn current_client(
         .await
         .map(|(client, _, _)| client)
 }
+
+/// Who a notification is for: callers who may access one backend, or every
+/// caller whose credential is still live.
+///
+/// An enum rather than `Option<&str>`, which reads as "no backend means
+/// everyone" at the one place that must never widen by accident.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Audience<'a> {
+    Backend(&'a str),
+    Any,
+}
+
+/// What delivery to one held credential should do now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    /// The credential is live and in scope.
+    Deliver,
+    /// The credential is live but may not access the audience's backend.
+    OutOfScope,
+    /// The credential no longer authenticates (revoked, expired, or never
+    /// presented under authentication): nothing will ever reach it.
+    Dead,
+}
+
+/// The one entitlement rule for notifications delivered after the request
+/// that opened the stream, shared by the legacy session stream and
+/// `subscriptions/listen` so the two cannot drift.
+pub(crate) async fn delivery(
+    state: &AuthState,
+    credential: Option<&HeldCredential>,
+    audience: Audience<'_>,
+) -> Delivery {
+    let _ = (state, credential, audience);
+    Delivery::Deliver
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn bearer(token: &str) -> Option<HeldCredential> {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        held_credential(&headers)
+    }
+
+    /// Authentication on, no static keys, and `key_server` issuing tokens.
+    fn authorizer(key_server: Arc<crate::key_server::KeyServer>) -> AuthState {
+        let config = crate::config::AuthConfig {
+            enabled: true,
+            ..crate::config::AuthConfig::default()
+        };
+        AuthState {
+            auth_config: Arc::new(super::super::ResolvedAuthConfig::from_config(&config)),
+            key_server: Some(key_server),
+            dashboard_bootstrap: Arc::new(super::super::DashboardBootstrap::new()),
+            tls_enabled: false,
+        }
+    }
+
+    /// A key-server temporary token for `backends`. Copied from
+    /// `webhooks/tests.rs::temporary_token`, which is private to that suite.
+    fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
+        use crate::key_server::InMemoryTokenStore;
+        use crate::key_server::oidc::VerifiedIdentity;
+        use crate::key_server::store::TokenScopes;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        crate::key_server::TemporaryToken {
+            jti: InMemoryTokenStore::generate_jti(),
+            token: InMemoryTokenStore::generate_bearer(),
+            identity: VerifiedIdentity {
+                subject: "sub".to_string(),
+                email: "user@issuer.test".to_string(),
+                name: None,
+                groups: vec![],
+                issuer: "https://issuer.test".to_string(),
+            },
+            scopes: TokenScopes {
+                backends: backends.iter().map(|b| (*b).to_string()).collect(),
+                tools: vec![],
+                rate_limit: 0,
+            },
+            iat: now,
+            exp: now + 3600,
+            client_ip: None,
+        }
+    }
+
+    // U1
+    #[tokio::test]
+    async fn delivery_is_dead_for_a_revoked_token() {
+        let key_server = Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        let (kept, revoked) = (temporary_token(&["alpha"]), temporary_token(&["alpha"]));
+        let (kept_cred, revoked_cred) = (bearer(&kept.token), bearer(&revoked.token));
+        let revoked_jti = revoked.jti.clone();
+        key_server.store.insert(kept).await;
+        key_server.store.insert(revoked).await;
+        assert!(key_server.store.revoke_by_jti(&revoked_jti).await);
+        let state = authorizer(key_server);
+
+        // Control: the same rule delivers to a token that is still live.
+        assert_eq!(
+            delivery(&state, kept_cred.as_ref(), Audience::Any).await,
+            Delivery::Deliver
+        );
+        assert_eq!(
+            delivery(&state, revoked_cred.as_ref(), Audience::Any).await,
+            Delivery::Dead
+        );
+        assert_eq!(
+            delivery(&state, None, Audience::Any).await,
+            Delivery::Dead,
+            "no credential under authentication can never be delivered to"
+        );
+    }
+
+    #[tokio::test]
+    async fn delivery_is_out_of_scope_for_a_live_token_without_the_backend() {
+        let key_server = Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        let token = temporary_token(&["alpha"]);
+        let credential = bearer(&token.token);
+        key_server.store.insert(token).await;
+        let state = authorizer(key_server);
+
+        assert_eq!(
+            delivery(&state, credential.as_ref(), Audience::Backend("alpha")).await,
+            Delivery::Deliver
+        );
+        assert_eq!(
+            delivery(&state, credential.as_ref(), Audience::Backend("beta")).await,
+            Delivery::OutOfScope
+        );
+    }
+}

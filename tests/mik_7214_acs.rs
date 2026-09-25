@@ -291,7 +291,17 @@ mod http {
         let agent_registry = Arc::new(AgentRegistry::new());
 
         // One registry, shared with the executor that publishes through it.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let subscriptions = Arc::new(SubscriptionRegistry::new(
+            64,
+            mcp_gateway::gateway::AuthState {
+                auth_config: Arc::new(mcp_gateway::gateway::auth::ResolvedAuthConfig::from_config(
+                    &config.auth,
+                )),
+                key_server: None,
+                dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+                tls_enabled: false,
+            },
+        ));
         let store_dir = tempfile::tempdir().expect("a private task-store directory");
         let (tasks, task_executor) = open_runtime(
             &store_dir.path().join("tasks"),

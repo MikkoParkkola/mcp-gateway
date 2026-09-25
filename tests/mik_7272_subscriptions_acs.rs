@@ -298,7 +298,17 @@ mod http {
         // One registry, shared between the state the router reads and the
         // executor that publishes: these cases assert on what a listener sees,
         // and two registries would strand every task notification.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let subscriptions = Arc::new(SubscriptionRegistry::new(
+            64,
+            mcp_gateway::gateway::AuthState {
+                auth_config: Arc::new(mcp_gateway::gateway::auth::ResolvedAuthConfig::from_config(
+                    &config.auth,
+                )),
+                key_server: None,
+                dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+                tls_enabled: false,
+            },
+        ));
         let store_dir = tempfile::tempdir().expect("a private task-store directory");
         let (tasks, task_executor) = open_runtime(
             &store_dir.path().join("tasks"),

@@ -560,7 +560,17 @@ mod http {
 
         // One registry, shared between the state the router reads and the
         // executor that publishes through it.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY));
+        let subscriptions = Arc::new(SubscriptionRegistry::new(
+            SUBSCRIPTION_CAPACITY,
+            mcp_gateway::gateway::AuthState {
+                auth_config: Arc::new(mcp_gateway::gateway::auth::ResolvedAuthConfig::from_config(
+                    &config.auth,
+                )),
+                key_server: None,
+                dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+                tls_enabled: false,
+            },
+        ));
         let tasks_dir = store_root.join("tasks");
         let deadline = tokio::time::Instant::now() + fixture::BOUND;
         let (tasks, task_executor) = loop {

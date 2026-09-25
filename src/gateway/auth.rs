@@ -891,6 +891,19 @@ pub struct AuthState {
     pub tls_enabled: bool,
 }
 
+#[cfg(test)]
+impl AuthState {
+    /// Authentication off and no key server: every caller is the anonymous client.
+    pub(crate) fn disabled_for_test() -> Self {
+        Self {
+            auth_config: Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default())),
+            key_server: None,
+            dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
+            tls_enabled: false,
+        }
+    }
+}
+
 /// Authentication middleware
 ///
 /// Validation order (for performance and backward compatibility):
