@@ -62,6 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each
+  webhook endpoint now gets its own per-minute budget and answers `429` past it; the
+  default is 100 per minute and `0` disables the limit. See `docs/UPGRADING-4.0.md` item 42.
+
 - **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
   discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
   is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
@@ -356,9 +360,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed the `session_sandbox` and `tunnel` modules. No configuration key reached
+  either: nothing constructed a `SandboxEnforcer` outside its own tests and a
+  benchmark, and there is no `tunnel:` section (a config that has one already
+  fails the load as an unread key). The `session_sandbox/*` benchmark group goes
+  with them. Also removed `src/gateway/ui/costs.rs`, a second `/ui/api/costs`
+  handler that no module declared, so it was never compiled.
+
 - **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
   its backend's `timeout`. A config that still sets it now fails to load with an
   explanation. See UPGRADING-4.0.md item 39.
+
 - **The inbound WebSocket listener and `server.ws_port` (breaking).** The
   listener only echoed text frames back; it served no MCP, ran outside the
   Origin/Host guard and had no auth. A config that still sets `server.ws_port`
