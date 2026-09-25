@@ -835,11 +835,16 @@
     },
     {
       "id": "MIK-7570.PAGING.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/backend/metadata.rs",
+        "src/backend/list_paging_tests.rs",
+        "src/gateway/meta_mcp/list_paging_e2e.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-25 (F3, design F3-design.md rev 3). Green CI Tests run 36114424347 at 9305f79c (pre-rebase SHA of the fix branch, on e29c4915): 5580 lib passed, 0 failed. Red first: Tests run 36114421453 at e9057f3c (pre-rebase SHA of the test commit), 11 failed, every one an F3 cell: backend::list_paging_tests cache_fill_follows_next_cursor_across_three_pages, complete_fill_clears_truncated_flag, fill_budget_expiry_keeps_pages_and_marks_truncated, mid_drain_failure_keeps_previous_catalogue, page_cap_overflow_keeps_32_pages_and_marks_truncated, repeated_cursor_stops_drain_at_first_repeat, resend_permission_spans_all_pages, resource_templates_cache_follows_next_cursor; gateway::meta_mcp::list_paging_e2e page_two_tool_is_discoverable_and_invocable_via_meta_route, surfaced_tool_on_page_two_is_listed, truncated_drain_is_a_lower_bound_until_a_complete_fill. Mechanism: drain_list_pages (src/backend/metadata.rs) follows nextCursor into one merged list, bounded by crate::backend::LIST_MAX_PAGES = 32 (also the direct route's DIRECT_LIST_MAX_PAGES), a seen-cursor set and a 120 s CACHE_LIST_DRAIN_BUDGET; a page error keeps the last complete catalogue, a structural stop keeps the fresh pages marked truncated, counted by mcp_backend_list_truncated_total{backend,reason}, and admitted counts read as AtLeast. Delete-the-branch via CI, one mutant per run, each off 9305f79c: page follow dropped, run 36114479468, 10 failed (cells #1-#7 and #9, the budget cell and the e2e lower-bound cell); counter dropped, run 36114462569, 3 failed (page_cap_overflow, repeated_cursor, fill_budget_expiry); page cap lifted to LIST_MAX_PAGES * 1000, run 36121331790, 2 failed (page_cap_overflow_keeps_32_pages_and_marks_truncated on the request-65 fixture error, truncated_drain_is_a_lower_bound_until_a_complete_fill); budget lifted to Duration::MAX, run 36121333929, 1 failed (fill_budget_expiry_keeps_pages_and_marks_truncated). Not run: seen-cursor removal alone, per-page parse, partial store on error, {} on page 1, never clearing the flag, wrong resource_templates key."
     },
     {
       "id": "MIK-7570.STDIO.1",
