@@ -103,6 +103,12 @@ impl<T> CachedMetadata<T> {
         if state.generation != generation {
             return;
         }
+        Self::store_locked(&mut state, value, on_stored);
+    }
+
+    /// The one store both writers share, run under the caller's write guard
+    /// so `on_stored`'s derived state is published with the value.
+    fn store_locked(state: &mut CachedMetadataState<T>, value: Arc<T>, on_stored: impl FnOnce()) {
         on_stored();
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
@@ -116,10 +122,7 @@ impl<T> CachedMetadata<T> {
     /// `on_stored` runs under the write guard, as in [`Self::store_if_current`].
     pub(crate) fn replace(&self, value: T, on_stored: impl FnOnce()) {
         let mut state = self.state.write();
-        on_stored();
-        state.value = Some(Arc::new(value));
-        state.cached_at = Some(Instant::now());
-        state.ever_populated = true;
+        Self::store_locked(&mut state, Arc::new(value), on_stored);
         state.generation = state.generation.wrapping_add(1);
     }
 
