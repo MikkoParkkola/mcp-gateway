@@ -453,7 +453,7 @@ fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
     match token.and_then(|t| inner.progress_destinations.get(&t)) {
         // `deliver` uses `try_send`: this runs on the I/O task, which must
         // never park on a slow caller.
-        Some(destination) => destination.deliver(notification),
+        Some(destination) => drop((destination, notification)),
         None => debug!(method = %notification.method, "Ignoring WebSocket notification"),
     }
 }
