@@ -254,3 +254,6 @@ async fn standing_of(
 
 #[path = "sso_admin_tests/cells.rs"]
 mod cells;
+
+#[path = "sso_admin_tests/admin_action.rs"]
+mod admin_action;
