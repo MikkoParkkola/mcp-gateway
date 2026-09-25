@@ -58,6 +58,10 @@ echo "BIN_351=$BIN_351 ($("$BIN_351" --version))"
 echo "BIN_400=$BIN_400 ($("$BIN_400" --version))"
 # The stamp the 4.0 binary writes is its own version (4.0.0-beta.1, 4.0.0, ...).
 VERSION_400="$("$BIN_400" --version | awk '{print $2}')"
+if [[ -z "$VERSION_400" ]]; then
+  echo "FATAL: could not read a version from $BIN_400 --version" >&2
+  exit 1
+fi
 
 # ── port selection: bind a random high port, confirm nothing is listening ──
 pick_free_port() {
@@ -326,10 +330,20 @@ else
   record "PHASE2.ACTIVE_CALLER_POST_UPGRADE" "FAIL" "gateway_invoke failed post-upgrade: $ECHO_400"
 fi
 stop_gateway "phase2-400-post-upgrade"
-if [[ -s "$AUDIT_LOG" ]] && grep -q '"schema_version":2' "$AUDIT_LOG"; then
-  record "PHASE2.AUDIT_LOG_WRITTEN" "PASS" "the tool call wrote schema_version 2 records to $AUDIT_LOG"
+# A parsed record, not a byte pattern: schema_version 2 with an `ok` outcome
+# is the echo call succeeding on 4.0 and being audited.
+if python3 - "$AUDIT_LOG" <<'PY'
+import json, sys
+try:
+    rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+except (OSError, ValueError):
+    sys.exit(1)
+sys.exit(0 if any(r.get("schema_version") == 2 and r.get("outcome") == "ok" for r in rows) else 1)
+PY
+then
+  record "PHASE2.AUDIT_LOG_WRITTEN" "PASS" "the tool call wrote a schema_version 2, outcome ok record to $AUDIT_LOG"
 else
-  record "PHASE2.AUDIT_LOG_WRITTEN" "FAIL" "no schema_version 2 record in $AUDIT_LOG"
+  record "PHASE2.AUDIT_LOG_WRITTEN" "FAIL" "no schema_version 2 record with outcome ok in $AUDIT_LOG"
 fi
 
 echo "-- phase 3: modern-off --"
