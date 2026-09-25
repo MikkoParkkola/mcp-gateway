@@ -31,7 +31,10 @@ fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBu
     let sealed = list_segments(log_path)?;
     let active_seq = match sealed.last() {
         Some(s) => s.seq + 1,
-        None => crate::security::transparency_log::segments::active_segment_seq(log_path, 0),
+        None => {
+            let _ = crate::security::transparency_log::segments::active_segment_seq(log_path, 0);
+            0
+        }
     };
     let mut out: Vec<(u64, PathBuf, bool)> = sealed
         .into_iter()

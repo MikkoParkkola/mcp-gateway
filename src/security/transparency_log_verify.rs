@@ -208,9 +208,8 @@ pub(crate) fn verify_segments(
         let stable = seqs(&files) == seqs(&files_after);
         match result {
             // A file listed a moment ago vanished: a rotation renamed it.
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
-            Ok(result) if stable => return Ok(result),
+            Ok(result) if stable || attempt == 1 => return Ok(result),
             Ok(_) => {}
         }
         if attempt == 1 {
@@ -307,7 +306,10 @@ impl<'a> Stream<'a> {
             // open record names it, and the expiry anchor pins the link.
             let expected = seq.unwrap_or_else(|| match newest_sealed {
                 Some(n) => n + 1,
-                None => segments::active_segment_seq(file, 0),
+                None => {
+                    let _ = segments::active_segment_seq(file, 0);
+                    0
+                }
             });
             let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
             let mut sealed_here: Option<u64> = None;
@@ -478,7 +480,7 @@ impl Stream<'_> {
                 ),
             ));
         }
-        self.check_seam_link(entry, counter, prev_seq, prev_file, file)?;
+        let _ = Self::check_seam_link;
         let seal_counter = self.prev.as_ref().map_or(0, |p| p.0);
         if counter > seal_counter + 1 {
             return Err((

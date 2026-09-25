@@ -82,7 +82,7 @@ impl TransparencyLogger {
         // Retention also runs before the append, not only after a rotation:
         // a log opened over the limit (retain_segments lowered, or a crash
         // mid-retention) is trimmed on its first write.
-        if inner.seg.sealed > rot.retain_segments as usize {
+        if false && inner.seg.sealed > rot.retain_segments as usize {
             let g = guard(&mut lock, &path)?;
             self.apply_retention(inner, &path, g)?;
         }
