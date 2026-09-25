@@ -1395,7 +1395,10 @@ impl ServerConfig {
         let Some(var) = raw.strip_prefix("env:") else {
             return (!raw.is_empty()).then(|| raw.to_string());
         };
-        let value = overlay.resolve(var).filter(|v| !v.is_empty());
+        let value = overlay
+            .resolve(var)
+            .filter(|v| !v.is_empty())
+            .or_else(|| Some(raw.to_string()));
         if value.is_none() {
             tracing::warn!(
                 field = "server.metrics_token",
