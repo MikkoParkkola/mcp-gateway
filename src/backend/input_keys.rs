@@ -3,9 +3,11 @@
 //! Undeclared tool-call argument keys, judged against the caller's own
 //! catalogue slot (MIK-7570.SCHEMA.1, R2).
 
+use std::sync::Arc;
+
 use serde_json::Value;
 
-use super::Backend;
+use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
 
 impl Backend {
@@ -46,5 +48,42 @@ impl Backend {
             "tool call refused: undeclared argument keys"
         );
         Some(refusal)
+    }
+
+    /// Fill this caller's catalogue slot from a `tools/list` the direct route
+    /// already drained, so the caller's later `tools/call`s are judged against
+    /// what it was shown. Without this, a caller that lists only on the direct
+    /// route reads a cold slot on every call and is forwarded unchecked.
+    ///
+    /// Fills an empty or stale slot only; a fresher discovery fill stands. A
+    /// page fetched under a caller's own credential never lands in the shared
+    /// slot, which every caller reads.
+    pub(crate) async fn remember_listed_tools(
+        &self,
+        identity_key: Option<&str>,
+        sent_caller_credential: bool,
+        tools: &[Value],
+    ) {
+        let key = self.pool_key_for(identity_key);
+        if matches!(key, PoolKey::Shared) && sent_caller_credential {
+            return;
+        }
+        let Ok(mut parsed) =
+            serde_json::from_value::<Vec<crate::protocol::Tool>>(Value::Array(tools.to_vec()))
+        else {
+            return;
+        };
+        // The same normalisation a discovery fill applies; the resend set it
+        // returns stays with discovery, so this fill grants no retries.
+        let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
+        let lease = self.begin_internal_activity_for(&key);
+        let entry = Arc::clone(lease.entry());
+        let _ = entry
+            .tools_cache
+            .get_or_fetch_shared(self.cache_ttl, || {
+                let tools = parsed.clone();
+                async move { Ok(tools) }
+            })
+            .await;
     }
 }
