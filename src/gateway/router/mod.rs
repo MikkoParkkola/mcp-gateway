@@ -395,10 +395,19 @@ pub(crate) fn create_router_with_accounts(
     // Merge RFC 9728 protected-resource metadata route (unauthenticated)
     app = app.merge(protected_resource_route);
 
-    // Merge /metrics scrape endpoint (unauthenticated — Prometheus scrapers do not send auth headers)
+    // Merge /metrics outside the auth layer: it answers only its own scrape
+    // token (`server.metrics_token`), never the admin bearer.
     #[cfg(feature = "metrics")]
     {
-        app = app.merge(Router::new().route("/metrics", get(handlers::metrics_handler)));
+        let token = startup_config
+            .server
+            .resolve_metrics_token(&startup_config.env_overlay())
+            .map(Arc::<str>::from);
+        app = app.merge(
+            Router::new()
+                .route("/metrics", get(handlers::metrics_handler))
+                .with_state(token),
+        );
     }
 
     // Merge web UI HTML route (unauthenticated — static HTML, no data)

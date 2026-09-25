@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30 and 31 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -49,6 +49,7 @@ upgrading a running deployment.
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 31 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -617,6 +618,31 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
 - **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
   `GATEWAY_ATTESTATION_MODE=observe`. Deleting the variable turns attestation off.
+
+## 31. `/metrics` requires its own scrape token
+
+In 3.x `/metrics` sat outside authentication and answered anyone who could reach the port,
+and its labels name your backends. It now answers only `Authorization: Bearer <token>` where
+the token is `server.metrics_token`, a literal or `env:VAR`, and returns 401 with
+`WWW-Authenticate: Bearer` until it is set.
+
+- **A missing `env:` variable does not stop startup.** Unset, missing or empty all mean no
+  token: the gateway starts, logs a WARN naming the field and the variable, and `/metrics`
+  answers 401. This differs from `auth.bearer_token` on purpose: a scrape credential must not
+  be able to take the gateway down.
+- **The admin bearer is refused on purpose**, and the scrape token opens nothing but
+  `/metrics`. Two credentials, two surfaces.
+- **Give Prometheus the token through a dedicated scrape job** (`authorization:
+  {type: Bearer, credentials_file: ...}`), or through the Helm chart's ServiceMonitor
+  (`metrics.serviceMonitor.enabled`, which sends it with `bearerTokenSecret`). Do not add it to
+  a generic annotation-driven `kubernetes-pods` job: that job would send the token to every
+  annotated pod in the cluster.
+- **Helm chart:** set `metrics.existingSecret` (and `metrics.secretKey`, default `token`) to
+  the Secret holding the token. The chart then renders `server.metrics_token`, the
+  `MCP_GATEWAY_METRICS_TOKEN` env reference and the `prometheus.io/*` annotations. Without it
+  the chart no longer renders those annotations, so a stock install is not scraped to `up=0`.
+- **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
+  from the optional Secret `mcp-gateway-metrics` (key `token`).
 
 ## After upgrading
 

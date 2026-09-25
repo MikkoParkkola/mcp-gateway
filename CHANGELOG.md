@@ -123,6 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no validator; set `observe` to keep the audit lines. `enforce` is refused at
   load until it covers the direct route and multi-step plans. See
   `docs/UPGRADING-4.0.md` item 30.
+- **`/metrics` requires a dedicated scrape token (breaking).** It sat outside
+  authentication and its labels name your backends. It now answers only
+  `Bearer <server.metrics_token>` and returns 401 otherwise, the admin bearer
+  included. A missing `env:` variable leaves the gateway running with
+  `/metrics` closed. The Helm chart advertises `/metrics` only when
+  `metrics.existingSecret` is set and can render a ServiceMonitor. See
+  `docs/UPGRADING-4.0.md` item 31.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept

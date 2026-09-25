@@ -22,10 +22,9 @@ spec:
       labels:
         app.kubernetes.io/name: mcp-gateway
         app.kubernetes.io/part-of: mcp-gateway-enterprise
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/path: "/metrics"
-        prometheus.io/port: "39400"
+      # No prometheus.io/* annotations: /metrics answers only the scrape token
+      # below, and a generic annotation-driven job would send that token to
+      # every annotated pod in the cluster. Scrape with a dedicated job.
     spec:
       serviceAccountName: mcp-gateway
       automountServiceAccountToken: true
@@ -74,6 +73,17 @@ spec:
                 secretKeyRef:
                   name: mcp-gateway-auth
                   key: token
+            # The ConfigMap's server.metrics_token references this. Optional:
+            # without the Secret the gateway still starts and /metrics answers
+            # 401. Create it to scrape:
+            #   kubectl create secret generic mcp-gateway-metrics \
+            #     --from-literal=token="$(openssl rand -base64 32)"
+            - name: MCP_GATEWAY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-metrics
+                  key: token
+                  optional: true
           volumeMounts:
             - name: config
               mountPath: /etc/mcp-gateway
