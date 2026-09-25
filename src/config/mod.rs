@@ -1364,7 +1364,6 @@ impl std::fmt::Debug for ServerConfig {
             .field("modern_protocol", &self.modern_protocol)
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("ws_port", &self.ws_port)
             .field("request_timeout", &self.request_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("max_body_size", &self.max_body_size)
