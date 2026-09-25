@@ -687,11 +687,18 @@
     },
     {
       "id": "MIK-7570.TRANSPORT.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/server/cleartext.rs",
+        "src/gateway/server/cleartext_tests.rs",
+        "scripts/dev/helm-chart-smoke.sh",
+        "scripts/dev/helm-kind-real-image.sh",
+        "tests/kubernetes_manifest_tests.rs",
+        "tests/compose_manifest_tests.rs"
+      ],
+      "note": "Graded 2026-09-25 (C3). With auth, agent_auth or the key server on, a non-loopback bind or public_url, and no mTLS, serve refuses to start (support::start_refusal -> cleartext::serve_refusal) and a reload into that state is refused (cleartext::reload_posture_refusal), unless server.cleartext_http is tls_terminated_upstream, host_local_publish, or cluster_internal with a public_url host of <svc>.<ns>.svc[.<server.cluster_domain>] (whole labels, stricter than the criterion's contains-.svc.); every non-refuse value WARNs on each start. Deviation: refused at serve start, not config load, because --host is applied after load (design C3). Tests in src/gateway/server/cleartext_tests.rs: auth_on_network_bind_without_tls_refused, every_credential_gate_counts, declared_public_url_counts_as_exposure, cluster_internal_requires_service_host, reload_to_public_url_refused_for_cleartext_credentials, reload_that_drops_the_service_url_is_refused, the_enterprise_alpha_configmap_starts; controls mtls_or_enum_or_loopback_passes, reload_public_url_with_mtls_passes, no_credential_is_not_this_check, cluster_internal_warning_names_the_service_host. Chart: helm_credential_mode_renders_cleartext_value, cluster_internal_renders_a_network_policy, cluster_internal_refuses_off_cluster_publishing (helm-chart-smoke.sh); the real image starts under the chart and logs the cluster_internal WARN (helm-kind-real-image.sh, Docker run 36134475487). CI: RED run 36133828166 (7 cleartext tests, the enterprise-alpha manifest test and the chart smoke failed), GREEN run 36134475820. Delete-the-branch: dropping the key_server term reddened every_credential_gate_counts (run 36139029073); neutralising the cleartext check in serve_refusal reddened five refusal tests (run 36139037519); accepting any public_url host for cluster_internal reddened cluster_internal_requires_service_host (run 36139046998). UPGRADING-4.0 item 38."
     },
     {
       "id": "MIK-7570.SECRET.1",
