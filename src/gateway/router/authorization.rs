@@ -157,12 +157,20 @@ pub(super) fn require_admin_tool_access(
 /// (one). The per-caller need is met by the level declared in each request's
 /// `_meta`. -32600 matches [`require_admin_tool_access`], so clients see one
 /// admin-denial shape. The refusal is audited here so the routes cannot drift.
+///
+/// `method` is matched case-insensitively: a backend that matches names
+/// loosely acts on `logging/SETLEVEL` as it does on the canonical name, so a
+/// case variant is the same request and must not slip past the gate. Any other
+/// method passes.
 pub(super) fn require_admin_log_level(
+    method: &str,
     client: Option<&AuthenticatedClient>,
     principal: Option<&str>,
     server: &str,
 ) -> Result<(), AuthorizationError> {
-    if CallerStanding::of_client(client) == CallerStanding::Admin {
+    if !method.eq_ignore_ascii_case("logging/setLevel")
+        || CallerStanding::of_client(client) == CallerStanding::Admin
+    {
         return Ok(());
     }
     let e = AuthorizationError::forbidden(
