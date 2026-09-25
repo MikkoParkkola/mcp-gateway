@@ -106,6 +106,8 @@ impl WsPeer {
     }
 }
 
+// The upgrade callback must return tungstenite's own (large) `ErrorResponse`.
+#[allow(clippy::result_large_err)]
 async fn serve(stream: TcpStream, behaviour: Behaviour, seen: Arc<Seen>) {
     let header_seen = Arc::clone(&seen);
     let callback = move |request: &Request, response: Response| {
@@ -141,7 +143,11 @@ async fn serve(stream: TcpStream, behaviour: Behaviour, seen: Arc<Seen>) {
             continue;
         };
         for reply in reply {
-            if write.send(Message::Text(reply.to_string().into())).await.is_err() {
+            if write
+                .send(Message::Text(reply.to_string().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -185,7 +191,8 @@ fn answer(frame: &Value, behaviour: Behaviour, seen: &Seen) -> Option<Vec<Value>
                 return None;
             }
             let token = frame["params"]["_meta"]["progressToken"].clone();
-            let echo = json!({ "wire_id": id, "token": token, "arguments": frame["params"]["arguments"] });
+            let echo =
+                json!({ "wire_id": id, "token": token, "arguments": frame["params"]["arguments"] });
             let mut frames = Vec::new();
             if !token.is_null() {
                 frames.push(json!({
@@ -204,5 +211,7 @@ fn answer(frame: &Value, behaviour: Behaviour, seen: &Seen) -> Option<Vec<Value>
             return Some(vec![json!({ "jsonrpc": "2.0", "id": id, "error": error })]);
         }
     };
-    Some(vec![json!({ "jsonrpc": "2.0", "id": id, "result": result })])
+    Some(vec![
+        json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+    ])
 }

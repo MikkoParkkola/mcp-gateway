@@ -32,6 +32,7 @@ mod metadata;
 mod ops;
 mod pool;
 mod registry;
+mod status;
 
 #[cfg(test)]
 pub(crate) use pool::PoolKey;

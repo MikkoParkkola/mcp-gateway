@@ -861,21 +861,6 @@ impl Backend {
         }
     }
 
-    /// Check if backend is running (canonical shared slot connected).
-    pub fn is_running(&self) -> bool {
-        self.pool
-            .get(&PoolKey::Shared)
-            .and_then(|entry| {
-                entry
-                    .value()
-                    .transport
-                    .read()
-                    .as_ref()
-                    .map(|t| t.is_connected())
-            })
-            .unwrap_or(false)
-    }
-
     /// Tear down the current transport (killing any child process) and start a
     /// fresh one.
     ///

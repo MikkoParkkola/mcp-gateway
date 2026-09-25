@@ -12,8 +12,9 @@
 //!   (outbound frames) using `tokio::select!`.
 //! - Pending requests are stored in a [`dashmap::DashMap`] keyed by request-id,
 //!   mirroring the stdio and HTTP transport patterns.
-//! - [`WebSocketTransport::reconnect`] tears down the existing connection and
-//!   re-establishes it to the same URL.
+//! - There is no reconnect here: on close the transport reports itself
+//!   disconnected and fails its in-flight calls, and the backend lifecycle
+//!   builds a fresh transport on the next call.
 //!
 //! # Frame model
 //!
@@ -37,7 +38,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use super::{PendingRequestGuard, Transport};
+use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
 };
@@ -47,9 +48,6 @@ use crate::{Error, Result};
 
 /// Bounded outbound queue depth.  Callers experience backpressure beyond this.
 const OUTBOUND_QUEUE_DEPTH: usize = 256;
-
-/// Default request timeout.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ── Frame types ──────────────────────────────────────────────────────────────
 
@@ -188,8 +186,8 @@ impl Default for WebSocketSession {
 struct Inner {
     /// Pending requests: request-id string → response oneshot sender.
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
-    /// Sender side of the outbound channel.  Wrapped in a Mutex so it can be
-    /// replaced on reconnect without rebuilding the Arc.
+    /// Sender side of the outbound channel. Taken on close, which ends the
+    /// I/O task.
     outbound_tx: Mutex<Option<Sender<Message>>>,
     /// Session metadata.
     session: Mutex<WebSocketSession>,
@@ -197,8 +195,9 @@ struct Inner {
     connected: AtomicBool,
     /// Monotonically-increasing request ID counter.
     request_id: AtomicU64,
-    /// Handle to the background I/O task (reader + writer loop).
-    task: Mutex<Option<JoinHandle<()>>>,
+    /// Handle to the background I/O task (reader + writer loop). A sync lock
+    /// so `Drop` can abort it.
+    task: parking_lot::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Inner {
@@ -209,7 +208,7 @@ impl Inner {
             session: Mutex::new(WebSocketSession::new()),
             connected: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
-            task: Mutex::new(None),
+            task: parking_lot::Mutex::new(None),
         })
     }
 }
@@ -228,13 +227,12 @@ impl Inner {
 /// [`OUTBOUND_QUEUE_DEPTH`].  `send` awaits when the channel is full, providing
 /// natural flow-control.
 ///
-/// ## Reconnection
+/// ## Teardown
 ///
-/// [`reconnect`] aborts the I/O task, clears pending state, resets the session,
-/// and calls `connect` again against the same URL.
+/// A failed `connect`, `close`, and `Drop` all stop the I/O task, so no socket
+/// outlives the transport that opened it.
 ///
 /// [`connect`]: WebSocketTransport::connect
-/// [`reconnect`]: WebSocketTransport::reconnect
 pub struct WebSocketTransport {
     /// WebSocket endpoint URL (`ws://` or `wss://`).
     url: String,
@@ -283,7 +281,9 @@ impl WebSocketTransport {
         protocol_version: Option<String>,
     ) -> Result<Arc<dyn Transport>> {
         let transport = Self::new(url, headers.clone(), timeout, protocol_version);
-        transport.connect().await?;
+        // Boxed: the TLS upgrade future is large, and inlining it would grow
+        // every future that can start a backend (clippy::large_futures).
+        Box::pin(transport.connect()).await?;
         Ok(transport)
     }
 
@@ -291,54 +291,67 @@ impl WebSocketTransport {
     ///
     /// # Errors
     ///
-    /// Returns an error if the TCP/TLS connection or WebSocket upgrade fails,
-    /// or if the MCP `initialize` request is rejected by the server.
+    /// Returns an error if the TCP/TLS connection or WebSocket upgrade fails
+    /// or outlasts the configured timeout, or if the MCP `initialize` request
+    /// is rejected or unanswered. A failed `initialize` closes the socket the
+    /// upgrade opened before the error is returned.
     pub async fn connect(self: &Arc<Self>) -> Result<()> {
         self.do_connect().await?;
-        self.initialize().await
-    }
-
-    /// Reconnect: tear down the existing connection then call [`connect`] again.
-    ///
-    /// Any pending requests are silently dropped (callers will receive a
-    /// channel-closed error on their `oneshot::Receiver`).
-    ///
-    /// [`connect`]: WebSocketTransport::connect
-    pub async fn reconnect(self: &Arc<Self>) -> Result<()> {
-        debug!(url = %self.url, "WebSocket reconnecting");
-
-        // Abort and drop the old I/O task.
-        if let Some(h) = self.inner.task.lock().await.take() {
-            h.abort();
+        if let Err(e) = self.initialize().await {
+            let _ = self.close().await;
+            return Err(e);
         }
-
-        // Drain the outbound channel (close it).
-        self.inner.outbound_tx.lock().await.take();
-
-        // Drop all pending request senders — callers will see channel-closed.
-        self.inner.pending.clear();
-
-        self.inner.connected.store(false, Ordering::Relaxed);
-
-        // Fresh session metadata.
-        *self.inner.session.lock().await = WebSocketSession::new();
-
-        self.connect().await
+        Ok(())
     }
 
     // ── private ──────────────────────────────────────────────────────────────
 
     /// Open the WebSocket, spawn the I/O task, wire up the outbound channel.
+    ///
+    /// The static `headers` go on the upgrade request, once. The upgrade is
+    /// bounded by the configured timeout. No log line or error carries more
+    /// of the URL than its origin: it may hold userinfo or a query token.
     async fn do_connect(self: &Arc<Self>) -> Result<()> {
         use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 
-        debug!(url = %self.url, "WebSocket connecting");
+        let origin = sanitize_url_for_diagnostics(&self.url);
+        debug!(url = %origin, "WebSocket connecting");
 
-        let (ws_stream, _response) = connect_async(&self.url)
+        let mut request = self
+            .url
+            .as_str()
+            .into_client_request()
+            .map_err(|_| Error::Transport("WebSocket connect failed: invalid ws_url".into()))?;
+        for (name, value) in &self.headers {
+            let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(value),
+            ) else {
+                // The value is a credential; name the header only.
+                return Err(Error::Transport(format!(
+                    "WebSocket connect failed: header `{name}` is not a valid HTTP header"
+                )));
+            };
+            request.headers_mut().insert(name, value);
+        }
+
+        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connect_async(request))
             .await
-            .map_err(|e| Error::Transport(format!("WebSocket connect failed: {e}")))?;
+            .map_err(|_| {
+                // The configured value, not the measured one: this text is
+                // also the breaker's `reason` label, so it must stay constant.
+                Error::Transport(format!(
+                    "WebSocket connect timed out after {:?}",
+                    self.timeout
+                ))
+            })?
+            .map_err(|e| {
+                Error::Transport(format!("WebSocket connect failed: {}", connect_error(&e)))
+            })?;
 
-        debug!(url = %self.url, "WebSocket handshake complete");
+        debug!(url = %origin, "WebSocket handshake complete");
 
         let (outbound_tx, outbound_rx) = channel::<Message>(OUTBOUND_QUEUE_DEPTH);
 
@@ -351,7 +364,7 @@ impl WebSocketTransport {
             run_io_loop(inner, ws_stream, outbound_rx).await;
         });
 
-        *self.inner.task.lock().await = Some(task);
+        *self.inner.task.lock() = Some(task);
 
         Ok(())
     }
@@ -362,7 +375,7 @@ impl WebSocketTransport {
             .request(
                 "initialize",
                 Some(serde_json::json!({
-                    "protocolVersion": PROTOCOL_VERSION,
+                    "protocolVersion": self.protocol_version.as_deref().unwrap_or(PROTOCOL_VERSION),
                     "capabilities": {},
                     "clientInfo": {
                         "name": "mcp-gateway",
@@ -383,7 +396,7 @@ impl WebSocketTransport {
         tokio::task::yield_now().await;
 
         self.inner.connected.store(true, Ordering::Relaxed);
-        debug!(url = %self.url, "WebSocket transport initialized");
+        debug!(url = %sanitize_url_for_diagnostics(&self.url), "WebSocket transport initialized");
         Ok(())
     }
 
@@ -524,6 +537,10 @@ async fn run_io_loop(
             }
         }
     }
+    // Fail in-flight calls now: their senders drop, so each caller sees
+    // "connection closed before the response arrived" instead of waiting out
+    // its timeout.
+    inner.pending.clear();
 }
 
 // ── Transport impl ────────────────────────────────────────────────────────────
@@ -549,10 +566,10 @@ impl Transport for WebSocketTransport {
         let msg = McpFrame::Request(request).to_ws_message()?;
         self.send_message(msg).await?;
 
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+        match tokio::time::timeout(self.timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(Error::Transport(
-                "WebSocket response channel closed".to_string(),
+                "WebSocket connection closed before the response arrived".to_string(),
             )),
             Err(_) => Err(Error::BackendTimeout(
                 "WebSocket request timed out".to_string(),
@@ -581,11 +598,32 @@ impl Transport for WebSocketTransport {
         self.inner.outbound_tx.lock().await.take();
 
         // Abort the task (safe to call even after it has already exited).
-        if let Some(h) = self.inner.task.lock().await.take() {
+        if let Some(h) = self.inner.task.lock().take() {
             h.abort();
         }
 
         Ok(())
+    }
+}
+
+/// A transport dropped without `close()` (a lifecycle that discards it, a
+/// start that was cancelled) must not orphan its I/O task: the task holds the
+/// socket, which the handshake credential authenticated.
+impl Drop for WebSocketTransport {
+    fn drop(&mut self) {
+        if let Some(h) = self.inner.task.lock().take() {
+            h.abort();
+        }
+    }
+}
+
+/// Render a connect failure without the request URI, which carries the query.
+fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
+    use tokio_tungstenite::tungstenite::Error as WsError;
+    match error {
+        WsError::Url(_) => "invalid ws_url".to_string(),
+        WsError::Http(response) => format!("upgrade refused with HTTP {}", response.status()),
+        other => other.to_string(),
     }
 }
 

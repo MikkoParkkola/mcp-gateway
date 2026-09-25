@@ -307,6 +307,19 @@ async fn revive_backend(
         .into_response()
 }
 
+/// The transport a PATCH asks for. A URL goes through
+/// [`TransportConfig::for_url`], so a pasted `ws://`/`wss://` URL becomes a
+/// WebSocket backend here exactly as it does on add (F17).
+fn requested_transport(command: Option<String>, url: Option<String>) -> Option<TransportConfig> {
+    command
+        .map(|command| TransportConfig::Stdio {
+            command,
+            cwd: None,
+            protocol_version: None,
+        })
+        .or_else(|| url.map(|url| TransportConfig::for_url(&url)))
+}
+
 async fn update_backend(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -351,19 +364,7 @@ async fn update_backend(
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
             }
 
-            let transport = command
-                .map(|command| TransportConfig::Stdio {
-                    command,
-                    cwd: None,
-                    protocol_version: None,
-                })
-                .or_else(|| {
-                    url.map(|http_url| TransportConfig::Http {
-                        http_url,
-                        streamable_http: false,
-                        protocol_version: None,
-                    })
-                });
+            let transport = requested_transport(command, url);
 
             let env = env.map(|env_patch| {
                 let mut merged = config
@@ -535,6 +536,22 @@ mod tests {
     fn name_at_max_length_is_accepted() {
         let exact = "a".repeat(128);
         assert!(validate_backend_name(&exact).is_ok());
+    }
+
+    // ── requested_transport (PATCH) ───────────────────────────────────────────
+
+    #[test]
+    fn a_patched_wss_url_becomes_a_websocket_backend() {
+        for url in ["wss://h/mcp", "WS://h/mcp"] {
+            match requested_transport(None, Some(url.to_string())) {
+                Some(TransportConfig::WebSocket { ws_url, .. }) => assert_eq!(ws_url, url),
+                other => panic!("{url}: expected WebSocket, got {other:?}"),
+            }
+        }
+        assert!(matches!(
+            requested_transport(None, Some("https://h/mcp".to_string())),
+            Some(TransportConfig::Http { .. })
+        ));
     }
 
     // ── resolve_transport ─────────────────────────────────────────────────────

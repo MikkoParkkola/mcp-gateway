@@ -109,8 +109,20 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Cap third-party logging that writes credentials, whatever the operator asked for.
+///
+/// tungstenite's client handshake logs the whole upgrade request at TRACE:
+/// the path with its query (`?token=`) and every header (`Authorization`).
+/// Added after the operator's directives, and for the exact module as well as
+/// its parent, so neither `RUST_LOG=trace` nor a directive naming the module
+/// can re-enable it. DEBUG stays available for handshake diagnostics.
 fn cap_handshake_logging(filter: EnvFilter) -> EnvFilter {
-    filter
+    [
+        "tungstenite::handshake=debug",
+        "tungstenite::handshake::client=debug",
+    ]
+    .into_iter()
+    .filter_map(|directive| directive.parse().ok())
+    .fold(filter, EnvFilter::add_directive)
 }
 
 /// Setup tracing/logging

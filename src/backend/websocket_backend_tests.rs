@@ -31,7 +31,12 @@ fn backend(transport: TransportConfig, timeout: Duration) -> Arc<Backend> {
         timeout,
         ..Default::default()
     };
-    Arc::new(Backend::new("rt", config, &failsafe(), Duration::from_secs(60)))
+    Arc::new(Backend::new(
+        "rt",
+        config,
+        &failsafe(),
+        Duration::from_secs(60),
+    ))
 }
 
 fn ws_backend(url: &str, timeout: Duration) -> Arc<Backend> {
@@ -57,15 +62,21 @@ fn stdio_backend(command: &str) -> Arc<Backend> {
 
 /// A credential-shaped URL for `peer`: none of these literals may surface.
 fn credentialed(peer: &WsPeer) -> String {
-    format!("ws://f17user:f17pass@127.0.0.1:{}/mcp?token=F17SECRET", peer.port)
+    format!(
+        "ws://f17user:f17pass@127.0.0.1:{}/mcp?token=F17SECRET",
+        peer.port
+    )
 }
 
 const CREDENTIALS: [&str; 3] = ["f17user", "f17pass", "F17SECRET"];
 
 async fn call(backend: &Backend, params: Value) -> crate::Result<crate::protocol::JsonRpcResponse> {
-    tokio::time::timeout(WAIT, backend.request_with_headers("tools/call", Some(params), &[], None))
-        .await
-        .expect("the call must not hang")
+    tokio::time::timeout(
+        WAIT,
+        backend.request_with_headers("tools/call", Some(params), &[], None),
+    )
+    .await
+    .expect("the call must not hang")
 }
 
 // ── T6 ───────────────────────────────────────────────────────────────────────
@@ -78,7 +89,10 @@ async fn t6_the_next_call_after_a_dropped_socket_reconnects() {
     call(&backend, json!({"name": "echo"}))
         .await
         .expect_err("the first call dies with its socket");
-    assert!(started.elapsed() < Duration::from_secs(2), "fail fast, not at the timeout");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "fail fast, not at the timeout"
+    );
     let response = call(&backend, json!({"name": "echo"}))
         .await
         .expect("the next call rebuilds the transport and succeeds");
@@ -102,8 +116,14 @@ async fn t13_t14a_a_stalled_upgrade_times_out_and_opens_the_breaker_with_its_rea
             err.to_string().contains("WebSocket connect timed out"),
             "attempt {attempt}: {err}"
         );
-        assert!(elapsed >= Duration::from_millis(900), "not before the deadline: {elapsed:?}");
-        assert!(elapsed < Duration::from_secs(5), "at the deadline: {elapsed:?}");
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "not before the deadline: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "at the deadline: {elapsed:?}"
+        );
     }
     let accepts = peer.seen.accepts.load(Ordering::SeqCst);
     let err = call(&backend, json!({"name": "echo"}))
@@ -152,14 +172,17 @@ async fn t14b_a_stdio_backend_that_cannot_spawn_opens_the_breaker_naming_the_spa
     );
 }
 
+/// Every trip path records an open event, so `None` is reached only by a
+/// breaker with no recorded trip; the refusal then keeps today's text.
 #[tokio::test]
-async fn t14c_a_breaker_that_never_opened_keeps_todays_text() {
+async fn t14c_a_breaker_with_no_recorded_trip_keeps_todays_text() {
     let backend = stdio_backend(MISSING);
-    // Forced open with no recorded open event.
-    backend.trip_circuit_breaker_for_test();
-    let err = call(&backend, json!({"name": "echo"}))
-        .await
-        .expect_err("the breaker is open");
+    let breaker = &backend.shared_entry().failsafe.circuit_breaker;
+    assert!(
+        breaker.last_open_event().is_none(),
+        "precondition: never tripped"
+    );
+    let err = Error::circuit_open("rt", breaker);
     assert_eq!(err.to_string(), "Circuit breaker open for backend 'rt'");
 }
 
@@ -196,9 +219,10 @@ async fn t15_concurrent_callers_share_one_socket_and_never_cross_answers() {
             "id": 1
         });
         async move {
-            let (fut, _rx) = crate::transport::notification_sink::scope(async move {
-                call(&backend, params).await
-            });
+            let (fut, _rx) =
+                crate::transport::notification_sink::scope(
+                    async move { call(&backend, params).await },
+                );
             (n, fut.await)
         }
     });
@@ -211,13 +235,28 @@ async fn t15_concurrent_callers_share_one_socket_and_never_cross_answers() {
             .unwrap()
             .to_string();
         let echo: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(echo["arguments"]["caller"], json!(n), "caller {n} got another's answer");
+        assert_eq!(
+            echo["arguments"]["caller"],
+            json!(n),
+            "caller {n} got another's answer"
+        );
         wire_ids.insert(echo["wire_id"].to_string());
         tokens.insert(echo["token"].to_string());
     }
-    assert_eq!(wire_ids.len(), 8, "the transport mints a distinct wire id per call");
-    assert!(!tokens.contains("1"), "the caller's token never reaches the socket");
+    assert_eq!(
+        wire_ids.len(),
+        8,
+        "the transport mints a distinct wire id per call"
+    );
+    assert!(
+        !tokens.contains("1"),
+        "the caller's token never reaches the socket"
+    );
     assert_eq!(tokens.len(), 8, "each call carries its own minted token");
     assert_eq!(peer.seen.accepts.load(Ordering::SeqCst), 1, "one socket");
-    assert_eq!(peer.seen.initialize_params.lock().len(), 1, "one initialize");
+    assert_eq!(
+        peer.seen.initialize_params.lock().len(),
+        1,
+        "one initialize"
+    );
 }

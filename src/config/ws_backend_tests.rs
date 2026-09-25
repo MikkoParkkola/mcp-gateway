@@ -73,7 +73,19 @@ fn t1_ws_url_parses_to_the_websocket_variant() {
 fn t4_cleartext_ws_with_credentials_off_host_is_refused() {
     let message = refusal(with_header(ws("ws://10.0.0.5/mcp")));
     assert!(message.contains("cleartext"), "{message}");
-    assert!(!message.contains("10.0.0.5"), "no URL in the text: {message}");
+    assert!(
+        !message.contains("10.0.0.5"),
+        "no URL in the text: {message}"
+    );
+    // Credentials in the URL itself count too, with no `headers`.
+    for url in [
+        format!("ws://user:{CANARY}@10.0.0.5/mcp"),
+        format!("ws://10.0.0.5/mcp?token={CANARY}"),
+    ] {
+        let message = refusal(ws(&url));
+        assert!(message.contains("cleartext"), "{message}");
+        assert!(!message.contains(CANARY), "no URL in the text: {message}");
+    }
 }
 
 #[test]
@@ -95,10 +107,16 @@ fn t4_empty_ws_url_is_refused_naming_the_key() {
 fn t4_non_websocket_scheme_is_refused_without_echoing_the_url() {
     let message = refusal(ws(&format!("https://user:{CANARY}@h/mcp?token={CANARY}")));
     assert!(message.contains("ws_url"), "{message}");
-    assert!(message.contains("ws://") && message.contains("wss://"), "{message}");
+    assert!(
+        message.contains("ws://") && message.contains("wss://"),
+        "{message}"
+    );
     assert!(!message.contains(CANARY), "no URL in the text: {message}");
     let unparsable = refusal(ws(&format!("not a url {CANARY}")));
-    assert!(!unparsable.contains(CANARY), "no URL in the text: {unparsable}");
+    assert!(
+        !unparsable.contains(CANARY),
+        "no URL in the text: {unparsable}"
+    );
 }
 
 // ── T5 ───────────────────────────────────────────────────────────────────────
@@ -217,8 +235,11 @@ fn t11_admin_ui_and_cli_add_store_a_pasted_wss_url_as_websocket() {
 fn load(backend_yaml: &str) -> crate::Result<Config> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
-    crate::gateway::test_helpers::write_owner_only(&path, format!("backends:\n  x:\n{backend_yaml}"))
-        .unwrap();
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        format!("backends:\n  x:\n{backend_yaml}"),
+    )
+    .unwrap();
     Config::load(Some(&path))
 }
 
@@ -233,7 +254,8 @@ fn load_refusal(backend_yaml: &str) -> String {
 fn t8_ws_url_beside_http_url_is_refused_as_read_by_another_transport() {
     let message = load_refusal("    http_url: \"https://h/mcp\"\n    ws_url: \"wss://h/mcp\"\n");
     assert!(
-        message.contains("`backends.x.ws_url` is never read: `http_url` selects the http transport"),
+        message
+            .contains("`backends.x.ws_url` is never read: `http_url` selects the http transport"),
         "{message}"
     );
 }

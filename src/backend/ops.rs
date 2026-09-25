@@ -303,7 +303,10 @@ impl Backend {
         .set(if can_proceed { 1.0_f64 } else { 0.0_f64 });
         if !can_proceed {
             tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
-            return Err(Error::circuit_open(&self.name, &entry.failsafe.circuit_breaker));
+            return Err(Error::circuit_open(
+                &self.name,
+                &entry.failsafe.circuit_breaker,
+            ));
         }
 
         // Acquire semaphore
@@ -319,7 +322,7 @@ impl Backend {
         let _activity = self.begin_activity(&key);
 
         // Ensure this slot's transport is live.
-        let transport = self.ensure_entry_started(&key).await?;
+        let transport = self.start_recorded(&key, &entry, start_time).await?;
 
         // Execute with retry
         let name = self.name.clone();
@@ -383,6 +386,22 @@ impl Backend {
         }
 
         result
+    }
+
+    /// Start (or reuse) the slot's transport, recording a failed start on the
+    /// slot's failsafe like any other failed dispatch (F17). Both the request
+    /// and the notify path start here, on every transport, so a command that
+    /// cannot spawn, a refused or stalled upgrade and a failed `initialize` all
+    /// count toward the breaker, whose refusal then names the start error.
+    async fn start_recorded(
+        &self,
+        key: &super::pool::PoolKey,
+        entry: &super::PooledEntry,
+        started_at: std::time::Instant,
+    ) -> Result<std::sync::Arc<dyn crate::transport::Transport>> {
+        self.ensure_entry_started(key).await.inspect_err(|e| {
+            self.record_dispatch_error(entry, started_at.elapsed(), e, "Start");
+        })
     }
 
     /// Record a failed dispatch against the slot's failsafe, log it, and count
@@ -535,7 +554,10 @@ impl Backend {
             )
             .set(0.0_f64);
             tracing::warn!(backend = %self.name, ?key, "Notification rejected by circuit breaker");
-            return Err(Error::circuit_open(&self.name, &entry.failsafe.circuit_breaker));
+            return Err(Error::circuit_open(
+                &self.name,
+                &entry.failsafe.circuit_breaker,
+            ));
         }
         telemetry_metrics::gauge!(
             "mcp_backend_circuit_state",
@@ -553,7 +575,7 @@ impl Backend {
         // See `request_with_headers`: client activity marking + stop protection.
         let _activity = self.begin_activity(&key);
 
-        let transport = self.ensure_entry_started(&key).await?;
+        let transport = self.start_recorded(&key, &entry, start_time).await?;
 
         let result = transport
             .notify_with_headers(method, params, identity_key)
@@ -714,51 +736,6 @@ impl Backend {
             restart_command_hint: plan.lifecycle.restart_command_hint.clone(),
             rollback_step: plan.rollback_step.clone(),
         })
-    }
-
-    /// Get circuit breaker stats for this backend's canonical Shared slot
-    /// (MIK-6735 fix 1).
-    pub fn circuit_breaker_stats(&self) -> crate::failsafe::CircuitBreakerStats {
-        self.shared_entry().failsafe.circuit_breaker.stats()
-    }
-
-    /// Drive this backend's canonical Shared-slot circuit breaker open.
-    ///
-    /// The counterpart to [`Self::reset_circuit_breaker`], for the one caller
-    /// that has decided a backend is failing without having a failed request to
-    /// show for it: the health probe's unserved escalation (MIK-7217,
-    /// OUTBOUND.2), whose evidence is a run of complete answers that served
-    /// nothing. Expressed as the configured number of failures rather than a
-    /// state write, so the breaker's own accounting - open event, failure
-    /// count, the half-open timer - stays the single description of why it is
-    /// open.
-    pub(crate) fn trip_circuit_breaker(&self, reason: &str) {
-        let entry = self.shared_entry();
-        let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
-        for _ in 0..threshold {
-            entry
-                .failsafe
-                .circuit_breaker
-                .record_failure(reason, std::time::Duration::ZERO);
-        }
-    }
-
-    /// Force this backend's canonical Shared-slot circuit breaker back to
-    /// `Closed` (MIK-5983; slot-scoped per MIK-6735 fix 1).
-    ///
-    /// Called by `gateway_revive_server` so the documented manual recovery
-    /// path also clears a tripped breaker, not just the kill switch.
-    pub fn reset_circuit_breaker(&self) {
-        self.shared_entry().failsafe.circuit_breaker.reset();
-    }
-
-    /// Whether this backend's canonical Shared-slot circuit breaker is
-    /// currently tripped (`Open` or `HalfOpen` -- i.e. not `Closed`; slot-scoped
-    /// per MIK-6735 fix 1).
-    #[must_use]
-    pub fn is_circuit_tripped(&self) -> bool {
-        self.shared_entry().failsafe.circuit_breaker.state()
-            != crate::failsafe::CircuitState::Closed
     }
 
     /// Get health metrics for this backend's canonical Shared slot (MIK-6735

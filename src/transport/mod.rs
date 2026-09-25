@@ -15,6 +15,13 @@ pub use self::http::HttpTransport;
 pub use self::stdio::{StdioTransport, isolated_package_manager_env};
 pub use self::websocket::McpFrame;
 
+/// Reduce a URL to its origin before it reaches a log line or an error string.
+/// Shared by the HTTP and WebSocket transports: either URL may carry userinfo
+/// or a query-string token.
+fn sanitize_url_for_diagnostics(raw: &str) -> String {
+    crate::security::sanitize::redact_url_for_diagnostics(raw)
+}
+
 use std::collections::HashSet;
 
 use async_trait::async_trait;

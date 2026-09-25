@@ -85,4 +85,13 @@ body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks no
 it), and a failed append refuses calls with 503 and unreadies `/readyz` until it recovers. Records \
 carry `schema_version: 2`, `who` and `outcome`, including refused and failed calls. On Kubernetes \
 the chart's audit volume is an emptyDir: set `audit.existingClaim` to keep the log.",
+    "A backend that fails to START now counts toward its circuit breaker on every transport \
+(a stdio command that cannot spawn, an HTTP or WebSocket backend that cannot connect). Once it \
+opens, callers get `Circuit breaker open ...; last failure: <the start error>` instead of the \
+start error itself. Code matching `Error::CircuitOpen(name)` must now match \
+`CircuitOpen { backend, last_failure }`.",
+    "WebSocket is a backend transport again: `ws_url: wss://...` selects it. Every caller shares \
+one socket and the one static credential in `headers`, sent on the upgrade only. `ws://` with \
+credentials to another host needs `allow_cleartext_credentials`; `oauth`, identity propagation and \
+header or query `secrets` are refused on `ws_url`.",
 ];

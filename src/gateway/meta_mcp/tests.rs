@@ -6206,7 +6206,10 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
     use crate::gateway::meta_mcp::invoke::classify_bridged_dispatch_error;
 
     for error in [
-        crate::Error::CircuitOpen { backend: "breaker open".into(), last_failure: None },
+        crate::Error::CircuitOpen {
+            backend: "breaker open".into(),
+            last_failure: None,
+        },
         crate::Error::BackendNotFound("no such backend".into()),
         crate::Error::ToolNotFound("no such tool".into()),
         crate::Error::TransportConnect("connection refused".into()),

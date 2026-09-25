@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! F17 transport rows against a real in-process peer: headers (T3), fail-fast
 //! on close (T6), configured timeout (T7), teardown on a failed start (T9),
-//! no raw URL in diagnostics (T10, T10c), protocol_version (T12).
+//! no raw URL in diagnostics (T10, T10c), `protocol_version` (T12).
 //!
 //! Timing: every row runs on the real clock. Fail-fast rows bound the wait
 //! with a wall-clock `timeout`; the fix answers in milliseconds, the mutant
@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{WebSocketTransport, Transport};
+use super::{Transport, WebSocketTransport};
 use crate::protocol::PROTOCOL_VERSION;
 use crate::transport::websocket_test_server::{Behaviour, WsPeer};
 
@@ -45,10 +45,16 @@ async fn t3_static_headers_ride_the_upgrade_request() {
         ("X-Tenant".to_string(), "acme".to_string()),
     ]);
     let t = WebSocketTransport::new(&peer.url, headers, WAIT, None);
-    tokio::time::timeout(WAIT, t.connect()).await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, t.connect())
+        .await
+        .unwrap()
+        .unwrap();
     let seen = peer.seen.upgrade_headers.lock().clone();
     assert_eq!(seen.len(), 1, "one upgrade");
-    assert_eq!(seen[0].get("authorization").map(String::as_str), Some("Bearer rt-token"));
+    assert_eq!(
+        seen[0].get("authorization").map(String::as_str),
+        Some("Bearer rt-token")
+    );
     assert_eq!(seen[0].get("x-tenant").map(String::as_str), Some("acme"));
 }
 
@@ -79,7 +85,10 @@ async fn t3_an_env_reference_in_a_header_reaches_the_upgrade_expanded() {
         &crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     );
-    tokio::time::timeout(WAIT, backend.start()).await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, backend.start())
+        .await
+        .unwrap()
+        .unwrap();
     let seen = peer.seen.upgrade_headers.lock().clone();
     assert_eq!(
         seen[0].get("authorization").map(String::as_str),
@@ -97,7 +106,10 @@ async fn t6_a_peer_that_closes_mid_call_fails_the_caller_at_once() {
     let result = tokio::time::timeout(FAST, t.request("tools/call", Some(json!({"name": "echo"}))))
         .await
         .expect("an in-flight call must fail when the socket closes, not wait out its timeout");
-    assert!(result.is_err(), "the call cannot succeed on a closed socket");
+    assert!(
+        result.is_err(),
+        "the call cannot succeed on a closed socket"
+    );
     assert!(started.elapsed() < FAST);
     assert!(!t.is_connected(), "the transport reports the loss");
 }
@@ -108,7 +120,10 @@ async fn t6_a_peer_that_closes_mid_call_fails_the_caller_at_once() {
 async fn t7_the_configured_timeout_bounds_a_request() {
     let peer = WsPeer::start(Behaviour::SilentRequests).await;
     let t = transport(&peer.url, Duration::from_secs(1));
-    tokio::time::timeout(WAIT, t.connect()).await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, t.connect())
+        .await
+        .unwrap()
+        .unwrap();
     let started = Instant::now();
     let err = tokio::time::timeout(WAIT, t.request("tools/list", None))
         .await
@@ -116,8 +131,14 @@ async fn t7_the_configured_timeout_bounds_a_request() {
         .expect_err("a silent peer times out");
     let elapsed = started.elapsed();
     assert!(matches!(err, crate::Error::BackendTimeout(_)), "{err:?}");
-    assert!(elapsed >= Duration::from_millis(900), "not before the deadline: {elapsed:?}");
-    assert!(elapsed < Duration::from_secs(5), "at the configured deadline: {elapsed:?}");
+    assert!(
+        elapsed >= Duration::from_millis(900),
+        "not before the deadline: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "at the configured deadline: {elapsed:?}"
+    );
 }
 
 // ── T9 ───────────────────────────────────────────────────────────────────────
@@ -163,7 +184,10 @@ async fn t9_an_unanswered_initialize_closes_the_socket_at_the_timeout() {
 async fn t9_dropping_a_connected_transport_without_close_closes_the_socket() {
     let peer = WsPeer::start(Behaviour::Normal).await;
     let t = transport(&peer.url, WAIT);
-    tokio::time::timeout(WAIT, t.do_connect()).await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, t.do_connect())
+        .await
+        .unwrap()
+        .unwrap();
     drop(t);
     tokio::time::timeout(FAST, peer.wait_closed(1))
         .await
@@ -176,7 +200,10 @@ async fn t9_dropping_a_connected_transport_without_close_closes_the_socket() {
 async fn t12_a_configured_protocol_version_is_sent_in_initialize() {
     let peer = WsPeer::start(Behaviour::Normal).await;
     let t = WebSocketTransport::new(&peer.url, HashMap::new(), WAIT, Some("2025-06-18".into()));
-    tokio::time::timeout(WAIT, t.connect()).await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, t.connect())
+        .await
+        .unwrap()
+        .unwrap();
     let params = peer.seen.initialize_params.lock().clone();
     assert_eq!(params[0]["protocolVersion"], json!("2025-06-18"));
 }
@@ -250,7 +277,10 @@ mod diagnostics {
 
     fn assert_clean(text: &str, secrets: &[&str]) {
         for secret in secrets {
-            assert!(!text.contains(secret), "`{secret}` leaked into diagnostics:\n{text}");
+            assert!(
+                !text.contains(secret),
+                "`{secret}` leaked into diagnostics:\n{text}"
+            );
         }
     }
 
@@ -260,15 +290,24 @@ mod diagnostics {
     fn t10_a_refused_connect_logs_and_returns_the_origin_only() {
         let (err, text) = captured("debug", async {
             let peer = WsPeer::start(Behaviour::RefuseUpgrade).await;
-            let url = format!("ws://f17user:f17pass@127.0.0.1:{}/mcp?token=F17SECRET", peer.port);
+            let url = format!(
+                "ws://f17user:f17pass@127.0.0.1:{}/mcp?token=F17SECRET",
+                peer.port
+            );
             transport(&url, WAIT)
                 .connect()
                 .await
                 .expect_err("a refused upgrade fails the connect")
                 .to_string()
         });
-        assert!(text.contains("WebSocket connecting"), "the connect line is captured:\n{text}");
-        assert!(text.contains("ws://127.0.0.1"), "the origin is logged:\n{text}");
+        assert!(
+            text.contains("WebSocket connecting"),
+            "the connect line is captured:\n{text}"
+        );
+        assert!(
+            text.contains("ws://127.0.0.1"),
+            "the origin is logged:\n{text}"
+        );
         assert_clean(&text, &["f17user", "f17pass", "F17SECRET"]);
         assert_clean(&err, &["f17user", "f17pass", "F17SECRET"]);
     }
@@ -279,8 +318,14 @@ mod diagnostics {
     fn t10_a_successful_connect_logs_the_origin_only() {
         let ((), text) = captured("debug", async {
             let peer = WsPeer::start(Behaviour::Normal).await;
-            let url = format!("ws://f17user:f17pass@127.0.0.1:{}/mcp?token=F17SECRET", peer.port);
-            transport(&url, WAIT).connect().await.expect("the peer initializes");
+            let url = format!(
+                "ws://f17user:f17pass@127.0.0.1:{}/mcp?token=F17SECRET",
+                peer.port
+            );
+            transport(&url, WAIT)
+                .connect()
+                .await
+                .expect("the peer initializes");
         });
         assert!(text.contains("WebSocket handshake complete"), "{text}");
         assert!(text.contains("WebSocket transport initialized"), "{text}");
@@ -296,12 +341,17 @@ mod diagnostics {
             log::debug!(target: "tungstenite::handshake::client", "f17 bridge control");
             let peer = WsPeer::start(Behaviour::Normal).await;
             let url = format!("ws://127.0.0.1:{}/mcp?token=F17SECRET", peer.port);
-            let headers =
-                HashMap::from([("Authorization".to_string(), "Bearer F17TOPSECRET".to_string())]);
+            let headers = HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer F17TOPSECRET".to_string(),
+            )]);
             let t = WebSocketTransport::new(&url, headers, WAIT, None);
             t.connect().await.expect("the peer initializes");
         });
-        assert!(text.contains("f17 bridge control"), "the log bridge is live:\n{text}");
+        assert!(
+            text.contains("f17 bridge control"),
+            "the log bridge is live:\n{text}"
+        );
         assert_clean(&text, &["F17SECRET", "F17TOPSECRET"]);
     }
 }

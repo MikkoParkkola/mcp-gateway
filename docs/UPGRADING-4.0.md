@@ -63,6 +63,8 @@ upgrading a running deployment.
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 41 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §41 for what is refused on `ws_url` |
+| 42 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 
 Numbers 18-20 are intentionally unused.
 
@@ -746,8 +748,8 @@ authentication, so no client could reach a tool through it.
   reload, with `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0;
   ... Remove server.ws_port. Delete the key. Like every `MCP_GATEWAY_*` variable,
   `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
-- **WebSocket is not a backend transport either.** No backend config reaches the WebSocket client
-  in `src/transport/websocket.rs`; backends use stdio, HTTP (Streamable HTTP or SSE) or A2A.
+- **Outbound WebSocket is a backend transport** (`ws_url`, see §41). Only the inbound listener is
+  removed.
 
 ## 35. A config or env file other users can read fails the load
 
@@ -1038,6 +1040,59 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 41. WebSocket backends (`ws_url`)
+
+A backend can be reached over WebSocket:
+
+```yaml
+backends:
+  realtime:
+    ws_url: "wss://rt.example.com/mcp"
+    protocol_version: "2025-11-25"   # optional
+    headers: { Authorization: "Bearer ${RT_TOKEN}" }
+    timeout: 30s
+```
+
+- **One session, one credential.** Every caller shares one socket to the backend, one MCP
+  session and the one static credential in `headers`, so the backend sees a single client. The
+  headers travel once, on the upgrade request; a rotated credential takes effect on the next
+  connect (a restart of that backend, or a reconnect after the socket drops).
+- **Credentials over `ws://`.** `ws://` to a host off this machine with any credential (`headers`,
+  `secrets`, userinfo, a query string, `oauth`) refuses the load unless the backend sets
+  `allow_cleartext_credentials`, the same rule as `http://`. `wss://` passes.
+- **Refused on `ws_url`:** `oauth` (it needs a per-request bearer the socket cannot refresh),
+  `identity_propagation`, and `secrets` with `inject_as: header` or `query`. `inject_as: argument`
+  works.
+- **Legacy handshake only.** The transport always runs `initialize`. A `protocol_version` of
+  `2026-07-28` or later on `ws_url` refuses the load, and a peer that only speaks the stateless
+  revision fails the start with "WebSocket MCP initialize failed".
+- **Public roots only.** `wss://` trusts the bundled web PKI roots; a private CA fails at start
+  with a TLS error.
+- **Bounded start.** A peer that accepts TCP and stalls the upgrade fails the call after the
+  backend `timeout`, and the failure counts toward that backend's breaker (§42).
+- **`mcp-gateway add` and the admin UI** store a pasted `ws://` or `wss://` URL as `ws_url`;
+  discovery does the same for `MCP_SERVER_*_URL` variables and client-config `url` entries.
+- **Logs.** The URL is logged by origin only. tungstenite's handshake logging is capped at DEBUG,
+  so even `RUST_LOG=trace` does not print the upgrade request with its query and headers.
+
+## 42. A backend that fails to start counts toward its circuit breaker
+
+In 3.x a start failure (a stdio command that cannot spawn, an HTTP or WebSocket backend that
+cannot connect) was returned to the caller and never recorded, so only health probes could trip
+the breaker. It now counts on every transport, on the request and the notification path. Once
+the breaker opens, callers get:
+
+```text
+Circuit breaker open for backend '<name>'; last failure: <the start error>
+```
+
+The same text reaches meta-route callers in the recovery hint. For a stdio backend the start
+error can name the configured command.
+
+**Breaking, public API:** `mcp_gateway::error::Error::CircuitOpen(String)` is now
+`CircuitOpen { backend: String, last_failure: Option<String> }`. A `match` on the old tuple
+variant no longer compiles; match `CircuitOpen { backend, .. }`.
 
 ## After upgrading
 

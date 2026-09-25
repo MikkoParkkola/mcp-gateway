@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
+  reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
+  by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket
+  drops, and never logs more of its URL than the origin. `mcp-gateway add`, the admin UI and
+  discovery store a `ws://`/`wss://` URL as `ws_url`. Refused on `ws_url`: cleartext `ws://`
+  credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
+  header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §41.
+
 ### Changed
 
 - **API keys are configured as sha256 digests, with an optional expiry
@@ -16,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
+- **Breaking: a backend that fails to start counts toward its circuit breaker, on every
+  transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
+  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §42.
+- **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
+  line prints the upgrade request with its query string and headers.
 
 ## [4.0.0-beta.1] - 2026-09-25
 

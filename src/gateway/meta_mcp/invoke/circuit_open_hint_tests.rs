@@ -16,7 +16,10 @@ fn an_open_breaker_hint_names_the_backend_and_the_last_failure() {
     let (category, detail) = classify_dispatch_error(&error);
     assert!(matches!(category, ErrorCategory::CircuitBreakerTrip));
     assert!(detail.contains("'rt'"), "{detail}");
-    assert!(detail.contains("WebSocket connect timed out after 1s"), "{detail}");
+    assert!(
+        detail.contains("WebSocket connect timed out after 1s"),
+        "{detail}"
+    );
 }
 
 #[test]

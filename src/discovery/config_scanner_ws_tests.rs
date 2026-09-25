@@ -29,7 +29,10 @@ fn an_env_var_wss_endpoint_is_discovered_as_websocket() {
         overlay,
         crate::config::ResolvedEnvFiles::default(),
     ));
-    let servers = ConfigScanner::new().with_env(env).scan_environment().unwrap();
+    let servers = ConfigScanner::new()
+        .with_env(env)
+        .scan_environment()
+        .unwrap();
     let server = servers
         .iter()
         .find(|s| s.name == "f17ws")

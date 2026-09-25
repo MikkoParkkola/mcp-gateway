@@ -1128,7 +1128,10 @@ impl Config {
         backend: &BackendConfig,
         url: &url::Url,
     ) -> Result<()> {
-        if !backend.enabled || backend.allow_cleartext_credentials || url.scheme() != "http" {
+        if !backend.enabled
+            || backend.allow_cleartext_credentials
+            || !matches!(url.scheme(), "http" | "ws")
+        {
             return Ok(());
         }
         // Loopback never leaves the machine. Decided by the classifier the
@@ -1600,7 +1603,8 @@ pub struct BackendConfig {
     pub timeout: Duration,
     /// Environment variables (for stdio).
     pub env: HashMap<String, String>,
-    /// HTTP headers (for http/sse).
+    /// HTTP headers (for http/sse). On a `ws_url` backend they go only on the
+    /// upgrade request, once per connect, never per message.
     pub headers: HashMap<String, String>,
     /// OAuth configuration (optional).
     #[serde(default)]
@@ -1621,8 +1625,8 @@ pub struct BackendConfig {
     pub passthrough: bool,
     /// Undeclared tool-call argument keys: `closed` (default), `standard`, `off`.
     pub input_schema_enforcement: InputSchemaEnforcement,
-    /// Permit this backend to carry credentials over cleartext `http://` to a
-    /// non-loopback host.
+    /// Permit this backend to carry credentials over cleartext `http://` or
+    /// `ws://` to a non-loopback host.
     ///
     /// **Security warning**: a credential sent to a non-loopback `http://`
     /// endpoint is readable by every host on the path and is replayable

@@ -96,7 +96,10 @@ pub enum Error {
     /// Carries the backend name and, once the breaker has tripped, the failure
     /// that tripped it.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000) as the
     /// JSON-RPC code for this variant.
-    #[error("Circuit breaker open for backend '{backend}'")]
+    #[error(
+        "Circuit breaker open for backend '{backend}'{}",
+        last_failure.as_ref().map(|r| format!("; last failure: {r}")).unwrap_or_default()
+    )]
     CircuitOpen {
         /// Backend whose breaker refused the call.
         backend: String,
@@ -273,10 +276,10 @@ pub enum Error {
 
 impl Error {
     /// The refusal an open breaker returns, carrying the failure that tripped it.
-    pub(crate) fn circuit_open(backend: &str, _breaker: &crate::failsafe::CircuitBreaker) -> Self {
+    pub(crate) fn circuit_open(backend: &str, breaker: &crate::failsafe::CircuitBreaker) -> Self {
         Self::CircuitOpen {
             backend: backend.to_string(),
-            last_failure: None,
+            last_failure: breaker.last_open_event().map(|event| event.reason),
         }
     }
 

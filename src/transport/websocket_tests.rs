@@ -378,5 +378,10 @@ async fn send_message_succeeds_with_live_channel() {
 }
 
 fn test_transport(url: &str) -> Arc<WebSocketTransport> {
-    WebSocketTransport::new(url, HashMap::new(), REQUEST_TIMEOUT, None)
+    WebSocketTransport::new(
+        url,
+        HashMap::new(),
+        std::time::Duration::from_secs(30),
+        None,
+    )
 }
