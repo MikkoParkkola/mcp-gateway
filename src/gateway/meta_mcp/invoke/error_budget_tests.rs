@@ -426,7 +426,7 @@ fn a_gateway_rate_limit_refusal_is_ignored_and_an_open_breaker_is_a_failure() {
         BudgetOutcome::of(&Err::<Value, _>(Error::CircuitOpen("srv".into()))),
         BudgetOutcome::Failure
     );
-    // The caller's recovery hint says "back off", not "wait for the breaker".
+    // The recovery category is RateLimited, not CircuitBreakerTrip.
     assert!(matches!(
         super::classify_dispatch_error(&Error::RateLimited("srv".into())).0,
         super::ErrorCategory::RateLimited
