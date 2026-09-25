@@ -165,6 +165,8 @@ pub struct TransparencyLogger {
     degraded: std::sync::atomic::AtomicBool,
     /// Every failed append, whatever the policy.
     append_failures: std::sync::atomic::AtomicU64,
+    /// Index of the last failure's cause (`usize::MAX` before any failure).
+    last_failure_cause: std::sync::atomic::AtomicUsize,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -260,6 +262,7 @@ impl TransparencyLogger {
             failure_policy: crate::security::audit::AuditFailurePolicy::BestEffort,
             degraded: std::sync::atomic::AtomicBool::new(false),
             append_failures: std::sync::atomic::AtomicU64::new(0),
+            last_failure_cause: std::sync::atomic::AtomicUsize::new(usize::MAX),
         })
     }
 
@@ -428,7 +431,7 @@ impl TransparencyLogger {
         resync: bool,
     ) -> io::Result<String> {
         let result = self.append_chained(fields, envelope, resync);
-        self.record_append(result.is_ok());
+        self.record_append(result.as_ref().err());
         result
     }
 

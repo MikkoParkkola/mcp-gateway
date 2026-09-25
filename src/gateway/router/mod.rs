@@ -229,13 +229,17 @@ async fn probe_ok() -> &'static str {
 /// constant, so the kubelet unreadies the pod but never restarts it.
 async fn readyz(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-) -> (axum::http::StatusCode, &'static str) {
+) -> (axum::http::StatusCode, String) {
     match &state.transparency_log {
+        // The cause is a fixed label such as `storage_full`, never a path.
         Some(log) if log.admit().await.is_err() => (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "audit log unavailable",
+            format!(
+                "audit log unavailable: {}",
+                log.last_failure_cause().unwrap_or("io_error")
+            ),
         ),
-        _ => (axum::http::StatusCode::OK, "ok"),
+        _ => (axum::http::StatusCode::OK, "ok".to_string()),
     }
 }
 

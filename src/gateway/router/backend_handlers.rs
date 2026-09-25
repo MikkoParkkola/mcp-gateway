@@ -323,81 +323,9 @@ fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIde
     )
 }
 
-/// Record an identity-propagation credential decision (`idp_mint` /
-/// `idp_refuse`) into the tamper-evident transparency log (MIK-6740, IDP4).
-///
-/// Takes the logger directly (rather than `&AppState`) so this function is
-/// independently unit-testable against a real [`crate::security::TransparencyLogger`]
-/// over a tempfile, with no need to construct a full `AppState`. `logger` is
-/// `None` when the transparency log is disabled — the call is then a no-op.
-///
-/// Redaction is the load-bearing property here: only `subject`, `backend`,
-/// `audience`, `action`, `reason`, and `timestamp` are ever passed to
-/// [`crate::security::TransparencyLogger::append_event`] — never the resolved
-/// credential header value or a raw assertion.
-///
-/// ponytail: duplicate of `identity_propagation::audit_identity_propagation`;
-/// kept in place to avoid a large-deletion refactor — dedup is follow-up debt.
-///
-/// Fail-closed hardening (mirrors `identity_propagation::audit_identity_propagation`,
-/// MIK-6740 hardening carried forward to this hand-duplicated copy): a
-/// transparency-log write failure is no longer swallowed. It is `warn!`'d AND
-/// returned as `Err(PropagationError::AuditFailed)`.
-///
-/// - **`idp_mint` callers MUST fail-closed**: propagate the `Err` and abort
-///   the mint/request. No mint without a durable audit record.
-/// - **`idp_refuse` callers**: the request is already being refused on other
-///   grounds, so the `Err` does not need to change the outcome, but MUST NOT
-///   be silently dropped (log via `tracing::warn!`).
-///
-/// `logger = None` (transparency log disabled) is `Ok(())` — a no-op, not a
-/// failure.
-///
-/// # Errors
-/// [`crate::identity_propagation::PropagationError::AuditFailed`] when
-/// [`crate::security::TransparencyLogger::append_event`] fails (e.g. disk
-/// full, permission revoked, filesystem gone read-only underneath the
-/// gateway).
-fn audit_identity_propagation(
-    logger: Option<&crate::security::TransparencyLogger>,
-    action: &'static str,
-    subject: &str,
-    backend: &str,
-    audience: Option<&str>,
-    reason: Option<&str>,
-) -> Result<(), crate::identity_propagation::PropagationError> {
-    let Some(logger) = logger else {
-        return Ok(());
-    };
-
-    let mut fields = serde_json::Map::new();
-    fields.insert("action".into(), action.into());
-    fields.insert("subject".into(), subject.into());
-    fields.insert("backend".into(), backend.into());
-    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
-    if let Some(audience) = audience {
-        fields.insert("audience".into(), audience.into());
-    }
-    if let Some(reason) = reason {
-        fields.insert("reason".into(), reason.into());
-    }
-
-    let envelope = crate::security::audit::AuditEnvelope::identity_propagation(action, subject);
-    logger
-        .append_event(fields, &envelope)
-        .map(|_| ())
-        .map_err(|e| {
-            warn!(
-                backend,
-                action, error = %e,
-                "Failed to write identity-propagation audit entry (transparency log); \
-                 fail-closed on idp_mint"
-            );
-            crate::identity_propagation::PropagationError::AuditFailed(format!(
-                "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
-            ))
-        })
-}
+// One writer for identity-propagation audit on both routes (the direct
+// route used to carry a hand copy of it).
+use crate::identity_propagation::audit_identity_propagation;
 
 /// Resolve just the identity-key session-bucket binding for a notification
 /// (MIK-6735 fix 2), WITHOUT the full propagation/OAuth-isolation enforcement

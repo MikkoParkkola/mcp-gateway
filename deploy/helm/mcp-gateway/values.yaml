@@ -52,11 +52,20 @@ podSecurityContext:
   runAsGroup: 1001
   fsGroup: 1001
 
-# Credential mode requires the audit log (UPGRADING-4.0). It is written to a
-# volume at /var/lib/mcp-gateway/audit: an emptyDir by default, which DIES WITH
-# THE POD. Set existingClaim to a PersistentVolumeClaim to keep it, or ship it
-# out with control_plane.export (SIEM). Each replica writes its own chain.
-# Mesh mode (auth off) renders no audit volume.
+# Credential mode requires the audit log (UPGRADING-4.0 item 39). It is
+# written to /var/lib/mcp-gateway/audit/transparency.jsonl on the `audit`
+# volume (any config.security.transparency_log.path is replaced by it): an
+# emptyDir by default, which DIES WITH THE POD. Set existingClaim to a
+# PersistentVolumeClaim to keep it, or ship it out with control_plane.export
+# (SIEM). Each replica writes its own chain. Mesh mode renders no audit volume.
+#
+# THE LOG IS NOT ROTATED YET (rotation is a separate item due before 4.0.0
+# final). When the volume fills, every append fails with `storage_full`: the
+# gateway answers tool calls with 503 and /readyz goes 503, until space is
+# freed. Size it for your traffic: a tool call writes one or two records of
+# roughly 1 KiB, so 1Gi holds on the order of half a million calls. Watch
+# mcp_audit_degraded and
+# mcp_audit_append_failures_total{cause="storage_full"}.
 audit:
   existingClaim: ""
   sizeLimit: 1Gi

@@ -229,6 +229,11 @@ async fn readyz_alone_recovers_after_storage_heals() {
         StatusCode::SERVICE_UNAVAILABLE,
         "degraded"
     );
+    assert_eq!(
+        fx.log.last_failure_cause(),
+        Some("io_error"),
+        "the cause is named"
+    );
     fx.log.set_append_failure_for_test(false);
     assert_eq!(
         readyz(&fx).await,

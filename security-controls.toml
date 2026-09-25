@@ -323,7 +323,7 @@ reason = "an audit record, not a refusal; its absence leaves no signal in any re
 
 [[control]]
 id = "audit-fail-closed"
-description = "with auth on, a failed audit append withholds the call's result (503/-32005), refuses later calls and the direct route, and unreadies /readyz until an append succeeds (D1-f)"
+description = "with auth on, a failed audit append withholds the call's result (503/-32005), refuses later calls and the direct route, and unreadies /readyz until an append succeeds (D1-f); enforced at src/gateway/meta_mcp/invoke/audit.rs, src/gateway/meta_mcp/response_security.rs, src/gateway/router/backend_handlers.rs and the /readyz handler in src/gateway/router/mod.rs"
 source = "src/security/transparency_log_degraded.rs"
 probe = "none"
 reason = "fires only when the log's storage fails; a live probe cannot induce that without breaking the install it probes"

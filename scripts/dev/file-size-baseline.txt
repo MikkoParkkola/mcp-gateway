@@ -32,7 +32,7 @@
 1464 src/capability/definition/tests.rs
 1462 src/idempotency.rs
 1457 src/gateway/router/backend_handlers.rs
-1482 src/security/transparency_log.rs
+1485 src/security/transparency_log.rs
 1431 src/protocol/continuation.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1407 src/capability/definition/mod.rs
@@ -40,7 +40,7 @@
 1371 src/gateway/meta_mcp/authz_tests.rs
 1357 src/capability/backend.rs
 1329 tests/security_tests.rs
-1320 tests/openwebui_adapter_config.rs
+1329 tests/openwebui_adapter_config.rs
 1332 src/commands/upgrade.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1277 src/oauth/client/mod.rs
@@ -87,7 +87,7 @@
 838 src/tool_registry.rs
 836 src/gateway/meta_mcp_helpers_chain_tests.rs
 820 src/capability/executor/mod.rs
-814 tests/gh462_config_preservation.rs
+817 tests/gh462_config_preservation.rs
 807 src/gateway/ui/mod.rs
 806 src/backend/ops.rs
 804 src/cli/subcommands.rs

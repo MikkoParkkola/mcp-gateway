@@ -718,11 +718,9 @@ mod admin_credential_tests {
         );
     }
 
-    /// D1-T12. `auth.enabled: true` with no `security.transparency_log` is
-    /// exactly what a fresh install writes today (D1-L12), and after D1-a
-    /// lands that refuses to load. Red now for a more basic reason: the
-    /// template does not turn the log on at all, so `enabled` is false even
-    /// though the config still loads. D1-e (Phase B) must make both true.
+    /// D1-T12. The starter config turns auth on, and D1-a refuses auth
+    /// without the audit log, so the template must enable the log (D1-e) for
+    /// a fresh install to load at all.
     #[test]
     fn init_config_loads_under_d1() {
         let dir = tempfile::tempdir().expect("tempdir");

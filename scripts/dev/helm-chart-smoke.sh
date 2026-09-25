@@ -273,6 +273,9 @@ claim="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml \
 claim_vol="$(grep -A3 -E '^ *- name: audit$' <<<"$claim" || true)"
 grep -qE '^ *claimName: "?x"?$' <<<"$claim_vol" || fail "audit.existingClaim does not mount the claim"
 grep -qE '^ *fsGroup: 1001$' <<<"$claim" || fail "existingClaim render lost fsGroup; uid 1001 cannot write the PVC"
+moved="$("$HELM" template t "$CHART" --show-only templates/configmap.yaml \
+  --set config.security.transparency_log.path=/tmp/elsewhere.jsonl)"
+grep -q '/tmp/elsewhere.jsonl' <<<"$moved" && fail "a configured log path moved the log off the audit volume"
 mesh_all="$("$HELM" template t "$CHART" --set auth.mode=mesh)"
 grep -q 'transparency_log' <<<"$mesh_all" && fail "mesh mode renders an audit log"
 grep -qE '^ *- name: audit$' <<<"$mesh_all" && fail "mesh mode renders an audit volume"

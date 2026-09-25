@@ -819,6 +819,16 @@ named an API-key label rather than a person and skipped every refused or failed 
   `/readyz` itself tries that probe, so a drained pod recovers without traffic; `/livez`
   stays 200, so the pod is not restarted. Watch `mcp_audit_append_failures_total` and
   `mcp_audit_degraded`. Probe records carry `type: "audit_probe"`.
+- **The log is not rotated yet, and a full volume stops the gateway.** Rotation is a separate
+  item due before 4.0.0 final. Until then, when the log's volume fills every append fails
+  with `storage_full`: tool calls get 503 and `/readyz` returns 503 (its body names the
+  cause), and the counter reads `mcp_audit_append_failures_total{cause="storage_full"}`.
+  Size the volume for your traffic: a tool call writes one or two records of roughly 1 KiB,
+  so the chart's default 1Gi holds on the order of half a million calls. Archive or export
+  the file before it fills; the gateway recovers on its own once an append succeeds. The
+  chart always writes the log to the `audit` volume, whatever
+  `config.security.transparency_log.path` says, and prints a warning at install while
+  `audit.existingClaim` is unset.
 - **Every record carries `schema_version: 2`**, plus `trace_id`, `outcome`
   (`ok`, `tool_error`, `denied`, `invalid`, `error`), `error_code` for the last three, and
   `who`: `credential_kind`, `principal` (12 hex characters of the credential's sha256),
