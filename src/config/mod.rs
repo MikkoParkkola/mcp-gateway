@@ -612,7 +612,7 @@ impl Config {
     /// verbatim: auth validation skips it too, and enabling it goes through
     /// reload, which runs this again.
     fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<BTreeSet<String>> {
-        for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
+        for (name, backend) in self.backends.iter_mut() {
             for (key, value) in &mut backend.headers {
                 *value = secret_ref::expand_field(
                     &format!("backends.{name}.headers.{key}"),
