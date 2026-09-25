@@ -30,7 +30,10 @@ spec:
       # every annotated pod in the cluster. Scrape with a dedicated job.
     spec:
       serviceAccountName: mcp-gateway
-      automountServiceAccountToken: true
+      # The gateway never calls the Kubernetes API: it has no API client, and
+      # the `kubernetes` subcommands shell out to kubectl, which the image does
+      # not carry. The reconciler Role is for wherever that CLI runs.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         # The image declares `USER gateway`, a name the kubelet cannot verify
@@ -138,5 +141,8 @@ spec:
             defaultMode: 288
         # Pod-lifetime state under HOME: it survives a container restart, and a
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
+        # Bounded like the Helm chart's stateVolume.sizeLimit: a full HOME evicts
+        # the pod instead of filling the node's disk.
         - name: state
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 1Gi
