@@ -134,6 +134,39 @@ grep -qE '^ *value: "?/var/lib/mcp-gateway"?$' <<<"$home_env" \
 grep -qE '^ *readOnlyRootFilesystem: true$' <<<"$dep" \
   || fail "readOnlyRootFilesystem is no longer true"
 
+echo "== helm_metrics_scrape_follows_secret =="
+# /metrics answers only server.metrics_token (UPGRADING-4.0 §33). Without a
+# Secret nothing advertises the endpoint, so a stock install is not scraped to
+# up=0; with one, the annotations, the env reference and the ServiceMonitor's
+# bearerTokenSecret all name that Secret.
+stock="$("$HELM" template t "$CHART" --set metrics.serviceMonitor.enabled=true)"
+grep -q 'prometheus.io/scrape' <<<"$stock" && fail "stock render advertises /metrics with no scrape token"
+grep -q '^kind: ServiceMonitor' <<<"$stock" && fail "ServiceMonitor renders with no metrics.existingSecret"
+grep -q 'MCP_GATEWAY_METRICS_TOKEN' <<<"$stock" && fail "stock render references a metrics token Secret"
+scraped="$("$HELM" template t "$CHART" --set metrics.existingSecret=scrape-sec \
+  --set metrics.secretKey=tok --set metrics.serviceMonitor.enabled=true)"
+grep -q 'prometheus.io/scrape: "true"' <<<"$scraped" || fail "annotations missing with metrics.existingSecret"
+grep -q '^kind: ServiceMonitor' <<<"$scraped" || fail "ServiceMonitor missing with metrics.existingSecret"
+monitor="$(awk '/^kind: ServiceMonitor/,0' <<<"$scraped")"
+# Captured, not piped into grep -q (SIGPIPE under pipefail, see above).
+bts="$(grep -A2 'bearerTokenSecret:' <<<"$monitor" || true)"
+grep -q 'name: "\?scrape-sec"\?' <<<"$bts" \
+  || fail "ServiceMonitor bearerTokenSecret does not name metrics.existingSecret"
+grep -q 'key: "\?tok"\?' <<<"$bts" \
+  || fail "ServiceMonitor bearerTokenSecret does not use metrics.secretKey"
+menv="$(grep -A4 'name: MCP_GATEWAY_METRICS_TOKEN' <<<"$scraped" || true)"
+grep -q 'name: "\?scrape-sec"\?' <<<"$menv" \
+  || fail "MCP_GATEWAY_METRICS_TOKEN is not read from metrics.existingSecret"
+menv="$(grep -A6 'name: MCP_GATEWAY_METRICS_TOKEN' <<<"$scraped" || true)"
+grep -q 'optional: true' <<<"$menv" \
+  || fail "a missing metrics Secret must not stop the pod (optional: true)"
+grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$scraped" \
+  || fail "rendered gateway.yaml does not set server.metrics_token"
+mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingSecret=scrape-sec \
+  --show-only templates/configmap.yaml)"
+grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$mesh" \
+  || fail "mesh mode drops server.metrics_token"
+
 echo "== helm_config_file_mode_is_readable_without_a_world_bit =="
 # CONFIG.2 refuses a config with a world bit; the projection is root-owned, so
 # the gateway reads it through fsGroup. Both defaults render, and both overrides win.

@@ -2218,3 +2218,19 @@ fn duration_serialize_rejects_sub_ms_and_over_u64_millis() {
         "mixed-seconds millis total over u64 must be a serde error"
     );
 }
+
+/// CWE-532: `ServerConfig`'s `Debug` must not print the `/metrics` scrape token.
+#[test]
+fn server_config_debug_redacts_metrics_token() {
+    const SENTINEL: &str = "scrape-token-sentinel-c7";
+    let cfg = ServerConfig {
+        metrics_token: Some(SENTINEL.to_string()),
+        ..ServerConfig::default()
+    };
+    let dbg = format!("{cfg:?}");
+    assert!(!dbg.contains(SENTINEL), "leaked metrics_token: {dbg}");
+    assert!(
+        dbg.contains("<redacted>"),
+        "missing redaction marker: {dbg}"
+    );
+}

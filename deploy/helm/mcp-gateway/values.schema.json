@@ -188,6 +188,35 @@
         }
       }
     },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "/metrics answers only server.metrics_token. Nothing advertises the endpoint until existingSecret names the Secret holding that token.",
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "description": "Secret holding the scrape token. Empty: no token, /metrics answers 401, and neither the prometheus.io annotations nor the ServiceMonitor render."
+        },
+        "secretKey": {
+          "type": "string",
+          "minLength": 1,
+          "default": "token"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Render a prometheus-operator ServiceMonitor whose endpoint sends the token via bearerTokenSecret. Needs existingSecret and the monitoring.coreos.com CRDs."
+            },
+            "interval": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "auth": {
       "type": "object",
       "description": "How this gateway proves who is calling it. A pod binds a network address, and the gateway refuses to serve a reachable tool surface that needs no credential, so exactly one of these modes is rendered.",

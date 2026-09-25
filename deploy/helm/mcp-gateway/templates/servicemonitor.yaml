@@ -1,0 +1,21 @@
+{{- /* Gated on the Secret as well as the flag: a ServiceMonitor with no
+       token would only ever record 401s. */}}
+{{- if and .Values.metrics.serviceMonitor.enabled .Values.metrics.existingSecret }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "mcp-gateway.fullname" . }}
+  labels:
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "mcp-gateway.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | default "30s" | quote }}
+      bearerTokenSecret:
+        name: {{ .Values.metrics.existingSecret | quote }}
+        key: {{ .Values.metrics.secretKey | quote }}
+{{- end }}
