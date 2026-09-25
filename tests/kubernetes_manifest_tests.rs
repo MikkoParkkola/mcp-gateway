@@ -56,10 +56,19 @@ fn crds_cover_gateway_server_policy_trustcard_and_runtime_profile() {
 fn deployment_defaults_are_ha_safe_probe_backed_and_restricted() {
     let deployment = docs(DEPLOYMENT).remove(0);
     assert_eq!(str_at(&deployment, &["kind"]), "Deployment");
-    assert_eq!(deployment["spec"]["replicas"].as_i64(), Some(2));
+    // One: key-server tokens, accounts custody and task records are per process
+    // (UPGRADING-4.0 item 37), and the modern protocol reaches the task store.
+    assert_eq!(deployment["spec"]["replicas"].as_i64(), Some(1));
+    // Recreate: the shipped config serves the modern protocol, so a surge pod
+    // would hold a second task store beside the old one (UPGRADING-4.0 item 37).
     assert_eq!(
-        deployment["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"].as_i64(),
-        Some(0)
+        str_at(&deployment, &["spec", "strategy", "type"]),
+        "Recreate"
+    );
+    assert!(
+        deployment["spec"]["strategy"]
+            .get("rollingUpdate")
+            .is_none()
     );
 
     let container = &deployment["spec"]["template"]["spec"]["containers"][0];
@@ -142,7 +151,7 @@ fn network_policy_has_ingress_and_egress_defaults() {
 fn values_expose_enterprise_boundary_human_gates_and_protected_value_provider() {
     let values: Value = serde_yaml::from_str(VALUES).expect("values parse");
     assert_eq!(values["licenseTier"].as_str(), Some("enterprise"));
-    assert_eq!(values["replicaCount"].as_i64(), Some(2));
+    assert_eq!(values["replicaCount"].as_i64(), Some(1));
     assert_eq!(values["policy"]["networkEgress"].as_str(), Some("deny_all"));
     assert_eq!(
         values["protectedValues"]["provider"].as_str(),
@@ -560,6 +569,29 @@ fn enterprise_alpha_config_loads() {
     }
 }
 
+/// Kustomize cannot template `server.replicas` from `spec.replicas`, so the
+/// declaration the startup refusal reads is kept true here instead. A config
+/// left at the default of 1 under a scaled manifest would let per-process state
+/// start on every replica unrefused.
+#[test]
+fn enterprise_alpha_declared_replicas_match_manifest() {
+    let deployment = docs(DEPLOYMENT).remove(0);
+    let config = docs(BASE_CONFIGMAP)
+        .into_iter()
+        .next()
+        .expect("configmap document");
+    let gateway: Value =
+        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+    let declared = gateway["server"]["replicas"]
+        .as_i64()
+        .expect("base/configmap.yaml must declare server.replicas");
+    assert_eq!(
+        Some(declared),
+        deployment["spec"]["replicas"].as_i64(),
+        "server.replicas must equal the Deployment's spec.replicas"
+    );
+}
+
 /// CONFIG.2: the gateway refuses a config other users can read, and the
 /// configMap projection is root-owned, so the pod reads it through `fsGroup`
 /// with no world bit. Without both the pod refuses its own config.
@@ -576,4 +608,25 @@ fn enterprise_alpha_config_is_group_readable_without_a_world_bit() {
         .expect("config volume");
     // 288 is octal 0440.
     assert_eq!(config["configMap"]["defaultMode"].as_i64(), Some(0o440));
+}
+
+/// The Gateway CRD and its example must admit the single replica the gateway
+/// requires while per-process state is on; a schema minimum of 2 forbade it.
+#[test]
+fn gateway_crd_and_example_admit_one_replica() {
+    let crd = docs(CRDS)
+        .into_iter()
+        .find(|doc| str_at(doc, &["spec", "names", "kind"]) == "Gateway")
+        .expect("Gateway CRD");
+    let replicas = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+        ["replicas"];
+    assert_eq!(replicas["minimum"].as_i64(), Some(1), "{replicas:?}");
+    assert_eq!(replicas["default"].as_i64(), Some(1), "{replicas:?}");
+    let example = docs(include_str!(
+        "../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+    ))
+    .into_iter()
+    .find(|doc| str_at(doc, &["kind"]) == "Gateway")
+    .expect("example Gateway");
+    assert_eq!(example["spec"]["replicas"].as_i64(), Some(1));
 }

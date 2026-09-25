@@ -60,3 +60,23 @@ own HOME, so it is refused at render time instead of failing in the cluster. */}
 {{ $k }}: 1001
 {{- end }}
 {{- end -}}
+
+{{/* Per-process state (UPGRADING-4.0 §37): one sentence per holder that is on,
+     or empty. The render guard (configmap.yaml) fails on it above one replica
+     and the Deployment picks Recreate on it, so the two cannot disagree. The
+     modern protocol is on unless config.server.modern_protocol is false; a
+     `default true` would replace an explicit false. */}}
+{{- define "mcp-gateway.perProcessState" -}}
+{{- $cfg := .Values.config | default dict -}}
+{{- $reasons := list -}}
+{{- if dig "key_server" "enabled" false $cfg -}}
+{{- $reasons = append $reasons "config.key_server.enabled keeps issued tokens and revocations in one process's InMemoryTokenStore; set replicaCount: 1." -}}
+{{- end -}}
+{{- if dig "accounts" "enabled" false $cfg -}}
+{{- $reasons = append $reasons "config.accounts.enabled: managed custody (accounts.deployment: single_process) holds one process's store and keys; set replicaCount: 1." -}}
+{{- end -}}
+{{- if ne (toString (dig "server" "modern_protocol" true $cfg)) "false" -}}
+{{- $reasons = append $reasons "config.server.modern_protocol (on unless set false) serves the tasks extension, and each pod has its own task store; set replicaCount: 1, or config.server.modern_protocol: false." -}}
+{{- end -}}
+{{- join " " $reasons -}}
+{{- end -}}

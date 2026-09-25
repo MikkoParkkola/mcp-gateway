@@ -8,10 +8,17 @@ spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: 10
   strategy:
+    {{- /* A surge pod beside the old one is two processes, each with its own
+           task store, tokens or custody (UPGRADING-4.0 §37). The API server
+           rejects rollingUpdate under Recreate, so the block goes with it. */}}
+    {{- if include "mcp-gateway.perProcessState" . }}
+    type: Recreate
+    {{- else }}
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+    {{- end }}
   selector:
     matchLabels:
       {{- include "mcp-gateway.selectorLabels" . | nindent 6 }}
