@@ -310,6 +310,30 @@ async fn ui_get_writes_no_record() {
         assert_eq!(status, StatusCode::OK, "{method}");
     }
     assert!(fx.entries().is_empty(), "{:#?}", fx.entries());
+    // A read needs no admission, so it is served while the log is down.
+    fx.degrade();
+    let request = axum::http::Request::get("/ui/api/config")
+        .header("authorization", format!("Bearer {}", fx.alice()))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let (status, body) = fx.send(request).await;
+    assert_eq!(status, StatusCode::OK, "a read was refused while degraded: {body}");
+}
+
+/// A non-POST mutation is recorded too: `DELETE` names its method.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn ui_delete_writes_admin_action() {
+    let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    let uri = "/ui/api/backends/alpha";
+    let (status, body) = fx.send(ui("DELETE", uri, &fx.alice(), &json!({}))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "no config path: {body}");
+    let records = fx.admin_actions();
+    assert_eq!(records.len(), 1, "{records:#?}");
+    assert_record(&records[0], "admin_ui", "error", Some(-32603));
+    assert_eq!(records[0]["route"], "/ui/api/backends/{name}");
+    assert_eq!(records[0]["method"], "DELETE");
+    assert_eq!(records[0]["http_status"], 503);
 }
 
 /// E1-T12c (amended): a control-plane POST writes one `admin_action` each,
@@ -327,6 +351,8 @@ async fn control_plane_mutation_is_recorded() {
     assert_ui_record(&entries[0], GRANTS, 409, "error", Some(-32603));
     assert_alice(&entries[0]);
     assert_ui_record(&entries[1], GRANTS, 403, "denied", Some(-32600));
+    assert_eq!(entries[1]["who"]["account"], STANDARD_KEY);
+    assert!(!fx.raw().contains(EMAIL_CANARY), "the email was logged");
 }
 
 /// E1-T12d: the route is the matched template, never the path or query.
