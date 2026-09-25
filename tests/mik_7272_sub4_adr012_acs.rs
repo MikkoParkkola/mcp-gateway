@@ -256,6 +256,7 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
         passthrough: matches!(arm, ForwardArm::Fallback),
         account: None,
         allow_cleartext_credentials: false,
+        input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
         runtime_profile: None,
         identity_propagation: None,
     };
