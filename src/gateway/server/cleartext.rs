@@ -64,7 +64,7 @@ pub(super) fn cleartext_credential_refusal(config: &Config) -> Option<String> {
         "authentication is enabled"
     } else if config.agent_auth.enabled {
         "agent_auth is enabled"
-    } else if config.key_server.enabled {
+    } else if config.key_server.enabled && config.auth.enabled {
         "the key server is enabled"
     } else {
         return None;
