@@ -27,7 +27,6 @@ pub mod provenance_eval;
 pub mod result_extractor;
 mod result_provenance;
 mod schema_bounds;
-
 pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,
     TrustAssistantPromptKind, TrustCardAssistant, TrustCardAssistantPlan,
@@ -40,6 +39,7 @@ pub use descriptor::{
 };
 pub use result_extractor::extract_row_count;
 pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
+pub(crate) use schema_bounds::closed_keys;
 pub use schema_bounds::{SchemaBounds, unresolved_refs};
 
 use inference::{
