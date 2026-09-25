@@ -29,7 +29,7 @@ The release profile applies: `lto = "thin"`, `codegen-units = 1`, `panic = "abor
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `webui` | Yes | Embedded web dashboard at `/ui` and `/dashboard` |
-| `metrics` | Yes | Prometheus metrics endpoint at `/metrics`, unauthenticated (see [Prometheus Metrics](#prometheus-metrics)) |
+| `metrics` | Yes | Prometheus metrics endpoint at `/metrics`, behind its own scrape token `server.metrics_token` (see [Prometheus Metrics](#prometheus-metrics)) |
 
 ```bash
 cargo build --release                          # Default features, including metrics
@@ -401,6 +401,8 @@ server {
     }
     location /health  { proxy_pass http://mcp_gateway; }
     location /ui      { proxy_pass http://mcp_gateway; }
+    # /metrics checks its own bearer (server.metrics_token); pass the
+    # Authorization header through. The allow-list is defence in depth.
     location /metrics {
         allow 10.0.0.0/8; deny all;
         proxy_pass http://mcp_gateway;
@@ -519,9 +521,39 @@ Includes: timestamp, level, span context, backend name, request ID, latency, cir
 
 ### Prometheus Metrics
 
-Included in a default build. Scrape `/metrics`. The endpoint is unauthenticated,
-because Prometheus scrapers do not send auth headers — keep it off the public
-internet with a firewall rule or a reverse-proxy allow-list.
+Included in a default build. `/metrics` answers only the scrape token in
+`server.metrics_token`, a literal or `env:VAR`:
+
+```yaml
+server:
+  metrics_token: env:MCP_GATEWAY_METRICS_TOKEN
+```
+
+Anything else gets 401 with `WWW-Authenticate: Bearer`, **the admin bearer
+included**, and the scrape token opens nothing but `/metrics`. Unset, or an
+`env:` variable that is missing or empty, means no token: the gateway still
+starts, logs a WARN naming the field and the variable, and `/metrics` answers
+401 to everyone. The token sits under `server`, so it survives a deployment
+with no `auth` section.
+
+Prometheus sends it natively:
+
+```yaml
+scrape_configs:
+  - job_name: mcp-gateway
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/mcp-gateway-metrics-token
+    static_configs:
+      - targets: ["mcp-gateway:39400"]
+```
+
+Use a **dedicated** job like this one. Do not put the token into a generic
+annotation-driven `kubernetes-pods` job: that job would send it to every
+annotated pod in the cluster. The Helm chart advertises `/metrics` (the
+`prometheus.io/*` annotations) only when `metrics.existingSecret` names the
+Secret holding the token, and `metrics.serviceMonitor.enabled` renders a
+prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
 
 - `mcp_gateway_requests_total` -- count per backend/tool
 - `mcp_gateway_request_duration_seconds` -- latency histogram
@@ -748,7 +780,7 @@ browser marks `Sec-Fetch-Site: cross-site` or `same-site`.
 
 A request with no `Origin` is allowed, because a non-browser MCP client never
 sends one. That is what keeps command-line clients, Prometheus scrapes of
-`/metrics`, and health probes working unchanged.
+`/metrics` (which carry their scrape token), and health probes working unchanged.
 
 The allow list is the loopback spellings of the bind address **at the bind
 port**, the configured bind address itself, and the `server.public_url` origin,

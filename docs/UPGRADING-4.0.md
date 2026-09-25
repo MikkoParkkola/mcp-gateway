@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30-32 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27 and 30-33 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -50,6 +50,7 @@ upgrading a running deployment.
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
+| 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 
 ## 1. OAuth credentials are stored per issuer
@@ -662,6 +663,33 @@ A token request whose `backends:` scope names none of the rule's backends is als
 `no_backends_granted`. Tool lists are unchanged: an empty `tools` still means every tool on the
 granted backends.
 
+## 33. `/metrics` requires its own scrape token
+
+In 3.x `/metrics` sat outside authentication and answered anyone who could reach the port,
+and its labels name your backends. It now answers only `Authorization: Bearer <token>` where
+the token is `server.metrics_token`, a literal or `env:VAR`, and returns 401 with
+`WWW-Authenticate: Bearer` until it is set. Prefer the `env:VAR` form, so the token stays out of
+the config file. The token is resolved at startup: setting or changing it takes effect after a
+restart, not on a config reload.
+
+- **A missing `env:` variable does not stop startup.** Unset, missing or empty all mean no
+  token: the gateway starts, logs a WARN naming the field and the variable, and `/metrics`
+  answers 401. This differs from `auth.bearer_token` on purpose: a scrape credential must not
+  be able to take the gateway down.
+- **The admin bearer is refused on purpose**, and the scrape token opens nothing but
+  `/metrics`. Two credentials, two surfaces.
+- **Give Prometheus the token through a dedicated scrape job** (`authorization:
+  {type: Bearer, credentials_file: ...}`), or through the Helm chart's ServiceMonitor
+  (`metrics.serviceMonitor.enabled`, which sends it with `bearerTokenSecret`). Do not add it to
+  a generic annotation-driven `kubernetes-pods` job: that job would send the token to every
+  annotated pod in the cluster.
+- **Helm chart:** set `metrics.existingSecret` (and `metrics.secretKey`, default `token`) to
+  the Secret holding the token. The chart then renders `server.metrics_token`, the
+  `MCP_GATEWAY_METRICS_TOKEN` env reference and the `prometheus.io/*` annotations. Without it
+  the chart no longer renders those annotations, so a stock install is not scraped to `up=0`.
+- **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
+  from the optional Secret `mcp-gateway-metrics` (key `token`).
+
 ## 34. A config or env file other users can read fails the load
 
 In 3.x a config file readable by other local accounts drew one WARN in the HTTP startup banner,
@@ -688,8 +716,15 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   Without them the projection is `root:root 0644` and is refused. If you run another UID, or a mesh
   injects its own group, override both values together.
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
-- **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode. Either
-  `chmod 600` it and `chown 1001` it, or `chmod 640` it with group 1001.
+- **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
+  container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
+  user is. `chmod 640` with group 1001 passes only while the file's owner is not UID 1001, because
+  group read on a file the gateway owns is refused.
+- **The fix the error names depends on ownership.** On a file the gateway owns it is
+  `chmod 600`. On a file another user owns, `chmod 600` would lock the gateway out, so it names
+  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
+- **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
+  gateway then reads, so a file swapped or loosened in between is not loaded.
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.

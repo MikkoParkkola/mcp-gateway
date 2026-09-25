@@ -50,6 +50,9 @@ observability:
   metrics:
     enabled: true
     path: /metrics
+    # Secret holding server.metrics_token; /metrics answers 401 without it.
+    existingSecret: mcp-gateway-metrics
+    secretKey: token
   otel:
     enabled: false
     endpoint: ""

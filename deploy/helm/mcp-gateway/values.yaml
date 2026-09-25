@@ -127,6 +127,24 @@ logging:
   format: json
   level: info
 
+# /metrics answers only the scrape token in server.metrics_token, never the auth
+# bearer. Name the Secret holding it here; until then /metrics answers 401 and
+# the chart advertises nothing, so a stock install is not scraped to up=0.
+#
+#   kubectl create secret generic mcp-gateway-metrics \
+#     --from-literal=token="$(openssl rand -base64 32)"
+#
+# With a Secret, the pod carries prometheus.io/* annotations. Point only a
+# DEDICATED scrape job at them: a generic annotation-driven kubernetes-pods job
+# would send this token to every annotated pod in the cluster. Or enable the
+# ServiceMonitor (prometheus-operator), which sends it via bearerTokenSecret.
+metrics:
+  existingSecret: ""
+  secretKey: token
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+
 # HTTP /livez and /readyz probes. Default on. Disable only for images that don't
 # serve them (e.g. lifecycle/CI tests with a placeholder image).
 probes:

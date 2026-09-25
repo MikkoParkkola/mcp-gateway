@@ -1264,8 +1264,8 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-/// Server configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Server configuration. `Debug` is manual so `metrics_token` is redacted.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
     /// Serve requests written against MCP revision 2026-07-28.
@@ -1329,6 +1329,15 @@ pub struct ServerConfig {
     /// Whether a modern `tools/call` must carry `_meta`
     /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §28).
     pub idempotency_key: IdempotencyKeyMode,
+    /// Bearer token a scraper presents to `/metrics` (UPGRADING-4.0 §33): a
+    /// literal or `env:VAR`, resolved by [`ServerConfig::resolve_metrics_token`].
+    /// Under `server`, not `auth`, because a mesh deployment has no `auth`
+    /// section and still needs scraping. The admin bearer never opens
+    /// `/metrics`, and this token never opens anything else. It serializes only
+    /// for the config-file round trip (`config_persistence::write_config`),
+    /// which must keep it; any new export of this struct must redact it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_token: Option<String>,
 }
 
 /// `server.idempotency_key`: see [`ServerConfig::idempotency_key`].
@@ -1357,7 +1366,56 @@ impl Default for ServerConfig {
             public_url: None,
             allow_unauthenticated_network_bind: false,
             idempotency_key: IdempotencyKeyMode::Optional,
+            metrics_token: None,
         }
+    }
+}
+
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("modern_protocol", &self.modern_protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("ws_port", &self.ws_port)
+            .field("request_timeout", &self.request_timeout)
+            .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("max_body_size", &self.max_body_size)
+            .field("public_url", &self.public_url)
+            .field(
+                "allow_unauthenticated_network_bind",
+                &self.allow_unauthenticated_network_bind,
+            )
+            .field("idempotency_key", &self.idempotency_key)
+            .field(
+                "metrics_token",
+                &self.metrics_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+impl ServerConfig {
+    /// The `/metrics` scrape token; `None` admits no scraper. Never an error,
+    /// unlike `auth.bearer_token`: a scrape credential must not be able to
+    /// stop startup, so a missing or empty `env:` variable logs a WARN and
+    /// yields `None`. The unresolved `env:` spelling is never returned.
+    #[must_use]
+    pub fn resolve_metrics_token(&self, overlay: &EnvOverlay) -> Option<String> {
+        let raw = self.metrics_token.as_deref()?;
+        let Some(var) = raw.strip_prefix("env:") else {
+            return (!raw.is_empty()).then(|| raw.to_string());
+        };
+        let value = overlay.resolve(var).filter(|v| !v.is_empty());
+        if value.is_none() {
+            tracing::warn!(
+                field = "server.metrics_token",
+                variable = var,
+                "server.metrics_token references an unset or empty environment variable; \
+                 /metrics answers 401 until it is set and the gateway restarted"
+            );
+        }
+        value
     }
 }
 
