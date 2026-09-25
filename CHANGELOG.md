@@ -106,9 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Helm chart pins its pod identity and bounds its scratch volume.**
   `podSecurityContext.runAsUser`, `runAsGroup` and `fsGroup` render as 1001, the
-  image's gateway user, and any other value, root included, fails `helm
-  template`. The `state` emptyDir carries `sizeLimit` from
-  `stateVolume.sizeLimit` (default `1Gi`). The enterprise-alpha Deployment no
+  image's gateway user, and the values schema refuses any other value, root
+  included, so `helm lint` and `helm template` fail. The `state` emptyDir
+  carries `sizeLimit` from `stateVolume.sizeLimit` (default `1Gi`), and
+  enterprise-alpha's carries the same `1Gi`. The enterprise-alpha Deployment no
   longer mounts a service account token: the gateway never calls the
   Kubernetes API. The kind real-image check now sends an MCP `initialize` and
   a tool listing and requires a JSON-RPC result.

@@ -138,5 +138,8 @@ spec:
             defaultMode: 288
         # Pod-lifetime state under HOME: it survives a container restart, and a
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
+        # Bounded like the Helm chart's stateVolume.sizeLimit: a full HOME evicts
+        # the pod instead of filling the node's disk.
         - name: state
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 1Gi

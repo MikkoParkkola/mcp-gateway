@@ -769,9 +769,10 @@ These need no action and have no startup notice.
 - **The Helm chart's `state` volume is capped, and its pod identity is fixed.** The
   emptyDir under HOME now has a `sizeLimit` of `1Gi`; a pod whose task store and npm/uv
   caches outgrow it is evicted and restarts empty. Raise it with
-  `--set stateVolume.sizeLimit=4Gi`. `podSecurityContext.runAsUser`, `runAsGroup` and
-  `fsGroup` accept only 1001, the image's UID/GID, and any other value, root included, fails
-  the render; item 35's config read relies on that `fsGroup`. enterprise-alpha stops mounting a service
+  `--set stateVolume.sizeLimit=4Gi`; enterprise-alpha's `base/deployment.yaml` carries the same
+  `1Gi`. `podSecurityContext.runAsUser`, `runAsGroup` and
+  `fsGroup` accept only 1001, the image's UID/GID: the values schema refuses any other value,
+  root included, so `helm lint` and `helm template` fail; item 35's config read relies on that `fsGroup`. enterprise-alpha stops mounting a service
   account token; run `mcp-gateway kubernetes` from a place that has kubectl credentials.
 
 ## Rolling back

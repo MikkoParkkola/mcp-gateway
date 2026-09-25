@@ -103,15 +103,18 @@
       "properties": {
         "runAsUser": {
           "type": "integer",
-          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render."
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render.",
+          "const": 1001
         },
         "runAsGroup": {
           "type": "integer",
-          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render."
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render.",
+          "const": 1001
         },
         "fsGroup": {
           "type": "integer",
-          "description": "Must be 1001, the image's gateway GID; any other value fails the render. The gateway reads its root-owned config through this group (CONFIG.2)."
+          "description": "Must be 1001, the image's gateway GID; any other value fails the render. The gateway reads its root-owned config through this group (CONFIG.2).",
+          "const": 1001
         }
       }
     },
