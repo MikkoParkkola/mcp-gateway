@@ -127,6 +127,8 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
 const MAX_KEY_VIOLATIONS: usize = 5;
 /// Longest key path echoed back, in characters, before escaping.
 const MAX_KEY_PATH_CHARS: usize = 64;
+/// Longest MCP refusal text, in bytes.
+const MAX_REFUSAL_BYTES: usize = 4096;
 
 /// [`validate_arguments`] under an explicit enforcement mode (MIK-7570.SCHEMA.1).
 ///
@@ -175,7 +177,19 @@ pub(crate) fn undeclared_key_refusal(
         violations: key_violations(&faults, input_schema),
         coerced: Value::Null,
     };
-    Some(result.format_error(input_schema))
+    let mut text = result.format_error(input_schema);
+    // The footer lists a backend's own parameters; a schema with hundreds of
+    // them must not make one refusal a huge payload. The violations come
+    // first, so the cut only ever shortens the list.
+    if text.len() > MAX_REFUSAL_BYTES {
+        let mut cut = MAX_REFUSAL_BYTES;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+        text.push_str("\n... (parameter list truncated)");
+    }
+    Some(text)
 }
 
 /// Bounded, escaped violations: at most five, each path cut to 64 characters
