@@ -131,10 +131,13 @@ impl KeyServerConfig {
     /// # Errors
     ///
     /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
-    pub fn resolve_admin_token(&self) -> Result<Option<String>> {
+    pub fn resolve_admin_token(
+        &self,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Option<String>> {
         self.admin_token.as_ref().map_or(Ok(None), |t| {
             crate::config::secret_ref::SecretRef::parse(t)
-                .resolve("key_server.admin_token", &crate::config::EnvOverlay::none())
+                .resolve("key_server.admin_token", overlay)
                 .map(Some)
         })
     }

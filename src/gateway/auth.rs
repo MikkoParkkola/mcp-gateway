@@ -153,9 +153,14 @@ impl ResolvedAuthConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if any `env:VAR_NAME` secret reference cannot be resolved.
-    pub fn try_from_config(config: &AuthConfig) -> Result<Self> {
-        let bearer_token = config.resolve_bearer_token()?;
+    /// Returns an error if any `env:VAR_NAME` secret reference cannot be
+    /// resolved in `overlay` (the env files the config was loaded with, then
+    /// the process environment).
+    pub fn try_from_config(
+        config: &AuthConfig,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Self> {
+        let bearer_token = config.resolve_bearer_token(overlay)?;
         // An empty credential compares equal to an empty presented token, so it
         // is refused here, where the comparator is built, for every caller (C4).
         if bearer_token.as_deref() == Some("") {
@@ -186,7 +191,7 @@ impl ResolvedAuthConfig {
             .api_keys
             .iter()
             .map(|k| {
-                let key = k.resolve_key()?;
+                let key = k.resolve_key(overlay)?;
                 if key.is_empty() {
                     return Err(crate::Error::ConfigValidation(format!(
                         "auth.api_keys['{}'].key is empty.",
@@ -236,7 +241,8 @@ impl ResolvedAuthConfig {
     /// paths should prefer [`Self::try_from_config`] so the error is returned.
     #[must_use]
     pub fn from_config(config: &AuthConfig) -> Self {
-        Self::try_from_config(config).expect("auth config secret references should resolve")
+        Self::try_from_config(config, &crate::config::EnvOverlay::none())
+            .expect("auth config secret references should resolve")
     }
 
     /// Check if a path is public (bypasses auth)
@@ -1139,7 +1145,7 @@ mod tests {
             bearer_token: Some(String::new()),
             ..AuthConfig::default()
         };
-        let err = ResolvedAuthConfig::try_from_config(&config)
+        let err = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
             .expect_err("an empty bearer would match an empty presented token");
         assert!(err.to_string().contains("empty"), "got: {err}");
     }
