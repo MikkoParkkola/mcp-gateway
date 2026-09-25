@@ -300,3 +300,32 @@ fn refused_call_is_not_counted_as_an_invocation() {
         "the counter is not observable here"
     );
 }
+
+/// R2-T13 (counter half): the unchecked forward of a cold slot is counted.
+#[cfg(feature = "metrics")]
+#[test]
+fn cold_slot_forward_is_counted() {
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    telemetry_metrics::with_local_recorder(&recorder, || {
+        runtime.block_on(async {
+            let fx = fixture(BackendConfig::default(), false).await;
+            let _ = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
+            assert_eq!(fx.calls.lock().len(), 1, "a cold slot must forward");
+        });
+    });
+    let rendered = handle.render();
+    let label = concat!("input_schema_", "unknown");
+    assert!(
+        rendered
+            .lines()
+            .any(|l| l.starts_with("mcp_input_schema_events_total")
+                && l.contains(label)
+                && !l.ends_with(" 0")),
+        "the unchecked forward was not counted: {rendered}"
+    );
+}
