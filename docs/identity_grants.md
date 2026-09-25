@@ -119,9 +119,13 @@ Every `auth.api_keys` entry must have a non-empty `name`, unique across the
 list, because that name is the key's grant identity. Config load refuses a
 missing or duplicated name.
 
-`agent: {exact: AGENT_ID}` matches only a caller with a proven agent id, which
-only mTLS and agent-JWT callers have. An API-key caller has none, so an
-API-key grant uses `agent: any`.
+`agent: !exact {source: mtls|jwt, id: AGENT_ID}` (JSON:
+`"agent": {"exact": {"source": ..., "id": ...}}`) matches only a caller whose
+agent id was proven by that source: `mtls` takes the first SAN URI, else the
+bare CN; `jwt` takes the agent's `client_id`. Only mTLS and agent-JWT callers
+have a proven agent id. An API-key caller has none, so an API-key grant uses
+`agent: any`. A bare `!exact AGENT_ID` from 3.x is refused at load; see
+`UPGRADING-4.0.md` item 27.
 
 `capability` is the capability's `name`. `tool` is optional; for a capability
 tool it is the same name, so leave it out.
@@ -209,8 +213,8 @@ mcp-gateway identity grants grant \
 ```
 
 `--subject` takes `AUTHORITY:SUBJECT` from the table above. Pass
-`--agent AGENT_ID` instead of `--any-agent` only for mTLS or agent-JWT callers,
-the ones that carry a proven agent id. The command rejects duplicate grant ids unless `--replace` is
+`--agent mtls:AGENT_ID` or `--agent jwt:AGENT_ID` instead of `--any-agent` only
+for mTLS or agent-JWT callers, the ones that carry a proven agent id. The command rejects duplicate grant ids unless `--replace` is
 passed. If `--owner` is omitted, the owner defaults to the subject so the common
 "user grants access to their own personal capability" flow does not require
 extra fields.
