@@ -45,7 +45,7 @@ use jsonwebtoken::{
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::config::{KeyServerOidcConfig, KeyServerProviderConfig};
+use crate::config::{KeyServerOidcConfig, KeyServerProviderConfig, TokenAgeCap};
 
 /// Error variants for OIDC verification failures.
 #[derive(Debug, thiserror::Error)]
@@ -335,6 +335,13 @@ impl OidcVerifier {
         }
     }
 
+    /// A verifier for Cloudflare Access assertions: one provider whose issuer
+    /// is `https://<team_domain>` and whose keys are the team's certs.
+    #[must_use]
+    pub fn cloudflare_access(config: &crate::config::CloudflareAccessConfig) -> Self {
+        Self::new(vec![cloudflare_access_provider(config)])
+    }
+
     /// Test-only constructor injecting a custom HTTP client into the JWKS
     /// cache. See [`JwksCache::with_http_client`] — same MIK-6729 rationale.
     #[cfg(test)]
@@ -378,18 +385,20 @@ impl OidcVerifier {
             warn!(issuer = %provider.issuer, "OIDC issuer is not HTTPS");
         }
 
-        // Replay protection: check token age against max_token_age
-        let max_age_secs = config.max_token_age_secs;
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-        let iat_ago = now_secs.saturating_sub(unverified_claims.iat);
-        if iat_ago > max_age_secs {
-            return Err(OidcError::TokenTooOld {
-                iat_ago,
-                max: max_age_secs,
-            });
+        // Replay protection: check token age against the caller's cap. The
+        // `ExpOnly` arm leaves `exp` (checked in `decode` below) as the bound.
+        if let TokenAgeCap::MaxIat(max_age_secs) = config.token_age {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_secs();
+            let iat_ago = now_secs.saturating_sub(unverified_claims.iat);
+            if iat_ago > max_age_secs {
+                return Err(OidcError::TokenTooOld {
+                    iat_ago,
+                    max: max_age_secs,
+                });
+            }
         }
 
         // Get kid from header (clone so `header` stays intact for build_validation)
@@ -522,6 +531,23 @@ fn find_key_in_jwks(jwks: &JwkSet, kid: &str) -> Option<DecodingKey> {
         };
     }
     None
+}
+
+/// The single provider an Access assertion is verified against. The certs
+/// path and issuer shape are Cloudflare's published ones; `team_domain` is a
+/// bare host by config validation.
+pub(crate) fn cloudflare_access_provider(
+    config: &crate::config::CloudflareAccessConfig,
+) -> KeyServerProviderConfig {
+    let issuer = format!("https://{}", config.team_domain);
+    KeyServerProviderConfig {
+        jwks_uri: Some(format!("{issuer}/cdn-cgi/access/certs")),
+        issuer,
+        discovery_url: None,
+        auto_discover: false,
+        audiences: config.audiences.clone(),
+        allowed_domains: Vec::new(),
+    }
 }
 
 /// Build a [`Validation`] from the JWT header algorithm.

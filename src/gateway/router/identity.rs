@@ -6,10 +6,14 @@
 //! (`backend_handlers`), so both resolve one caller the same way. `pub(super)`:
 //! nothing outside `router` needs the resolver.
 
-use axum::http::HeaderMap;
+use std::net::SocketAddr;
 
+use axum::http::{HeaderMap, StatusCode};
+
+use crate::config::{CallerIdentityConfig, CallerIdentityMode};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
+use crate::key_server::OidcVerifier;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 
@@ -19,16 +23,74 @@ const HEADER_GATEWAY_IDENTITY_LABEL: &str = "x-gateway-identity-label";
 const HEADER_GATEWAY_IDENTITY_SUBJECT: &str = "x-gateway-identity-subject";
 const HEADER_CF_ACCESS_EMAIL: &str = "cf-access-authenticated-user-email";
 const HEADER_CF_ACCESS_USER_ID: &str = "cf-access-authenticated-user-id";
+const HEADER_CF_ACCESS_JWT: &str = "cf-access-jwt-assertion";
 const HEADER_IDENTITY_MAX_LEN: usize = 512;
 
-pub(super) fn caller_grant_subject(
+/// Why a request's identity headers were refused. Each maps to one status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(dead_code, reason = "constructed once the header checks land")]
+pub(super) enum IdentityHeaderRefusal {
+    /// `trusted_proxy`: an identity header from a peer not in `trusted_proxies`.
+    UntrustedPeer,
+    /// `X-Gateway-Identity` or `X-Gateway-Identity-Authority`, both removed.
+    RemovedHeader,
+    /// Repeated, not UTF-8, or over 512 bytes.
+    Malformed,
+    /// `cloudflare_access`: an `X-Gateway-Identity-*` header.
+    WrongModeHeader,
+    /// `cloudflare_access`: user headers with no assertion, or a bad assertion.
+    AccessAssertion,
+}
+
+impl IdentityHeaderRefusal {
+    pub(super) const fn status(self) -> StatusCode {
+        match self {
+            Self::UntrustedPeer => StatusCode::FORBIDDEN,
+            Self::RemovedHeader | Self::Malformed | Self::WrongModeHeader => {
+                StatusCode::BAD_REQUEST
+            }
+            Self::AccessAssertion => StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    pub(super) const fn reason(self) -> &'static str {
+        match self {
+            Self::UntrustedPeer => "untrusted_peer",
+            Self::RemovedHeader => "removed_header",
+            Self::Malformed => "malformed",
+            Self::WrongModeHeader => "wrong_mode_header",
+            Self::AccessAssertion => "access_assertion",
+        }
+    }
+}
+
+/// The HTTP answer to a refused identity header. The header value is never
+/// echoed: the reason names the rule, not the input.
+pub(super) fn identity_refusal_response(
+    refusal: IdentityHeaderRefusal,
+) -> (StatusCode, axum::Json<serde_json::Value>) {
+    super::helpers::build_http_error_response(
+        None,
+        -32600,
+        format!("caller identity header refused: {}", refusal.reason()),
+        refusal.status(),
+    )
+}
+
+/// Resolve the caller's grant subject. Precedence: verified OIDC > header
+/// identity > mTLS > OAuth agent.
+pub(super) async fn caller_grant_subject(
     verified_identity: Option<&VerifiedIdentity>,
     headers: &HeaderMap,
-    trust_identity_headers: bool,
+    peer: Option<SocketAddr>,
+    config: &CallerIdentityConfig,
+    access_verifier: Option<&OidcVerifier>,
     cert_identity: Option<&CertIdentity>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
-) -> Option<GrantSubject> {
-    verified_identity
+) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+    let _ = (peer, access_verifier, HEADER_CF_ACCESS_JWT);
+    let trust_identity_headers = config.mode != CallerIdentityMode::Off;
+    Ok(verified_identity
         .and_then(grant_subject_from_verified_identity)
         .or_else(|| {
             trust_identity_headers
@@ -36,7 +98,7 @@ pub(super) fn caller_grant_subject(
                 .flatten()
         })
         .or_else(|| cert_identity.and_then(grant_subject_from_cert_identity))
-        .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent))
+        .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent)))
 }
 
 /// Build the grant subject an OIDC-verified caller is authorized as.
@@ -128,58 +190,5 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod caller_identity_tests {
-    use super::*;
-
-    #[test]
-    fn trusted_identity_headers_are_ignored_until_enabled() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HEADER_GATEWAY_IDENTITY, "user-123".parse().unwrap());
-
-        let subject = caller_grant_subject(None, &headers, false, None, None);
-
-        assert!(subject.is_none());
-    }
-
-    #[test]
-    fn trusted_identity_headers_build_grant_subject_when_enabled() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HEADER_GATEWAY_IDENTITY_SUBJECT, "user-123".parse().unwrap());
-        headers.insert(
-            HEADER_GATEWAY_IDENTITY_AUTHORITY,
-            "cloudflare_access".parse().unwrap(),
-        );
-        headers.insert(
-            HEADER_GATEWAY_IDENTITY_LABEL,
-            "owner@example.com".parse().unwrap(),
-        );
-
-        let subject = caller_grant_subject(None, &headers, true, None, None).unwrap();
-
-        assert_eq!(subject.authority, "cloudflare_access");
-        assert_eq!(subject.subject, "user-123");
-        assert_eq!(subject.label.as_deref(), Some("owner@example.com"));
-    }
-
-    #[test]
-    fn verified_identity_precedes_trusted_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HEADER_GATEWAY_IDENTITY_SUBJECT,
-            "spoofed-user".parse().unwrap(),
-        );
-        let verified = VerifiedIdentity {
-            subject: "oidc-subject".to_string(),
-            email: "owner@example.com".to_string(),
-            name: Some("Owner".to_string()),
-            groups: Vec::new(),
-            issuer: "https://issuer.example".to_string(),
-        };
-
-        let subject = caller_grant_subject(Some(&verified), &headers, true, None, None).unwrap();
-
-        assert_eq!(subject.authority, "https://issuer.example");
-        assert_eq!(subject.subject, "oidc-subject");
-        assert_eq!(subject.label.as_deref(), Some("owner@example.com"));
-    }
-}
+#[path = "identity_header_tests.rs"]
+mod tests;

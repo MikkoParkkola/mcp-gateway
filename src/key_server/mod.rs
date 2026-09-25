@@ -136,7 +136,7 @@ impl KeyServer {
         token: &str,
     ) -> Option<(AuthenticatedClient, VerifiedIdentity)> {
         let oidc_config = KeyServerOidcConfig {
-            max_token_age_secs: self.config.max_oidc_token_age_secs,
+            token_age: crate::config::TokenAgeCap::MaxIat(self.config.max_oidc_token_age_secs),
         };
         let identity = match self.oidc.verify(token, &oidc_config).await {
             Ok(id) => id,
