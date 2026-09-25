@@ -110,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks one). An `env:` variable must hold the digest, not the key. The
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
-  `docs/UPGRADING-4.0.md` item 39.
+  `docs/UPGRADING-4.0.md` item 40.
 - **The Helm chart pins its pod identity and bounds its scratch volume
   (breaking).**
   `podSecurityContext.runAsUser`, `runAsGroup` and `fsGroup` render as 1001, the
