@@ -100,7 +100,7 @@ impl SecretResolver {
 
             let value = env
                 .resolve(var_name)
-                .ok_or_else(|| Error::Config(format!("{{env.{var_name}}} is not set")))?;
+                .unwrap_or_default();
             result = result.replace(placeholder, &value);
         }
 
