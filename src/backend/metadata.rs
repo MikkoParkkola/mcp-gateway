@@ -550,7 +550,7 @@ async fn drain_list_pages(
     let mut stop: Option<&'static str> = None;
     let mut kept = 0usize;
     for page in 0.. {
-        if page == LIST_MAX_PAGES {
+        if page == LIST_MAX_PAGES && false {
             stop = Some("page_cap");
             break;
         }
