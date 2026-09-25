@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Authentication configuration for gateway access.
 
-use std::env;
-
 use serde::{Deserialize, Serialize};
 
 use super::failsafe::CircuitBreakerConfig;
@@ -206,14 +204,10 @@ impl AuthConfig {
                         random_bytes
                     )
                 )))
-            } else if let Some(var_name) = token.strip_prefix("env:") {
-                env::var(var_name).map(Some).map_err(|_| {
-                    Error::ConfigValidation(format!(
-                        "auth.bearer_token references missing environment variable '{var_name}'"
-                    ))
-                })
             } else {
-                Ok(Some(token.clone()))
+                crate::config::secret_ref::SecretRef::parse(token)
+                    .resolve("auth.bearer_token", &crate::config::EnvOverlay::none())
+                    .map(Some)
             }
         })
     }
@@ -254,15 +248,10 @@ impl ApiKeyConfig {
     ///
     /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
     pub fn resolve_key(&self) -> Result<String> {
-        if let Some(var_name) = self.key.strip_prefix("env:") {
-            env::var(var_name).map_err(|_| {
-                Error::ConfigValidation(format!(
-                    "auth.api_keys[].key references missing environment variable '{var_name}'"
-                ))
-            })
-        } else {
-            Ok(self.key.clone())
-        }
+        crate::config::secret_ref::SecretRef::parse(&self.key).resolve(
+            &format!("auth.api_keys['{}'].key", self.name),
+            &crate::config::EnvOverlay::none(),
+        )
     }
 }
 
@@ -355,15 +344,12 @@ impl AgentDefinitionConfig {
     /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
     pub fn resolved_hs256_secret(&self) -> Result<Option<String>> {
         self.hs256_secret.as_ref().map_or(Ok(None), |s| {
-            if let Some(var) = s.strip_prefix("env:") {
-                env::var(var).map(Some).map_err(|_| {
-                    Error::ConfigValidation(format!(
-                        "agent_auth.agents[].hs256_secret references missing environment variable '{var}'"
-                    ))
-                })
-            } else {
-                Ok(Some(s.clone()))
-            }
+            crate::config::secret_ref::SecretRef::parse(s)
+                .resolve(
+                    "agent_auth.agents[].hs256_secret",
+                    &crate::config::EnvOverlay::none(),
+                )
+                .map(Some)
         })
     }
 }

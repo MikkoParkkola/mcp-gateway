@@ -98,7 +98,9 @@ impl SecretResolver {
             let var_name = &caps[1];
             let placeholder = &caps[0];
 
-            let value = env.resolve(var_name).unwrap_or_default();
+            let value = env
+                .resolve(var_name)
+                .ok_or_else(|| Error::Config(format!("{{env.{var_name}}} is not set")))?;
             result = result.replace(placeholder, &value);
         }
 
@@ -226,9 +228,8 @@ mod tests {
     #[test]
     fn test_resolve_missing_env_var() {
         let resolver = SecretResolver::new();
-        // Missing env var should resolve to empty string
-        let result = resolver.resolve("Value: {env.NONEXISTENT_VAR}").unwrap();
-        assert_eq!(result, "Value: ");
+        // C4: an unset variable is an error, never an empty credential.
+        assert!(resolver.resolve("Value: {env.NONEXISTENT_VAR}").is_err());
     }
 
     #[test]
@@ -288,12 +289,12 @@ mod tests {
     #[test]
     fn test_mixed_patterns() {
         let resolver = SecretResolver::new();
-        let result = resolver
-            .resolve("Path: {env.PATH}, Missing: {env.NONEXISTENT_VAR_12345}")
-            .unwrap();
-
-        assert!(result.contains("Path: /") || result.contains("Path: C"));
-        assert!(result.contains("Missing: "));
+        // One unset variable fails the whole value (C4).
+        assert!(
+            resolver
+                .resolve("Path: {env.PATH}, Missing: {env.NONEXISTENT_VAR_12345}")
+                .is_err()
+        );
     }
 
     #[test]
