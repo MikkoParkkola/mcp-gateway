@@ -267,7 +267,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             agent_declared: None,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
-            stdio_nonce: self.stdio_nonce,
+            stdio_nonce: None,
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),
