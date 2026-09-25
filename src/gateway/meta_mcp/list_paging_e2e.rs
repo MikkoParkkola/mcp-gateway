@@ -187,3 +187,12 @@ async fn keyless_first_page_still_lists_page_two() {
     assert!(invoked.to_string().contains("ok"), "invoke: {invoked}");
     assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
 }
+
+/// The unscoped total (`tool_total`) is a floor for a truncated drain too.
+#[tokio::test]
+async fn truncated_drain_makes_the_unscoped_total_a_floor() {
+    let (_meta, backend, _transport) = pager_meta(true, Duration::from_secs(300)).await;
+
+    let total = crate::gateway::meta_mcp_tool_total::tool_total(&[backend]);
+    assert_eq!(total, ToolTotal::AtLeast(crate::backend::LIST_MAX_PAGES));
+}
