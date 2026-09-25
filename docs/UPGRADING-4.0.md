@@ -568,8 +568,10 @@ These need no action and have no startup notice.
 - **Paginated backends show their whole tool catalogue.** The metadata cache now follows
   `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
-  catalogue longer than that keeps what was read, reports its tool count as "at least", and
-  increments `mcp_backend_list_truncated_total{backend,reason}`.
+  drain that stops early keeps what was read, reports its tool count as "at least", and
+  increments `mcp_backend_list_truncated_total{backend,reason}`, where `reason` is
+  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
+  `fill_budget` (120 s spent).
 
 ## Rolling back
 

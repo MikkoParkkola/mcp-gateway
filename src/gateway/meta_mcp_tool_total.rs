@@ -42,10 +42,17 @@ impl fmt::Display for ToolTotal {
 }
 
 /// A floor over the backends enumerated so far; `Unknown` when none has been.
+/// A truncated drain is enumerated but only a floor (MIK 7570 PAGING.1).
 pub(crate) fn tool_total(backends: &[Arc<Backend>]) -> ToolTotal {
     let enumerated = backends.iter().filter(|b| b.cached_tools_known()).count();
-    let total: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
-    if enumerated == backends.len() {
+    let mut truncated = false;
+    let mut total: usize = 0;
+    for b in backends {
+        let (tools, cut) = b.cached_tools_snapshot_and_truncated();
+        truncated |= cut;
+        total += tools.len();
+    }
+    if enumerated == backends.len() && !truncated {
         ToolTotal::Exact(total)
     } else if enumerated == 0 {
         ToolTotal::Unknown

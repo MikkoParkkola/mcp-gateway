@@ -176,6 +176,10 @@ fn backend_with(transport: Arc<Pager>, ttl: Duration) -> Arc<Backend> {
     backend
 }
 
+fn truncated(backend: &Backend) -> bool {
+    backend.cached_tools_snapshot_and_truncated().1
+}
+
 const LONG_TTL: Duration = Duration::from_secs(300);
 
 fn names(backend: &Backend) -> Vec<String> {
@@ -230,7 +234,7 @@ async fn cache_fill_follows_next_cursor_across_three_pages() {
     assert_eq!(names(&backend), ["t0", "t1", "t2"]);
     assert_eq!(pager.request_count(), 3);
     assert_eq!(pager.cursors(), ["c1", "c2"]);
-    assert!(!backend.cached_tools_truncated());
+    assert!(!truncated(&backend));
 }
 
 /// #4: merge then parse once, so the retry set spans every page.
@@ -271,10 +275,7 @@ fn page_cap_overflow_keeps_32_pages_and_marks_truncated() {
         LIST_MAX_PAGES
     );
     assert_eq!(pager.request_count(), LIST_MAX_PAGES);
-    assert!(
-        backend.cached_tools_truncated(),
-        "cap overflow must mark truncated"
-    );
+    assert!(truncated(&backend), "cap overflow must mark truncated");
     assert_eq!(
         truncated_count(&rendered, "page_cap").as_deref(),
         Some("1"),
@@ -293,7 +294,7 @@ fn repeated_cursor_stops_drain_at_first_repeat() {
     fill.expect("fill");
     assert_eq!(names(&backend), ["t0", "t1"]);
     assert_eq!(pager.request_count(), 2, "must stop, not run all 32 pages");
-    assert!(backend.cached_tools_truncated());
+    assert!(truncated(&backend));
     assert_eq!(
         truncated_count(&rendered, "cursor_repeat").as_deref(),
         Some("1"),
@@ -313,7 +314,7 @@ async fn mid_drain_failure_keeps_previous_catalogue() {
 
     assert!(backend.get_tools_shared().await.is_err(), "page 3 errors");
     assert_eq!(names(&backend), ["t0", "t1", "t2"]);
-    assert!(!backend.cached_tools_truncated());
+    assert!(!truncated(&backend));
 }
 
 /// A page answering with neither `result` nor `error` mid-drain is a
@@ -332,7 +333,7 @@ async fn mid_drain_empty_answer_keeps_previous_catalogue() {
         "page 3 has no result"
     );
     assert_eq!(names(&backend), ["t0", "t1", "t2"]);
-    assert!(!backend.cached_tools_truncated());
+    assert!(!truncated(&backend));
 }
 
 /// Page 1 omits the `tools` key but carries `nextCursor`: later pages'
@@ -370,11 +371,11 @@ async fn complete_fill_clears_truncated_flag() {
     let backend = backend_with(Arc::clone(&pager), Duration::ZERO);
 
     backend.get_tools_shared().await.expect("capped fill");
-    assert!(backend.cached_tools_truncated(), "precondition");
+    assert!(truncated(&backend), "precondition");
     *pager.script.lock() = finite(vec![(vec!["t0"], Some("c1")), (vec!["t1"], None)]);
 
     backend.get_tools_shared().await.expect("complete fill");
-    assert!(!backend.cached_tools_truncated());
+    assert!(!truncated(&backend));
     assert_eq!(names(&backend), ["t0", "t1"]);
 }
 
@@ -404,7 +405,7 @@ fn fill_budget_expiry_keeps_pages_and_marks_truncated() {
     fill.expect("fill stores what it drained");
     // Pages end at 10 s, 20 s, ... 120 s; the check before page 13 stops it.
     assert_eq!(pager.request_count(), 12, "budget, not the 32-page cap");
-    assert!(backend.cached_tools_truncated());
+    assert!(truncated(&backend));
     assert_eq!(
         truncated_count(&rendered, "fill_budget").as_deref(),
         Some("1"),

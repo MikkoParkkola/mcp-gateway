@@ -94,11 +94,18 @@ impl Backend {
         self.tools_slot(None).tools_cache.ever_populated()
     }
 
-    /// Whether the shared slot's last drain stopped before exhausting the
-    /// upstream catalogue (MIK 7570 PAGING.1 design §2.D).
+    /// The shared slot's tools and truncated flag under one read guard. The
+    /// fill writes the flag under the store's write guard, so this pair is
+    /// never a truncated list beside a clear flag.
     #[must_use]
-    pub(crate) fn cached_tools_truncated(&self) -> bool {
-        self.tools_slot(None).tools_truncated.load(Ordering::SeqCst)
+    pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
+        let slot = self.tools_slot(None);
+        slot.tools_cache.with_cached(|tools| {
+            (
+                tools.map_or_else(|| Arc::new(Vec::new()), Arc::clone),
+                slot.tools_truncated.load(Ordering::SeqCst),
+            )
+        })
     }
 
     /// Both under one guard; use wherever the two travel together.
@@ -570,7 +577,16 @@ async fn drain_list_pages(
             return Err(Error::json_rpc(error.code, error.message));
         }
         let Some(mut result) = response.result else {
-            break;
+            if page == 0 {
+                break;
+            }
+            // Neither `result` nor `error` mid-drain says nothing about the
+            // list's shape: a transient page failure, so keep the last
+            // complete catalogue (design E).
+            return Err(Error::json_rpc(
+                -32603,
+                format!("{} page {} returned no result", family.method, page + 1),
+            ));
         };
         let next = result
             .as_object_mut()
@@ -582,7 +598,13 @@ async fn drain_list_pages(
                 .and_then(Value::as_array_mut)
                 .map(std::mem::take)
                 .unwrap_or_default();
-            if let Some(list) = acc.get_mut(family.list_key).and_then(Value::as_array_mut) {
+            // Page 1 may omit the key and still carry `nextCursor`; create
+            // the array so later pages' items are not dropped.
+            if let Some(list) = acc
+                .as_object_mut()
+                .map(|m| m.entry(family.list_key).or_insert_with(|| json!([])))
+                .and_then(Value::as_array_mut)
+            {
                 list.extend(items);
             }
         } else {

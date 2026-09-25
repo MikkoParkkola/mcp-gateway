@@ -94,15 +94,19 @@ impl<T> CachedMetadata<T> {
     /// the pre-revocation answer and served for the rest of the TTL. The
     /// fetch's own caller still receives its result; only the cache is denied
     /// it, so the next reader re-asks.
-    fn store_if_current(&self, value: Arc<T>, generation: u64) -> bool {
+    ///
+    /// `on_stored` runs under the same write guard, so state derived from the
+    /// fill (the tools-truncated flag) is published together with the value:
+    /// a reader holding the read guard never sees one without the other.
+    fn store_if_current(&self, value: Arc<T>, generation: u64, on_stored: impl FnOnce()) {
         let mut state = self.state.write();
         if state.generation != generation {
-            return false;
+            return;
         }
+        on_stored();
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
         state.ever_populated = true;
-        true
     }
 
     /// Not `value.is_some()`: `invalidate_if` clears the value, so that would
@@ -223,9 +227,9 @@ impl<T> CachedMetadata<T> {
                     let result = fetch().await;
                     let result = result.map(|(value, side)| {
                         let value = Arc::new(value);
-                        if self.store_if_current(Arc::clone(&value), permit.generation) {
+                        self.store_if_current(Arc::clone(&value), permit.generation, || {
                             on_stored(side);
-                        }
+                        });
                         value
                     });
                     drop(permit);
