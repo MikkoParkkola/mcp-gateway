@@ -34,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
   stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
   item 52.
+- **Capability pins survive CRLF line endings.** The `sha256:` pin now reads CRLF as LF, so
+  a pinned capability that a Windows checkout or editor converted to CRLF is no longer
+  refused as tampered. A lone CR still changes the hash. Capability YAML is checked out
+  with LF on every platform (`.gitattributes`), so the Windows binary embeds the same
+  starter capabilities as the others. A pin made over CRLF bytes must be re-made: see
+  UPGRADING-4.0 item 60. (#524)
+- **`doctor` finds stdio commands on Windows.** It split `PATH` on `:`, which takes
+  `C:\...` apart, so it reported every stdio backend's command missing. It now uses the
+  platform separator and, on Windows, also the `.exe` name a spawn resolves a bare
+  command to. (#524)
+- **The `Windows check` CI job runs tests.** It compiles every test target for Windows
+  and runs the library and binary unit tests, except `gateway::` and
+  `personal_accounts::`, whose fixtures open stores that refuse on non-unix (#1142). Before,
+  it ran `cargo check` only. (#524)
 
 ### Security
 
