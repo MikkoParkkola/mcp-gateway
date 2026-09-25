@@ -673,7 +673,8 @@ authentication, so no client could reach a tool through it.
   reload, with `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0;
   ... Remove server.ws_port. Delete the key. Like every `MCP_GATEWAY_*` variable,
   `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
-- **The outbound WebSocket client transport (`src/transport/websocket.rs`) is unchanged.**
+- **WebSocket is not a backend transport either.** No backend config reaches the WebSocket client
+  in `src/transport/websocket.rs`; backends use stdio, HTTP (Streamable HTTP or SSE) or A2A.
 
 ## After upgrading
 
