@@ -426,6 +426,7 @@ fn until_sealed(l: &TransparencyLogger, path: &Path, seq: u64) {
     while sealed(path).last().is_none_or(|s| *s < seq) {
         gov_event(l, &format!("e{i}"));
         i += 1;
+        assert!(i < 10_000, "no rotation happened");
     }
 }
 
