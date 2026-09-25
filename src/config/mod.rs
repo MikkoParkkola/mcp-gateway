@@ -38,7 +38,6 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 pub use input_schema::InputSchemaEnforcement;
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
-pub(crate) use features::parse_api_key_digest;
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
@@ -50,6 +49,7 @@ pub use features::{
     RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
     StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
+pub(crate) use features::{api_key_expired, parse_api_key_digest};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
@@ -803,7 +803,9 @@ impl Config {
     /// was evaluated against, and the `auto` bearer mints a fresh random token
     /// per call. Handing over the configured text lets the checks resolve
     /// through the overlay and skip `auto` deliberately.
-    fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
+    pub(crate) fn gateway_credentials(
+        &self,
+    ) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
         use crate::personal_accounts::config::GatewayCredential;
 
         let mut credentials: Vec<GatewayCredential<'_>> = Vec::new();

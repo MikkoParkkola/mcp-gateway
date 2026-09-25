@@ -375,9 +375,9 @@ pub(crate) fn assert_refusal(result: Result<()>, code: i32, expected: &str) {
     }
 }
 
-/// A real validated-credential bucket key, not a display label.
+/// A real validated-credential bucket key, not a display label: the bucket the
+/// gateway builds for an API key whose plaintext is `secret`, keyed on its digest.
 pub(crate) fn principal_key(secret: &str) -> String {
-    QuotaPrincipal::api_key(secret.as_bytes())
-        .as_store_key()
-        .to_owned()
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(secret.as_bytes());
+    QuotaPrincipal::api_key(&digest).as_store_key().to_owned()
 }

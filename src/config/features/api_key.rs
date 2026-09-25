@@ -127,8 +127,15 @@ impl ApiKeyConfig {
     /// True when `now` is at or past `expires_at`.
     #[must_use]
     pub(crate) fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
-        self.expires_at.is_some_and(|at| now >= at)
+        api_key_expired(self.expires_at, now)
     }
+}
+
+/// The one expiry boundary, shared by the load-time warning and the request
+/// path: a key is expired at and after `expires_at`, never before it.
+#[must_use]
+pub(crate) fn api_key_expired(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    expires_at.is_some_and(|at| now >= at)
 }
 
 fn malformed(name: &str, spec: &str) -> Error {

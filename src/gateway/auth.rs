@@ -286,36 +286,35 @@ impl ResolvedAuthConfig {
             ));
         }
 
-        // API keys: hash once, compare digests in constant time (no timing oracle).
+        // API keys: hash once, then compare against EVERY digest in constant time,
+        // so neither a match nor its position is visible in the timing.
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
-        for key in &self.api_keys {
-            if presented.as_slice().ct_eq(key.digest.as_slice()).into() {
-                // After the match: an expired key is never an authenticated caller.
-                if key.expires_at.is_some_and(|at| chrono::Utc::now() >= at) {
-                    warn!(key = %key.name, "expired API key");
-                    return None;
-                }
-                return Some((
-                    AuthenticatedClient {
-                        quota_principal: Some(key.quota_principal.clone()),
-                        name: key.name.clone(),
-                        // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
-                        principal: hex::encode(&key.digest[..6]),
-                        rate_limit: key.rate_limit,
-                        backends: key.backends.clone(),
-                        allowed_tools: key.allowed_tools.clone(),
-                        denied_tools: key.denied_tools.clone(),
-                        admin: key.admin,
-                        authenticated: true,
-                    },
-                    Some(NamedApiKey {
-                        name: key.name.clone(),
-                    }),
-                ));
-            }
+        let key = self.api_keys.iter().fold(None, |hit, k| {
+            let eq: bool = presented.as_slice().ct_eq(k.digest.as_slice()).into();
+            hit.or(eq.then_some(k))
+        })?;
+        // After the match: an expired key is never an authenticated caller.
+        if crate::config::api_key_expired(key.expires_at, chrono::Utc::now()) {
+            warn!(key = %key.name, "expired API key");
+            return None;
         }
-
-        None
+        Some((
+            AuthenticatedClient {
+                quota_principal: Some(key.quota_principal.clone()),
+                name: key.name.clone(),
+                // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
+                principal: hex::encode(&key.digest[..6]),
+                rate_limit: key.rate_limit,
+                backends: key.backends.clone(),
+                allowed_tools: key.allowed_tools.clone(),
+                denied_tools: key.denied_tools.clone(),
+                admin: key.admin,
+                authenticated: true,
+            },
+            Some(NamedApiKey {
+                name: key.name.clone(),
+            }),
+        ))
     }
 
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.

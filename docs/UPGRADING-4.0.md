@@ -853,7 +853,9 @@ These need no action and have no startup notice.
 
 ## Rolling back
 
-Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade
+Keep the 3.x `gateway.yaml` you had before migrating API keys (item 40): 3.x reads `key` and
+cannot read `key_sha256`, so a rollback puts that copy back. Beyond that, downgrading loads the
+same file, because 4.0.0 itself never edited it. The upgrade
 leaves the 3.x token files in place — its migration prints the notice and stamps the version,
 and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0

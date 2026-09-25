@@ -168,3 +168,12 @@ fn env_reference_holding_plaintext_is_refused() {
         "the variable's value leaked: {message}"
     );
 }
+
+// Neither field: a key with no credential at all is refused, not skipped.
+#[test]
+fn neither_key_nor_digest_fails_to_load() {
+    let (_dir, loaded) = load("    - name: ops\n      backends: [\"*\"]\n", None);
+    let message = validation_error(loaded, "neither field");
+    assert!(message.contains("ops"), "{message}");
+    assert!(message.contains("key_sha256"), "{message}");
+}

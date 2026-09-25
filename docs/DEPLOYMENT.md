@@ -812,7 +812,11 @@ printf %s "$KEY" | mcp-gateway hash-key                       # prints sha256:<h
 printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>  # exit 0 match, 1 mismatch, 2 malformed
 ```
 
-`hash-key` reads the key from stdin, strips one trailing newline, and reads no config. A
+Use a long random key, for example `openssl rand -base64 32`. The digest is an unsalted
+sha256, so a short or guessable key can be recovered from a leaked config by offline
+guessing; a 32-byte random key cannot.
+
+`hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. A
 plaintext `key` field, or an `env:` variable that holds a key rather than a digest, fails the
 load with an error that names the entry or variable but never the value. See
 [UPGRADING-4.0.md](UPGRADING-4.0.md) item 40.

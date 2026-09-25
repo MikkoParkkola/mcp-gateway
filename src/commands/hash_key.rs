@@ -13,6 +13,9 @@ use std::process::ExitCode;
 use mcp_gateway::config::api_key_digest_spec;
 use subtle::ConstantTimeEq;
 
+/// Longest accepted input, line ending included.
+const MAX_KEY_BYTES: u64 = 64 * 1024;
+
 const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify sha256:<hex>]";
 
 /// Run `hash-key`. Exit codes: 0 printed or matched, 1 mismatch, 2 usage error
@@ -24,8 +27,18 @@ pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
         return ExitCode::from(2);
     }
     let mut raw = Vec::new();
-    if stdin.lock().read_to_end(&mut raw).is_err() {
+    // Bounded: a key is short, and a stray large pipe must fail fast.
+    if stdin
+        .lock()
+        .take(MAX_KEY_BYTES + 1)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
         eprintln!("hash-key: could not read the key from stdin");
+        return ExitCode::from(2);
+    }
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_KEY_BYTES {
+        eprintln!("hash-key: the input is longer than {MAX_KEY_BYTES} bytes");
         return ExitCode::from(2);
     }
     let key = strip_one_line_ending(&raw);

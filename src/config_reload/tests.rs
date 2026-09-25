@@ -2725,6 +2725,7 @@ async fn envfile_6c_a_malformed_line_on_a_reload_names_file_line_and_category_on
 /// env-file-only rotation it exists to catch went unreported.
 #[tokio::test]
 async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_only_key() {
+    let digest = |v: &str| crate::config::api_key_digest_spec(v.as_bytes());
     // The four forms funnelled through `validate_env_reference`
     // (`src/config/mod.rs:627,630,637,645`).
     let forms: [(&str, &str); 4] = [
@@ -2747,8 +2748,11 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
     ];
 
     for (key, section) in forms {
-        let old = crate::config::api_key_digest_spec(format!("10c-{key}-old").as_bytes());
-        let new = crate::config::api_key_digest_spec(format!("10c-{key}-new").as_bytes());
+        let mut old = format!("s3cr3t-10c-{key}-old");
+        let mut new = format!("s3cr3t-10c-{key}-new");
+        if key.ends_with("APIKEY") {
+            (old, new) = (digest(&old), digest(&new));
+        }
 
         let dir = tempfile::tempdir().unwrap();
         let env_path = env_file(dir.path(), "secrets.env", &format!("{key}={old}\n"));
@@ -2789,14 +2793,9 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
             "{key}: the report leaked a value; got {report}"
         );
 
-        // AND: the resolved holder still carries the STARTUP value.
-        //
-        // Asserted through `ResolvedAuthConfig` for the two forms it owns. The
-        // `agent_auth` and `key_server` forms have no separately reachable
-        // resolved holder in this crate's test surface; for those two this case
-        // asserts the outcome half only, and the holder half rides on the same
-        // mechanism (nothing rebuilds a startup-resolved holder). Stated rather
-        // than approximated.
+        // AND: the resolved holder still carries the STARTUP value. Asserted through `ResolvedAuthConfig` for its two forms; `agent_auth`
+        // and `key_server` have no reachable resolved holder here, so for them
+        // this asserts the outcome half only. Stated rather than approximated.
         if key.ends_with("BEARER") {
             assert_eq!(
                 holder.bearer_token.as_deref(),
