@@ -48,6 +48,15 @@ service:
 podSecurityContext:
   fsGroup: 1001
 
+# Credential mode requires the audit log (UPGRADING-4.0). It is written to a
+# volume at /var/lib/mcp-gateway/audit: an emptyDir by default, which DIES WITH
+# THE POD. Set existingClaim to a PersistentVolumeClaim to keep it, or ship it
+# out with control_plane.export (SIEM). Each replica writes its own chain.
+# Mesh mode (auth off) renders no audit volume.
+audit:
+  existingClaim: ""
+  sizeLimit: 1Gi
+
 configVolume:
   # Decimal, because `--set` and some YAML readers do not take octal: 288 is
   # 0440. Any world bit, or group write, is refused at startup.

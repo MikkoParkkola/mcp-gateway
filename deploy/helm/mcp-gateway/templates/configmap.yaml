@@ -34,6 +34,15 @@ data:
            hatch still on, warning on every start about a check it is not
            relying on. */}}
     {{- $_ := unset $cfg.server "allow_unauthenticated_network_bind" }}
+    {{- /* Auth on requires the audit log, on the writable `audit` volume. */}}
+    {{- $sec := $cfg.security | default dict }}
+    {{- $tlog := $sec.transparency_log | default dict }}
+    {{- $_ := set $tlog "enabled" true }}
+    {{- if not $tlog.path }}
+    {{- $_ := set $tlog "path" "/var/lib/mcp-gateway/audit/transparency.jsonl" }}
+    {{- end }}
+    {{- $_ := set $sec "transparency_log" $tlog }}
+    {{- $_ := set $cfg "security" $sec }}
     {{- end }}
     {{- /* The name clients dial. On a 0.0.0.0 bind — the only bind a pod can
            be reached on — the Host gate admits a NAME only when it is declared,

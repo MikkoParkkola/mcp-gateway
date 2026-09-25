@@ -108,6 +108,20 @@
         }
       }
     },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingClaim": {
+          "type": "string",
+          "description": "PersistentVolumeClaim for the audit log. Empty uses an emptyDir, which dies with the pod."
+        },
+        "sizeLimit": {
+          "type": "string",
+          "description": "sizeLimit of the audit emptyDir."
+        }
+      }
+    },
     "configVolume": {
       "type": "object",
       "additionalProperties": false,

@@ -427,6 +427,7 @@ fn authenticated_client_debug_redacts_the_nested_quota_principal() {
         principal: "0123456789ab".to_string(),
         quota_principal: Some(quota),
         authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     let rendered = format!("{client:?}");

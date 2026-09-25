@@ -305,6 +305,10 @@ FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
 (default 1) above 1 FAILS STARTUP with the modern protocol on, or with the key server or accounts \
 enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules. \
 Without the chart, set `server.replicas` to the processes you run: 1 is a declaration, not a detection.",
+    "With auth on, `security.transparency_log.enabled: true` is REQUIRED (the load FAILS without \
+it), and a failed append refuses calls with 503 and unreadies `/readyz` until it recovers. Records \
+carry `schema_version: 2`, `who` and `outcome`, including refused and failed calls. On Kubernetes \
+the chart's audit volume is an emptyDir: set `audit.existingClaim` to keep the log.",
 ];
 
 /// Emit the one-time 4.0.0 notice.

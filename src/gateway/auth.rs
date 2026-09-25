@@ -274,6 +274,7 @@ impl ResolvedAuthConfig {
                     denied_tools: None,
                     admin: true,
                     authenticated: true,
+                    credential_kind: crate::security::audit::CredentialKind::StaticBearer,
                 },
                 // The bearer is NOT an API key, whatever an operator named their
                 // keys: no adapter allow-list entry may be satisfied by it.
@@ -295,6 +296,7 @@ impl ResolvedAuthConfig {
                         denied_tools: key.denied_tools.clone(),
                         admin: key.admin,
                         authenticated: true,
+                        credential_kind: crate::security::audit::CredentialKind::ApiKey,
                     },
                     Some(NamedApiKey {
                         name: key.name.clone(),
@@ -399,6 +401,8 @@ impl ResolvedAuthConfig {
     }
 }
 
+pub use crate::security::audit::CredentialKind;
+
 /// Information about an authenticated client
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient {
@@ -431,6 +435,9 @@ pub struct AuthenticatedClient {
     /// name is data, and a rule written against one silently admits any client
     /// configured with a different name.
     pub authenticated: bool,
+    /// How the credential was presented, for the audit record's `who`
+    /// (4.0.0 item D1-c). Set at each mint site; it has no `Default`.
+    pub credential_kind: CredentialKind,
 }
 
 impl AuthenticatedClient {
@@ -834,6 +841,7 @@ fn dashboard_client() -> AuthenticatedClient {
         denied_tools: None,
         admin: true,
         authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::DashboardSession,
     }
 }
 
@@ -894,6 +902,7 @@ pub fn anonymous_client() -> AuthenticatedClient {
         denied_tools: None,
         admin: false,
         authenticated: false,
+        credential_kind: crate::security::audit::CredentialKind::None,
     }
 }
 
@@ -984,6 +993,7 @@ pub async fn auth_middleware(
             denied_tools: None,
             admin: false,
             authenticated: false,
+            credential_kind: crate::security::audit::CredentialKind::None,
         });
         return next.run(request).await;
     }
@@ -1409,6 +1419,7 @@ mod tests {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // No restrictions = all tools allowed (fallback to global policy)
@@ -1428,6 +1439,7 @@ mod tests {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // Tools in allowlist
@@ -1451,6 +1463,7 @@ mod tests {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // Tools matching glob patterns
@@ -1480,6 +1493,7 @@ mod tests {
             denied_tools: Some(vec!["write_file".to_string(), "delete_file".to_string()]),
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // Tools in denylist
@@ -1503,6 +1517,7 @@ mod tests {
             denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // Tools matching deny glob patterns
@@ -1539,6 +1554,7 @@ mod tests {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // Qualified match: only filesystem:read_file allowed, not other servers
@@ -1564,6 +1580,7 @@ mod tests {
             ]),
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         // In allowlist and NOT in denylist
@@ -1602,6 +1619,7 @@ mod tests {
             denied_tools: None,
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         let err = client_allow
@@ -1622,6 +1640,7 @@ mod tests {
             denied_tools: Some(vec!["exec_*".to_string()]),
             admin: false,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         };
 
         let err = client_deny

@@ -113,6 +113,12 @@ spec:
               readOnly: true
             - name: state
               mountPath: /var/lib/mcp-gateway
+            {{- if ne .Values.auth.mode "mesh" }}
+            # Credential mode turns auth on, and auth on requires the audit
+            # log (UPGRADING-4.0): the ConfigMap points it here.
+            - name: audit
+              mountPath: /var/lib/mcp-gateway/audit
+            {{- end }}
           {{- if .Values.probes.enabled }}
           readinessProbe:
             httpGet:
@@ -153,3 +159,15 @@ spec:
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
         - name: state
           emptyDir: {}
+        {{- if ne .Values.auth.mode "mesh" }}
+        # An emptyDir log dies with the pod; set audit.existingClaim to keep it.
+        # fsGroup above makes the claim writable by uid 1001.
+        - name: audit
+          {{- if .Values.audit.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.audit.existingClaim | quote }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.audit.sizeLimit }}
+          {{- end }}
+        {{- end }}

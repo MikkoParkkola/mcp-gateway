@@ -261,6 +261,9 @@ security:
     enabled: true
     scan_requests: true
     scan_responses: true
+  transparency_log:
+    enabled: true
+    path: /var/lib/mcp-gateway/audit/transparency.jsonl
 server:
   host: 0.0.0.0
   port: 39400
@@ -295,6 +298,9 @@ security:
     enabled: true
     scan_requests: true
     scan_responses: true
+  transparency_log:
+    enabled: true
+    path: /var/lib/mcp-gateway/audit/transparency.jsonl
 backends: {}
 ";
 

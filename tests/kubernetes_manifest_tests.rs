@@ -581,7 +581,7 @@ fn enterprise_alpha_declared_replicas_match_manifest() {
 /// (D1-a), and the enterprise-alpha manifests get the same writable volume
 /// and `fsGroup` as the Helm chart (tier2-audit-admin-design.md, Revision 4,
 /// "the enterprise-alpha manifests ... get the same writable audit volume and
-/// `fsGroup`; test renders them"). Red today: the shipped ConfigMap has no
+/// `fsGroup`; test renders them"). Red today: the shipped `ConfigMap` has no
 /// `security.transparency_log` at all (ships auth-on with no audit, same gap
 /// as L13), and the Deployment mounts no `audit` volume.
 #[test]

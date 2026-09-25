@@ -77,6 +77,8 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 #[path = "transparency_log_degraded.rs"]
 mod degraded;
 
+use crate::security::audit::{AuditEnvelope, AuditWho};
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Runtime configuration for the transparency log.
@@ -311,11 +313,11 @@ impl TransparencyLogger {
                 id: session_id,
                 source: CorrelationSource::SessionId,
             },
-            caller,
+            &AuditEnvelope::ok(AuditWho::from_actor_id(caller)),
             server,
             tool,
             request_hash,
-            response_hash,
+            Some(response_hash),
         )
     }
 
@@ -328,27 +330,31 @@ impl TransparencyLogger {
     pub fn log_invocation_correlated(
         &self,
         key: CorrelationKey<'_>,
-        caller: &str,
+        envelope: &AuditEnvelope,
         server: &str,
         tool: &str,
         request_hash: &str,
-        response_hash: &str,
+        response_hash: Option<&str>,
     ) -> io::Result<()> {
         let timestamp = Utc::now().to_rfc3339();
 
         // Domain fields for an invocation entry. `counter`, `prev_entry_hash`,
         // `entry_hash`, and `sig`/`key_id` are added by `append_core`.
         let mut fields = serde_json::Map::new();
-        fields.insert("caller".into(), caller.into());
+        // `caller` is kept for one major version as a copy of `who.account`.
+        fields.insert("caller".into(), envelope.who.account().into());
         fields.insert("correlation_source".into(), key.source.as_str().into());
         fields.insert("request_hash".into(), request_hash.into());
-        fields.insert("response_hash".into(), response_hash.into());
+        // A failed call has no response to hash.
+        if let Some(response_hash) = response_hash {
+            fields.insert("response_hash".into(), response_hash.into());
+        }
         fields.insert("server".into(), server.into());
         fields.insert("session_id".into(), key.id.into());
         fields.insert("timestamp".into(), timestamp.into());
         fields.insert("tool".into(), tool.into());
 
-        self.append_core(fields, false).map(|_| ())
+        self.append_core(fields, envelope, false).map(|_| ())
     }
 
     /// Append an arbitrary governance/audit entry into the same tamper-evident
@@ -366,9 +372,10 @@ impl TransparencyLogger {
     pub fn append_event(
         &self,
         fields: serde_json::Map<String, serde_json::Value>,
+        envelope: &AuditEnvelope,
     ) -> io::Result<String> {
         Self::reject_reserved_keys(&fields)?;
-        self.append_core(fields, false)
+        self.append_core(fields, envelope, false)
     }
 
     /// Like [`Self::append_event`], but re-syncs chain state (`counter`,
@@ -388,13 +395,15 @@ impl TransparencyLogger {
     pub fn append_event_synced(
         &self,
         fields: serde_json::Map<String, serde_json::Value>,
+        envelope: &AuditEnvelope,
     ) -> io::Result<String> {
         Self::reject_reserved_keys(&fields)?;
-        self.append_core(fields, true)
+        self.append_core(fields, envelope, true)
     }
 
     fn reject_reserved_keys(fields: &serde_json::Map<String, serde_json::Value>) -> io::Result<()> {
-        for reserved in ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"] {
+        let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
+        for reserved in chain.into_iter().chain(AuditEnvelope::RESERVED) {
             if fields.contains_key(reserved) {
                 return Err(io::Error::other(format!(
                     "transparency log: reserved chain field '{reserved}' cannot be supplied by caller"
@@ -414,9 +423,22 @@ impl TransparencyLogger {
     /// write leaves no counter gap.
     fn append_core(
         &self,
-        mut fields: serde_json::Map<String, serde_json::Value>,
+        fields: serde_json::Map<String, serde_json::Value>,
+        envelope: &AuditEnvelope,
         resync: bool,
     ) -> io::Result<String> {
+        let result = self.append_chained(fields, envelope, resync);
+        self.record_append(result.is_ok());
+        result
+    }
+
+    fn append_chained(
+        &self,
+        mut fields: serde_json::Map<String, serde_json::Value>,
+        envelope: &AuditEnvelope,
+        resync: bool,
+    ) -> io::Result<String> {
+        envelope.write_into(&mut fields);
         #[cfg(test)]
         {
             self.append_attempts

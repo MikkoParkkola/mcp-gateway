@@ -8,7 +8,7 @@
 3946 src/gateway/router/tests.rs
 2983 src/config_reload/tests.rs
 2854 src/transport/http/tests.rs
-2745 src/gateway/meta_mcp/mod.rs
+2754 src/gateway/meta_mcp/mod.rs
 2352 tests/mik_7272_task_1_acs.rs
 2342 src/config/mod.rs
 2304 src/gateway/router/handlers.rs
@@ -23,7 +23,7 @@
 1929 src/transport/http/mod.rs
 1894 src/commands/trust.rs
 1890 src/backend/tests.rs
-1815 src/control_plane/store.rs
+1818 src/control_plane/store.rs
 1808 src/gateway/ui/control_plane.rs
 1644 src/security/firewall/mod.rs
 1617 tests/mik_7272_sub2b_acs.rs
@@ -32,7 +32,7 @@
 1464 src/capability/definition/tests.rs
 1462 src/idempotency.rs
 1457 src/gateway/router/backend_handlers.rs
-1460 src/security/transparency_log.rs
+1482 src/security/transparency_log.rs
 1431 src/protocol/continuation.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1407 src/capability/definition/mod.rs
@@ -41,7 +41,7 @@
 1357 src/capability/backend.rs
 1329 tests/security_tests.rs
 1320 tests/openwebui_adapter_config.rs
-1328 src/commands/upgrade.rs
+1332 src/commands/upgrade.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1277 src/oauth/client/mod.rs
 1272 tests/mik_7212_mrtr7_stdio_acs.rs
@@ -59,7 +59,7 @@
 1086 src/oauth/client/tests.rs
 1069 src/gateway/server/support.rs
 1053 src/main_tests.rs
-1023 src/control_plane/export.rs
+1024 src/control_plane/export.rs
 1023 tests/nfr_obs_3_era_observability.rs
 1021 tests/mik_7272_sub4_adr012_acs.rs
 1006 src/protocol/messages.rs
@@ -67,7 +67,7 @@
 1005 src/ranking/tests.rs
 996 src/idempotency/admission.rs
 982 tests/mik_7272_subscriptions_acs.rs
-1180 src/identity_propagation/mod.rs
+1184 src/identity_propagation/mod.rs
 974 src/ranking/mod.rs
 967 src/gateway/meta_mcp_tool_defs.rs
 967 src/gateway/ui/backend_ops.rs

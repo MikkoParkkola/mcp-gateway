@@ -1066,14 +1066,28 @@ impl Gateway {
                 key_id: self.config.security.transparency_log.key_id.clone(),
                 shared_secret: self.config.security.transparency_log.shared_secret.clone(),
             });
+            // Auth on: the log is required (D1-a) and a failed append
+            // withholds the call's result (D1-f).
+            let auth_on = self.config.auth.enabled;
+            let policy = if auth_on {
+                crate::security::audit::AuditFailurePolicy::FailClosed
+            } else {
+                crate::security::audit::AuditFailurePolicy::BestEffort
+            };
             match crate::security::TransparencyLogger::open(tl_cfg) {
                 Ok(logger) => {
-                    let logger = Arc::new(logger);
+                    let logger = Arc::new(logger.with_failure_policy(policy));
                     Arc::get_mut(&mut meta_mcp)
                         .expect("no other Arc references at this point")
                         .enable_transparency_log(Arc::clone(&logger));
                     transparency_log = Some(logger);
                     info!("Transparency log enabled");
+                }
+                Err(e) if auth_on => {
+                    return Err(Error::Config(format!(
+                        "auth is enabled, so the audit log (security.transparency_log) must \
+                         open: {e}"
+                    )));
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to open transparency log — continuing without it");
@@ -3110,6 +3124,7 @@ impl Gateway {
             protocol_revision,
             credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
+            credential_kind: crate::security::audit::CredentialKind::LocalTransport,
             authorizer: stdio_authorizer,
             // Stdio has no port and no network surface: the
             // client SPAWNED this process, so it already holds
@@ -3629,6 +3644,7 @@ fn stdio_caller_context<'a>(
         protocol_revision: None,
         credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
+        credential_kind: crate::security::audit::CredentialKind::LocalTransport,
         authorizer,
         // Stdio has no port and no network surface: the
         // client SPAWNED this process, so it already holds

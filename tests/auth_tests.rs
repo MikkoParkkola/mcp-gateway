@@ -172,6 +172,7 @@ fn test_resolved_client_rate_limit_creates_identity_bucket() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
@@ -248,6 +249,7 @@ fn test_client_backend_access_patterns() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
     assert!(wildcard_client.can_access_backend("anything"));
     assert!(wildcard_client.can_access_backend("tavily"));
@@ -263,6 +265,7 @@ fn test_client_backend_access_patterns() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
     assert!(!no_backends_client.can_access_backend("anything"));
 
@@ -277,6 +280,7 @@ fn test_client_backend_access_patterns() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
     assert!(restricted_client.can_access_backend("backend-a"));
     assert!(restricted_client.can_access_backend("backend-b"));

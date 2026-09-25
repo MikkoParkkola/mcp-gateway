@@ -185,7 +185,7 @@ mod tests {
 
     fn auth_on_with_store_dir(store_dir: &str) -> String {
         format!(
-            "auth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: \"{store_dir}\"\n"
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: \"{store_dir}\"\n"
         )
     }
 
@@ -289,7 +289,7 @@ mod tests {
         .unwrap();
         let (config, path) = load(
             cfg_dir.path(),
-            "auth:\n  enabled: true\n  bearer_token: f6-test-token\n",
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\n",
         );
 
         assert_eq!(start(&config, &path), Ok(false));

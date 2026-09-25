@@ -218,9 +218,25 @@ impl AppState {
     }
 }
 
-/// `/livez` and `/readyz`; the invariant is stated at the route table.
+/// `/livez`; the invariant is stated at the route table.
 async fn probe_ok() -> &'static str {
     "ok"
+}
+
+/// `/readyz`: `/livez` plus the audit log (D1-f). While the log is degraded
+/// the probe itself attempts one bounded append, so a pod the Service has
+/// drained still recovers without call traffic (Revision 3). `/livez` stays
+/// constant, so the kubelet unreadies the pod but never restarts it.
+async fn readyz(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> (axum::http::StatusCode, &'static str) {
+    match &state.transparency_log {
+        Some(log) if log.admit().await.is_err() => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "audit log unavailable",
+        ),
+        _ => (axum::http::StatusCode::OK, "ok"),
+    }
 }
 
 /// The `AuthState` needed by [`auth_middleware`], split out of
@@ -346,10 +362,10 @@ pub(crate) fn create_router_with_accounts(
         // Orchestrator probes answer from the process alone. `/health` fails
         // when any backend is down, and probing it restarted every replica for
         // one flapping upstream. Reaching this handler means the config loaded
-        // and the listener is up, which is all readiness asserts; graceful
-        // shutdown closes the listener, which is how both turn red.
+        // and the listener is up; readiness adds only the audit log (D1-f).
+        // Graceful shutdown closes the listener, which is how both turn red.
         .route("/livez", get(probe_ok))
-        .route("/readyz", get(probe_ok))
+        .route("/readyz", get(readyz))
         .route("/api/costs", get(backend_handlers::costs_handler))
         .route(
             "/mcp",

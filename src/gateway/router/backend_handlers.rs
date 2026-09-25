@@ -382,17 +382,21 @@ fn audit_identity_propagation(
         fields.insert("reason".into(), reason.into());
     }
 
-    logger.append_event(fields).map(|_| ()).map_err(|e| {
-        warn!(
-            backend,
-            action, error = %e,
-            "Failed to write identity-propagation audit entry (transparency log); \
-             fail-closed on idp_mint"
-        );
-        crate::identity_propagation::PropagationError::AuditFailed(format!(
-            "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
-        ))
-    })
+    let envelope = crate::security::audit::AuditEnvelope::identity_propagation(action, subject);
+    logger
+        .append_event(fields, &envelope)
+        .map(|_| ())
+        .map_err(|e| {
+            warn!(
+                backend,
+                action, error = %e,
+                "Failed to write identity-propagation audit entry (transparency log); \
+                 fail-closed on idp_mint"
+            );
+            crate::identity_propagation::PropagationError::AuditFailed(format!(
+                "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
+            ))
+        })
 }
 
 /// Resolve just the identity-key session-bucket binding for a notification
@@ -493,6 +497,20 @@ pub(super) async fn backend_handler(
 ) -> impl IntoResponse {
     // Track in-flight request for graceful drain
     let _inflight_permit = state.inflight.acquire().await;
+
+    // D1-f: this route writes no invocation record (D2), but while the audit
+    // log is down it must not serve, or it is a second, unaudited route.
+    if let Some(log) = &state.transparency_log
+        && log.admit().await.is_err()
+    {
+        let error = crate::Error::AuditUnavailable;
+        return build_http_error_response(
+            None,
+            error.to_rpc_code(),
+            error.to_string(),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    }
 
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();

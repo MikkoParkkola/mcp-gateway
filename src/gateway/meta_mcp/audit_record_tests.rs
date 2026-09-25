@@ -113,8 +113,6 @@ fn context<'a>(
     authorizer: &'a (dyn ToolAuthorizer + Sync),
     who: &'a Caller,
 ) -> MetaMcpCallerContext<'a> {
-    // Red commit: the context has no field for the kind yet (D1-c adds it).
-    let _ = who.kind;
     MetaMcpCallerContext {
         signing: None,
         execution: None,
@@ -124,6 +122,7 @@ fn context<'a>(
         } else {
             Authentication::Anonymous
         },
+        credential_kind: who.kind,
         is_modern: false,
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer,
@@ -258,18 +257,20 @@ async fn denied_call_writes_denied_record() {
     assert!(record.get("response_hash").is_none(), "{record}");
 }
 
-/// D1-T7. A backend transport failure writes an `error` record.
+/// D1-T7. A backend transport failure writes an `error` record with the
+/// failure's code, although the caller receives it as an `isError` tool
+/// result (the dispatch path converts it for the LLM's recovery hint).
 #[tokio::test]
 async fn backend_error_writes_error_record() {
     let dir = tempfile::tempdir().unwrap();
     let meta = meta(Err("connection reset".to_string()), &dir);
     let who = api_key_caller();
-    let result = meta
+    let _ = meta
         .invoke_tool(&args(), None, &context(&AllowAll, &who))
         .await;
-    assert!(result.is_err(), "a transport failure must fail the call");
     let record = only_record(&dir);
     assert_eq!(record["outcome"], json!("error"), "{record}");
+    assert_eq!(record["error_code"], json!(-32000), "{record}");
 }
 
 /// D1-T8. A result with `isError: true` is a `tool_error`, with no code.

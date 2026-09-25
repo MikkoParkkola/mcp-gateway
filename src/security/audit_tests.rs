@@ -24,10 +24,9 @@ fn logger(path: &Path) -> TransparencyLogger {
     .expect("open log")
 }
 
-/// The one place these cells call the logger, so the envelope parameter is a
-/// one-line change.
+/// The one place these cells call the logger.
 fn append(logger: &TransparencyLogger, fields: Map<String, Value>) -> std::io::Result<String> {
-    logger.append_event(fields)
+    logger.append_event(fields, &super::AuditEnvelope::gateway())
 }
 
 fn fields(pairs: &[(&str, Value)]) -> Map<String, Value> {
@@ -83,7 +82,8 @@ fn v1_and_v2_entries_verify_in_one_chain() {
         let hash = recompute_entry_hash(&entry).expect("hash v1 entry");
         entry["entry_hash"] = json!(hash);
         prev = hash;
-        lines.push_str(&format!("{entry}\n"));
+        lines.push_str(&entry.to_string());
+        lines.push('\n');
     }
     std::fs::write(&path, lines).expect("write v1 entries");
     let v2 = logger(&path);

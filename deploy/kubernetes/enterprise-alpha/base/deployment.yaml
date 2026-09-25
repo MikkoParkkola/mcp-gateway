@@ -96,6 +96,8 @@ spec:
               readOnly: true
             - name: state
               mountPath: /var/lib/mcp-gateway
+            - name: audit
+              mountPath: /var/lib/mcp-gateway/audit
           readinessProbe:
             httpGet:
               path: /readyz
@@ -140,3 +142,8 @@ spec:
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
         - name: state
           emptyDir: {}
+        # The audit log (configmap.yaml). fsGroup 1001 above makes a claim
+        # swapped in here writable by the gateway's uid.
+        - name: audit
+          emptyDir:
+            sizeLimit: 1Gi
