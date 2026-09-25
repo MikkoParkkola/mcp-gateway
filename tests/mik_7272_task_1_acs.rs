@@ -1570,30 +1570,18 @@ mod ownership {
     }
 
     // =======================================================================
-    // MIK-7272.TASK.1.19 — the subscription path is EXCLUDED from the refusal:
-    // an unattributed listen is answered, never told that the id resolves.
+    // MIK-7272.TASK.1.19 — an unattributed listen never says whether an id
+    // resolves.
     // =======================================================================
 
-    /// The stream is the one arm that must not refuse. `subscriptions/listen`
-    /// naming a task nobody may see returns a quiet stream, exactly as it does
-    /// for a task owned by another principal — an error here would tell the
-    /// caller that the id resolves to something. The id it names now really
-    /// does resolve, for A, which is what gives the silence something to hide.
-    ///
-    /// FORWARD GUARD, and stated as one: this case is green with the
-    /// `2c522f53` production hunk reverted, because before that commit no arm
-    /// refused at all. It cannot catch a regression of the fix; it fires when
-    /// someone LATER widens the refusal over `subscriptions/listen` — the one
-    /// change that would turn silence into disclosure. The other half of the
-    /// criterion, that the caller is silently narrowed to no ids, has NO
-    /// observable surface to assert against: `ListenRequest::from_params`
-    /// (`src/protocol/subscriptions.rs:100`) reads only `params.notifications`
-    /// and never `taskIds`, so the narrowing at `handlers.rs:1015` reaches no
-    /// consumer. Assertable once task notifications become a
-    /// `NotificationKind` — that is `MIK-7272.TASK.1.12`'s work, not this
-    /// case's.
+    /// Amended by A5c (MIK-7570.NOTIFY.2): with authentication on, a
+    /// credential-less `subscriptions/listen` is refused 401 before any task id
+    /// is read, so "never refused" no longer holds. What survives is the point
+    /// of the row: the answer must not depend on the id. A listen naming a task
+    /// that resolves, for A, and one naming an id nobody holds get the same
+    /// status, code and message, so the refusal discloses nothing.
     #[tokio::test]
-    async fn ac_task_1_19_unattributed_subscription_is_quiet_not_refused() {
+    async fn ac_task_1_19_unattributed_subscription_discloses_nothing() {
         let fixture = state_public_mcp().await;
         let (_, created) = post_against(
             Arc::clone(&fixture.state),
@@ -1603,20 +1591,28 @@ mod ownership {
         .await;
         let owned_id = task_id_of(&created);
 
-        let (_, listened) = post_unattributed(
-            Arc::clone(&fixture.state),
+        let listen = |id: i64, task: &str| {
             modern(
-                37,
+                id,
                 "subscriptions/listen",
-                json!({ "taskIds": [owned_id] }),
+                json!({ "taskIds": [task] }),
                 true,
-            ),
-        )
-        .await;
+            )
+        };
+        let owned = post_unattributed(Arc::clone(&fixture.state), listen(37, &owned_id)).await;
+        let absent =
+            post_unattributed(Arc::clone(&fixture.state), listen(38, "no-such-task")).await;
 
-        assert!(
-            listened.get("error").is_none(),
-            "an unattributed subscription is narrowed in silence, never refused: {listened}"
+        assert_eq!(owned.0, StatusCode::UNAUTHORIZED, "{}", owned.1);
+        assert_eq!(owned.0, absent.0, "the status must not depend on the id");
+        assert_eq!(
+            owned.1["error"]["code"], absent.1["error"]["code"],
+            "{}",
+            owned.1
+        );
+        assert_eq!(
+            owned.1["error"]["message"], absent.1["error"]["message"],
+            "an id that resolves must be indistinguishable from one that does not"
         );
     }
 

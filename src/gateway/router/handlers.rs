@@ -1058,7 +1058,8 @@ async fn meta_mcp_dispatch(
     // wants, so the empty notification filter is synthesised rather than
     // refused. Ownership narrows the stream in silence: a task another
     // principal owns must be indistinguishable from one that never existed, and
-    // a refusal would announce the difference.
+    // a refusal would announce the difference. A caller with no credential
+    // under authentication is refused at the listen arm, whatever ids it names.
     let mut params = params;
     if method == "subscriptions/listen" {
         let ids = listened_task_ids(params.as_ref());
