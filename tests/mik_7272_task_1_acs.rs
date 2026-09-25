@@ -388,13 +388,12 @@ mod http {
     use axum::http::{Request, StatusCode};
     use mcp_gateway::backend::BackendRegistry;
     use mcp_gateway::config::{ApiKeyConfig, AuthConfig, Config};
-    use mcp_gateway::gateway::auth::ResolvedAuthConfig;
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
     use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
     use mcp_gateway::gateway::test_helpers::{
-        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+        AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
     };
     use mcp_gateway::key_server::oidc::VerifiedIdentity;
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
@@ -560,7 +559,9 @@ mod http {
 
         // One registry, shared between the state the router reads and the
         // executor that publishes through it.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY));
+        let authorizer = auth_state(&config.auth);
+        let auth_config = Arc::clone(&authorizer.auth_config);
+        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY, authorizer));
         let tasks_dir = store_root.join("tasks");
         let deadline = tokio::time::Instant::now() + fixture::BOUND;
         let (tasks, task_executor) = loop {
@@ -602,7 +603,7 @@ mod http {
             multiplexer,
             proxy_manager,
             streaming_config: config.streaming.clone(),
-            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+            auth_config,
             key_server: None,
             tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

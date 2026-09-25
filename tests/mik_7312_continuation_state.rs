@@ -19,7 +19,9 @@ use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair}
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, StoreLimits, open_runtime};
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, auth_state, open_runtime,
+};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::continuation::{
     ContinuationError, ContinuationPurpose, ContinuationState, Payload,
@@ -46,7 +48,7 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let agent_registry = Arc::new(AgentRegistry::new());
 
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
