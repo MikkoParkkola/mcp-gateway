@@ -536,6 +536,17 @@ async fn backend_handler_inner(
         Err(refusal) => return super::identity::identity_refusal_response(refusal),
     };
 
+    if let Some(ref client) = client
+        && !client.can_access_backend(&name)
+    {
+        return build_http_error_response(
+            None,
+            -32003,
+            client.backend_refusal(&name),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(request).await {
         Ok(bytes) => bytes,
@@ -572,16 +583,6 @@ async fn backend_handler_inner(
     // D2-b: scope is checked after the parse, so its refusal names the tool,
     // and before the backend lookup, so a scoped key gets 403 for an unknown
     // backend as for a forbidden one, never a 404 existence oracle.
-    if let Some(ref client) = client
-        && !client.can_access_backend(&name)
-    {
-        return build_http_error_response(
-            None,
-            -32003,
-            client.backend_refusal(&name),
-            StatusCode::FORBIDDEN,
-        );
-    }
 
     // Find backend
     let Some(backend) = state.backends.get(&name) else {
