@@ -199,6 +199,10 @@ The chart and the manifests run the image with a read-only root filesystem. Ever
 gateway writes under `$HOME` (task records, its data directory, the upgrade stamp, npm/uv
 caches) goes to a `state` volume at `/var/lib/mcp-gateway`, an `emptyDir` that survives a container
 restart and starts empty in a replaced pod. `config.backends` is a map keyed by backend name.
+The volume is per pod, and the defaults run two (`replicaCount: 2` in the chart,
+`replicas: 2` in the enterprise-alpha manifest) behind a Service with no session affinity, so a
+task created on one pod is not found by a follow-up routed to the other. Task API callers need
+one replica until shared task storage exists (see `docs/UPGRADING-4.0.md` item 21).
 
 If you need both horizontal scale and the 2026-07-28 revision: MIK-7312 settled
 the mechanism as per-process key material rather than the shared store this

@@ -294,7 +294,16 @@ security context now sets `runAsUser: 1001`, the image's gateway user.
 
 Task records live in the `state` volume. An `emptyDir` survives a container restart, and a pod
 that is replaced (rollout, eviction, reschedule) starts empty. This release has no
-chart setting for a persistent volume. The control-plane store still sits next to the config on
+chart setting for a persistent volume.
+
+Each pod has its own `state` volume, and both shipped defaults run two pods: `replicaCount: 2`
+in the chart's `values.yaml` and `replicas: 2` in the enterprise-alpha `base/deployment.yaml`.
+The Service has no session affinity. A task created on one pod is unknown to the other, so a
+poll, cancel or result request routed to the other pod answers as if the task did not exist.
+If your clients use the task API, set `replicaCount: 1` (or `replicas: 1`) until shared task
+storage exists.
+
+The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
 startup). That is tracked separately.
 
