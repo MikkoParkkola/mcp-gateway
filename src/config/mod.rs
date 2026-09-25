@@ -619,7 +619,8 @@ impl Config {
             &field, value, overlay,
         ) {
             Ok(expanded) => *value = expanded,
-            Err(message) => unresolved.push(message),
+            Err(message) if unresolved.is_empty() => unresolved.push(message),
+                Err(_) => {}
         };
         for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
             for (key, value) in &mut backend.headers {
