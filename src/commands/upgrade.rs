@@ -290,11 +290,9 @@ error lists every such row. Rewrite each as `!exact {source: mtls, id: ...}` or 
 `!exact {source: jwt, id: ...}`; the gateway will not pick the source. Until \
 then personal capabilities fail closed. `identity grants grant --agent` takes \
 `mtls:<id>` or `jwt:<id>`.",
-    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set, so an \
-unset mode no longer writes `attestation_observe_reject` audit lines; set \
-`observe` to keep them. `enforce` and any other unrecognised value now FAIL \
-STARTUP instead of falling back to observe: `enforce` is not available in this \
-build.",
+    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set: an unset mode no longer \
+writes `attestation_observe_reject` audit lines (set `observe` to keep them), and `enforce` or \
+any unrecognised value now FAILS STARTUP instead of falling back to observe.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
