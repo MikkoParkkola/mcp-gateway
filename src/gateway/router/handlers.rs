@@ -382,7 +382,7 @@ fn backends_overall_healthy(
 ) -> bool {
     statuses
         .values()
-        .all(|s| s.circuit_state != crate::failsafe::CircuitState::Open && s.healthy)
+        .all(|s| s.healthy)
 }
 
 /// Health check handler
