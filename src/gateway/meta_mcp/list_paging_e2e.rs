@@ -24,6 +24,8 @@ use crate::transport::Transport;
 /// `tools/call` and counts the calls that reach it.
 struct TwoPages {
     endless: AtomicBool,
+    /// Page 0 omits the `tools` key and keeps only `nextCursor`.
+    keyless_first: bool,
     calls: AtomicUsize,
 }
 
@@ -46,6 +48,8 @@ impl Transport for TwoPages {
         let tool = |name: String| json!({ "name": name, "inputSchema": { "type": "object" } });
         let result = if self.endless.load(Ordering::SeqCst) {
             json!({ "tools": [tool(format!("page_{page}"))], "nextCursor": format!("p{}", page + 1) })
+        } else if page == 0 && self.keyless_first {
+            json!({ "nextCursor": "p1" })
         } else if page == 0 {
             json!({ "tools": [tool("alpha_tool".into())], "nextCursor": "p1" })
         } else {
@@ -68,10 +72,16 @@ impl Transport for TwoPages {
 }
 
 async fn pager_meta(endless: bool, ttl: Duration) -> (MetaMcp, Arc<Backend>, Arc<TwoPages>) {
-    let transport = Arc::new(TwoPages {
+    let transport = TwoPages {
         endless: AtomicBool::new(endless),
+        keyless_first: false,
         calls: AtomicUsize::new(0),
-    });
+    };
+    meta_over(transport, ttl).await
+}
+
+async fn meta_over(transport: TwoPages, ttl: Duration) -> (MetaMcp, Arc<Backend>, Arc<TwoPages>) {
+    let transport = Arc::new(transport);
     let backend = Arc::new(Backend::new(
         "pager",
         BackendConfig::default(),
@@ -153,4 +163,27 @@ async fn truncated_drain_is_a_lower_bound_until_a_complete_fill() {
     backend.get_tools_shared().await.expect("complete fill");
     let (total, _) = meta.admitted_counts(InvokeScope::allow_all(CallerStanding::Admin), None);
     assert_eq!(total, ToolTotal::Exact(2));
+}
+
+/// Page 1 carries `nextCursor` but no `tools` key: page 2's tool is still
+/// listed and invocable through the meta route.
+#[tokio::test]
+async fn keyless_first_page_still_lists_page_two() {
+    let transport = TwoPages {
+        endless: AtomicBool::new(false),
+        keyless_first: true,
+        calls: AtomicUsize::new(0),
+    };
+    let (meta, _backend, transport) = meta_over(transport, Duration::from_secs(300)).await;
+
+    let listed = call(&meta, "gateway_list_tools", json!({ "server": "pager" })).await;
+    assert!(listed.to_string().contains("zebra_tool"), "list: {listed}");
+    let invoked = call(
+        &meta,
+        "gateway_invoke",
+        json!({ "server": "pager", "tool": "zebra_tool", "arguments": {} }),
+    )
+    .await;
+    assert!(invoked.to_string().contains("ok"), "invoke: {invoked}");
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
 }

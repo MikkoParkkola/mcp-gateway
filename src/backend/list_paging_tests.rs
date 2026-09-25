@@ -35,6 +35,11 @@ struct Script {
     endless: bool,
     /// Global request index from which every answer is a JSON-RPC error.
     error_from: Option<usize>,
+    /// Global request index from which every answer has neither `result`
+    /// nor `error`.
+    bare_from: Option<usize>,
+    /// Page index whose answer omits the list key (keeps `nextCursor`).
+    keyless_page: Option<usize>,
     sleep_per_page: Duration,
 }
 
@@ -83,6 +88,8 @@ fn finite(pages: Vec<(Vec<&'static str>, Option<&'static str>)>) -> Script {
         pages,
         endless: false,
         error_from: None,
+        bare_from: None,
+        keyless_page: None,
         sleep_per_page: Duration::ZERO,
     }
 }
@@ -92,6 +99,8 @@ fn endless(error_from: Option<usize>, sleep_per_page: Duration) -> Script {
         pages: Vec::new(),
         endless: true,
         error_from,
+        bare_from: None,
+        keyless_page: None,
         sleep_per_page,
     }
 }
@@ -115,6 +124,11 @@ impl crate::transport::Transport for Pager {
         if script.error_from.is_some_and(|from| n >= from) {
             return Ok(JsonRpcResponse::error(Some(id), -32603, "upstream failed"));
         }
+        if script.bare_from.is_some_and(|from| n >= from) {
+            let mut bare = JsonRpcResponse::success(id, json!(null));
+            bare.result = None;
+            return Ok(bare);
+        }
         let (names, next) = if script.endless {
             (vec![format!("t{page}")], Some(format!("c{}", page + 1)))
         } else {
@@ -129,7 +143,9 @@ impl crate::transport::Transport for Pager {
             .map(|n| item(self.key, n, &self.extra))
             .collect();
         let mut result = json!({});
-        result[self.key] = json!(items);
+        if script.keyless_page != Some(page) {
+            result[self.key] = json!(items);
+        }
         if let Some(next) = next {
             result["nextCursor"] = json!(next);
         }
@@ -298,6 +314,38 @@ async fn mid_drain_failure_keeps_previous_catalogue() {
     assert!(backend.get_tools_shared().await.is_err(), "page 3 errors");
     assert_eq!(names(&backend), ["t0", "t1", "t2"]);
     assert!(!backend.cached_tools_truncated());
+}
+
+/// A page answering with neither `result` nor `error` mid-drain is a
+/// transient page failure too: the last complete catalogue stays (design E).
+#[tokio::test]
+async fn mid_drain_empty_answer_keeps_previous_catalogue() {
+    let pager = Pager::tools(three_pages());
+    let backend = backend_with(Arc::clone(&pager), Duration::ZERO);
+
+    backend.get_tools_shared().await.expect("first fill");
+    assert_eq!(names(&backend), ["t0", "t1", "t2"], "precondition");
+    pager.script.lock().bare_from = Some(pager.request_count() + 2);
+
+    assert!(
+        backend.get_tools_shared().await.is_err(),
+        "page 3 has no result"
+    );
+    assert_eq!(names(&backend), ["t0", "t1", "t2"]);
+    assert!(!backend.cached_tools_truncated());
+}
+
+/// Page 1 omits the `tools` key but carries `nextCursor`: later pages'
+/// tools must still land in the cache.
+#[tokio::test]
+async fn keyless_first_page_keeps_later_pages() {
+    let pager = Pager::tools(vec![(vec![], Some("c1")), (vec!["t1"], None)]);
+    pager.script.lock().keyless_page = Some(0);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    backend.get_tools_shared().await.expect("fill");
+    assert_eq!(pager.request_count(), 2);
+    assert_eq!(names(&backend), ["t1"]);
 }
 
 /// #8
