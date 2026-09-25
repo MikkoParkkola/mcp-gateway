@@ -175,6 +175,30 @@ fn retired_server_ws_port_refused_with_explanation() {
     }
 }
 
+/// F15: `ws_port: null`, the old example default, is refused as retired too.
+#[test]
+fn retired_server_ws_port_null_refused() {
+    let message = refusal("server:\n  ws_port: null\n", &["server.ws_port"]);
+    assert!(
+        message.contains("inbound WebSocket listener was removed in 4.0"),
+        "a null ws_port must carry the retired explanation; got: {message}"
+    );
+}
+
+/// F15: the retirement names `server.ws_port` only; the same leaf under a
+/// backend is an ordinary unknown key.
+#[test]
+fn backend_ws_port_is_an_ordinary_unknown_key() {
+    let message = refusal(
+        "backends:\n  x:\n    command: y\n    ws_port: 9000\n",
+        &["backends.x.ws_port"],
+    );
+    assert!(
+        message.contains("fix the spelling") && !message.contains("is retired"),
+        "a backend ws_port must take the generic path; got: {message}"
+    );
+}
+
 /// F15 control: a `server` section without `ws_port` still loads.
 #[test]
 fn server_section_without_ws_port_loads() {
