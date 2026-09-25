@@ -270,6 +270,7 @@ fn response_cache_key_separates_two_answers_to_one_gate() {
             request_state: Some("st-1".to_string()),
             idempotency_key: None,
             malformed: Vec::new(),
+            attestation: None,
         };
         super::response_cache_key_for(
             "air",
