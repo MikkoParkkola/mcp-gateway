@@ -81,11 +81,11 @@ async fn fixture(config: BackendConfig, warm: bool) -> Fixture {
     fixture_with(config, warm, None).await
 }
 
-async fn fixture_with(
-    config: BackendConfig,
-    warm: bool,
-    injector: Option<crate::secret_injection::SecretInjector>,
-) -> Fixture {
+/// Rebuilds the fixture's Meta-MCP over the same registry.
+type Customize =
+    Box<dyn FnOnce(crate::gateway::test_helpers::MetaMcp) -> crate::gateway::test_helpers::MetaMcp>;
+
+async fn fixture_with(config: BackendConfig, warm: bool, customize: Option<Customize>) -> Fixture {
     let calls = Calls::default();
     let backend = Arc::new(Backend::new(
         "edits",
@@ -103,11 +103,10 @@ async fn fixture_with(
             .expect("the fixture lists its tools");
     }
     let (mut state, store) = test_router_app_state_with_backend(backend).await;
-    if let Some(injector) = injector {
+    if let Some(customize) = customize {
         let state = Arc::get_mut(&mut state).expect("state is unique");
-        let meta = crate::gateway::test_helpers::MetaMcp::new(Arc::clone(&state.backends))
-            .with_secret_injector(injector);
-        state.meta_mcp = Arc::new(meta);
+        let meta = crate::gateway::test_helpers::MetaMcp::new(Arc::clone(&state.backends));
+        state.meta_mcp = Arc::new(customize(meta));
     }
     Fixture {
         router: create_router(state),
@@ -255,7 +254,8 @@ async fn injected_secret_key_not_refused() {
     let injector = crate::secret_injection::SecretInjector::new(
         [("edits".to_string(), vec![rule])].into_iter().collect(),
     );
-    let fx = fixture_with(BackendConfig::default(), true, Some(injector)).await;
+    let customize: Customize = Box::new(move |meta| meta.with_secret_injector(injector));
+    let fx = fixture_with(BackendConfig::default(), true, Some(customize)).await;
     let (_, body) = post(&fx.router, "/mcp", invoke(&json!({"edits": []}))).await;
     assert!(!is_error(&body), "{body}");
     let calls = fx.calls.lock();
@@ -327,5 +327,28 @@ fn cold_slot_forward_is_counted() {
                 && l.contains(label)
                 && !l.ends_with(" 0")),
         "the unchecked forward was not counted: {rendered}"
+    );
+}
+
+/// R2-T5: a code-mode chain whose first step invents a nested key stops
+/// there; the valid second step is never dispatched.
+#[tokio::test]
+async fn code_mode_chain_step_refuses_invented_key() {
+    let customize: Customize = Box::new(|meta| meta.with_code_mode(true));
+    let fx = fixture_with(BackendConfig::default(), true, Some(customize)).await;
+    let chain = json!({"chain": [
+        {"tool": "edits:edit", "arguments": nested_invented()},
+        {"tool": "edits:edit", "arguments": {"edits": []}}
+    ]});
+    let body = json!({"jsonrpc": "2.0", "id": 13, "method": "tools/call",
+        "params": {"name": "gateway_execute", "arguments": chain}});
+    let (_, body) = post(&fx.router, "/mcp", body).await;
+    assert!(
+        body.to_string().contains("edits[0].type"),
+        "step 1 was not refused: {body}"
+    );
+    assert!(
+        fx.calls.lock().is_empty(),
+        "a chain step reached the backend: {body}"
     );
 }
