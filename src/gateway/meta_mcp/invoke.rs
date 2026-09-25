@@ -926,6 +926,20 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // round is a real backend call and is accounted and gated exactly like
         // the first one. A round that skipped the accounting would let a
         // backend that keeps asking spend an unmetered budget.
+        // The same key rule as the first round, against the slot as it is now.
+        if let Some(refusal) = self.meta.undeclared_key_refusal(
+            self.server,
+            self.tool,
+            self.arguments,
+            self.cache_binding,
+        ) {
+            return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                message: refusal["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            });
+        }
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")
@@ -1798,6 +1812,20 @@ impl MetaMcp {
         let protocol_revision = caller
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
+
+        // MIK-7570.SCHEMA.1 (R2): refused above the response cache, so a result
+        // cached before the rule (or under `off`) is never served to a call the
+        // rule refuses, and before `mark_dispatched`, so a refusal is never
+        // dispatched, charged or counted as an invocation. Nothing ran, so the
+        // idempotency key is released for an honest retry.
+        if let Some(refusal) =
+            self.undeclared_key_refusal(server, tool, &arguments, dispatch_binding.as_deref())
+        {
+            if let Some(reservation) = idem_reservation.as_mut() {
+                reservation.release();
+            }
+            return Ok(GuardedValue::sealed_by_guard(refusal));
+        }
 
         // Counted only for a call the cache would otherwise have served, so an
         // `unresolved_principal` count always means a real bypass.
@@ -3144,6 +3172,32 @@ impl MetaMcp {
             ));
         }
         Ok(result.warnings)
+    }
+
+    /// MIK-7570.SCHEMA.1 (R2): the `isError` result refusing a call to an MCP
+    /// backend whose arguments carry keys the tool's schema does not declare.
+    ///
+    /// Runs on the arguments as the caller sent them, before secret injection,
+    /// so a gateway-injected credential is never mistaken for an invented key.
+    /// Capabilities are skipped: their executor validates after injection.
+    fn undeclared_key_refusal(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: &Value,
+        identity_key: Option<&str>,
+    ) -> Option<Value> {
+        if self
+            .get_capabilities()
+            .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
+        {
+            return None;
+        }
+        let text =
+            self.backends
+                .get(server)?
+                .undeclared_key_refusal(identity_key, tool, arguments)?;
+        Some(json!({ "content": [{ "type": "text", "text": text }], "isError": true }))
     }
 
     /// Dispatch one round to the backend and meter it.

@@ -33,6 +33,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub(crate) mod closed_keys;
+
 /// Verdict recorded beside a published schema. Additive: the schema itself is
 /// judged, never altered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,36 +136,25 @@ pub fn unresolved_refs(schema: &Value) -> Vec<String> {
 /// and are reported here as unresolved. Teach it `$anchor` and `$id` bases the
 /// day a schema uses one, rather than editing schemas to suit the check.
 fn resolves(root: &Value, pointer: &str) -> bool {
-    let Some(rest) = pointer.strip_prefix('#') else {
-        return false;
-    };
-    let Some(decoded) = percent_decode(rest) else {
-        return false;
-    };
+    resolve(root, pointer).is_some()
+}
+
+/// The target of a local `$ref`, for the key walker in [`closed_keys`].
+fn resolve<'a>(root: &'a Value, pointer: &str) -> Option<&'a Value> {
+    let decoded = percent_decode(pointer.strip_prefix('#')?)?;
     if decoded.is_empty() {
-        return true;
+        return Some(root);
     }
-    let Some(path) = decoded.strip_prefix('/') else {
-        return false;
-    };
     let mut node = root;
-    for raw in path.split('/') {
-        let Some(token) = unescape(raw) else {
-            return false;
-        };
+    for raw in decoded.strip_prefix('/')?.split('/') {
+        let token = unescape(raw)?;
         node = match node {
-            Value::Object(map) => match map.get(token.as_ref()) {
-                Some(child) => child,
-                None => return false,
-            },
-            Value::Array(items) => match array_index(&token) {
-                Some(index) if index < items.len() => &items[index],
-                _ => return false,
-            },
-            _ => return false,
+            Value::Object(map) => map.get(token.as_ref())?,
+            Value::Array(items) => items.get(array_index(&token)?)?,
+            _ => return None,
         };
     }
-    true
+    Some(node)
 }
 
 /// Percent-decode a URI fragment, per RFC 6901 §6.
