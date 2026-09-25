@@ -12,7 +12,7 @@ use crate::idempotency::admission::{Mode, Request};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::meta::Declared;
-use crate::protocol::mrtr::NO_RETRY;
+use crate::protocol::mrtr::RetryFields;
 
 /// Snapshot of the creating request's identity, rebuilt as a borrowed caller
 /// context at dispatch. `task` is always `None` on the rebuilt context so the
@@ -42,6 +42,13 @@ pub(crate) struct OwnedCallerContext {
     /// Classifier revision captured at admission. Borrowed into the rebuilt
     /// caller at dispatch. Not persisted on the durable task record.
     protocol_revision: Option<String>,
+    /// The creating request's `_meta` attestation token and nothing else of
+    /// its retry fields: admission already reserved the key, and the retry
+    /// pair named a question this worker never asked. Owned here so the
+    /// rebuilt caller can borrow it; a surfaced tool's funnel envelope reads
+    /// it at dispatch, where it is re-validated (MIK-7570.ATTEST.1 part 3).
+    /// In memory only, like the rest of this struct.
+    retry: RetryFields,
 }
 
 impl OwnedCallerContext {
@@ -60,6 +67,7 @@ impl OwnedCallerContext {
         input_capabilities: Declared,
         session_id: Option<String>,
         protocol_revision: Option<String>,
+        attestation: Option<String>,
     ) -> Self {
         // The very string the admission request is keyed on, passed in from the
         // one construction site: it is the durable task's owner, not a display
@@ -78,6 +86,10 @@ impl OwnedCallerContext {
             input_capabilities,
             session_id,
             protocol_revision,
+            retry: RetryFields {
+                attestation,
+                ..RetryFields::default()
+            },
         }
     }
 
@@ -94,7 +106,8 @@ impl OwnedCallerContext {
     }
 
     /// Rebuild the dispatch funnel. Retry metadata is not forwarded: admission
-    /// already reserved the key in `Mode::Task`. Confirmation is honestly
+    /// already reserved the key in `Mode::Task`. Only the creating request's
+    /// attestation token rides along, for the funnel to re-check. Confirmation is honestly
     /// unavailable on the worker. Capabilities are the creating request's.
     pub(crate) fn dispatch_context<'a>(
         &'a self,
@@ -141,7 +154,7 @@ impl OwnedCallerContext {
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
-            retry: &NO_RETRY,
+            retry: &self.retry,
             task: None,
             era: crate::protocol::meta::Era::Modern,
             channel: &crate::gateway::input_bridge::NoClientChannel,

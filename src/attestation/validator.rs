@@ -37,6 +37,19 @@ pub const DEFAULT_ROTATION_GRACE_SECS: i64 = 30;
 /// Distinct from the boot-time [`crate::attestation::AttestationEnforcement`]
 /// rollback flag: this governs an already-wired call boundary (e.g.
 /// `gateway_invoke`), not whether the boot gate is bypassed.
+/// What a presented token must grant for one call (MIK-7570.ATTEST.1).
+///
+/// An enum rather than an optional string, so "no capability to match" is a
+/// named decision at each call site and never the accident of a missing field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttestationScope<'a> {
+    /// The token's capabilities must include this one, or `"*"`. An empty
+    /// string is satisfied only by `"*"`.
+    Capability(&'a str),
+    /// Any authentic, unexpired token; no capability is matched.
+    AuthenticOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AttestationMode {
     /// Validate and audit every presented token, but never block a call.
