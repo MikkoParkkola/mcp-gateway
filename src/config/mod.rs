@@ -1283,13 +1283,11 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
-    /// Request timeout.
-    #[serde(with = "humantime_serde")]
-    pub request_timeout: Duration,
     /// Graceful shutdown timeout.
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
-    /// Maximum request body size (bytes).
+    /// Maximum request body size (bytes) on every route. Read once at startup:
+    /// an oversize body gets HTTP 413.
     pub max_body_size: usize,
     /// Externally reachable base URL of this gateway (scheme + host + optional
     /// port), e.g. `https://mcp.your-domain.tld`. Set this when the gateway
@@ -1347,7 +1345,6 @@ impl Default for ServerConfig {
             modern_protocol: true,
             host: "127.0.0.1".to_string(),
             port: 39400,
-            request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
@@ -1364,7 +1361,6 @@ impl std::fmt::Debug for ServerConfig {
             .field("modern_protocol", &self.modern_protocol)
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("request_timeout", &self.request_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("max_body_size", &self.max_body_size)
             .field("public_url", &self.public_url)
