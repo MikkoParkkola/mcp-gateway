@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
+  builds refused it with `-32602` unless the tool was marked read-only, which
+  made write tools unusable from standard MCP clients, none of which send the
+  vendor `_meta` key `io.mcp-gateway/idempotency-key`. Such a call now runs
+  unprotected, as legacy frames always did: at-most-once holds only for calls
+  carrying a key or a task. The new `server.idempotency_key: optional | required`
+  (default `optional`) restores the refusal under `required`, for modern
+  un-keyed, un-tasked calls to tools not marked read-only on the meta route and
+  stdio only. New counter `mcp_unkeyed_calls_total{era, read_only_hint}` shows
+  the traffic to watch before switching. See UPGRADING-4.0.md section 28 and the
+  ADR-012 addendum.
+
 - **The Helm chart and the enterprise-alpha manifests start.** They never had,
   since the chart arrived in #292: `serve --host` exited 2, `backends: []` failed
   the map-typed config, and the task store could not open under a read-only

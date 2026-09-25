@@ -1377,7 +1377,7 @@ pub struct ServerConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_unauthenticated_network_bind: bool,
     /// Whether a modern `tools/call` must carry `_meta`
-    /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §27).
+    /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §28).
     pub idempotency_key: IdempotencyKeyMode,
 }
 

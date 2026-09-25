@@ -44,6 +44,7 @@ upgrading a running deployment.
 | 24 | `notifications/tools/list_changed` from backend edits reaches only callers of that backend | None; a key that must hear about every backend needs `backends: ["*"]` |
 | 25 | Admin-panel grant, policy and decision writes return 409 | Change grants with `mcp-gateway identity grants`, policies in `security.*`; keep the old store files |
 | 26 | `subscriptions/listen` needs a credential and is scoped to it | Send a credential with the listen request; re-subscribe after a token is revoked or expires |
+| 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -513,6 +514,44 @@ a DN fragment such as `mtls:CN=runner` are refused.
 `security.agent_identity.known_agents` rejects a bare string and names the sources it may use.
 A `source: declared` entry refuses load when `agent_identity.enabled` is true and
 `allow_unverified_agent_identity` is false; with agent identity disabled it loads with a warning.
+
+## 28. A modern `tools/call` without an idempotency key is admitted, unprotected
+
+The vendor `_meta` key `io.mcp-gateway/idempotency-key` makes a side-effecting
+call at-most-once: a re-issue after a broken stream, under a new request id, is
+recognised and answered from the first execution instead of running again.
+
+Earlier 4.0 builds refused a modern-era `tools/call` (one whose `_meta` carries
+`io.modelcontextprotocol/protocolVersion`) with `-32602` when it carried no key,
+unless the tool was marked read-only. No standard MCP client sends that key, so
+those calls now **succeed, unprotected**, by default. Legacy frames were always
+admitted this way.
+
+- At-most-once holds only for calls carrying a key or a task. A call carrying
+  neither cannot be recognised as a re-issue; if a client re-sends it, it runs twice.
+- `server.idempotency_key` takes `optional` (default) or `required`. `required`
+  restores the `-32602` refusal, and the error names the key.
+- `required` refuses exactly: a modern call carrying no key and no task, to a
+  tool not marked read-only, on the meta route (`POST /mcp`) and stdio. Legacy
+  frames, read-only tools, task calls and the backend route `POST /mcp/{name}`
+  (which performs no sync admission) are admitted in both modes.
+- "Read-only" means an exact `idempotency.read_only_tools` entry or a gateway
+  discovery tool, never a backend's own `readOnlyHint`. The metric label
+  `read_only_hint` reports that decision.
+- The era marker is chosen by the client, so `required` is a contract for
+  cooperating clients, not a security boundary.
+- `server` is restart-scoped: a change takes effect on restart.
+
+**Migration.** Watch `mcp_unkeyed_calls_total` by `era` and `read_only_hint`
+(labels carry no identity). Once modern clients send keys, set:
+
+```yaml
+server:
+  idempotency_key: required
+```
+
+A warning names the backend and tool of a modern un-keyed call, at most once per
+tool per 10 minutes.
 
 ## After upgrading
 
