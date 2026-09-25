@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all six items, each named by the
+/// GH475.MIG.4 — the notice carries all seven items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_six_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 6);
+fn notice_4_0_0_carries_all_seven_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 7);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -24,6 +24,7 @@ fn notice_4_0_0_carries_all_six_items() {
         "429",
         "mcp-protocol-version",
         "notify: true",
+        "logging/setlevel",
     ] {
         assert!(
             all.contains(expected),

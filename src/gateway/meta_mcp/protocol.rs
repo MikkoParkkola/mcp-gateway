@@ -292,6 +292,10 @@ impl MetaMcp {
     /// Updates the gateway-wide log level and forwards the request to every
     /// running backend.  Backends that fail to accept the level are logged
     /// but do not cause the overall request to fail.
+    ///
+    /// Ungated here on purpose: the HTTP router refuses non-admin callers
+    /// before calling this, and stdio is the operator's own process. A third
+    /// caller must apply its own admin gate.
     pub async fn handle_logging_set_level(
         &self,
         id: RequestId,
