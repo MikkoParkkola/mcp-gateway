@@ -400,6 +400,18 @@ struct WriteRefusal {
 
 impl WriteRefusal {
     fn response(&self) -> axum::response::Response {
+        // MUTATION M4: grants refusal arm accepts without writing.
+        if self.reason_code.starts_with("grants") {
+            return (
+                StatusCode::OK,
+                Json(MutationResponse {
+                    ok: true,
+                    reason_code: String::new(),
+                    reason: String::new(),
+                }),
+            )
+                .into_response();
+        }
         (
             StatusCode::CONFLICT,
             Json(MutationResponse {
@@ -628,6 +640,20 @@ fn merge_store_into_snapshot(
     snapshot: &mut ControlPlaneSnapshot,
 ) -> bool {
     let mut degraded = false;
+    // MUTATION M2: policy merge restored.
+    if let Ok(policies) = store.list_policies() {
+        for p in policies {
+            if let Some(existing) = snapshot
+                .policies
+                .iter_mut()
+                .find(|x| x.policy_id == p.policy_id)
+            {
+                *existing = p;
+            } else {
+                snapshot.policies.push(p);
+            }
+        }
+    }
     // One bounded page: the newest 200 events, newest first. The view never
     // walks the whole log, however long it has grown.
     match store.read_audit(&AuditFilter::new(200)) {
