@@ -80,23 +80,13 @@ impl Backend {
         let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
-        // A zero TTL reads no value as fresh, so this always fills; the fill
-        // still yields to an invalidation that lands while it runs.
-        let _ = entry
-            .tools_cache
-            .get_or_fetch_shared_then(
-                std::time::Duration::ZERO,
-                || {
-                    let tools = parsed.clone();
-                    async move { Ok((tools, ())) }
-                },
-                |()| {
-                    entry
-                        .tools_truncated
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                },
-            )
-            .await;
+        // A store, not a fill: it must not depend on the slot reading as
+        // stale, nor queue behind a discovery fill already on the wire.
+        entry.tools_cache.replace(parsed, || {
+            entry
+                .tools_truncated
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        });
     }
 }
 
