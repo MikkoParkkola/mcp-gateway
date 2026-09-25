@@ -1905,15 +1905,25 @@ class WorkflowWiring(unittest.TestCase):
             if not pieces:
                 continue
             verifying += 1
-            self.assertTrue(
-                any(re.match(r"^\s+timeout-minutes:\s*\d+\s*$", line) for line in block),
-                f"ci.yml: {block[0].strip()} has no step timeout-minutes",
-            )
+            # Bounded low: a timeout raised to 360 is the 6-hour stall again.
+            minutes = [
+                int(m.group(1))
+                for line in block
+                if (m := re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line))
+            ]
+            self.assertTrue(minutes, f"ci.yml: {block[0].strip()} has no step timeout-minutes")
+            self.assertLessEqual(max(minutes), 15, f"ci.yml: {block[0].strip()} timeout is not low")
             for piece in pieces:
                 self.assertRegex(
                     piece,
                     stdout_dropped,
                     f"ci.yml: cosign verify stdout reaches the log: {piece}",
+                )
+                # stderr carries the verification summary: the evidence stays.
+                self.assertNotRegex(
+                    piece,
+                    r"2>",
+                    f"ci.yml: cosign verify stderr is redirected: {piece}",
                 )
         self.assertTrue(verifying, "ci.yml: docker-manifest verifies nothing")
 
