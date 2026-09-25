@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0-beta.1] - 2026-09-25
+
+> **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final
+> release. It is not feature complete: the criteria still open for 4.0.0 are listed under
+> *Known gaps* in [`docs/release/4.0.0-beta.1-notes.md`](docs/release/4.0.0-beta.1-notes.md).
+> It contains every entry below this heading and everything in the `[4.0.0]` section further
+> down, which describes the 4.0 line and is not yet released as a final version. Breaking
+> changes from 3.x are listed in [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md).
+> Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.1`,
+> `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1`);
+> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+
 ### Added
 
 - **A `-full` image variant carrying the runtimes stdio backends spawn.**
@@ -2129,7 +2141,8 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...HEAD
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...HEAD
+[4.0.0-beta.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
 [4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
