@@ -719,7 +719,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "note": "Added 2026-09-25 by MIK-7570. Stage 1 of C5 (branch fix/c5-attestation-default-off): default is off, enforce and unrecognised modes fail startup. Stays pending until enforce is wired (needs the check_attestation visibility change) or formally descoped. Design and landing order: MIK-7570."
     },
     {
       "id": "MIK-7570.AUDIT.1",

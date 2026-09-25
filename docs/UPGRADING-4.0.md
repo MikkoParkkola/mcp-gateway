@@ -13,7 +13,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12 and 13 refuse the gateway's start. Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13 and 29 refuse the gateway's start (item 29 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -45,6 +45,7 @@ upgrading a running deployment.
 | 25 | Admin-panel grant, policy and decision writes return 409 | Change grants with `mcp-gateway identity grants`, policies in `security.*`; keep the old store files |
 | 26 | `subscriptions/listen` needs a credential and is scoped to it | Send a credential with the listen request; re-subscribe after a token is revoked or expires |
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
+| 29 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -554,6 +555,21 @@ server:
 
 A warning names the backend and tool of a modern un-keyed call, at most once per
 tool per 10 minutes.
+
+## 29. Attestation is off by default, and a bad mode fails startup
+
+In 3.x an unset `GATEWAY_ATTESTATION_MODE` attached an observe-mode validator, and any value
+the gateway did not recognise, `enforce` included, logged a warning and fell back to observe.
+A deployment that set `enforce` ran unenforced and was told so only in a log line.
+
+- **The default is off.** Unset, empty or `off` attaches no validator, so no
+  `attestation_observe_reject` audit lines are written. Set `GATEWAY_ATTESTATION_MODE=observe`
+  to keep them.
+- **`enforce` fails startup.** It is not available in this build: the direct `/mcp/{name}` route
+  and multi-step plans carry no token, so an enforce limited to `gateway_invoke` would not
+  refuse what it claims to. The error names `observe` and `off`.
+- **Any other value fails startup** with an error naming the value. The value is still trimmed and
+  matched case-insensitively, so `Observe` and ` OFF ` keep working.
 
 ## After upgrading
 

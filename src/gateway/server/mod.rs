@@ -980,9 +980,9 @@ impl Gateway {
 
         // ── Per-action attestation (MIK-5223 / MIK-6163, B1-IDENT) ────────────
         // Wire the attestation validator from operator config (env-driven).
-        // Default posture is OBSERVE: audit every presented token at the
-        // `gateway_invoke` boundary but never block a call. `off` attaches no
-        // validator (pure no-op). Enforce is intentionally not yet a wired mode.
+        // Default is OFF: no validator. `observe` audits every presented token
+        // at the `gateway_invoke` boundary but never blocks a call. `enforce`
+        // and unknown values fail startup (`resolve_attestation_wiring`).
         if let Some((validator, mode)) =
             crate::attestation::attestation_wiring_from_overlay(&self.env.get())
                 .map_err(Error::Config)?

@@ -7,16 +7,14 @@
 //! operator config — *whether* to attach a validator on a live gateway and in
 //! which [`AttestationMode`].
 //!
-//! Rollout posture (operator directive 2026-06-19):
-//! - Default is **observe**: the validator audits every presented token but
-//!   never blocks a call, so enabling it on live traffic cannot break
-//!   unattested or mis-attested calls.
-//! - `off` attaches no validator at all — a pure no-op, byte-identical to the
-//!   pre-wiring gateway.
-//! - `enforce` is *intentionally not yet a recognised value*. Flipping to
-//!   fail-closed is a future one-liner here (add the `Some("enforce")` arm),
-//!   which is why an unrecognised mode falls back to observe rather than
-//!   silently enforcing.
+//! Modes (MIK-7570 ATTEST.1):
+//! - Default is **off**: unset, empty or `off` attaches no validator at all —
+//!   a pure no-op, byte-identical to the pre-wiring gateway.
+//! - `observe` audits every presented token but never blocks a call.
+//! - `enforce` is a load error in this build. The direct `/mcp/{name}` route
+//!   and synthesized envelopes carry no token yet, so an enforce that only
+//!   guarded `gateway_invoke` would claim more than it refuses.
+//! - Any other value is a load error, never a silent downgrade.
 //!
 //! [`MetaMcp::with_attestation`]: crate::gateway::meta_mcp::MetaMcp::with_attestation
 //! [`AttestationMode`]: super::validator::AttestationMode
@@ -27,9 +25,9 @@ use super::signer::BnautAttestationSigner;
 use super::validator::{AttestationMode, AttestationValidator};
 
 /// Env var selecting the wired attestation mode at the `gateway_invoke`
-/// boundary: `observe` (default) or `off`.
+/// boundary: `off` (default) or `observe`.
 ///
-/// `enforce` is deliberately NOT recognised yet — see the module docs.
+/// `enforce` is refused at load in this build — see the module docs.
 pub const ATTESTATION_MODE_ENV: &str = "GATEWAY_ATTESTATION_MODE";
 
 /// Env var carrying the HMAC-SHA256 signing key shared with bnaut-attestation.
@@ -51,12 +49,10 @@ pub const DEFAULT_KEY_ID: &str = "gateway";
 /// Resolve the attestation wiring from explicit settings — the unit-testable
 /// core that performs no process-environment reads.
 ///
-/// Returns `None` when the mode is `off` (attach no validator — a pure no-op).
-/// Returns `Some((validator, mode))` otherwise. The mode is matched
-/// case-insensitively after trimming; unset/empty resolves to
-/// [`AttestationMode::Observe`] (the default rollout posture), and any
-/// unrecognised value — including `enforce`, which is not yet wired — also
-/// falls back to observe with a warning.
+/// The mode is matched case-insensitively after trimming. Unset, empty or
+/// `off` returns `Ok(None)` (attach no validator — the default). `observe`
+/// returns `Ok(Some((validator, Observe)))`. `enforce`, which is not wired in
+/// this build, and any unrecognised value return `Err` for startup to report.
 pub fn resolve_attestation_wiring(
     mode: Option<&str>,
     signing_key: Option<&[u8]>,
@@ -64,15 +60,19 @@ pub fn resolve_attestation_wiring(
 ) -> Result<Option<(Arc<AttestationValidator>, AttestationMode)>, String> {
     let normalized = mode.map(|m| m.trim().to_ascii_lowercase());
     let mode = match normalized.as_deref() {
-        Some("off") => return Ok(None),
-        None | Some("" | "observe") => AttestationMode::Observe,
+        None | Some("" | "off") => return Ok(None),
+        Some("observe") => AttestationMode::Observe,
+        Some("enforce") => {
+            return Err(format!(
+                "{ATTESTATION_MODE_ENV}=enforce is not available in this build; \
+                 use `observe` (audit only) or `off`"
+            ));
+        }
         Some(other) => {
-            tracing::warn!(
-                requested = other,
-                "GATEWAY_ATTESTATION_MODE unrecognised (enforce is not yet wired); \
-                 defaulting to observe"
-            );
-            AttestationMode::Observe
+            return Err(format!(
+                "{ATTESTATION_MODE_ENV}={other:?} is not a valid mode; \
+                 use `observe` or `off`"
+            ));
         }
     };
 
@@ -110,7 +110,7 @@ pub fn resolve_attestation_wiring(
 ///
 /// Thin wrapper over [`resolve_attestation_wiring`] reading
 /// [`ATTESTATION_MODE_ENV`], [`ATTESTATION_SIGNING_KEY_ENV`], and
-/// [`ATTESTATION_KEY_ID_ENV`]. With nothing set the default is observe.
+/// [`ATTESTATION_KEY_ID_ENV`]. With nothing set the default is off.
 ///
 /// Reads the overlay, not `std::env`: env files load into an in-memory overlay
 /// rather than into the process environment, so a process-environment read
