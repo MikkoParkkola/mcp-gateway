@@ -264,7 +264,7 @@ impl<'a> Walk<'a> {
             Value::Object(map) => map,
             _ => return Verdict::Undecided,
         };
-        if in_any && is_free_map(schema) {
+        if in_any && (is_free_map(schema) || ref_to_free_map(root, schema, hops)) {
             return Verdict::Accept(Req::Free);
         }
         if matches_nothing(map) {
