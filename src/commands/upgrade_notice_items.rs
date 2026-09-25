@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The eighteen 4.0.0 changes, in the order they are printed.
+/// The nineteen 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -81,4 +81,7 @@ Without the chart, set `server.replicas` to the processes you run: 1 is a declar
     "`server.request_timeout`, never enforced, is removed and now FAILS the config load; bound \
 calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
 body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks now accept up to it.",
+    "`/health` now answers 503 `degraded` while any backend's circuit breaker is open; before, \
+only a failing health tracker did. Monitors on `/health` will see it. `/livez` and `/readyz` stay \
+backend-blind, so Kubernetes probes are unaffected.",
 ];

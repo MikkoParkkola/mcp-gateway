@@ -672,7 +672,7 @@ impl Backend {
             transport: self.config.transport.transport_type().to_string(),
             tools_cached,
             tools_known,
-            circuit_state: entry.failsafe.circuit_breaker.state().as_str().to_string(),
+            circuit_state: entry.failsafe.circuit_breaker.state(),
             request_count: self.request_count.load(Ordering::Relaxed),
             healthy: health.healthy,
             consecutive_failures: health.consecutive_failures,

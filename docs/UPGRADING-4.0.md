@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39 and 45 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -61,6 +61,7 @@ upgrading a running deployment.
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
+| 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
 
 Numbers 18-20 are intentionally unused.
 
@@ -942,6 +943,22 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 
 `server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
+
+## 45. `/health` reports an open circuit breaker
+
+In 3.x an open breaker never showed anywhere. The breaker reported its state as `"open"`, and
+`/health`, the admin panel and the redacted `/ui/api/status` compared it against `"Open"`, so
+the comparison never matched. `/health` went to 503 only when the health tracker also failed.
+
+- **`/health` now returns 503 with `status: "degraded"` while any backend's circuit breaker is
+  open.** External monitors that read `/health` will see it. `/livez` and `/readyz` do not read
+  backend state and still answer 200, so Kubernetes probes are unaffected: one open breaker does
+  not restart or unready a pod.
+- **The admin panel shows that backend as `Down` and `Blocked`**, and the redacted
+  `/ui/api/status` counts it in `degraded_count`.
+- A half-open breaker, which is letting trial requests through, still counts as healthy.
+- The `circuit_state` field in the admin `/health` body keeps its values (`closed`, `open`,
+  `half_open`).
 
 ## After upgrading
 

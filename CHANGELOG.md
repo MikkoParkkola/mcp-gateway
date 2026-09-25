@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An open circuit breaker now degrades `/health` (breaking for `/health` monitors).** The
+  breaker reported `"open"` and every consumer compared against `"Open"`, so `/health`, the
+  admin panel and the redacted `/ui/api/status` never saw an open breaker. `BackendStatus.circuit_state`
+  is now the typed `CircuitState`, serialised as the same `closed` / `open` / `half_open` strings.
+  `/health` answers 503 `degraded` while a breaker is open, the admin panel shows the backend
+  `Down` and `Blocked`, and `/livez` / `/readyz` stay backend-blind. See item 45 in
+  [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). (MIK-7570.BREAKER.1)
+
 ## [4.0.0-beta.1] - 2026-09-25
 
 > **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final

@@ -513,7 +513,7 @@ async fn status(
         // Redacted view: counts only, no names/details
         let healthy = backends
             .iter()
-            .filter(|b| b.status().circuit_state != "Open")
+            .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
         return Json(json!({
             "server_count": total,

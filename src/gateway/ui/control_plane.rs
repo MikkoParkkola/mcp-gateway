@@ -723,7 +723,7 @@ fn can_view_backend(client: Option<&AuthenticatedClient>, backend_name: &str) ->
 }
 
 fn server_status_from_backend(status: &crate::backend::BackendStatus) -> ControlPlaneServerStatus {
-    if status.circuit_state == "Open" {
+    if status.circuit_state == crate::failsafe::CircuitState::Open {
         ControlPlaneServerStatus::Blocked
     } else {
         ControlPlaneServerStatus::Enabled
@@ -731,7 +731,7 @@ fn server_status_from_backend(status: &crate::backend::BackendStatus) -> Control
 }
 
 fn runtime_health_from_backend(status: &crate::backend::BackendStatus) -> ControlPlaneHealth {
-    if status.circuit_state == "Open" {
+    if status.circuit_state == crate::failsafe::CircuitState::Open {
         ControlPlaneHealth::Down
     } else if !status.running {
         ControlPlaneHealth::Unknown
@@ -1561,7 +1561,10 @@ mod breaker_tests {
             server_status_from_backend(&closed),
             ControlPlaneServerStatus::Enabled
         );
-        assert_ne!(runtime_health_from_backend(&closed), ControlPlaneHealth::Down);
+        assert_ne!(
+            runtime_health_from_backend(&closed),
+            ControlPlaneHealth::Down
+        );
 
         backend.trip_circuit_breaker_for_test();
         let open = backend.status();
