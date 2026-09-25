@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39 and 43 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43 and 45 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -65,6 +65,7 @@ upgrading a running deployment.
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 
@@ -1051,6 +1052,22 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 45. `/health` reports an open circuit breaker
+
+In 3.x an open breaker never showed anywhere. The breaker reported its state as `"open"`, and
+`/health`, the admin panel and the redacted `/ui/api/status` compared it against `"Open"`, so
+the comparison never matched. `/health` went to 503 only when the health tracker also failed.
+
+- **`/health` now returns 503 with `status: "degraded"` while any backend's circuit breaker is
+  open.** External monitors that read `/health` will see it. `/livez` and `/readyz` do not read
+  backend state and still answer 200, so Kubernetes probes are unaffected: one open breaker does
+  not restart or unready a pod.
+- **The admin panel shows that backend as `Down` and `Blocked`**, and the redacted
+  `/ui/api/status` counts it in `degraded_count`.
+- A half-open breaker, which is letting trial requests through, still counts as healthy.
+- The `circuit_state` field in the admin `/health` body keeps its values (`closed`, `open`,
+  `half_open`).
 
 ## 46. Attestation `enforce` enforces on every route
 

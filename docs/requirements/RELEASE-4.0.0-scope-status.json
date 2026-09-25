@@ -837,11 +837,16 @@
     },
     {
       "id": "MIK-7570.BREAKER.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/probe_tests.rs",
+        "src/gateway/ui/control_plane.rs",
+        "src/failsafe/circuit_breaker.rs",
+        "src/gateway/router/handlers_health_predicate_tests.rs"
+      ],
+      "note": "Graded 2026-09-25 (B6, PR #1024). BackendStatus.circuit_state is the typed CircuitState, so every consumer compares the enum. Health: health_is_degraded_while_the_breaker_is_open (/health 503 degraded, /livez and /readyz 200) with the closed control health_is_healthy_with_breaker_closed. UI: ui_redacted_status_counts_open_breaker_degraded (closed 1/0, open 0/1). Control plane: control_plane_reports_open_breaker_down_and_blocked. Metrics: metrics_gauge_reads_zero_while_breaker_open (mcp_backend_circuit_state 1 closed, 0 open). Only Open degrades: half_open_circuit_is_healthy. Wire unchanged: circuit_state_serialises_as_its_label and backend_status_serialises_circuit_state_lowercase. Red-first CI run 36174266529 failed exactly the three consumer tests at the tests-only commit; six local mutants killed; design mutant PR #1026."
     },
     {
       "id": "MIK-7570.CHART.2",
