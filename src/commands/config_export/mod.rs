@@ -238,7 +238,7 @@ pub fn merge_into_config(
     // 0600 from creation, then rename (F18 W4): the client config holds other
     // servers' `env` secrets, and a scratch file at the umask would hand the
     // replaced file a looser mode than it had.
-    mcp_gateway::config_persistence::write_text_atomic(path, &json_str)?;
+    std::fs::write(path, &json_str).map_err(|e| e.to_string())?;
     if let Some(note) = tightening_notice(path, old_mode) {
         eprintln!("{note}");
     }
