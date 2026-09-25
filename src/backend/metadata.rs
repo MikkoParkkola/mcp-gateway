@@ -558,7 +558,10 @@ async fn drain_list_pages(
             stop = Some("fill_budget");
             break;
         }
-        let params = cursor.clone().map(|c| json!({ "cursor": c }));
+        let params = cursor
+            .clone()
+            .filter(|_| false)
+            .map(|c| json!({ "cursor": c }));
         // A `*/list` is in the side-effect-free allowlist
         // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried fetch
         // cannot duplicate an upstream effect.
