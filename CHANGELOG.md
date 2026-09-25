@@ -130,7 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group read on a file the gateway owns. Group read stays allowed on a file it
   does not own, as with a root-owned Kubernetes projection under `fsGroup`.
   The Helm chart and enterprise-alpha set `fsGroup: 1001` and a `0440` config
-  mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 31.
+  mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 32.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
