@@ -145,7 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own catalogue entry; an unlisted tool is forwarded and counted. Capabilities
   refuse nested keys too, and now honour a top-level `additionalProperties:
   true`. The per-backend `input_schema_enforcement: closed | standard | off`
-  (default `closed`) is the escape hatch. See `docs/UPGRADING-4.0.md` item 28.
+  (default `closed`) is the escape hatch. See `docs/UPGRADING-4.0.md` item 31.
   (MIK-7570.SCHEMA.1)
 
 - **`notifications/tools/list_changed` from an admin backend edit reaches only
