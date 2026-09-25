@@ -59,6 +59,7 @@ upgrading a running deployment.
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
+| 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -868,6 +869,47 @@ other route, webhooks included, used the framework's 2 MiB default.
   Clients that matched on -32700 must also handle 413 / -32600.
 - **Routes that parsed with a framework extractor (webhooks, key server, admin UI) now accept up
   to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
+
+## 40. A secret reference that resolves to nothing fails the load
+
+In 3.x an unset or empty secret became an empty credential without a word. `${GITHUB_TOKEN}`
+with `GITHUB_TOKEN` unset expanded to `""`, so the backend was sent `Authorization: Bearer `.
+An `env:` reference to a variable that was set but empty passed validation, and so did a literal
+`bearer_token: ""`. A `{env.X}` template in a capability, webhook or injected credential sent
+`""` when `X` was unset. Each of these now fails instead.
+
+- **`${VAR}` with no default must be set and non-empty** in the `headers` and `env` of every
+  enabled backend and in `capabilities.directories`. The error names the field and the variable:
+  `backends.github.headers.Authorization references ${GITHUB_TOKEN}, which is not set (or is
+  empty) and has no default. Set it, or write ${GITHUB_TOKEN:-} to allow empty.` One load reports
+  every such reference, together with every `env:` secret below that does not resolve. A `${`
+  that is not a `${NAME}` reference (names are uppercase, as in `${github_token}` written
+  lowercase) is refused too, instead of being sent verbatim. As in a POSIX shell, `${VAR:-text}` falls back to
+  `text` when `VAR` is unset **or empty** (3.x used the default only when unset), and `${VAR:-}`
+  is the way to say empty is intended.
+- **A disabled backend is not expanded.** Its `${VAR}` text stays as written, so a variable only
+  a disabled backend needs does not stop startup. Enabling it from the admin panel writes the
+  file and reloads; while the variable is unset that reload fails, names the variable, and the
+  running config is kept. The file already says `enabled: true`, so set the variable (or disable
+  the backend again) before the next restart, which would otherwise refuse to start.
+- **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
+  `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
+  `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',
+  which is empty; empty secrets are refused.` An empty literal in any of these four fails too
+  (`auth.bearer_token is empty.`), including when the config is built in code rather than
+  loaded, and the key server never accepts an empty admin bearer.
+- **`{env.X}` templates fail at call time.** Capability, webhook and injection templates resolve
+  when they are used, not at load, so the tool call or webhook delivery errors
+  (`{env.X} is not set or is empty`) instead of sending an empty credential. Write `{env.X:-}`
+  where empty is intended. A credential injection rule whose `{env.X}` is unset used to be
+  skipped; the call now fails. A capability `auth.key` (`env:X`, `{env.X}` or a bare `X`) whose
+  variable is set but empty fails the call too.
+- **A listed env file that does not exist is still allowed**, but every unresolved-reference error
+  now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
+  up next to the variable it failed to supply.
+
+`server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
+running with `/metrics` closed (item 33). No error prints a secret value.
 
 ## After upgrading
 

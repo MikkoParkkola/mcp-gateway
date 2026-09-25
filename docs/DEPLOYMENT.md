@@ -333,7 +333,12 @@ Config merges from three sources (later overrides earlier):
 
 Nested values: `MCP_GATEWAY_SERVER__PORT=8080` sets `server.port`.
 
-Config values support `${VAR}` and `${VAR:-default}` expansion. Use `env_files:` in config to load `.env` files (supports `~` expansion; missing files silently skipped).
+Config values support `${VAR}` and `${VAR:-default}` expansion. In an enabled backend's
+`headers` and `env`, and in `capabilities.directories`, a `${VAR}` with no default that is unset
+or empty fails the load, and `${VAR:-default}` applies the default to an empty variable too;
+write `${VAR:-}` where empty is intended. An `env:` secret that is unset or empty
+fails too. Use `env_files:` in config to load `.env` files (supports `~` expansion). A listed
+file that does not exist is skipped, and any unresolved-reference error names it.
 
 A **malformed** line in an env file is not skipped: it fails startup, naming the file,
 the line number and the category of fault. The offending line is never echoed, because

@@ -20,11 +20,14 @@ fn key(name: &str, backends: &[&str], admin: bool) -> ApiKeyConfig {
 }
 
 fn resolved(keys: Vec<ApiKeyConfig>) -> ResolvedAuthConfig {
-    ResolvedAuthConfig::try_from_config(&AuthConfig {
-        enabled: true,
-        api_keys: keys,
-        ..AuthConfig::default()
-    })
+    ResolvedAuthConfig::try_from_config(
+        &AuthConfig {
+            enabled: true,
+            api_keys: keys,
+            ..AuthConfig::default()
+        },
+        &no_env(),
+    )
     .expect("literal keys resolve")
 }
 
@@ -64,7 +67,8 @@ fn api_key_with_backends_omitted_from_yaml_reaches_no_backend() {
     )
     .expect("auth YAML parses");
     assert!(auth.api_keys[0].backends.is_empty());
-    let config = ResolvedAuthConfig::try_from_config(&auth).expect("literal key resolves");
+    let config =
+        ResolvedAuthConfig::try_from_config(&auth, &no_env()).expect("literal key resolves");
     let client = config
         .validate_token("omitted-secret")
         .expect("key is valid");
@@ -99,4 +103,9 @@ fn key_without_backends_warns_once() {
         !logs.contains("'scoped'"),
         "no WARN for a key that lists backends: {logs}"
     );
+}
+
+/// No env files: these fixtures hold literal keys only.
+fn no_env() -> crate::config::EnvOverlay {
+    crate::config::EnvOverlay::none()
 }
