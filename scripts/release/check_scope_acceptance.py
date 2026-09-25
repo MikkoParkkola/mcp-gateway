@@ -16,8 +16,13 @@ and pending so an accepted shortfall cannot read as finished work.
 additionally requires completed acceptance when GITHUB_EVENT_NAME/GITHUB_REF
 (and, for workflow_dispatch, INPUT_TAG) show a tag push or manual dispatch
 (publishing context) whose Cargo.toml [package].version or normalized tag/
-input is 4.0.0. The manifest must exist and parse with a valid version in
-that context regardless of which version it names.
+input is 4.0.0, with or without a suffix. The one exception is a
+4.0.0-beta.N or 4.0.0-rc.N prerelease: by owner decision of 2026-09-25 it
+ships to the opt-in channels before acceptance completes, so it gets the
+consistency checks only. Both the manifest and the tag must be such a
+prerelease; either one naming 4.0.0 otherwise still requires acceptance.
+The manifest must exist and parse with a valid version in that context
+regardless of which version it names.
 """
 
 import argparse
@@ -39,6 +44,9 @@ MANIFEST = pathlib.Path("Cargo.toml")
 REQUIRED_DECISIONS = {"reference_personal_account_journey"}
 ID = re.compile(r"^\| ((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?) \|", re.M)
 VERSION_400 = re.compile(r"^4\.0\.0([+-].*)?$")
+# The two prerelease forms a 4.0.0 beta or candidate takes. Any other suffix
+# (4.0.0-hotfix, 4.0.0-beta.1+build) is still held to full acceptance.
+PRERELEASE_400 = re.compile(r"^4\.0\.0-(beta|rc)\.\d+$")
 VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
 
 spec = importlib.util.spec_from_file_location(
@@ -63,6 +71,11 @@ def is_publishing_context(event_name, ref):
     if event_name == "workflow_dispatch":
         return True
     return event_name == "push" and ref.startswith("refs/tags/")
+
+
+def requires_400_acceptance(version):
+    """4.0.0 in any form except a beta/rc prerelease must be fully accepted."""
+    return bool(VERSION_400.match(version)) and not PRERELEASE_400.match(version)
 
 
 def normalize_ref(value):
@@ -439,7 +452,7 @@ def main(argv=None):
     mode.add_argument(
         "--publish-check",
         action="store_true",
-        help="enforce completed 4.0.0 acceptance in publish context",
+        help="enforce completed 4.0.0 acceptance on a final publish",
     )
     args = parser.parse_args(argv)
     try:
@@ -464,8 +477,8 @@ def main(argv=None):
             elif event_name == "workflow_dispatch":
                 ref_tag = normalize_ref(os.environ.get("INPUT_TAG", ""))
             require_acceptance = bool(
-                (version is not None and VERSION_400.match(version))
-                or (ref_tag and VERSION_400.match(ref_tag))
+                (version is not None and requires_400_acceptance(version))
+                or (ref_tag and requires_400_acceptance(ref_tag))
             )
 
     # Keep all of the existing coverage/count/method checks; this adds acceptance,
