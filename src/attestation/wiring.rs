@@ -62,12 +62,6 @@ pub fn resolve_attestation_wiring(
     let mode = match normalized.as_deref() {
         None | Some("" | "off") => return Ok(None),
         Some("observe") => AttestationMode::Observe,
-        Some("enforce") => {
-            return Err(format!(
-                "{ATTESTATION_MODE_ENV}=enforce is not available in this build; \
-                 use `observe` (audit only) or `off`"
-            ));
-        }
         Some(other) => {
             return Err(format!(
                 "{ATTESTATION_MODE_ENV}={other:?} is not a valid mode; \
