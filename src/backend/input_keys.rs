@@ -55,9 +55,10 @@ impl Backend {
     /// what it was shown. Without this, a caller that lists only on the direct
     /// route reads a cold slot on every call and is forwarded unchecked.
     ///
-    /// Fills an empty or stale slot only; a fresher discovery fill stands. A
-    /// page fetched under a caller's own credential never lands in the shared
-    /// slot, which every caller reads.
+    /// Replaces the slot even when a discovery fill is still fresh: this list
+    /// is the one the caller was shown last, and it was drained in full, so it
+    /// also clears the slot's truncated mark. A page fetched under a caller's
+    /// own credential never lands in the shared slot, which every caller reads.
     pub(crate) async fn remember_listed_tools(
         &self,
         identity_key: Option<&str>,
@@ -79,15 +80,21 @@ impl Backend {
         let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
+        // A zero TTL reads no value as fresh, so this always fills; the fill
+        // still yields to an invalidation that lands while it runs.
         let _ = entry
             .tools_cache
             .get_or_fetch_shared_then(
-                self.cache_ttl,
+                std::time::Duration::ZERO,
                 || {
                     let tools = parsed.clone();
                     async move { Ok((tools, ())) }
                 },
-                |()| {},
+                |()| {
+                    entry
+                        .tools_truncated
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                },
             )
             .await;
     }
