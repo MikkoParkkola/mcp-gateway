@@ -32,7 +32,6 @@
 
 use super::Config;
 use crate::capability::definition::AuthConfig;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const CURRENT_B64: &str = "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=";
