@@ -62,6 +62,7 @@ upgrading a running deployment.
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
+| 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 
@@ -984,6 +985,17 @@ ever needs the key's hash, so 4.0 stores the digest instead.
   `ApiKeyConfig::resolve_key()` is replaced by `resolve_digest()`, which returns the 32 digest
   bytes. `ResolvedApiKey::key` is replaced by `digest` and `expires_at`. The new
   `mcp_gateway::config::api_key_digest_spec(&[u8])` returns the `sha256:<hex>` form.
+
+## 42. `webhooks.rate_limit` is enforced
+
+Before 4.0 the key was parsed and ignored. Each webhook endpoint now accepts at most
+`rate_limit` requests per minute (burst up to the same number) and answers `429` with
+`Retry-After: 60` beyond that. Only requests that pass the signature check count, so unsigned
+traffic cannot use up a real sender's budget. The default is 100. `0` means no limit.
+
+A sender that bursts above the limit loses events: most providers, GitHub included, do not
+retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0`. The value is
+read at startup; a reload that changes `webhooks` needs a restart.
 
 ## 43. With auth on, the audit log is required and fails closed
 
