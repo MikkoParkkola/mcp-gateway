@@ -67,8 +67,9 @@ security:
   `Cf-Access-Authenticated-User-*` is never read; sent without a valid assertion
   it gets 401, and `X-Gateway-Identity-*` gets 400.
 
-A header value is at most 512 bytes of UTF-8 and may appear once; anything else
-gets 400. Refusals are counted in `mcp_identity_header_refused_total{reason}`.
+An `X-Gateway-Identity-*` value is at most 512 bytes of UTF-8 and a
+`Cf-Access-Jwt-Assertion` at most 8 KiB; each may appear once, and anything
+else gets 400. Refusals are counted in `mcp_identity_header_refused_total{reason}`.
 Headers that were valid but not used are counted in
 `mcp_identity_header_ignored_total{reason}` (`oidc_precedence`,
 `cf_access_in_trusted_proxy`).
