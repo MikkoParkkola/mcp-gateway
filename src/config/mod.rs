@@ -11,6 +11,7 @@ mod config_file;
 mod env_overlay;
 mod features;
 mod input_schema;
+#[allow(dead_code)] // red tree only: the F18 sites are not wired yet
 mod secret_file;
 mod secret_ref;
 mod strict_keys;

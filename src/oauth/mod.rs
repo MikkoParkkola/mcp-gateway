@@ -16,6 +16,7 @@ mod callback;
 pub mod client;
 mod metadata;
 mod storage;
+#[allow(dead_code)] // red tree only: the F18 sites are not wired yet
 mod token_file;
 #[cfg(test)]
 mod upgrade_path_tests;
