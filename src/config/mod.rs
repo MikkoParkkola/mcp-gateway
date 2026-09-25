@@ -30,8 +30,8 @@ use crate::routing_profile::RoutingProfileConfig;
 use crate::security::verify_remote_server_provenance;
 use crate::{Error, Result};
 
-pub use input_schema::InputSchemaEnforcement;
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
+pub use input_schema::InputSchemaEnforcement;
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{

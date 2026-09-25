@@ -3193,10 +3193,10 @@ impl MetaMcp {
         {
             return None;
         }
-        let text = self
-            .backends
-            .get(server)?
-            .undeclared_key_refusal(identity_key, tool, arguments)?;
+        let text =
+            self.backends
+                .get(server)?
+                .undeclared_key_refusal(identity_key, tool, arguments)?;
         Some(json!({ "content": [{ "type": "text", "text": text }], "isError": true }))
     }
 

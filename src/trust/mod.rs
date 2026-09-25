@@ -39,8 +39,8 @@ pub use descriptor::{
 };
 pub use result_extractor::extract_row_count;
 pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
-pub use schema_bounds::{SchemaBounds, unresolved_refs};
 pub(crate) use schema_bounds::closed_keys;
+pub use schema_bounds::{SchemaBounds, unresolved_refs};
 
 use inference::{
     infer_data_classes, infer_permissions, infer_risk_class, source_uri_from_capability,
