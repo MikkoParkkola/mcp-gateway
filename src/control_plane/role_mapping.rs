@@ -30,6 +30,13 @@ pub struct ControlPlaneConfig {
     pub role_mapping: ControlPlaneRoleMappingConfig,
     /// SIEM evidence-export runtime configuration (MIK-6703). Opt-in.
     pub export: super::ExportConfig,
+    /// Directory for the governance store (`store/`) and its audit log
+    /// (`audit.jsonl`). Unset: `<config dir>/<config stem>-control-plane`, so
+    /// existing installs do not move. Set: must be absolute after `~`
+    /// expansion, and a start that cannot write it refuses to serve. The store
+    /// takes no lease, so one gateway process per directory. Restart-required.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_dir: Option<String>,
 }
 
 /// Ordered, first-match-wins identity-to-role rules.

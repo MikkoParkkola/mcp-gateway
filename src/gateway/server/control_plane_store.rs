@@ -2,80 +2,139 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Where the control-plane (governance) store lives, and opening it at startup.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tracing::{info, warn};
 
 use super::expand_home_path;
 use crate::config::Config;
+use crate::control_plane::ControlPlaneStore;
+use crate::{Error, Result};
+
+/// Which setting chose the control-plane base directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::gateway) enum BaseSource {
+    /// `control_plane.store_dir` names it.
+    Explicit,
+    /// Derived from the config file's location, as before `store_dir` existed.
+    Default,
+}
+
+/// The control-plane base directory (governance store + audit log), and which
+/// setting chose it.
+///
+/// `control_plane.store_dir` wins (`~`-expanded). Otherwise the base is
+/// `<config dir>/<config stem>-control-plane`, so distinct gateway instances do
+/// not share governance state, or `~/.mcp-gateway/control-plane` when no config
+/// path is known. Shared by [`build_control_plane_store`], the SIEM export
+/// wiring (MIK-6703) and the admin API, so all three name the same directory.
+pub(in crate::gateway) fn control_plane_base(
+    config: &Config,
+    config_path: Option<&Path>,
+) -> (PathBuf, BaseSource) {
+    if let Some(dir) = &config.control_plane.store_dir {
+        return (expand_home_path(dir), BaseSource::Explicit);
+    }
+    let base = config_path.map_or_else(
+        || expand_home_path("~/.mcp-gateway/control-plane"),
+        |p| {
+            let dir = p.parent().unwrap_or_else(|| Path::new("."));
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("gateway");
+            dir.join(format!("{stem}-control-plane"))
+        },
+    );
+    (base, BaseSource::Default)
+}
 
 /// Open the durable control-plane store (grants/policies plus a
 /// governance-scoped audit log, separate from the invocation transparency log;
 /// ADR-005, MIK-6685).
 ///
-/// Returns `None` — disabling the governance mutation routes (they answer 503) —
-/// when auth is disabled, since an auth-disabled gateway treats every caller as
-/// an anonymous admin and a durable governance mutation surface must not be open
-/// to unauthenticated callers. Also returns `None` if the data directory or the
-/// audit log cannot be opened; never fatal to startup.
+/// `Ok(None)` disables the governance mutation routes (they answer 503):
+/// - auth is off, since an auth-disabled gateway treats every caller as an
+///   anonymous admin and a durable mutation surface must not be open to it;
+/// - the DEFAULT base cannot be opened. Installs whose config directory is
+///   read-only kept starting before `store_dir` existed and still do; the
+///   admin API reports `store_unavailable` with the path.
 ///
-/// The store is rooted next to the config file when one is known
-/// (`<config-dir>/control-plane`), so distinct gateway instances do not share
-/// governance state; otherwise it falls back to `~/.mcp-gateway/control-plane`.
+/// `Err` refuses start when `control_plane.store_dir` is relative, or is set
+/// and cannot be written: the operator asked for governance, and serving
+/// without it would hide that the request was not met.
+///
 /// Governance audit entries reuse the transparency log's signing identity, so
 /// they are signed iff the invocation log is.
-/// Per-config control-plane base directory (governance store + audit log).
-/// Shared by [`build_control_plane_store`] and the SIEM export wiring so both
-/// resolve the identical `audit.jsonl` path (MIK-6703).
-pub(super) fn control_plane_base(config_path: Option<&std::path::Path>) -> std::path::PathBuf {
-    config_path.map_or_else(
-        || expand_home_path("~/.mcp-gateway/control-plane"),
-        |p| {
-            let dir = p.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("gateway");
-            dir.join(format!("{stem}-control-plane"))
-        },
-    )
-}
-
 pub(super) fn build_control_plane_store(
     config: &Config,
-    config_path: Option<&std::path::Path>,
-) -> Option<Arc<dyn crate::control_plane::ControlPlaneStore>> {
+    config_path: Option<&Path>,
+) -> Result<Option<Arc<dyn ControlPlaneStore>>> {
+    let (base, source) = control_plane_base(config, config_path);
+    let path = base.display();
+    if source == BaseSource::Explicit && !base.is_absolute() {
+        return Err(Error::Config(format!(
+            "control_plane.store_dir '{path}' must be an absolute path"
+        )));
+    }
+    if !config.auth.enabled {
+        info!(
+            %path, ?source,
+            "control-plane governance mutations disabled: auth is off (would expose an anonymous-admin mutation surface)"
+        );
+        return Ok(None);
+    }
+    // An explicit directory is proven writable, not inferred from the audit
+    // log's open as a side effect.
+    let opened = match source {
+        BaseSource::Explicit => probe_writable(&base)
+            .map_err(|e| e.to_string())
+            .and_then(|()| open_store(config, &base)),
+        BaseSource::Default => open_store(config, &base),
+    };
+    match (opened, source) {
+        (Ok(store), _) => {
+            info!(%path, ?source, "control-plane store opened");
+            Ok(Some(store))
+        }
+        (Err(error), BaseSource::Explicit) => Err(Error::Config(format!(
+            "control_plane.store_dir '{path}' could not be opened: {error}"
+        ))),
+        (Err(error), BaseSource::Default) => {
+            warn!(
+                %path, ?source, %error,
+                "control-plane store unavailable; governance mutations disabled. Set control_plane.store_dir to a writable directory"
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Create, fsync and remove a marker file in `dir`.
+fn probe_writable(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let marker = dir.join(".write-probe");
+    std::fs::File::create(&marker)?.sync_all()?;
+    std::fs::remove_file(&marker)
+}
+
+fn open_store(
+    config: &Config,
+    base: &Path,
+) -> std::result::Result<Arc<dyn ControlPlaneStore>, String> {
     use crate::control_plane::FileControlPlaneStore;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    if !config.auth.enabled {
-        info!(
-            "control-plane governance mutations disabled: auth is off (would expose an anonymous-admin mutation surface)"
-        );
-        return None;
-    }
-
-    // Derive a per-config store directory so distinct gateway instances do not
-    // share governance state (see control_plane_base).
-    let base = control_plane_base(config_path);
     let audit_cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: base.join("audit.jsonl").to_string_lossy().into_owned(),
         key_id: config.security.transparency_log.key_id.clone(),
         shared_secret: config.security.transparency_log.shared_secret.clone(),
     });
-    let audit = match TransparencyLogger::open(audit_cfg) {
-        Ok(logger) => Arc::new(logger),
-        Err(e) => {
-            warn!(error = %e, "control-plane audit log unavailable; governance mutations disabled");
-            return None;
-        }
-    };
-    match FileControlPlaneStore::open(base.join("store"), audit) {
-        Ok(store) => Some(Arc::new(store) as Arc<dyn crate::control_plane::ControlPlaneStore>),
-        Err(e) => {
-            warn!(error = %e, "control-plane store unavailable; governance mutations disabled");
-            None
-        }
-    }
+    let audit = TransparencyLogger::open(audit_cfg).map_err(|e| format!("audit log: {e}"))?;
+    let store = FileControlPlaneStore::open(base.join("store"), Arc::new(audit))
+        .map_err(|e| format!("store: {e}"))?;
+    Ok(Arc::new(store))
 }
 
 /// F6 (MIK 7570.GOVSTORE.1): where the governance store lives, and what a
@@ -92,12 +151,13 @@ mod tests {
     /// `Ok(true)` a gateway serving governance mutation, `Ok(false)` one
     /// serving read-only.
     fn start(config: &Config, config_path: &Path) -> Result<bool, String> {
-        Ok(super::build_control_plane_store(config, Some(config_path)).is_some())
+        super::build_control_plane_store(config, Some(config_path))
+            .map(|store| store.is_some())
+            .map_err(|e| e.to_string())
     }
 
     fn base(config: &Config, config_path: &Path) -> PathBuf {
-        let _ = config;
-        super::control_plane_base(Some(config_path))
+        super::control_plane_base(config, Some(config_path)).0
     }
 
     /// Write `yaml` as `<dir>/gateway.yaml` and load it the way startup does.
