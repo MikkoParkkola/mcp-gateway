@@ -4,7 +4,7 @@ From any 3.x release. No migration edits your `gateway.yaml`, and the gateway ma
 change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11 and 23-28 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27 and 29 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
