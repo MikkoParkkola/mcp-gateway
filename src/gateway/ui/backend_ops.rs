@@ -249,7 +249,7 @@ pub fn resolve_transport(
 
     // Explicit URL.
     if let Some(url) = url {
-        let transport = TransportConfig::for_url(url);
+        let transport = TransportConfig::Http { http_url: url.to_string(), streamable_http: false, protocol_version: None };
         return Ok((transport, desc.unwrap_or("").to_string()));
     }
 

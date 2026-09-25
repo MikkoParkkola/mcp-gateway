@@ -317,7 +317,7 @@ fn requested_transport(command: Option<String>, url: Option<String>) -> Option<T
             cwd: None,
             protocol_version: None,
         })
-        .or_else(|| url.map(|url| TransportConfig::for_url(&url)))
+        .or_else(|| url.map(|http_url| TransportConfig::Http { http_url, streamable_http: false, protocol_version: None }))
 }
 
 async fn update_backend(

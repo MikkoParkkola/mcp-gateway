@@ -13,7 +13,7 @@ impl TransportConfig {
     /// can never become a broken HTTP backend.
     pub(crate) fn for_url(url: &str) -> Self {
         let scheme = url.split_once("://").map_or("", |(scheme, _)| scheme);
-        if scheme.eq_ignore_ascii_case("ws") || scheme.eq_ignore_ascii_case("wss") {
+        if scheme == "ws" || scheme == "wss" {
             return Self::WebSocket {
                 ws_url: url.to_string(),
                 protocol_version: None,
