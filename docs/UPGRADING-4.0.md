@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29 or 30 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30 or 34 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30-33 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27 and 30-34 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29 and 30 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30 and 34 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -51,6 +51,7 @@ upgrading a running deployment.
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
+| 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -690,6 +691,20 @@ restart, not on a config reload.
   the chart no longer renders those annotations, so a stock install is not scraped to `up=0`.
 - **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
   from the optional Secret `mcp-gateway-metrics` (key `token`).
+
+## 34. The inbound WebSocket listener is removed, and `server.ws_port` fails the load
+
+In 3.x, `server.ws_port` spawned a WebSocket listener beside the HTTP server. It only echoed
+text frames back: it never served MCP, sat outside the Origin/Host guard and had no
+authentication, so no client could reach a tool through it.
+
+- **The listener is gone.** Clients connect via stdio or HTTP (`POST /mcp`).
+- **`server.ws_port` in the config file is a retired key and refuses the load**, on start and on
+  reload, with `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0;
+  ... Remove server.ws_port. Delete the key. Like every `MCP_GATEWAY_*` variable,
+  `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
+- **WebSocket is not a backend transport either.** No backend config reaches the WebSocket client
+  in `src/transport/websocket.rs`; backends use stdio, HTTP (Streamable HTTP or SSE) or A2A.
 
 ## After upgrading
 

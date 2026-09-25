@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all fifteen items, each named by the
+/// GH475.MIG.4 — the notice carries all sixteen items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_fifteen_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 15);
+fn notice_4_0_0_carries_all_sixteen_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 16);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -33,6 +33,7 @@ fn notice_4_0_0_carries_all_fifteen_items() {
         "input_schema_enforcement",
         "backends: [\"*\"]",
         "server.metrics_token",
+        "server.ws_port",
     ] {
         assert!(
             all.contains(expected),
