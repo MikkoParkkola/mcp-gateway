@@ -101,7 +101,6 @@ impl SecretResolver {
             // Empty is refused like unset, as `SecretRef::resolve` does (C4).
             let value = env
                 .resolve(var_name)
-                .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
                     Error::Config(format!(
                         "{{env.{var_name}}} is not set or is empty{}",
