@@ -16,7 +16,10 @@ impl AuditWho {
     /// from a label or an email.
     pub(crate) fn from_caller(caller: &MetaMcpCallerContext<'_>) -> Self {
         Self {
-            credential_kind: Some(caller.credential_kind),
+            credential_kind: {
+                let _ = caller.credential_kind;
+                None
+            },
             principal: caller.credential_principal.unwrap_or_default().to_string(),
             account: caller.api_key_name.unwrap_or("anonymous").to_string(),
             authority: caller.grant_subject.as_ref().map(|g| g.authority.clone()),
