@@ -513,10 +513,14 @@ pub(crate) fn validate_no_gateway_material_reuse(
         // A literal credential in the file is still the credential the gateway
         // authenticates with, so it is compared as material. An unreadable
         // `file:` is `auth`'s own diagnostic, as an unset variable is.
-        let material = overlay
-            .resolve_reference(&credential.label(), credential.spec())
-            .ok()
-            .flatten();
+        let material = if credential.spec().starts_with("file:") {
+            Some(credential.spec().to_string())
+        } else {
+            overlay
+                .resolve_reference(&credential.label(), credential.spec())
+                .ok()
+                .flatten()
+        };
         let is_digest = matches!(credential, GatewayCredential::ApiKeyDigest { .. });
         match material {
             Some(value) if is_digest => {
