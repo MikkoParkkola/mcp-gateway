@@ -2608,6 +2608,10 @@ mod account_resolver_tests;
 mod account_rest_fixture;
 #[cfg(test)]
 mod account_rest_tests;
+#[cfg(test)]
+mod upstream_401_tests;
+#[cfg(test)]
+mod upstream_401_mcp_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

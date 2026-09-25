@@ -212,6 +212,10 @@ struct AuthorityEntry {
     record_sha256: Option<String>,
     state: GrantState,
     legacy_migration: Option<String>,
+    /// A11-d: the token revision a 401 already forced a refresh for.
+    /// Absent in pre-A11 files, which read as never force-tried.
+    #[serde(default)]
+    forced_revision: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -437,7 +441,7 @@ pub(crate) use service::CredentialLease;
 #[cfg(test)]
 pub(crate) use service::{
     ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
-    ReleasedCredentials, TokenRefresh,
+    RejectionOutcome, ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use storage::journey::JourneyReason;

@@ -349,6 +349,8 @@ fn stage_publication(
             record_sha256: Some(hex::encode(Sha256::digest(bytes.as_bytes()))),
             state: GrantState::Connected,
             legacy_migration,
+            // A new or reconnected grant has never been force-tried.
+            forced_revision: None,
         },
     );
 

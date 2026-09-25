@@ -93,6 +93,21 @@ pub(crate) struct CredentialLease {
     pub(crate) token_revision: u64,
 }
 
+/// What a forced refresh after an upstream 401 did (A11-c′). `InvalidGrant`
+/// is not an outcome: it fences, and comes back as `Err(ReconnectRequired)`.
+#[cfg(test)] // RED-FIRST: the implementation commit removes this gate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RejectionOutcome {
+    /// The provider rotated the token; the next call presents the new one.
+    Rotated,
+    /// The lease was already superseded, so nobody was asked.
+    Stale,
+    /// The provider could not be reached; the revision is still marked.
+    Unavailable,
+    /// This revision was already force-tried; the backend still refuses it.
+    AlreadyForced,
+}
+
 /// Transport credentials, produced only after a successful release recheck.
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct ReleasedCredentials {
@@ -281,6 +296,17 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
                 self.fence_after_invalid_grant(account, &expected)
             }
         }
+    }
+
+    /// A11: the backend refused this lease's token with HTTP 401.
+    ///
+    /// RED-FIRST STUB: never refreshes. Replaced by the A11 implementation.
+    #[cfg(test)]
+    pub(crate) async fn refresh_after_rejection(
+        &self,
+        _lease: &CredentialLease,
+    ) -> Result<RejectionOutcome, AccountServiceError> {
+        Ok(RejectionOutcome::AlreadyForced)
     }
 
     /// Recheck the whole lease against current authority, then publish once.

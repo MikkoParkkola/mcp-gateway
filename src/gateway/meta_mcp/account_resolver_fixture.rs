@@ -308,6 +308,20 @@ fn store_config(root: &std::path::Path) -> StoreConfig {
 pub(super) struct ScriptedProvider {
     rotated: String,
     calls: Arc<AtomicUsize>,
+    /// A11: answers consumed one per call, in order. When empty, every call
+    /// rotates to `rotated`, which is what every pre-A11 case relies on.
+    steps: Mutex<std::collections::VecDeque<ProviderStep>>,
+}
+
+/// One scripted provider answer (A11 cells).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ProviderStep {
+    /// Rotate to this access token, never expiring.
+    Rotate(&'static str),
+    /// The grant is dead: `invalid_grant`.
+    InvalidGrant,
+    /// The provider could not be reached.
+    Unavailable,
 }
 
 impl RefreshProvider for ScriptedProvider {
@@ -317,8 +331,22 @@ impl RefreshProvider for ScriptedProvider {
         current: &GrantRecord,
     ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let access_token = match self.steps.lock().pop_front() {
+            Some(ProviderStep::Rotate(token)) => token.to_string(),
+            Some(ProviderStep::InvalidGrant) => {
+                return futures::future::Either::Left(std::future::ready(Err(
+                    ProviderRefreshError::InvalidGrant,
+                )));
+            }
+            Some(ProviderStep::Unavailable) => {
+                return futures::future::Either::Left(std::future::ready(Err(
+                    ProviderRefreshError::Unavailable,
+                )));
+            }
+            None => self.rotated.clone(),
+        };
         let rotated = TokenRefresh {
-            access_token: self.rotated.clone(),
+            access_token,
             refresh_token: None,
             // Never broader than what was granted: the service refuses
             // broadening, and this fixture must not smuggle scope past it.
@@ -326,7 +354,7 @@ impl RefreshProvider for ScriptedProvider {
             token_type: "Bearer".into(),
             expires_at: u64::MAX,
         };
-        async move { Ok(rotated) }
+        futures::future::Either::Right(async move { Ok(rotated) })
     }
 }
 
@@ -399,6 +427,15 @@ pub(super) fn custody_with(seed: &[(AccountKey, GrantRecord)]) -> Custody {
 
 /// As [`custody_with`], with the scripted rotation chosen.
 pub(super) fn custody_with_rotation(seed: &[(AccountKey, GrantRecord)], rotated: &str) -> Custody {
+    custody_with_steps(seed, rotated, &[])
+}
+
+/// As [`custody_with_rotation`], with the provider's first answers scripted.
+pub(super) fn custody_with_steps(
+    seed: &[(AccountKey, GrantRecord)],
+    rotated: &str,
+    steps: &[ProviderStep],
+) -> Custody {
     let root = tempfile::TempDir::new().expect("fixture tempdir");
     let config = store_config(root.path());
 
@@ -417,6 +454,7 @@ pub(super) fn custody_with_rotation(seed: &[(AccountKey, GrantRecord)], rotated:
         ScriptedProvider {
             rotated: rotated.to_string(),
             calls: Arc::clone(&refresh_calls),
+            steps: Mutex::new(steps.iter().copied().collect()),
         },
         Arc::clone(&observer),
         4,
@@ -454,9 +492,31 @@ impl Dispatch {
 #[derive(Default)]
 pub(super) struct Dispatches {
     calls: Mutex<Vec<Dispatch>>,
+    /// A11: HTTP statuses the backend answers the next dispatches with, in
+    /// order, as the typed `Error::Http` the transport produces (A11-b). Empty
+    /// means today's success, which is what every pre-A11 case relies on.
+    answers: Mutex<std::collections::VecDeque<u16>>,
+}
+
+/// The typed error the HTTP transport returns for a non-2xx `status` (A11-b):
+/// a real `reqwest::Error` carrying the status, so `status()` reads it.
+fn http_status_error(status: u16) -> crate::Error {
+    let response = axum::http::Response::builder()
+        .status(status)
+        .body(String::new())
+        .expect("fixture response builds");
+    let error = reqwest::Response::from(response)
+        .error_for_status()
+        .expect_err("a fixture status is non-2xx");
+    crate::Error::Http(error)
 }
 
 impl Dispatches {
+    /// Answer the next dispatches with these HTTP statuses (A11 cells).
+    pub(super) fn answer_with(&self, statuses: &[u16]) {
+        self.answers.lock().extend(statuses.iter().copied());
+    }
+
     pub(super) fn count(&self) -> usize {
         self.calls.lock().len()
     }
@@ -509,6 +569,9 @@ impl crate::transport::Transport for CapturingTransport {
             headers: extra_headers.to_vec(),
             identity_key: identity_key.map(str::to_string),
         });
+        if let Some(status) = self.dispatches.answers.lock().pop_front() {
+            return Err(http_status_error(status));
+        }
         Ok(crate::protocol::JsonRpcResponse::success(
             crate::protocol::RequestId::Number(1),
             json!({"content": [{"type": "text", "text": "ok"}]}),

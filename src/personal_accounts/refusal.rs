@@ -96,6 +96,40 @@ pub(crate) fn mark(refused: Error, cause: &PropagationError, account_id: Option<
     }
 }
 
+/// A11-b′: an upstream 401 against a managed account, as a dispatch site
+/// reads it: the recovery code and whether retrying the same call can help.
+#[cfg(test)] // RED-FIRST: the implementation commit removes this gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UpstreamRejection {
+    pub(crate) error_code: &'static str,
+    pub(crate) retry: bool,
+}
+
+/// The upstream-rejection mark inside `error`, if it is one.
+///
+/// RED-FIRST STUB: nothing is marked yet.
+#[cfg(test)]
+pub(crate) fn upstream_rejection(_error: &Error) -> Option<UpstreamRejection> {
+    None
+}
+
+/// The ONE mapping from a forced refresh's outcome to what the caller is told
+/// (A11-c′): `AlreadyForced` is persistent and not retryable; every other
+/// outcome means the next call presents a different or newer token.
+///
+/// RED-FIRST STUB: returns `refused` unmarked.
+#[cfg(test)]
+pub(crate) fn mark_rejection(
+    _outcome: super::RejectionOutcome,
+    refused: Error,
+) -> Error {
+    refused
+}
+
+#[cfg(test)]
+#[path = "refusal_rejection_tests.rs"]
+mod rejection_tests;
+
 /// The marked refusal inside `error`, if it is one.
 pub(crate) fn marked(error: &Error) -> Option<Marked<'_>> {
     let Error::JsonRpc {

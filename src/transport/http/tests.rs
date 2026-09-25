@@ -2852,3 +2852,6 @@ async fn row_16d_a_404_carrying_a_session_error_body_still_reinitializes() {
 
     server.abort();
 }
+
+#[path = "status_typing_tests.rs"]
+mod status_typing;
