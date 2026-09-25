@@ -214,6 +214,35 @@ mod tests {
         );
     }
 
+    /// A `.write-probe` symlink planted in the store dir must not become a
+    /// write through the gateway's privileges. Chosen outcome: the probe
+    /// unlinks the link and succeeds, and the link's target keeps its bytes.
+    #[cfg(unix)]
+    #[test]
+    fn write_probe_does_not_follow_a_planted_symlink() {
+        let (cfg_dir, data, outside) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let store_dir = data.path().join("cp");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let target = outside.path().join("victim");
+        std::fs::write(&target, b"known bytes").unwrap();
+        std::os::unix::fs::symlink(&target, store_dir.join(".write-probe")).unwrap();
+        let (config, path) = load(
+            cfg_dir.path(),
+            &auth_on_with_store_dir(&store_dir.to_string_lossy()),
+        );
+
+        assert_eq!(start(&config, &path), Ok(true));
+        assert_eq!(std::fs::read(&target).unwrap(), b"known bytes");
+        assert!(
+            std::fs::symlink_metadata(store_dir.join(".write-probe")).is_err(),
+            "the probe must leave no marker behind"
+        );
+    }
+
     #[test]
     fn relative_store_dir_refuses_start() {
         let cfg_dir = tempfile::tempdir().unwrap();
