@@ -67,6 +67,7 @@ pub(super) fn refuse_unrecognised_keys(path: Option<&Path>) -> Result<()> {
     };
     let mut found = ignored_by_serde(&raw);
     let _ = unread_backend_keys;
+    found.extend(BTreeSet::<String>::new());
     if found.is_empty() {
         return Ok(());
     }
