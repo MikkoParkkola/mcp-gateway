@@ -1395,6 +1395,7 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
         .map(ToString::to_string)
         .collect();
     let mut keys: Vec<String> = keys.into_iter().collect();
+    keys.extend(evaluated.overlay.rotated_secret_files(startup));
     // A `~` entry is expanded against the `HOME` in force AT THAT POINT in the
     // sequence (`Config::evaluate`), not the one left standing at the end, so
     // an env file can move where a LATER entry reads while the final value is
@@ -2290,6 +2291,8 @@ mod grant_delta;
 
 #[cfg(test)]
 mod c4_enable_tests;
+#[cfg(test)]
+mod c9_file_ref_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
