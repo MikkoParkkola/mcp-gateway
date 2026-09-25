@@ -203,7 +203,7 @@ fn apply_intersection(
 /// - Otherwise, return only items that appear in both lists (wildcards in
 ///   `policy` are respected).
 fn intersect_scope_list(policy: &[String], requested: &[String]) -> Vec<String> {
-    let policy_is_wildcard = policy.iter().any(|p| p == "*");
+    let policy_is_wildcard = policy.is_empty() || policy.iter().any(|p| p == "*");
 
     if requested.is_empty() {
         // Client wants everything: return policy's list as-is.
