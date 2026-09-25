@@ -136,7 +136,7 @@ pub(super) async fn key_server_credential(
         };
     // E1-a: admin comes from the live role mapping on every request; no mint
     // site stores it, so a reload that removes the rule revokes it.
-    let config = state.live_config.get();
+    let config = state.live_config.running();
     client.admin = config.control_plane.role_mapping.grants_admin(&identity);
     Some((client, identity, via))
 }
