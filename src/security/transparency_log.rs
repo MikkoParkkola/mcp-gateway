@@ -73,6 +73,10 @@ const MAX_AUDIT_READ_BYTES: u64 = 256 * 1024 * 1024;
 /// always fully contained in the scanned window (MIK-6710).
 const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 
+// D1-f failure policy and degraded state, split out for the file-size ceiling.
+#[path = "transparency_log_degraded.rs"]
+mod degraded;
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Runtime configuration for the transparency log.
@@ -151,6 +155,14 @@ pub struct TransparencyLogger {
     fail_next_append: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     append_attempts: std::sync::atomic::AtomicUsize,
+    /// Persistent I/O fault: every append fails while set (D1-T17).
+    #[cfg(test)]
+    fail_appends: std::sync::atomic::AtomicBool,
+    failure_policy: crate::security::audit::AuditFailurePolicy,
+    /// Set by a failed append under `FailClosed`, cleared by a successful one.
+    degraded: std::sync::atomic::AtomicBool,
+    /// Every failed append, whatever the policy.
+    append_failures: std::sync::atomic::AtomicU64,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -241,6 +253,11 @@ impl TransparencyLogger {
             fail_next_append: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             append_attempts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_appends: std::sync::atomic::AtomicBool::new(false),
+            failure_policy: crate::security::audit::AuditFailurePolicy::BestEffort,
+            degraded: std::sync::atomic::AtomicBool::new(false),
+            append_failures: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -407,6 +424,7 @@ impl TransparencyLogger {
             if self
                 .fail_next_append
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
+                || self.fail_appends.load(std::sync::atomic::Ordering::Acquire)
             {
                 return Err(io::Error::other("injected transparency append failure"));
             }

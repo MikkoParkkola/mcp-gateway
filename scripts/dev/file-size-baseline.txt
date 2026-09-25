@@ -8,7 +8,7 @@
 3946 src/gateway/router/tests.rs
 2983 src/config_reload/tests.rs
 2854 src/transport/http/tests.rs
-2743 src/gateway/meta_mcp/mod.rs
+2745 src/gateway/meta_mcp/mod.rs
 2352 tests/mik_7272_task_1_acs.rs
 2342 src/config/mod.rs
 2304 src/gateway/router/handlers.rs
@@ -32,7 +32,7 @@
 1464 src/capability/definition/tests.rs
 1462 src/idempotency.rs
 1457 src/gateway/router/backend_handlers.rs
-1442 src/security/transparency_log.rs
+1460 src/security/transparency_log.rs
 1431 src/protocol/continuation.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1407 src/capability/definition/mod.rs

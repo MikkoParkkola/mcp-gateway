@@ -545,6 +545,65 @@ fn enterprise_alpha_config_loads() {
     }
 }
 
+/// D1-g / Revision 4: `auth.enabled: true` requires a running audit log
+/// (D1-a), and the enterprise-alpha manifests get the same writable volume
+/// and `fsGroup` as the Helm chart (tier2-audit-admin-design.md, Revision 4,
+/// "the enterprise-alpha manifests ... get the same writable audit volume and
+/// fsGroup; test renders them"). Red today: the shipped ConfigMap has no
+/// `security.transparency_log` at all (ships auth-on with no audit, same gap
+/// as L13), and the Deployment mounts no `audit` volume.
+#[test]
+fn enterprise_alpha_ships_writable_audit_log_with_fsgroup() {
+    let config = docs(BASE_CONFIGMAP)
+        .into_iter()
+        .next()
+        .expect("configmap document");
+    let gateway: Value =
+        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+    assert_eq!(
+        gateway["security"]["transparency_log"]["enabled"].as_bool(),
+        Some(true),
+        "auth is enabled in the shipped config, so the audit log must be too (D1-a)"
+    );
+    let audit_path = gateway["security"]["transparency_log"]["path"]
+        .as_str()
+        .expect("transparency_log.path must be set");
+    assert!(
+        audit_path.starts_with("/var/lib/mcp-gateway/audit"),
+        "audit path must live under the writable audit volume, got {audit_path}"
+    );
+
+    let deployment = docs(DEPLOYMENT).remove(0);
+    let pod = &deployment["spec"]["template"]["spec"];
+    assert_eq!(
+        pod["securityContext"]["fsGroup"].as_i64(),
+        Some(1001),
+        "the audit volume needs the same fsGroup as the config volume"
+    );
+
+    let container = &pod["containers"][0];
+    let mounts = container["volumeMounts"]
+        .as_sequence()
+        .expect("volumeMounts");
+    let audit_mount = mounts
+        .iter()
+        .find(|m| m["name"].as_str() == Some("audit"))
+        .expect("an `audit` volumeMount must be declared");
+    let mount_path = audit_mount["mountPath"]
+        .as_str()
+        .expect("audit mount has a mountPath");
+    assert!(
+        audit_path.starts_with(mount_path),
+        "transparency_log.path {audit_path} must live under the audit mountPath {mount_path}"
+    );
+
+    let volumes = pod["volumes"].as_sequence().expect("volumes");
+    volumes
+        .iter()
+        .find(|v| v["name"].as_str() == Some("audit"))
+        .expect("an `audit` volume must be declared");
+}
+
 /// CONFIG.2: the gateway refuses a config other users can read, and the
 /// configMap projection is root-owned, so the pod reads it through `fsGroup`
 /// with no world bit. Without both the pod refuses its own config.

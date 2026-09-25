@@ -710,4 +710,24 @@ mod admin_credential_tests {
             "too short to be 32 random bytes: {token}"
         );
     }
+
+    /// D1-T12. `auth.enabled: true` with no `security.transparency_log` is
+    /// exactly what a fresh install writes today (D1-L12), and after D1-a
+    /// lands that refuses to load. Red now for a more basic reason: the
+    /// template does not turn the log on at all, so `enabled` is false even
+    /// though the config still loads. D1-e (Phase B) must make both true.
+    #[test]
+    fn init_config_loads_under_d1() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let code = super::run_init_command(&path, false, InitProfile::Local);
+        assert_eq!(code, std::process::ExitCode::SUCCESS, "init must succeed");
+
+        let config = mcp_gateway::config::Config::load(Some(&path))
+            .expect("a fresh init config must load and validate under D1-a");
+        assert!(
+            config.security.transparency_log.enabled,
+            "auth is on in the starter config, so the audit log must be too"
+        );
+    }
 }

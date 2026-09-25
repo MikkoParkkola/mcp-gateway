@@ -8,6 +8,8 @@
 pub(crate) mod account_bindings;
 #[cfg(test)]
 mod attestation_start_tests;
+#[cfg(test)]
+mod audit_start_tests;
 mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;

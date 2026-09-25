@@ -57,6 +57,8 @@ pub fn is_loopback_bind(host: &str) -> bool {
 mod well_known;
 
 #[cfg(test)]
+mod audit_degraded_tests;
+#[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
 mod identity_parity_tests;
