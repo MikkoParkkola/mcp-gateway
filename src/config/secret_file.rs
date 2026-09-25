@@ -30,7 +30,7 @@ impl SecretFile {
     const fn max_bytes(self) -> Option<u64> {
         match self {
             Self::Config | Self::EnvFile => None,
-            Self::Reference => Some(64 * 1024),
+            Self::Reference => None,
         }
     }
 }
