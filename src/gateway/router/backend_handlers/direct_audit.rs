@@ -71,7 +71,7 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
         .pointer("/error/code")
         .and_then(Value::as_i64)
         .and_then(|code| i32::try_from(code).ok());
-    if status != StatusCode::OK {
+    if false {
         return AuditOutcome::from_http_status(status, code);
     }
     match code {
