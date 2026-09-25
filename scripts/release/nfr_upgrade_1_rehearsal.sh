@@ -21,6 +21,9 @@
 # not a script bug). Fatal setup problems (missing binary, busy port, a
 # gateway that never opens its port) still call `exit 1` explicitly.
 set -uo pipefail
+# 4.0 refuses a config or env file other users can read (UPGRADING-4.0 item 35),
+# so every file this rehearsal writes is owner-only, as the documented step asks.
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIXTURE_STUB="$REPO_ROOT/scripts/release/fixtures/nfr_upgrade_1_mount_stub.py"
@@ -53,6 +56,8 @@ echo "== NFR.UPGRADE.1 rehearsal =="
 echo "RUN_DIR=$RUN_DIR"
 echo "BIN_351=$BIN_351 ($("$BIN_351" --version))"
 echo "BIN_400=$BIN_400 ($("$BIN_400" --version))"
+# The stamp the 4.0 binary writes is its own version (4.0.0-beta.1, 4.0.0, ...).
+VERSION_400="$("$BIN_400" --version | awk '{print $2}')"
 
 # ── port selection: bind a random high port, confirm nothing is listening ──
 pick_free_port() {
@@ -218,8 +223,8 @@ UPGRADE_OUT="$(HOME="$HOME_DIR" "$BIN_400" upgrade --data-dir "$DATA_DIR" 2>"$LO
 UPGRADE_EXIT=$?
 echo "$UPGRADE_OUT" > "$LOG_DIR/phase2-upgrade.stdout.log"
 STAMP_AFTER_UPGRADE="$(cat "$STAMP_PATH" 2>/dev/null || echo '<missing>')"
-if [[ "$UPGRADE_EXIT" -eq 0 && "$STAMP_AFTER_UPGRADE" == "4.0.0" ]]; then
-  record "PHASE2.STAMP_ADVANCED" "PASS" "upgrade exited 0, stamp 3.5.1 -> 4.0.0"
+if [[ "$UPGRADE_EXIT" -eq 0 && "$STAMP_AFTER_UPGRADE" == "$VERSION_400" ]]; then
+  record "PHASE2.STAMP_ADVANCED" "PASS" "upgrade exited 0, stamp 3.5.1 -> $VERSION_400"
 else
   record "PHASE2.STAMP_ADVANCED" "FAIL" "exit=$UPGRADE_EXIT stamp='$STAMP_AFTER_UPGRADE'"
 fi
@@ -389,10 +394,10 @@ TOKEN_SHA_BEFORE_ROLLBACK="$(shasum -a 256 "$TOKEN_FILE" | awk '{print $1}')"
 start_gateway "$BIN_351" "phase4-351-rollback"
 STAMP_AFTER_ROLLBACK="$(cat "$STAMP_PATH" 2>/dev/null || echo '<missing>')"
 ROLLBACK_WARNED="$(rg -c 'Downgrade detected' "$LOG_DIR/phase4-351-rollback.stderr.log" 2>/dev/null || echo 0)"
-if [[ "$STAMP_AFTER_ROLLBACK" == "4.0.0" ]]; then
-  record "PHASE4.STAMP_UNCHANGED" "PASS" "stamp still 4.0.0 after starting the 3.5.1 binary (installed.cmp(current)==Greater leaves the stamp alone)"
+if [[ "$STAMP_AFTER_ROLLBACK" == "$VERSION_400" ]]; then
+  record "PHASE4.STAMP_UNCHANGED" "PASS" "stamp still $VERSION_400 after starting the 3.5.1 binary (installed.cmp(current)==Greater leaves the stamp alone)"
 else
-  record "PHASE4.STAMP_UNCHANGED" "FAIL" "stamp changed to '$STAMP_AFTER_ROLLBACK' when it should stay 4.0.0"
+  record "PHASE4.STAMP_UNCHANGED" "FAIL" "stamp changed to '$STAMP_AFTER_ROLLBACK' when it should stay $VERSION_400"
 fi
 if [[ "$ROLLBACK_WARNED" != "0" ]]; then
   record "PHASE4.DOWNGRADE_WARNING_LOGGED" "PASS" "'Downgrade detected' warning present in 3.5.1 stderr"
