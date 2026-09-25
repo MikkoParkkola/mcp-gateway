@@ -101,6 +101,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session is told. `subscriptions/listen` is unchanged. The unused
   `notifications/roots/list_changed` sender, which nothing called, is removed.
   See `docs/UPGRADING-4.0.md` item 24.
+- **Admin-panel grant and policy edits are refused with 409 (breaking).**
+  `POST /ui/api/control-plane/grants`, `…/policies` and `…/decisions` wrote to
+  the control-plane store and answered 200, but dispatch never read that store,
+  so the edit was accepted and ignored. The page also merged the store's rows
+  over the enforced ones, so it could show an enforced grant as revoked or SSRF
+  protection as off. The routes now check RBAC and return 409 naming the config
+  that is enforced (`security.identity_grants.path` and `mcp-gateway identity
+  grants`, or `security.sanitize_input` / `security.ssrf_protection`), with no
+  store or audit write. The page shows only enforced grants and policies, reads
+  "Read Only", and adds `authority`. The store still feeds the audit view. See
+  `docs/UPGRADING-4.0.md` item 25.
 - **`logging/setLevel` over HTTP needs an admin key (breaking).** The meta route
   forwarded the level over the gateway's own credential to every shared backend,
   so any key, including one scoped to a single backend, could switch every
