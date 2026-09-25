@@ -193,7 +193,7 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
 fn write_config(home: &Path, backend_url: &str) {
     let yaml = format!(
         "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
-         error_budget:\n  window_size: 100000\n  min_samples: 100000\n  capability:\n    \
+         \x20   error_budget:\n  window_size: 100000\n  min_samples: 100000\n  capability:\n    \
          window_size: 100000\n    min_samples: 100000\n"
     );
     // The top-level config ignores keys it does not know, so a misnested
