@@ -555,11 +555,13 @@ annotated pod in the cluster. The Helm chart advertises `/metrics` (the
 Secret holding the token, and `metrics.serviceMonitor.enabled` renders a
 prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
 
-- `mcp_gateway_requests_total` -- count per backend/tool
-- `mcp_gateway_request_duration_seconds` -- latency histogram
-- `mcp_gateway_circuit_breaker_state` -- state gauge
-- `mcp_gateway_rate_limiter_rejections_total` -- rejection count
-- `mcp_gateway_active_connections` -- current connections
+- `mcp_backend_requests_total` -- requests per backend
+- `mcp_backend_request_duration_seconds` -- backend latency histogram
+- `mcp_backend_circuit_state` -- circuit breaker state per backend
+- `mcp_circuit_breaker_opened_total` -- breaker trips
+- `mcp_tool_invocations_total`, `mcp_tool_invocation_duration_seconds` -- per-tool calls and latency
+- `mcp_cache_hits_total` -- response cache hits
+- `mcp_jsonrpc_requests_total` -- JSON-RPC requests by method
 - `mcp_backend_idle_stop_close_failures` -- per backend, counts backends stopped
   for idleness that did not shut down cleanly (see below)
 - `mcp_message_signing_nonce_entries` -- live signing nonces held for replay
