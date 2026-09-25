@@ -397,7 +397,7 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     /// The one derivation both the mint and the redeem read, so the two cannot
     /// name one caller two ways.
     pub(crate) fn principal_source(&self) -> crate::protocol::mrtr::PrincipalSource<'_> {
-        match self.stdio_nonce {
+        match None::<&crate::gateway::server::StdioNonce> {
             Some(nonce) => crate::protocol::mrtr::PrincipalSource::Stdio {
                 nonce: nonce.bytes(),
             },
