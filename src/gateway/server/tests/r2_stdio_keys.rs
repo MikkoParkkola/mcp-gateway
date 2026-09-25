@@ -54,7 +54,7 @@ impl crate::transport::Transport for Wire {
     }
 }
 
-fn call(id: u64, tool: &str, arguments: Value) -> Value {
+fn call(id: u64, tool: &str, arguments: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
         "params": {"name": tool, "arguments": arguments}})
 }
@@ -87,7 +87,7 @@ async fn stdio_tools_call_refuses_nested_invented_key() {
         }
     };
 
-    let listed = dispatch(call(1, "gateway_list_tools", json!({"server": "edits"}))).await;
+    let listed = dispatch(call(1, "gateway_list_tools", &json!({"server": "edits"}))).await;
     assert!(
         listed.to_string().contains("\\\"edit\\\""),
         "not listed: {listed}"
@@ -95,7 +95,7 @@ async fn stdio_tools_call_refuses_nested_invented_key() {
 
     let invented = json!({"server": "edits", "tool": "edit", "arguments":
         {"edits": [{"oldText": "a", "newText": "b", "type": "replace"}]}});
-    let refused = dispatch(call(2, "gateway_invoke", invented)).await;
+    let refused = dispatch(call(2, "gateway_invoke", &invented)).await;
     let text = refused["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or_default();

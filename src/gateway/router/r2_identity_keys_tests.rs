@@ -204,7 +204,7 @@ async fn post_as_alpha(router: &axum::Router, uri: &str, body: Value) -> (Status
     (status, serde_json::from_slice(&body).unwrap())
 }
 
-fn meta_call(tool: &str, arguments: Value) -> Value {
+fn meta_call(tool: &str, arguments: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": 21, "method": "tools/call",
         "params": {"name": tool, "arguments": arguments}})
 }
@@ -236,7 +236,7 @@ async fn per_identity_meta_list_warms_the_slot_the_call_is_judged_against() {
     let (_, listed) = post_as_alpha(
         &gw.router,
         "/mcp",
-        meta_call("gateway_list_tools", json!({"server": "edits"})),
+        meta_call("gateway_list_tools", &json!({"server": "edits"})),
     )
     .await;
     assert!(
@@ -249,7 +249,7 @@ async fn per_identity_meta_list_warms_the_slot_the_call_is_judged_against() {
     );
 
     let args = json!({"server": "edits", "tool": "edit", "arguments": invented()});
-    let (_, body) = post_as_alpha(&gw.router, "/mcp", meta_call("gateway_invoke", args)).await;
+    let (_, body) = post_as_alpha(&gw.router, "/mcp", meta_call("gateway_invoke", &args)).await;
     assert!(refused(&body), "forwarded instead of refused: {body}");
     let calls = |seen: &Seen| seen.lock().iter().filter(|m| *m == "tools/call").count();
     assert_eq!(
