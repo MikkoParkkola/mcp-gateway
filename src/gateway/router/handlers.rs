@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 use super::AppState;
 use super::authorization::{
     CallerStanding, RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call,
-    is_admin_meta_tool, refusal_principal, require_admin_tool_access,
+    is_admin_meta_tool, refusal_principal, require_admin_log_level, require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -1768,25 +1768,11 @@ async fn meta_mcp_dispatch(
 
         // Logging
         "logging/setLevel" => {
-            // A shared backend is one process with one level, and the handler
-            // forwards over the gateway's own credential, so this is a
-            // gateway-wide operator action. The per-caller need is met by the
-            // level declared in each request's `_meta`. -32600 matches the
-            // admin-tool refusal, so clients see one admin-denial shape.
-            if CallerStanding::of_client(scope) != CallerStanding::Admin {
-                let e = crate::gateway::authz::AuthorizationError::forbidden(
-                    -32600,
-                    "logging/setLevel sets backend log levels for the whole gateway and \
-                     requires admin access; to receive fewer messages, declare a level \
-                     in the request `_meta`",
-                );
-                crate::gateway::authz::audit_refusal(
-                    crate::gateway::authz::Transport::Http,
-                    router_authorizer.principal.as_deref(),
-                    "gateway",
-                    "logging/setLevel",
-                    &e.message,
-                );
+            // Every shared backend's one level, set over the gateway's own
+            // credential: an operator action (see `require_admin_log_level`).
+            if let Err(e) =
+                require_admin_log_level(scope, router_authorizer.principal.as_deref(), "gateway")
+            {
                 return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
             }
             state
