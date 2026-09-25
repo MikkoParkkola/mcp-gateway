@@ -94,14 +94,15 @@ impl<T> CachedMetadata<T> {
     /// the pre-revocation answer and served for the rest of the TTL. The
     /// fetch's own caller still receives its result; only the cache is denied
     /// it, so the next reader re-asks.
-    fn store_if_current(&self, value: Arc<T>, generation: u64) {
+    fn store_if_current(&self, value: Arc<T>, generation: u64) -> bool {
         let mut state = self.state.write();
         if state.generation != generation {
-            return;
+            return false;
         }
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
         state.ever_populated = true;
+        true
     }
 
     /// Not `value.is_some()`: `invalidate_if` clears the value, so that would
@@ -187,6 +188,30 @@ impl<T> CachedMetadata<T> {
         F: Fn() -> Fut,
         Fut: Future<Output = Result<T>>,
     {
+        let fetch = &fetch;
+        self.get_or_fetch_shared_then(
+            ttl,
+            || async move { fetch().await.map(|v| (v, ())) },
+            |()| {},
+        )
+        .await
+    }
+
+    /// [`Self::get_or_fetch_shared`] whose fetch also yields a side value `A`,
+    /// handed to `on_stored` ONLY when the generation check accepted the
+    /// store. State derived from a fill (the tools-truncated flag) is then
+    /// voided by the same mid-fill invalidation that voids the value.
+    pub(crate) async fn get_or_fetch_shared_then<A, F, Fut, S>(
+        &self,
+        ttl: Duration,
+        fetch: F,
+        on_stored: S,
+    ) -> Result<Arc<T>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<(T, A)>>,
+        S: FnOnce(A),
+    {
         loop {
             match self.acquire(ttl) {
                 CacheFetchState::Cached(value) => return Ok(value),
@@ -194,10 +219,14 @@ impl<T> CachedMetadata<T> {
                     let _ = receiver.changed().await;
                 }
                 CacheFetchState::Fetch(permit) => {
-                    let result = fetch().await.map(Arc::new);
-                    if let Ok(value) = &result {
-                        self.store_if_current(Arc::clone(value), permit.generation);
-                    }
+                    let result = fetch().await;
+                    let result = result.map(|(value, side)| {
+                        let value = Arc::new(value);
+                        if self.store_if_current(Arc::clone(&value), permit.generation) {
+                            on_stored(side);
+                        }
+                        value
+                    });
                     drop(permit);
                     return result;
                 }
