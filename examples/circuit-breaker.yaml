@@ -1,14 +1,14 @@
 # MCP Gateway Configuration - Circuit Breaker Example
 # =====================================================
 #
-# This example shows how to configure circuit breakers globally and per-backend.
+# This example shows how to configure the circuit breaker every backend uses.
 # Circuit breakers prevent cascading failures when backends go down.
 
 server:
   host: "127.0.0.1"
   port: 39400
 
-# Global circuit breaker configuration (applies to all backends by default)
+# Global circuit breaker configuration (applies to every backend)
 failsafe:
   circuit_breaker:
     enabled: true
@@ -23,40 +23,22 @@ failsafe:
     requests_per_second: 100
 
 backends:
-  # Use global circuit breaker settings
+  # Every backend gets its own breaker, built from the `failsafe.circuit_breaker`
+  # settings above. There is no per-backend override: a `circuit_breaker` block
+  # under a backend was never read, and 4.0 refuses it as an unrecognised key.
   reliable-backend:
     http_url: "http://localhost:8080/mcp"
-    description: "Reliable service - uses global settings"
+    description: "Reliable service"
     timeout: "10s"
 
-  # Override circuit breaker for flaky backend (more lenient)
   flaky-backend:
     http_url: "http://localhost:8081/mcp"
-    description: "Flaky service - custom circuit breaker"
+    description: "Flaky service"
     timeout: "10s"
-    circuit_breaker:
-      enabled: true
-      failure_threshold: 10   # More lenient - 10 failures before opening
-      success_threshold: 3    # Require 3 successes to close
-      reset_timeout: "60s"    # Longer recovery timeout
 
-  # Override circuit breaker for critical backend (more strict)
-  critical-backend:
-    http_url: "http://localhost:8082/mcp"
-    description: "Critical service - strict circuit breaker"
-    timeout: "5s"
-    circuit_breaker:
-      enabled: true
-      failure_threshold: 3    # Strict - open after just 3 failures
-      success_threshold: 5    # Require 5 successes before trusting again
-      reset_timeout: "10s"    # Quick retry to test recovery
-
-  # Disable circuit breaker for specific backend
   testing-backend:
     command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
-    description: "Testing service - no circuit breaker"
-    circuit_breaker:
-      enabled: false
+    description: "Testing service"
 
 # Circuit Breaker Behavior:
 # =========================
