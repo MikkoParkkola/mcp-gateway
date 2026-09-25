@@ -91,6 +91,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [@terafin](https://github.com/terafin) in [#695](https://github.com/MikkoParkkola/mcp-gateway/pull/695))
 
 ### Changed
+
+- **`logging/setLevel` over HTTP needs an admin key (breaking).** The meta route
+  forwarded the level over the gateway's own credential to every shared backend,
+  so any key, including one scoped to a single backend, could switch every
+  shared backend to `debug` for every user. Non-admin callers now get HTTP 403
+  with JSON-RPC `-32600`, and the refusal is audited. With auth off nobody is
+  admin, so the method is refused. Stdio is unchanged. See
+  `docs/UPGRADING-4.0.md` item 23.
 - **A tool count is no longer reported as `0` before a backend has been
   enumerated.** `gateway_list_servers`, the `initialize` preamble and the
   `gateway_list_tools` / `gateway_search_tools` descriptions all derive their
