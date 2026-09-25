@@ -127,7 +127,7 @@ mcp() { # id-or-empty method params_json [session] -> response headers + body
     body="{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params}"
   fi
   curl -sS --max-time 10 -D - -X POST "http://127.0.0.1:39499/mcp" \
-    -H "Authorization: Bearer $TOKEN" \
+    -H "Authorization: Bearer mutant-$TOKEN" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     ${sess:+-H "Mcp-Session-Id: $sess"} \
