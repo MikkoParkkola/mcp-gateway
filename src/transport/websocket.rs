@@ -38,6 +38,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
+use super::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
@@ -198,6 +199,9 @@ struct Inner {
     /// Handle to the background I/O task (reader + writer loop). A sync lock
     /// so `Drop` can abort it.
     task: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    /// Red stub: the F16 tests name this field; nothing registers or routes.
+    #[allow(dead_code)]
+    progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
 }
 
 impl Inner {
@@ -209,6 +213,7 @@ impl Inner {
             connected: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
             task: parking_lot::Mutex::new(None),
+            progress_destinations: dashmap::DashMap::new(),
         })
     }
 }
