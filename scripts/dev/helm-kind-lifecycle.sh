@@ -68,6 +68,7 @@ common_args=(
   --set image.registry="$IMG_REG"
   --set image.repository="$IMG_REPO"
   --set probes.enabled=false
+  --set server.cleartextHttp=cluster_internal
   --wait --timeout "$TIMEOUT"
 )
 

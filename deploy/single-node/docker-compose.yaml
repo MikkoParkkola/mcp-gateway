@@ -33,6 +33,11 @@ services:
       # either close the tool paths and give clients the credential, or put
       # something in front that authenticates.
       MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
+      # The same boundary answers a second question: authentication is on, and
+      # a credential over plain HTTP on 0.0.0.0 is refused unless something
+      # else keeps it off the network (C3). The loopback publish is that thing,
+      # and it goes stale on the same edit as the line above. WARNs every start.
+      MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish
 
       # The name every caller dials. On the 0.0.0.0 bind above the Host gate
       # admits a NAME only when it is declared here; an undeclared one is
