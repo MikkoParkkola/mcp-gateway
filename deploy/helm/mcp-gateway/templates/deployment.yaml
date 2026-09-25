@@ -46,10 +46,9 @@ spec:
         # The image declares `USER gateway`, a name the kubelet cannot verify
         # as non-root, so the pod is refused (CreateContainerConfigError)
         # unless the UID is numeric here. 1001 is the image's gateway user.
-        runAsUser: 1001
-        # The config projection is root-owned; the gateway reads it through
-        # this group, and refuses it when a world bit is set (CONFIG.2).
-        fsGroup: {{ .Values.podSecurityContext.fsGroup }}
+        # fsGroup is also how the gateway reads its root-owned config projection,
+        # which it refuses when a world bit is set (CONFIG.2).
+        {{- include "mcp-gateway.podIdentity" . | trim | nindent 8 }}
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -152,4 +151,5 @@ spec:
         # Pod-lifetime state under HOME: it survives a container restart, and a
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
         - name: state
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.stateVolume.sizeLimit }}
