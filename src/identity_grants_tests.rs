@@ -16,10 +16,15 @@ fn bob() -> GrantSubject {
     GrantSubject::new("local", "bob-sub", Some("bob".to_string()))
 }
 
+fn agent_a() -> crate::security::OwnedProvenAgentId {
+    crate::security::ProvenAgentId::for_test("agent-a", crate::security::ProofSource::MutualTls)
+        .into()
+}
+
 fn personal_request(identity: Option<GrantSubject>) -> IdentityGrantRequest {
     IdentityGrantRequest {
         identity,
-        agent_id: Some("agent-a".to_string()),
+        agent_id: Some(agent_a()),
         capability: "mail.send".to_string(),
         tool: Some("send_message".to_string()),
         scope: GrantScope::Execute,
@@ -32,7 +37,7 @@ fn personal_request(identity: Option<GrantSubject>) -> IdentityGrantRequest {
 fn recommendation_request(identity: Option<GrantSubject>) -> GrantRecommendationRequest {
     GrantRecommendationRequest {
         identity,
-        agent_id: Some("agent-a".to_string()),
+        agent_id: Some(agent_a()),
         capability: "mail.read".to_string(),
         tool: Some("list_messages".to_string()),
         scope: GrantScope::Read,
@@ -50,7 +55,10 @@ fn grant() -> IdentityGrant {
     IdentityGrant {
         grant_id: "grant-1".to_string(),
         subject: alice(),
-        agent: GrantAgent::Exact("agent-a".to_string()),
+        agent: GrantAgent::Exact(crate::identity_grants::GrantAgentKey {
+            source: crate::security::ProofSource::MutualTls,
+            id: "agent-a".to_string(),
+        }),
         capability: "mail.send".to_string(),
         tool: Some("send_message".to_string()),
         scope: GrantScope::Execute,
@@ -210,7 +218,13 @@ fn recommendation_proposes_short_least_privilege_lease_for_local_workflow() {
     );
     assert!(recommendation.confirmation_required);
     assert_eq!(lease.subject, alice());
-    assert_eq!(lease.agent, GrantAgent::Exact("agent-a".to_string()));
+    assert_eq!(
+        lease.agent,
+        GrantAgent::Exact(crate::identity_grants::GrantAgentKey {
+            source: crate::security::ProofSource::MutualTls,
+            id: "agent-a".to_string()
+        })
+    );
     assert_eq!(lease.capability, "mail.read");
     assert_eq!(lease.tool.as_deref(), Some("list_messages"));
     assert_eq!(lease.scope, GrantScope::Read);

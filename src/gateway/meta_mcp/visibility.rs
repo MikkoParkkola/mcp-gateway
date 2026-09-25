@@ -251,7 +251,9 @@ impl MetaMcp {
                 .grant_subject
                 .cloned()
                 .or_else(|| Self::grant_subject_from_api_key(scope.api_key_name)),
-            agent_id: scope.agent_id.map(|a| a.as_str().to_string()),
+            agent_id: scope
+                .agent_id
+                .map(crate::security::OwnedProvenAgentId::from),
             capability: cap_def.name.clone(),
             tool: Some(tool.to_string()),
             scope: GrantScope::requested_by(&cap_def),
