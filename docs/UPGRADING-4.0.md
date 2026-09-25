@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 or 43 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 or 46 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40 and 43 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43 and 46 refuse the gateway's start (item 43 only with auth on and no working audit log; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value; item 46 only for `enforce` without a signing key). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -50,7 +50,7 @@ upgrading a running deployment.
 | 27 | Exact agent grants name their proof source | Rewrite each bare `exact` grant as `!exact {source: mtls, id}` or `!exact {source: jwt, id}`; give `known_agents` entries a source |
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
-| 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 30 | Attestation is off by default; unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines |
 | 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
@@ -63,6 +63,7 @@ upgrading a running deployment.
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 | 47 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §47 for what is refused on `ws_url` |
 | 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 
@@ -661,9 +662,7 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
 - **The default is off.** Unset, empty or `off` attaches no validator, so no
   `attestation_observe_reject` audit lines are written. Set `GATEWAY_ATTESTATION_MODE=observe`
   to keep them.
-- **`enforce` fails startup.** It is not available in this build: the direct `/mcp/{name}` route
-  and multi-step plans carry no token, so an enforce limited to `gateway_invoke` would not
-  refuse what it claims to. The error names `observe` and `off`.
+- **`enforce` enforces.** See item 46.
 - **Any other value fails startup** with an error naming the value. The value is still trimmed and
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
 - **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
@@ -1040,6 +1039,32 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 46. Attestation `enforce` enforces on every route
+
+In 3.x `enforce` ran as observe (item 30). In 4.0.0 `GATEWAY_ATTESTATION_MODE=enforce` refuses,
+with JSON-RPC -32002, every call whose token is missing, forged, expired or not scoped to the
+tool.
+
+- **It needs `GATEWAY_ATTESTATION_SIGNING_KEY`.** Enforce with an unset, empty or
+  whitespace-only key fails startup: without a key every call would be refused.
+- **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
+  signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
+  `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
+  `_meta` key before forwarding on the direct route, for every method and for passthrough
+  backends too, so no backend receives the token.
+- **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
+  route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
+  the idempotency guard, so a replayed call needs a valid token as well.
+- **Tasks.** A task-mode `gateway_invoke` re-checks its original token when the worker
+  dispatches it, so a queued task needs a token that outlives the queue. A surfaced tool run
+  as a task has no token at dispatch and is refused. Task recovery reads need a fresh token in
+  `_meta["io.mcp-gateway/recovery"].attestation`.
+- **Playbooks and code mode are refused.** Under enforce, `gateway_run_playbook` and
+  `gateway_execute` answer -32002 "multi-step plans carry no attestation in 4.0.0", keyed
+  or not. Their steps are synthesized and carry no token. Call each tool with its own token.
+- **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
+  other methods are forwarded without an attestation check.
 
 ## 47. WebSocket backends (`ws_url`)
 

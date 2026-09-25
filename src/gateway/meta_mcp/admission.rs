@@ -288,8 +288,7 @@ impl MetaMcp {
                 let envelope = if tool_name == "gateway_invoke" {
                     arguments
                 } else {
-                    synthesized =
-                        json!({"server": server, "tool": tool, "arguments": operation_arguments});
+                    synthesized = named_tool_envelope(server, tool, &operation_arguments, caller);
                     &synthesized
                 };
                 if tool_name != "gateway_invoke"
@@ -500,3 +499,22 @@ mod tests;
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]
 mod round_tests;
+
+/// The policy envelope for a backend tool called by its own name.
+///
+/// Such a call has no `attestation` argument, so its token rides in
+/// `params._meta["io.mcp-gateway/attestation"]`, parsed into `caller.retry`.
+/// Admission and the invoke funnel both check an envelope built here, so the
+/// two checks of one call see the same token (MIK-7570.ATTEST.1).
+pub(super) fn named_tool_envelope(
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    caller: &super::MetaMcpCallerContext<'_>,
+) -> Value {
+    let mut envelope = json!({"server": server, "tool": tool, "arguments": arguments});
+    if let Some(token) = &caller.retry.attestation {
+        envelope["attestation"] = json!(token);
+    }
+    envelope
+}
