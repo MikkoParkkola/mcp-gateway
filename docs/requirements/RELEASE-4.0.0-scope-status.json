@@ -914,11 +914,15 @@
     },
     {
       "id": "MIK-7570.STDIO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "tests/r5_stdio_modern_continuation.rs",
+        "src/gateway/server/stdio_nonce.rs",
+        "src/protocol/mrtr.rs"
+      ],
+      "note": "Graded 2026-09-25 (R5, design R5-design.md rev 3; criterion text amended in the same PR, #1034). A modern-era stdio caller whose call declares elicitation in its own _meta now receives an InputRequiredResult with a redeemable requestState, and its retry completes, instead of -32003. Mechanism: MetaMcpCallerContext::principal_source (src/gateway/meta_mcp/invoke.rs) is the one derivation the mint and the redeem read; a stdio caller binds as sha256(\"stdio:\" + nonce) with a per-process OS-RNG nonce (src/gateway/server/stdio_nonce.rs) that only the two stdio context builders can obtain; the input bridge stays Era::Legacy. Green: CI run 36179259012 at c034f39a6. Red first: CI run 36179275448 (tests only on the release line): T1, T2, T9 failed with -32003, guards green. Delete-the-branch via CI, one mutant per run: M1 principal_source ignores the nonce, run 36178774897 (T1, T2, T9, T6 red); M2 redeem derives from identity only, run 36178778956 (T2 red, T1 green); M3 constant nonce, run 36178785311 (T5 red); M4 bridge admits unnamed callers, run 36178785954 (T3 red, with T1, T2, T9); M5 HTTP builder sets the stdio nonce, run 36178788579 (T7 and ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another red); M6 with_retry drops the nonce, run 36178790942 (T6 red). Out of scope: confirmation, task-confirmation and chain continuations still bind on identity only."
     },
     {
       "id": "MIK-7570.DOCS.1",
