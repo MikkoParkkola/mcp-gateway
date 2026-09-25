@@ -496,11 +496,16 @@
     },
     {
       "id": "MIK-7570.CHART.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "tests/kubernetes_manifest_tests.rs",
+        "scripts/dev/helm-chart-smoke.sh",
+        "scripts/dev/helm-kind-real-image.sh",
+        "src/gateway/task_service/runtime_tests.rs"
+      ],
+      "note": "Graded 2026-09-25 (B1). Green CI run 36079366315 and Docker run 36079366081 at 18784b80: the Docker amd64 leg installs the chart with default values (image and probes.enabled=true overridden) on the PR's own image in kind under Pod Security restricted and prints 'helm kind real image passed: Ready and /livez 200'. Pinned by enterprise_alpha_args_parse and enterprise_alpha_config_loads (tests/kubernetes_manifest_tests.rs), helm_rendered_args_and_config_are_valid and helm_renders_writable_state (scripts/dev/helm-chart-smoke.sh) and task_store_under_readonly_home_is_fatal (src/gateway/task_service/runtime_tests.rs). Red at 25677e8e: CI 36079301087, Docker 36079300932."
     },
     {
       "id": "MIK-7570.GOVSTORE.1",
