@@ -17,7 +17,7 @@ pub enum ChangeFeed {
 
 impl super::meta_mcp::MetaMcp {
     /// Bind the server mode once, when the HTTP server is built.
-    pub fn set_change_feed(&self, feed: ChangeFeed) {
+    pub(crate) fn set_change_feed(&self, feed: ChangeFeed) {
         let _ = self.change_feed.set(feed);
     }
 

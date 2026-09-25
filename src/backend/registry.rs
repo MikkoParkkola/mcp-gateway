@@ -257,12 +257,12 @@ impl BackendRegistry {
     }
 
     /// Route every membership change to one consumer (F24). Set once, by the HTTP server.
-    pub fn set_change_feed(&self, feed: tokio::sync::mpsc::UnboundedSender<String>) {
+    pub(crate) fn set_change_feed(&self, feed: tokio::sync::mpsc::UnboundedSender<String>) {
         let _ = self.change_feed.set(feed);
     }
 
     /// Report that `name`'s tools changed. A no-op until a feed is set.
-    pub fn announce_change(&self, name: &str) {
+    pub(crate) fn announce_change(&self, name: &str) {
         if let Some(feed) = self.change_feed.get() {
             let _ = feed.send(name.to_string());
         }

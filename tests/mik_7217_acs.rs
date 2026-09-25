@@ -217,7 +217,7 @@ fn ac_discover_3_initialize_result_is_unchanged() {
     // the wrong behaviour and never notices.
     for client_version in ["2025-11-25", "2025-06-18"] {
         let m = meta();
-        m.set_change_feed(mcp_gateway::gateway::ChangeFeed::Http);
+        mcp_gateway::gateway::test_helpers::bind_http_change_feed(&m);
         let params = serde_json::json!({
             "protocolVersion": client_version,
             "capabilities": {},
