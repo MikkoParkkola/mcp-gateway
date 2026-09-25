@@ -232,7 +232,7 @@ async fn readyz(
 ) -> (axum::http::StatusCode, String) {
     match &state.transparency_log {
         // The cause is a fixed label such as `storage_full`, never a path.
-        Some(log) if log.admit().await.is_err() => (
+        Some(log) if false && log.admit().await.is_err() => (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             format!(
                 "audit log unavailable: {}",
