@@ -29,7 +29,8 @@ pub(crate) fn task_admission_request(
 /// What the call carries once its confirmation metadata is removed.
 ///
 /// The idempotency key survives — it is the caller's, not the gate's, and the
-/// admission this call is about to face is keyed on it. The retry pair does
+/// admission this call is about to face is keyed on it. So does the attestation
+/// token: the confirmed call faces the same attestation check as any other. The retry pair does
 /// not: it named a question this gateway asked, and forwarding it would send a
 /// backend a `requestState` it never issued and answers to a question it never
 /// posed.
@@ -39,6 +40,7 @@ pub(super) fn cleared(retry: &RetryFields) -> RetryFields {
         request_state: None,
         idempotency_key: retry.idempotency_key.clone(),
         malformed: Vec::new(),
+        attestation: retry.attestation.clone(),
     }
 }
 

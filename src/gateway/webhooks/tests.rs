@@ -528,10 +528,10 @@ async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
 
 const AUTH_YAML: &str = "enabled: true
 api_keys:
-  - key: key-in-scope
+  - key_sha256: sha256:df01f4e6e61a80f512e3c760f8a3a190bb43c5796c96ff3ff9e2ee5d79697814
     name: in
     backends: [capabilities]
-  - key: key-out-of-scope
+  - key_sha256: sha256:e8a0f2142c13f911917fbbd41b1247ff167baf611d32b5f9a3aa09fe14d8169f
     name: out
     backends: [other]
 ";

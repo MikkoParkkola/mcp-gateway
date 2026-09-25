@@ -33,6 +33,9 @@ pub(crate) mod live;
 #[path = "auth_quota.rs"]
 mod quota;
 pub use quota::QuotaPrincipal;
+#[path = "auth_api_key.rs"]
+mod api_key;
+pub use api_key::ResolvedApiKey;
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
@@ -69,26 +72,6 @@ pub struct ResolvedAuthConfig {
     client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
 }
 
-/// Resolved API key with expanded values
-#[derive(Clone)]
-pub struct ResolvedApiKey {
-    /// The actual key value
-    pub key: String,
-    quota_principal: QuotaPrincipal,
-    /// Client name
-    pub name: String,
-    /// Rate limit (requests per minute)
-    pub rate_limit: u32,
-    /// Allowed backends
-    pub backends: Vec<String>,
-    /// Allowed tools (allowlist if Some)
-    pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (blocklist if Some)
-    pub denied_tools: Option<Vec<String>>,
-    /// Admin-level UI and management tool access.
-    pub admin: bool,
-}
-
 // Manual `Debug` that redacts resolved secrets (CWE-532, mirrors MIK-6733).
 // A derived `Debug` would print the bearer token / API key verbatim into any
 // trace or error context. Only a non-reversible fingerprint is shown.
@@ -105,23 +88,6 @@ impl std::fmt::Debug for ResolvedAuthConfig {
             )
             .field("api_keys", &self.api_keys)
             .field("public_paths", &self.public_paths)
-            .finish_non_exhaustive()
-    }
-}
-
-impl std::fmt::Debug for ResolvedApiKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedApiKey")
-            .field(
-                "key",
-                &format!("<redacted:{}>", bearer_token_fingerprint(&self.key)),
-            )
-            .field("name", &self.name)
-            .field("rate_limit", &self.rate_limit)
-            .field("backends", &self.backends)
-            .field("allowed_tools", &self.allowed_tools)
-            .field("denied_tools", &self.denied_tools)
-            .field("admin", &self.admin)
             .finish_non_exhaustive()
     }
 }
@@ -183,15 +149,16 @@ impl ResolvedAuthConfig {
         }
 
         config.warn_keys_without_backends();
+        config.warn_expired_keys(chrono::Utc::now());
         let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()
             .map(|k| {
-                let key = k.resolve_key(overlay)?;
-                let quota_principal = QuotaPrincipal::api_key(&key);
+                let digest = k.resolve_digest(overlay)?;
                 Ok(ResolvedApiKey {
-                    key,
-                    quota_principal,
+                    digest,
+                    expires_at: k.expires_at,
+                    quota_principal: QuotaPrincipal::api_key(&digest),
                     name: k.name.clone(),
                     rate_limit: k.rate_limit,
                     backends: k.backends.clone(),
@@ -291,30 +258,36 @@ impl ResolvedAuthConfig {
             ));
         }
 
-        // Check API keys (constant-time to avoid a per-key timing oracle).
-        for key in &self.api_keys {
-            if token.as_bytes().ct_eq(key.key.as_bytes()).into() {
-                return Some((
-                    AuthenticatedClient {
-                        quota_principal: Some(key.quota_principal.clone()),
-                        name: key.name.clone(),
-                        principal: principal_of(&key.key),
-                        rate_limit: key.rate_limit,
-                        backends: key.backends.clone(),
-                        allowed_tools: key.allowed_tools.clone(),
-                        denied_tools: key.denied_tools.clone(),
-                        admin: key.admin,
-                        authenticated: true,
-                        credential_kind: crate::security::audit::CredentialKind::ApiKey,
-                    },
-                    Some(NamedApiKey {
-                        name: key.name.clone(),
-                    }),
-                ));
-            }
+        // API keys: hash once, then compare against EVERY digest in constant time,
+        // so neither a match nor its position is visible in the timing.
+        let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+        let key = self.api_keys.iter().fold(None, |hit, k| {
+            let eq: bool = presented.as_slice().ct_eq(k.digest.as_slice()).into();
+            hit.or(eq.then_some(k))
+        })?;
+        // After the match: an expired key is never an authenticated caller.
+        if crate::config::api_key_expired(key.expires_at, chrono::Utc::now()) {
+            warn!(key = %key.name, "expired API key");
+            return None;
         }
-
-        None
+        Some((
+            AuthenticatedClient {
+                quota_principal: Some(key.quota_principal.clone()),
+                name: key.name.clone(),
+                // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
+                principal: hex::encode(&key.digest[..6]),
+                rate_limit: key.rate_limit,
+                backends: key.backends.clone(),
+                allowed_tools: key.allowed_tools.clone(),
+                denied_tools: key.denied_tools.clone(),
+                admin: key.admin,
+                authenticated: true,
+                credential_kind: crate::security::audit::CredentialKind::ApiKey,
+            },
+            Some(NamedApiKey {
+                name: key.name.clone(),
+            }),
+        ))
     }
 
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.
@@ -1136,8 +1109,17 @@ fn looks_like_jwt(token: &str) -> bool {
 mod backend_grant_tests;
 
 #[cfg(test)]
+#[path = "auth_api_key_digest_tests.rs"]
+mod api_key_digest_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_digest(key: &str) -> [u8; 32] {
+        crate::config::parse_api_key_digest(&crate::config::api_key_digest_spec(key.as_bytes()))
+            .expect("a computed digest parses")
+    }
 
     #[test]
     fn empty_bearer_refused_by_try_from_config() {
@@ -1238,8 +1220,9 @@ mod tests {
                 "super-secret-bearer-VALUE",
             )),
             api_keys: vec![ResolvedApiKey {
-                key: "api-key-SECRET-VALUE".to_string(),
-                quota_principal: QuotaPrincipal::api_key("api-key-SECRET-VALUE"),
+                digest: test_digest("api-key-SECRET-VALUE"),
+                expires_at: None,
+                quota_principal: QuotaPrincipal::api_key(&test_digest("api-key-SECRET-VALUE")),
                 name: "client-a".to_string(),
                 rate_limit: 60,
                 backends: vec!["*".to_string()],
@@ -1311,8 +1294,9 @@ mod tests {
             bearer_token: Some("bearer-EXACT".to_string()),
             bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("bearer-EXACT")),
             api_keys: vec![ResolvedApiKey {
-                key: "apikey-EXACT".to_string(),
-                quota_principal: QuotaPrincipal::api_key("apikey-EXACT"),
+                digest: test_digest("apikey-EXACT"),
+                expires_at: None,
+                quota_principal: QuotaPrincipal::api_key(&test_digest("apikey-EXACT")),
                 name: "client-ct".to_string(),
                 rate_limit: 10,
                 backends: vec!["*".to_string()],
@@ -1362,8 +1346,9 @@ mod tests {
             bearer_quota_principal: None,
             api_keys: vec![
                 ResolvedApiKey {
-                    key: "key1".to_string(),
-                    quota_principal: QuotaPrincipal::api_key("key1"),
+                    digest: test_digest("key1"),
+                    expires_at: None,
+                    quota_principal: QuotaPrincipal::api_key(&test_digest("key1")),
                     name: "Client A".to_string(),
                     rate_limit: 100,
                     backends: vec!["tavily".to_string()],
@@ -1372,8 +1357,9 @@ mod tests {
                     admin: false,
                 },
                 ResolvedApiKey {
-                    key: "key2".to_string(),
-                    quota_principal: QuotaPrincipal::api_key("key2"),
+                    digest: test_digest("key2"),
+                    expires_at: None,
+                    quota_principal: QuotaPrincipal::api_key(&test_digest("key2")),
                     name: "Client B".to_string(),
                     rate_limit: 0,
                     backends: vec![],
@@ -1706,8 +1692,9 @@ mod tests {
 
     fn admin_key(admin: bool) -> ResolvedApiKey {
         ResolvedApiKey {
-            key: "key-value".to_string(),
-            quota_principal: QuotaPrincipal::api_key("key-value"),
+            digest: test_digest("key-value"),
+            expires_at: None,
+            quota_principal: QuotaPrincipal::api_key(&test_digest("key-value")),
             name: "ops".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
@@ -1792,11 +1779,12 @@ mod signing_dashboard_quota_tests {
 
     /// Real resolved auth over a real bootstrap, with nothing hand-built.
     fn auth_state(enabled: bool) -> (AuthState, Arc<DashboardBootstrap>) {
+        let ops_digest = crate::config::api_key_digest_spec(OPS.as_bytes());
         let config: AuthConfig = serde_json::from_value(serde_json::json!({
             "enabled": enabled,
             "bearer_token": PRIMARY,
             "public_paths": ["/health", PROBE_PATH],
-            "api_keys": [{"key": OPS, "name": "ops", "admin": true}]
+            "api_keys": [{"key_sha256": ops_digest, "name": "ops", "admin": true}]
         }))
         .expect("auth config fixture deserializes");
         let bootstrap = Arc::new(DashboardBootstrap::new());

@@ -510,6 +510,7 @@ mod tests {
             request_state: Some("sealed".to_owned()),
             idempotency_key: Some("key-a".to_owned()),
             malformed: Vec::new(),
+            attestation: None,
         };
         let cleared = cleared(&retry);
         assert!(cleared.request_state.is_none());

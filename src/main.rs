@@ -62,6 +62,7 @@ async fn main() -> ExitCode {
         Some(Command::Accounts(accounts_cmd)) => {
             commands::run_accounts_command(&accounts_cmd, config_path.as_deref())
         }
+        Some(Command::HashKey { verify }) => commands::run_hash_key_command(verify.as_deref()),
         Some(Command::Stats { url }) => {
             let effective_url = resolve_stats_url(
                 url,

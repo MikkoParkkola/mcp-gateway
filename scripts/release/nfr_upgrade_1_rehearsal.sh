@@ -255,6 +255,30 @@ else
   record "PHASE2.PERMISSIONS_AND_MOUNTS_PRESERVED" "FAIL" "post-upgrade gateway.yaml no longer parses to the expected api_key/backend shape"
 fi
 
+echo "-- phase 2a: migrate the API key to its digest (UPGRADING-4.0 item 41) --"
+# 4.0 refuses a plaintext auth.api_keys[].key at load. The documented step:
+# hash the SAME key with hash-key and store it as key_sha256. The 3.x config is
+# kept for the rollback in phase 4, since 3.x cannot read key_sha256.
+cp "$CONFIG_PATH" "$CONFIG_PATH.3x"
+KEY_DIGEST="$(printf %s "$API_KEY" | "$BIN_400" hash-key 2>"$LOG_DIR/phase2a-hash-key.stderr.log")"
+python3 - "$CONFIG_PATH" "$KEY_DIGEST" <<'PY'
+import sys, yaml
+path, digest = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    d = yaml.safe_load(f)
+for key in d["auth"]["api_keys"]:
+    key.pop("key")
+    key["key_sha256"] = digest
+with open(path, "w") as f:
+    yaml.safe_dump(d, f, sort_keys=False)
+PY
+if printf %s "$API_KEY" | "$BIN_400" hash-key --verify "$KEY_DIGEST" 2>/dev/null \
+  && ! grep -q "$API_KEY" "$CONFIG_PATH"; then
+  record "PHASE2.API_KEY_MIGRATED_TO_DIGEST" "PASS" "key_sha256 verifies against the same key; the plaintext is gone from gateway.yaml"
+else
+  record "PHASE2.API_KEY_MIGRATED_TO_DIGEST" "FAIL" "hash-key migration did not produce a verifying digest, or the plaintext key is still in gateway.yaml"
+fi
+
 echo "-- phase 2b: active caller on 4.0.0 (modern-off default: true) --"
 start_gateway "$BIN_400" "phase2-400-post-upgrade"
 INIT_400="$(rpc_modern "initialize")"
@@ -337,6 +361,8 @@ cp "$CONFIG_PATH.pre-modern-off" "$CONFIG_PATH"
 rm -f "$CONFIG_PATH.pre-modern-off"
 
 echo "-- phase 4: rollback to 3.5.1 against the 4.0.0-stamped data dir --"
+# 3.x reads `key`, not key_sha256: a rollback restores the kept 3.x config.
+cp "$CONFIG_PATH.3x" "$CONFIG_PATH"
 CONFIG_SHA_BEFORE_ROLLBACK="$(shasum -a 256 "$CONFIG_PATH" | awk '{print $1}')"
 TOKEN_SHA_BEFORE_ROLLBACK="$(shasum -a 256 "$TOKEN_FILE" | awk '{print $1}')"
 start_gateway "$BIN_351" "phase4-351-rollback"

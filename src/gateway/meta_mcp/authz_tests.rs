@@ -1221,6 +1221,7 @@ async fn a_second_verified_caller_is_not_served_the_firsts_idempotent_result() {
         request_state: None,
         idempotency_key: Some("one-key-both-callers".to_string()),
         malformed: Vec::new(),
+        attestation: None,
     };
     let alice = verified("alice");
     let bob = verified("bob");

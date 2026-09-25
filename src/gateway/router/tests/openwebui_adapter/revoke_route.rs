@@ -56,7 +56,7 @@ auth:
   public_paths: []
   api_keys:
     - name: owui
-      key: {API_KEY}
+      key_sha256: "sha256:84065040774b729687518e297256e67e4c5d1084521656d4fa587a6fc317159d"
       backends: ["*"]
 accounts:
   schema_version: accounts.v1

@@ -92,7 +92,7 @@ auth:
   enabled: true
   single_user: true
   api_keys:
-    - key: "$API_KEY"
+    - key_sha256: "$(printf %s "$API_KEY" | "$BIN" hash-key)"
       name: "Demo Client"
       rate_limit: 0
       backends: ["catalogue"]

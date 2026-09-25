@@ -32,6 +32,8 @@ use tower::ServiceExt;
 
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
+/// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
+mod attestation_routes;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
@@ -670,7 +672,9 @@ fn scoped_auth_config(admin: bool) -> AuthConfig {
         enabled: true,
         bearer_token: None,
         api_keys: vec![ApiKeyConfig {
-            key: "scoped-key".to_string(),
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec("scoped-key".as_bytes())),
+            expires_at: None,
             name: "scoped-client".to_string(),
             rate_limit: 0,
             backends: vec!["demo".to_string()],

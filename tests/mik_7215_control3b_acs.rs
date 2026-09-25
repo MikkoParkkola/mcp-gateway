@@ -71,7 +71,9 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
         enabled: true,
         bearer_token: None,
         api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-            key: API_KEY.to_string(),
+            key: None,
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(API_KEY.as_bytes())),
+            expires_at: None,
             name: "control-3b-client".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],

@@ -35,9 +35,7 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use mcp_gateway::backend::{Backend, BackendRegistry};
-use mcp_gateway::config::{
-    ApiKeyConfig, AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig,
-};
+use mcp_gateway::config::{AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig};
 use mcp_gateway::config_reload::{LiveConfig, ReloadContext};
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
@@ -607,15 +605,13 @@ async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
     let auth_config = AuthConfig {
         enabled: true,
         bearer_token: None,
-        api_keys: vec![ApiKeyConfig {
-            key: "auditor-key".to_string(),
-            name: "auditor-client".to_string(),
-            rate_limit: 0,
-            backends: vec!["docs".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-        }],
+        api_keys: vec![
+            serde_json::from_value(serde_json::json!({
+                "key_sha256": mcp_gateway::config::api_key_digest_spec(b"auditor-key"),
+                "name": "auditor-client", "backends": ["docs"], "admin": false
+            }))
+            .expect("api key fixture"),
+        ],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: false,
@@ -1618,15 +1614,13 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
         // never sees the key. Removing it is what puts the API key on this path
         // at all; without this the case passes without exercising anything.
         public_paths: vec![],
-        api_keys: vec![ApiKeyConfig {
-            key: "scoped-key".to_string(),
-            name: "scoped".to_string(),
-            rate_limit: 0,
-            backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-        }],
+        api_keys: vec![
+            serde_json::from_value(serde_json::json!({
+                "key_sha256": mcp_gateway::config::api_key_digest_spec(b"scoped-key"),
+                "name": "scoped", "backends": ["*"], "admin": false
+            }))
+            .expect("api key fixture"),
+        ],
         ..AuthConfig::default()
     };
     let (state, _store) = make_app_state_with_auth_config(&auth).await;
