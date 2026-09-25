@@ -322,7 +322,7 @@ impl Backend {
         let _activity = self.begin_activity(&key);
 
         // Ensure this slot's transport is live.
-        let transport = self.start_recorded(&key, &entry, start_time).await?;
+        let transport = self.ensure_entry_started(&key).await?;
 
         // Execute with retry
         let name = self.name.clone();
@@ -575,7 +575,7 @@ impl Backend {
         // See `request_with_headers`: client activity marking + stop protection.
         let _activity = self.begin_activity(&key);
 
-        let transport = self.start_recorded(&key, &entry, start_time).await?;
+        let transport = self.ensure_entry_started(&key).await?;
 
         let result = transport
             .notify_with_headers(method, params, identity_key)
