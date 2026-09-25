@@ -9,7 +9,7 @@ namespace:
   create: false
   name: mcp-gateway
 
-replicaCount: 2
+replicaCount: 1
 
 service:
   type: ClusterIP
@@ -61,9 +61,8 @@ observability:
     endpoint: /trust/evidence
 
 rollout:
-  strategy: RollingUpdate
-  maxUnavailable: 0
-  maxSurge: 1
+  # Recreate while per-process state is on (UPGRADING-4.0 item 37).
+  strategy: Recreate
   revisionHistoryLimit: 10
 
 humanGates:

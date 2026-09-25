@@ -1319,6 +1319,12 @@ pub struct ServerConfig {
     /// which must keep it; any new export of this struct must redact it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_token: Option<String>,
+    /// How many processes serve this config: DECLARED, not observed. Nothing
+    /// in a pod can see its replica count, and `kubectl scale` or an HPA
+    /// changes it without touching config, so the Helm chart writes it from
+    /// `replicaCount`. Above 1, startup refuses the per-process state
+    /// (`support::replica_state_refusal`, UPGRADING-4.0 §37).
+    pub replicas: u32,
 }
 
 /// `server.idempotency_key`: see [`ServerConfig::idempotency_key`].
@@ -1347,6 +1353,7 @@ impl Default for ServerConfig {
             allow_unauthenticated_network_bind: false,
             idempotency_key: IdempotencyKeyMode::Optional,
             metrics_token: None,
+            replicas: 1,
         }
     }
 }
@@ -1370,6 +1377,7 @@ impl std::fmt::Debug for ServerConfig {
                 "metrics_token",
                 &self.metrics_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("replicas", &self.replicas)
             .finish()
     }
 }
