@@ -3917,7 +3917,7 @@ impl MetaMcp {
 /// string suitable for embedding in a [`RecoveryHint`].
 fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
     match error {
-        Error::CircuitOpen(backend) => (
+        Error::CircuitOpen { backend, .. } => (
             ErrorCategory::CircuitBreakerTrip,
             format!("Circuit breaker is open for backend '{backend}'"),
         ),
@@ -5972,3 +5972,6 @@ mod identity_propagation_enforcement_tests {
 
 #[cfg(test)]
 mod error_budget_tests;
+
+#[cfg(test)]
+mod circuit_open_hint_tests;

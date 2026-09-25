@@ -273,3 +273,7 @@ mod grant_reload_eviction_tests;
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
+
+#[cfg(test)]
+#[path = "websocket_backend_tests.rs"]
+mod websocket_backend_tests;

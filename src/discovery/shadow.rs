@@ -826,6 +826,11 @@ impl ShadowTransport {
                     local_only: is_loopback_url(http_url),
                 }
             }
+            TransportConfig::WebSocket { ws_url, .. } => Self {
+                kind: "websocket".to_string(),
+                endpoint: sanitize_url(ws_url),
+                local_only: is_loopback_url(ws_url),
+            },
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => {
                 let endpoint = sanitize_url(a2a_url);
@@ -843,8 +848,9 @@ impl ShadowAuthExposure {
     fn from_transport(transport: &TransportConfig) -> Self {
         match transport {
             TransportConfig::Stdio { .. } => Self::StdioProcess,
-            TransportConfig::Http { http_url, .. } => {
-                if is_loopback_url(http_url) {
+            TransportConfig::Http { http_url: url, .. }
+            | TransportConfig::WebSocket { ws_url: url, .. } => {
+                if is_loopback_url(url) {
                     Self::LocalHttpNoAuthMetadata
                 } else {
                     Self::NetworkHttpNoAuthMetadata

@@ -19,6 +19,7 @@ use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
+use crate::transport::websocket::WebSocketTransport;
 use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
 use crate::{Error, Result};
 
@@ -432,6 +433,14 @@ impl Backend {
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
                 transport
+            }
+            TransportConfig::WebSocket {
+                ws_url,
+                protocol_version,
+            } => {
+                let (headers, timeout) = (&self.config.headers, self.config.timeout);
+                WebSocketTransport::start(ws_url, headers, timeout, protocol_version.clone())
+                    .await?
             }
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => {

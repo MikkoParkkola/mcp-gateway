@@ -93,10 +93,16 @@ pub enum Error {
 
     /// Circuit breaker is open — request rejected without being dispatched.
     ///
-    /// Carries the backend name.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000)
-    /// as the JSON-RPC code for this variant.
-    #[error("Circuit breaker open for backend '{0}'")]
-    CircuitOpen(String),
+    /// Carries the backend name and, once the breaker has tripped, the failure
+    /// that tripped it.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000) as the
+    /// JSON-RPC code for this variant.
+    #[error("Circuit breaker open for backend '{backend}'")]
+    CircuitOpen {
+        /// Backend whose breaker refused the call.
+        backend: String,
+        /// Why the breaker last opened (`BreakerOpenEvent::reason`), if it has.
+        last_failure: Option<String>,
+    },
 
     /// Tool not found in any connected backend.
     ///
@@ -266,6 +272,14 @@ pub enum Error {
 }
 
 impl Error {
+    /// The refusal an open breaker returns, carrying the failure that tripped it.
+    pub(crate) fn circuit_open(backend: &str, _breaker: &crate::failsafe::CircuitBreaker) -> Self {
+        Self::CircuitOpen {
+            backend: backend.to_string(),
+            last_failure: None,
+        }
+    }
+
     /// Create a JSON-RPC error
     pub fn json_rpc(code: i32, message: impl Into<String>) -> Self {
         Self::JsonRpc {
@@ -296,7 +310,7 @@ impl Error {
     pub fn is_pre_dispatch(&self) -> bool {
         matches!(
             self,
-            Self::CircuitOpen(_)
+            Self::CircuitOpen { .. }
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
@@ -315,7 +329,7 @@ impl Error {
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::AuditUnavailable => -32005,
             Self::BackendUnavailable(_)
-            | Self::CircuitOpen(_)
+            | Self::CircuitOpen { .. }
             | Self::BackendTimeout(_)
             | Self::Transport(_)
             // A connect failure is the same class on the wire; the variant

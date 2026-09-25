@@ -23,6 +23,7 @@
 //! (`{"type":"ping"}` / `{"type":"pong"}`) so they are distinguishable from
 //! transport-level WebSocket ping/pong frames.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -237,6 +238,12 @@ impl Inner {
 pub struct WebSocketTransport {
     /// WebSocket endpoint URL (`ws://` or `wss://`).
     url: String,
+    /// Static headers sent once, on the upgrade request.
+    headers: HashMap<String, String>,
+    /// Bounds the upgrade and every request.
+    timeout: Duration,
+    /// `initialize` protocol version; `None` sends [`PROTOCOL_VERSION`].
+    protocol_version: Option<String>,
     /// Shared inner state (also held by the I/O task).
     inner: Arc<Inner>,
 }
@@ -248,11 +255,36 @@ impl WebSocketTransport {
     /// MCP initialisation handshake.
     ///
     /// [`connect`]: WebSocketTransport::connect
-    pub fn new(url: &str) -> Arc<Self> {
+    pub fn new(
+        url: &str,
+        headers: HashMap<String, String>,
+        timeout: Duration,
+        protocol_version: Option<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             url: url.to_string(),
+            headers,
+            timeout,
+            protocol_version,
             inner: Inner::new(),
         })
+    }
+
+    /// Build and connect a backend transport (the `ws_url` arm of
+    /// `Backend::start_entry`).
+    ///
+    /// # Errors
+    ///
+    /// As [`WebSocketTransport::connect`].
+    pub async fn start(
+        url: &str,
+        headers: &HashMap<String, String>,
+        timeout: Duration,
+        protocol_version: Option<String>,
+    ) -> Result<Arc<dyn Transport>> {
+        let transport = Self::new(url, headers.clone(), timeout, protocol_version);
+        transport.connect().await?;
+        Ok(transport)
     }
 
     /// Connect to the WebSocket server and initialise the MCP session.
@@ -562,3 +594,7 @@ impl Transport for WebSocketTransport {
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "websocket_backend_tests.rs"]
+mod backend_tests;

@@ -303,7 +303,7 @@ impl Backend {
         .set(if can_proceed { 1.0_f64 } else { 0.0_f64 });
         if !can_proceed {
             tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
-            return Err(Error::CircuitOpen(self.name.clone()));
+            return Err(Error::circuit_open(&self.name, &entry.failsafe.circuit_breaker));
         }
 
         // Acquire semaphore
@@ -535,7 +535,7 @@ impl Backend {
             )
             .set(0.0_f64);
             tracing::warn!(backend = %self.name, ?key, "Notification rejected by circuit breaker");
-            return Err(Error::CircuitOpen(self.name.clone()));
+            return Err(Error::circuit_open(&self.name, &entry.failsafe.circuit_breaker));
         }
         telemetry_metrics::gauge!(
             "mcp_backend_circuit_state",
@@ -597,7 +597,8 @@ impl Backend {
     #[must_use]
     pub fn transport_url(&self) -> Option<&str> {
         match &self.config.transport {
-            TransportConfig::Http { http_url, .. } => Some(http_url.as_str()),
+            TransportConfig::Http { http_url: url, .. }
+            | TransportConfig::WebSocket { ws_url: url, .. } => Some(url.as_str()),
             TransportConfig::Stdio { .. } => None,
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => Some(a2a_url.as_str()),

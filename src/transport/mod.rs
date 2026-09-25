@@ -7,6 +7,8 @@ mod http;
 pub(crate) mod notification_sink;
 mod stdio;
 pub mod websocket;
+#[cfg(test)]
+pub(crate) mod websocket_test_server;
 
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;

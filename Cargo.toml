@@ -177,6 +177,9 @@ tokio = { version = "1.52", features = ["test-util"] }
 tokio-test = "0.4"
 pretty_assertions = "1.4"
 tempfile = "3.14"
+# F17-T10c: bridge tungstenite's `log` records into a scoped test subscriber.
+tracing-log = "0.2"
+log = "0.4"
 serde_urlencoded = "0.7"
 criterion = { version = "0.8", features = ["html_reports"] }
 jsonschema = { version = "0.56.0", default-features = false }

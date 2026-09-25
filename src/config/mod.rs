@@ -15,6 +15,7 @@ mod input_schema;
 mod secret_file;
 mod secret_ref;
 mod strict_keys;
+mod ws_backend;
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -1102,6 +1103,10 @@ impl Config {
                     })?;
                     Self::reject_cleartext_credentials(name, backend, &url)?;
                 }
+                TransportConfig::WebSocket {
+                    ws_url,
+                    protocol_version,
+                } => Self::validate_ws_backend(name, backend, ws_url, protocol_version.as_deref())?,
                 TransportConfig::Stdio { .. } => {}
             }
         }
@@ -1233,6 +1238,7 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
         TransportConfig::Http { http_url, .. } => Some((transport.transport_type(), http_url)),
         #[cfg(feature = "a2a")]
         TransportConfig::A2a { a2a_url, .. } => Some((transport.transport_type(), a2a_url)),
+        TransportConfig::WebSocket { ws_url, .. } => Some((transport.transport_type(), ws_url)),
         TransportConfig::Stdio { .. } => None,
     }
 }
@@ -1810,6 +1816,15 @@ pub enum TransportConfig {
         #[serde(default)]
         protocol_version: Option<String>,
     },
+    /// WebSocket transport: one persistent socket per backend, legacy
+    /// `initialize` handshake only. `headers` go on the upgrade request once.
+    WebSocket {
+        /// WebSocket URL (`ws://` or `wss://`).
+        ws_url: String,
+        /// Override protocol version (a pre-2026-07-28 revision).
+        #[serde(default)]
+        protocol_version: Option<String>,
+    },
     /// A2A (`Agent2Agent`) transport.
     ///
     /// The gateway fetches the Agent Card from `<a2a_url>/.well-known/agent.json`
@@ -1864,6 +1879,7 @@ impl TransportConfig {
                 ..
             } => "streamable-http",
             Self::Http { .. } => "http",
+            Self::WebSocket { .. } => "websocket",
             #[cfg(feature = "a2a")]
             Self::A2a { .. } => "a2a",
         }
@@ -1884,7 +1900,7 @@ impl TransportConfig {
     pub fn carries_identity_headers(&self) -> bool {
         match self {
             Self::Http { .. } => true,
-            Self::Stdio { .. } => false,
+            Self::Stdio { .. } | Self::WebSocket { .. } => false,
             #[cfg(feature = "a2a")]
             Self::A2a { .. } => false,
         }

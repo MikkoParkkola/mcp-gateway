@@ -309,6 +309,10 @@ mod tests {
                 streamable_http: true,
                 protocol_version: Some("v".into()),
             },
+            TransportConfig::WebSocket {
+                ws_url: "w".into(),
+                protocol_version: Some("v".into()),
+            },
         ];
         #[cfg(feature = "a2a")]
         transports.push(TransportConfig::A2a {

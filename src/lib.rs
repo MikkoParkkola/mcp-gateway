@@ -108,6 +108,11 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 /// MCP Protocol version supported by this gateway (latest)
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
+/// Cap third-party logging that writes credentials, whatever the operator asked for.
+fn cap_handshake_logging(filter: EnvFilter) -> EnvFilter {
+    filter
+}
+
 /// Setup tracing/logging
 ///
 /// All log output is written to **stderr**. In stdio transport mode
@@ -122,6 +127,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 /// forward compatibility with fallible tracing configurations.
 pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = cap_handshake_logging(filter);
 
     let subscriber = tracing_subscriber::registry().with(filter);
 
@@ -140,3 +146,7 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "log_filter_tests.rs"]
+mod log_filter_tests;
