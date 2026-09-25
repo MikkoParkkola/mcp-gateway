@@ -26,10 +26,11 @@ use super::middleware::{
 use crate::Result;
 use crate::config::{AuthConfig, CircuitBreakerConfig};
 use crate::failsafe::{CircuitBreaker, CircuitState};
-use crate::key_server::{KeyServer, oidc::VerifiedIdentity};
+use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
 pub(crate) mod live;
+use live::key_server_credential;
 #[path = "auth_quota.rs"]
 mod quota;
 pub use quota::QuotaPrincipal;
@@ -900,6 +901,9 @@ pub struct AuthState {
     pub dashboard_bootstrap: Arc<DashboardBootstrap>,
     /// Whether this listener speaks TLS, so the session cookie can be `Secure`.
     pub tls_enabled: bool,
+    /// The live config, whose `control_plane.role_mapping` confers admin per
+    /// request (E1-a).
+    pub live_config: Arc<crate::config_reload::LiveConfig>,
 }
 
 /// Authentication middleware
@@ -1030,35 +1034,6 @@ pub async fn auth_middleware(
     // 3. Reject
     warn!(path = %path, "Invalid token");
     bearer_unauthorized_response("Invalid token")
-}
-
-/// Resolve a presented bearer against the key server, in the order the
-/// protected path has always used: the opaque temporary token first (an O(1)
-/// store lookup), then a raw OIDC ID token presented directly as a bearer
-/// (delegated auth, MIK-6648).
-///
-/// One function so the protected and public branches recognise exactly the same
-/// credentials. They did not, and the public path is where it mattered: a
-/// verified caller was handed the anonymous identity, and so shared the
-/// anonymous nonce quota with every unauthenticated request on the box.
-///
-/// The `via` label exists only so each caller keeps its own log line; it is a
-/// fixed string, never anything the caller sent.
-async fn key_server_credential(
-    state: &AuthState,
-    token: &str,
-) -> Option<(AuthenticatedClient, VerifiedIdentity, &'static str)> {
-    let ks = state.key_server.as_ref()?;
-    if let Some((client, temporary)) = ks.validate_token(token).await {
-        return Some((client, temporary.identity.clone(), "temporary token"));
-    }
-    // Gated on config and a cheap JWT-shape check so JWKS verification never
-    // runs on an opaque or static token.
-    if ks.config.delegated_bearer && looks_like_jwt(token) {
-        let (client, identity) = ks.verify_bearer_identity(token).await?;
-        return Some((client, identity, "delegated OIDC bearer"));
-    }
-    None
 }
 
 /// Per-client rate-limit + circuit-breaker preflight shared by every auth path.
@@ -1685,6 +1660,9 @@ mod tests {
                 key_server: None,
                 dashboard_bootstrap: bootstrap,
                 tls_enabled: false,
+                live_config: Arc::new(crate::config_reload::LiveConfig::new(
+                    crate::config::Config::default(),
+                )),
             },
             printed,
         )
@@ -1794,6 +1772,9 @@ mod signing_dashboard_quota_tests {
                 key_server: None,
                 dashboard_bootstrap: Arc::clone(&bootstrap),
                 tls_enabled: false,
+                live_config: Arc::new(crate::config_reload::LiveConfig::new(
+                    crate::config::Config::default(),
+                )),
             },
             bootstrap,
         )
