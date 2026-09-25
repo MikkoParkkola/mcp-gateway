@@ -463,7 +463,7 @@ impl ProxyManager {
     pub async fn broadcast_tools_list_changed(&self, backend: &str) {
         let notification = TaggedNotification {
             source: "gateway".to_string(),
-            event_type: "message".to_string(),
+            event_type: "notification".to_string(),
             data: json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/tools/list_changed"
