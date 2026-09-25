@@ -36,7 +36,7 @@ fn combined_output(output: &Output) -> String {
 fn backend_inspection_commands_never_print_config_secrets() {
     let dir = tempfile::tempdir().expect("create CLI redaction workspace");
     let config = dir.path().join("gateway.yaml");
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
         format!(
             r#"backends:

@@ -149,7 +149,7 @@ backends:
       session_mode: per_user
 ```
 
-**Identity propagation is HTTP-only.** A stdio or websocket backend drops
+**Identity propagation is HTTP-only.** A stdio backend drops
 per-request headers, so the gateway refuses the config at load rather than
 dispatching without the credential. A propagation-configured backend also
 cannot carry its own enabled `oauth` block — the two would fight over the same

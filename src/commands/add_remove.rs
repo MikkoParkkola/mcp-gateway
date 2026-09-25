@@ -449,7 +449,7 @@ mod tests {
     // GH462.CONFIG.5: these guarded writers must never persist an empty fallback.
     fn assert_guarded_writers_preserve_invalid_config(original: &str) {
         let (_dir, path) = temp_config();
-        std::fs::write(&path, original).unwrap();
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, original).unwrap();
         let error = Config::load_literal(Some(&path)).unwrap_err();
         if original.contains("bad/name") {
             assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));

@@ -31,7 +31,7 @@ use crate::config::Config;
 async fn built_from_yaml(yaml: &str) -> super::BuiltMetaMcp {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, yaml).expect("write config");
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("the configured error_budget must load");
     let gateway = Gateway::new(config).await.expect("gateway boots");
     gateway.build_meta_mcp().await.expect("meta-MCP builds")

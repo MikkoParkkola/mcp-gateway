@@ -179,7 +179,7 @@ mod tests {
     /// Write `yaml` as `<dir>/gateway.yaml` and load it the way startup does.
     fn load(dir: &Path, yaml: &str) -> (Config, PathBuf) {
         let path = dir.join("gateway.yaml");
-        std::fs::write(&path, yaml).expect("write config");
+        crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
         (Config::load(Some(&path)).expect("config loads"), path)
     }
 
@@ -216,7 +216,11 @@ mod tests {
     #[test]
     fn explicit_unopenable_store_dir_refuses_start() {
         let (cfg_dir, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        std::fs::write(data.path().join("file"), b"not a directory").unwrap();
+        crate::gateway::test_helpers::write_owner_only(
+            data.path().join("file"),
+            b"not a directory",
+        )
+        .unwrap();
         let store_dir = data.path().join("file").join("cp");
         let (config, path) = load(
             cfg_dir.path(),
@@ -244,7 +248,7 @@ mod tests {
         let store_dir = data.path().join("cp");
         std::fs::create_dir_all(&store_dir).unwrap();
         let target = outside.path().join("victim");
-        std::fs::write(&target, b"known bytes").unwrap();
+        crate::gateway::test_helpers::write_owner_only(&target, b"known bytes").unwrap();
         std::os::unix::fs::symlink(&target, store_dir.join(".write-probe")).unwrap();
         let (config, path) = load(
             cfg_dir.path(),
@@ -278,7 +282,11 @@ mod tests {
     #[test]
     fn default_unwritable_store_degrades_without_refusing() {
         let cfg_dir = tempfile::tempdir().unwrap();
-        std::fs::write(cfg_dir.path().join("gateway-control-plane"), b"file").unwrap();
+        crate::gateway::test_helpers::write_owner_only(
+            cfg_dir.path().join("gateway-control-plane"),
+            b"file",
+        )
+        .unwrap();
         let (config, path) = load(
             cfg_dir.path(),
             "auth:\n  enabled: true\n  bearer_token: f6-test-token\n",

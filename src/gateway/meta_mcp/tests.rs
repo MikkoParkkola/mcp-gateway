@@ -1385,7 +1385,11 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
     let old_config = Config::default();
     let mut new_config = old_config.clone();
     new_config.server.port += 1;
-    std::fs::write(&config_path, serde_yaml::to_string(&new_config).unwrap()).unwrap();
+    crate::gateway::test_helpers::write_owner_only(
+        &config_path,
+        serde_yaml::to_string(&new_config).unwrap(),
+    )
+    .unwrap();
 
     let registry = Arc::new(BackendRegistry::new());
     let live_config = Arc::new(LiveConfig::new(old_config.clone()));
@@ -2075,7 +2079,7 @@ async fn creating_caller_addressed_external_state_requires_admin() {
     use crate::capability::{CapabilityBackend, CapabilityExecutor};
 
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         dir.path().join("hook.yaml"),
         r#"fulcrum: "1.0"
 name: register_webhook
@@ -4069,7 +4073,7 @@ async fn meta_with_staged_cache_entry(dir: &tempfile::TempDir) -> (MetaMcp, Stri
         reason: "prove a cache hit does not outrank the grant".to_string(),
     };
 
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         dir.path().join("calendar_read.yaml"),
         r#"
 fulcrum: "1.0"
@@ -4588,7 +4592,7 @@ async fn meta_with_state_staged_capabilities() -> MetaMcp {
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         dir.path().join("always.yaml"),
         r"
 name: staged_always
@@ -4602,7 +4606,7 @@ providers:
 ",
     )
     .unwrap();
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         dir.path().join("default_only.yaml"),
         r"
 name: staged_default_only
@@ -4973,7 +4977,7 @@ async fn meta_with_narrowable_tools() -> MetaMcp {
         ("invariance_always", "always"),
         ("invariance_denied", "denied"),
     ] {
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             dir.path().join(format!("{name}.yaml")),
             format!(
                 r"

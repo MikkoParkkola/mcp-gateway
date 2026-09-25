@@ -54,7 +54,6 @@ pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
 pub mod webhooks;
-mod ws_listener;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
 // One owner for "is this host loopback", reachable crate-wide. `mod router` is
@@ -98,5 +97,21 @@ pub mod test_helpers {
             dashboard_bootstrap: std::sync::Arc::default(),
             tls_enabled: false,
         }
+    }
+
+    /// Writes a fixture owner-only (0600 on Unix), as the gateway requires of
+    /// a config or env file it loads (CONFIG.2). Same shape as `std::fs::write`,
+    /// so a fixture swaps one call for the other.
+    pub fn write_owner_only(
+        path: impl AsRef<std::path::Path>,
+        contents: impl AsRef<[u8]>,
+    ) -> std::io::Result<()> {
+        std::fs::write(&path, contents)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
     }
 }

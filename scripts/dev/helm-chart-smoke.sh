@@ -167,6 +167,16 @@ mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingS
 grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$mesh" \
   || fail "mesh mode drops server.metrics_token"
 
+echo "== helm_config_file_mode_is_readable_without_a_world_bit =="
+# CONFIG.2 refuses a config with a world bit; the projection is root-owned, so
+# the gateway reads it through fsGroup. Both defaults render, and both overrides win.
+grep -qE '^ *fsGroup: 1001$' <<<"$dep" || fail "pod fsGroup default is not 1001"
+grep -qE '^ *defaultMode: 288$' <<<"$dep" || fail "config defaultMode default is not 288 (0440)"
+over="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml \
+  --set podSecurityContext.fsGroup=2002 --set configVolume.defaultMode=256)"
+grep -qE '^ *fsGroup: 2002$' <<<"$over" || fail "podSecurityContext.fsGroup override ignored"
+grep -qE '^ *defaultMode: 256$' <<<"$over" || fail "configVolume.defaultMode override ignored"
+
 # C3: credential mode serves bearer tokens over plain HTTP on 0.0.0.0, which the
 # gateway refuses unless server.cleartext_http names who protects them. The
 # chart's answer is cluster_internal, honest only while the port stays inside

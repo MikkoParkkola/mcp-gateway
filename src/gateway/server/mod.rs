@@ -1995,28 +1995,6 @@ impl Gateway {
             return Err(Error::Config(reason));
         }
 
-        // Optionally spawn a WebSocket listener alongside the HTTP server.
-        if let Some(ws_port) = self.config.server.ws_port {
-            let ws_addr = SocketAddr::new(
-                self.config
-                    .server
-                    .host
-                    .parse()
-                    .map_err(|e| Error::Config(format!("Invalid host for WS: {e}")))?,
-                ws_port,
-            );
-            let ws_shutdown = shutdown_tx.subscribe();
-            tokio::spawn(super::ws_listener::run_websocket_listener(
-                ws_addr,
-                ws_shutdown,
-            ));
-            info!(
-                host = %self.config.server.host,
-                port = ws_port,
-                "WebSocket listener spawned"
-            );
-        }
-
         // Warned on EVERY start while the escape hatch is set, and not only when
         // authentication is off. The narrower condition missed the shape the
         // hatch is most often reached from: authentication enabled with `/mcp`
@@ -2049,7 +2027,6 @@ impl Gateway {
             &self.config,
             &self.backends,
             Some(dashboard_bootstrap.as_ref()),
-            self.config_path.as_deref(),
         );
 
         // Warm-start backends: connect + prefetch tools into cache
@@ -4850,7 +4827,7 @@ mod tests {
         // silently disabled a configured feature.
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             &env_file,
             format!(
                 "{}=from-the-overlay\n{}=overlay-key-id\n",
@@ -5346,7 +5323,7 @@ mod tests {
     async fn gh475_cfg_5_error_budget_section_reaches_running_meta_mcp() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             &path,
             "error_budget:\n  threshold: 0.25\n  window_size: 40\n  window_duration: 30s\n  \
              min_samples: 4\n  capability:\n    threshold: 0.35\n    window_size: 12\n    \

@@ -542,12 +542,16 @@ fn enterprise_alpha_config_loads() {
     // references at load time, and setting the process env is `unsafe` in
     // edition 2024 and racy across parallel tests.
     let env = dir.path().join("secret.env");
-    std::fs::write(&env, format!("MCP_GATEWAY_TOKEN={}\n", "k".repeat(48))).expect("write env");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &env,
+        format!("MCP_GATEWAY_TOKEN={}\n", "k".repeat(48)),
+    )
+    .expect("write env");
     std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).expect("chmod");
     let path = dir.path().join("gateway.yaml");
     let shipped = str_at(&config, &["data", "gateway.yaml"]);
     let text = format!("{shipped}\nenv_files:\n  - {}\n", env.display());
-    std::fs::write(&path, text).expect("write config");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
 
     let loaded = mcp_gateway::config::Config::load_evaluated(Some(&path));
@@ -558,4 +562,22 @@ fn enterprise_alpha_config_loads() {
     if let Err(e) = evaluated.config.validate_with_env(&evaluated.overlay) {
         panic!("the enterprise-alpha gateway.yaml must validate: {e}");
     }
+}
+
+/// CONFIG.2: the gateway refuses a config other users can read, and the
+/// configMap projection is root-owned, so the pod reads it through `fsGroup`
+/// with no world bit. Without both the pod refuses its own config.
+#[test]
+fn enterprise_alpha_config_is_group_readable_without_a_world_bit() {
+    let deployment = docs(DEPLOYMENT).remove(0);
+    let pod = &deployment["spec"]["template"]["spec"];
+    assert_eq!(pod["securityContext"]["fsGroup"].as_i64(), Some(1001));
+    let config = pod["volumes"]
+        .as_sequence()
+        .expect("volumes")
+        .iter()
+        .find(|v| v["name"].as_str() == Some("config"))
+        .expect("config volume");
+    // 288 is octal 0440.
+    assert_eq!(config["configMap"]["defaultMode"].as_i64(), Some(0o440));
 }
