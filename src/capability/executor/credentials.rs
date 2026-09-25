@@ -241,7 +241,7 @@ impl CapabilityExecutor {
                 .await
         } else if let Some(file_spec) = key.strip_prefix("file:") {
             {
-                let _ = file_spec;
+                let _ = (file_spec, Self::fetch_from_file);
                 crate::config::EnvOverlay::none()
                     .resolve_reference("capability", key)
                     .map(Option::unwrap_or_default)
