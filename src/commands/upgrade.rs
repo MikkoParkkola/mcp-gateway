@@ -231,16 +231,16 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries nine changes an operator can be surprised by, none of which a
+// v4.0.0 carries ten changes an operator can be surprised by, none of which a
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
 // file), one removes an advertised protocol version, one changes what the
 // error budgets count, one stops caching unidentified revisions, one makes
-// webhook notifications opt-in, one makes `logging/setLevel` admin-only, one
-// scopes `tools/list_changed` from backend edits, and one refuses admin-panel
-// grant and policy writes that were never enforced.
+// webhook notifications opt-in, one makes `logging/setLevel` admin-only, two
+// scope `tools/list_changed` and `subscriptions/listen` to the caller, and one
+// refuses admin-panel grant and policy writes that were never enforced.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The nine 4.0.0 changes, in the order they are printed.
+/// The ten 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -280,16 +280,21 @@ request's `_meta` instead.",
     "On an authenticated gateway, `notifications/tools/list_changed` from an \
 admin backend edit now reaches only sessions whose key may access that backend; \
 a session that presented no credential is not told. With auth off, every \
-session is told, as before. `subscriptions/listen` is unchanged.",
+session is told, as before.",
     "Grant, policy and decision writes to the admin panel's control-plane API \
 now return HTTP 409, because nothing enforced that store. Change grants with \
 `mcp-gateway identity grants` and policies with `security.sanitize_input` / \
 `security.ssrf_protection`. Keep the old store files: 4.1 re-imports them as drafts.",
+    "On an authenticated gateway, `subscriptions/listen` without a credential \
+that authenticates is refused with HTTP 401, including on a public `/mcp`. A \
+listener is told about `tools/list_changed` only for backends its key may \
+access, and its stream closes once its credential is revoked or expires; \
+re-subscribe with a fresh one. With auth off, nothing changes.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Reads nothing, because none of the nine items depends on what the config
+/// Reads nothing, because none of the ten items depends on what the config
 /// says. It marks the webhook item as delivered so a later start does not
 /// repeat it.
 ///

@@ -41,7 +41,7 @@
 1357 src/capability/backend.rs
 1329 tests/security_tests.rs
 1320 tests/openwebui_adapter_config.rs
-1310 src/commands/upgrade.rs
+1315 src/commands/upgrade.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1277 src/oauth/client/mod.rs
 1272 tests/mik_7212_mrtr7_stdio_acs.rs
