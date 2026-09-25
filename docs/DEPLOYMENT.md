@@ -156,7 +156,7 @@ Use the same doctor command for local and container deployments:
 
 ```bash
 mcp-gateway doctor --config gateway.yaml --format json
-curl -sf http://localhost:39400/health > /dev/null
+curl -sf http://localhost:39400/readyz > /dev/null
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
 scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
 scripts/dev/service-template-smoke.sh  # repo checkout: service template paths + native start smoke
