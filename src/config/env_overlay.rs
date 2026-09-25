@@ -372,7 +372,7 @@ impl EnvOverlay {
     pub(crate) fn rotated_secret_files(&self, startup: &Self) -> Vec<String> {
         self.secret_files
             .iter()
-            .filter(|(path, now)| startup.secret_files.get(*path).copied().flatten() != **now)
+            .filter(|(path, now)| startup.secret_files.get(*path).is_none() && now.is_none())
             .map(|(path, _)| format!("file:{}", path.display()))
             .collect()
     }
