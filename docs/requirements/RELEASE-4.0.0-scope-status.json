@@ -655,11 +655,16 @@
     },
     {
       "id": "MIK-7570.BACKENDGRANT.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/auth_backend_grant_tests.rs",
+        "src/gateway/router/tests/issue_555_listing_scope/backend_scope.rs",
+        "src/key_server/policy.rs",
+        "src/key_server/identity_rules_tests.rs"
+      ],
+      "note": "Graded 2026-09-25 (A10). AuthenticatedClient::can_access_backend (src/gateway/auth.rs) treats only \"*\" as the wildcard, so an API key or key-server token with no backends reaches none; a key-server policy rule with no backends grants none and the key server refuses the token (403 no_backends_granted, distinct from access_denied). Clause 'not reachable by any key until granted': api_key_without_backends_reaches_no_backend and wildcard_and_list_scoping (src/gateway/auth_backend_grant_tests.rs), api_key_without_backends_is_forbidden_on_tools_call (src/gateway/router/tests/issue_555_listing_scope/backend_scope.rs, 403 -32003 with a \"*\" positive control), oidc_token_with_empty_backends_reaches_none (src/key_server/mod.rs). Clause 'an empty grant means none': policy_without_backends_grants_none, policy_without_backends_refuses_specific_request, policy_wildcard_still_grants_request (src/key_server/policy.rs), empty_backend_grant_is_refused_with_its_own_code (src/key_server/identity_rules_tests.rs). CI: RED run 36122134007 (11 new/updated tests failed), GREEN run 36123226480. Delete-the-branch: restoring is_empty() in the predicate reddened the four reachability tests (run 36122401937); restoring the empty-policy wildcard reddened the intersect and specific-request rows (run 36122404755); narrowing the issuance refusal reddened policy_without_backends_grants_none and the 403-code test (run 36122407613)."
     },
     {
       "id": "MIK-7570.CONFIG.2",
