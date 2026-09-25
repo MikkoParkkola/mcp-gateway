@@ -268,7 +268,11 @@ fn test_allowlist_and_denylist_combination() {
 #[test]
 fn test_api_key_config_with_tool_scopes() {
     let config = ApiKeyConfig {
-        key: "test-key".to_string(),
+        key: None,
+        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+            "test-key".as_bytes(),
+        )),
+        expires_at: None,
         name: "Frontend App".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],

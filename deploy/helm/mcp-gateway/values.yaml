@@ -148,6 +148,9 @@ config:
   # `auth` is NOT set here on purpose: the template renders it from auth.mode
   # above, so the credential and the mesh flag cannot both appear. A value set
   # here would be overwritten.
+  # That includes auth.api_keys: the chart renders no API keys. A config you
+  # mount yourself stores each key as key_sha256 (`mcp-gateway hash-key`),
+  # never the key.
   security:
     firewall:
       enabled: true

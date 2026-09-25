@@ -321,10 +321,12 @@ fn legacy_secret_refs_and_port_zero_survive_alongside_account_key_references() {
     const AGENT_SECRET_VAR: &str = "LEGACY_AGENT_HS256";
     const ADMIN_TOKEN_VAR: &str = "LEGACY_ADMIN_TOKEN";
     const BEARER_VALUE: &str = "legacy-bearer-value-1";
-    const API_KEY_VALUE: &str = "legacy-api-key-value-2";
+    const API_KEY_VALUE: &str =
+        "sha256:6a8dc395ac31a6b76e080365ec8bceca13a55d26d2ccd3af5984e1031d8d45e6";
     const AGENT_SECRET_VALUE: &str = "legacy-agent-hs256-value-3";
     const ADMIN_TOKEN_VALUE: &str = "legacy-admin-token-value-4";
-    const LITERAL_API_KEY: &str = "literal-api-key-not-a-reference";
+    const LITERAL_API_KEY: &str =
+        "sha256:49a3f436c13056cb8ccf079500ec59120c97afa7c226f6375c17b1e831489ec0";
 
     let root = tempfile::TempDir::new().unwrap();
     let dir = root.path();
@@ -342,7 +344,7 @@ fn legacy_secret_refs_and_port_zero_survive_alongside_account_key_references() {
     let config_path = write_yaml(
         dir,
         &format!(
-            "env_files:\n  - {}\nserver:\n  port: 0\nauth:\n  bearer_token: env:{BEARER_VAR}\n  api_keys:\n    - key: env:{API_KEY_VAR}\n      name: ref-client\n    - key: {LITERAL_API_KEY}\n      name: literal-client\nagent_auth:\n  enabled: false\n  agents:\n    - client_id: agent-with-secret\n      name: Agent With Secret\n      hs256_secret: env:{AGENT_SECRET_VAR}\n    - client_id: agent-without-secret\n      name: Agent Without Secret\nkey_server:\n  enabled: false\n  admin_token: env:{ADMIN_TOKEN_VAR}\naccounts:\n  schema_version: accounts.v1\n  enabled: true\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {}\n  authority_dir: {}\n  current_key_id: current\n  keys:\n    current: env:{CURRENT_VAR}\n    retired: env:{RETIRED_VAR}\n",
+            "env_files:\n  - {}\nserver:\n  port: 0\nauth:\n  bearer_token: env:{BEARER_VAR}\n  api_keys:\n    - key_sha256: env:{API_KEY_VAR}\n      name: ref-client\n    - key_sha256: \"{LITERAL_API_KEY}\"\n      name: literal-client\nagent_auth:\n  enabled: false\n  agents:\n    - client_id: agent-with-secret\n      name: Agent With Secret\n      hs256_secret: env:{AGENT_SECRET_VAR}\n    - client_id: agent-without-secret\n      name: Agent Without Secret\nkey_server:\n  enabled: false\n  admin_token: env:{ADMIN_TOKEN_VAR}\naccounts:\n  schema_version: accounts.v1\n  enabled: true\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {}\n  authority_dir: {}\n  current_key_id: current\n  keys:\n    current: env:{CURRENT_VAR}\n    retired: env:{RETIRED_VAR}\n",
             quoted_yaml_path(&env_path),
             quoted_yaml_path(&store_dir),
             quoted_yaml_path(&authority_dir),
@@ -362,8 +364,14 @@ fn legacy_secret_refs_and_port_zero_survive_alongside_account_key_references() {
         evaluated.config.auth.bearer_token.as_deref(),
         Some(BEARER_VALUE)
     );
-    assert_eq!(evaluated.config.auth.api_keys[0].key, API_KEY_VALUE);
-    assert_eq!(evaluated.config.auth.api_keys[1].key, LITERAL_API_KEY);
+    assert_eq!(
+        evaluated.config.auth.api_keys[0].key_sha256.as_deref(),
+        Some(API_KEY_VALUE)
+    );
+    assert_eq!(
+        evaluated.config.auth.api_keys[1].key_sha256.as_deref(),
+        Some(LITERAL_API_KEY)
+    );
     assert_eq!(
         evaluated.config.agent_auth.agents[0]
             .hs256_secret

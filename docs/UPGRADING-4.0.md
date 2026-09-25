@@ -61,6 +61,7 @@ upgrading a running deployment.
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
+| 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 
 Numbers 18-20 are intentionally unused.
@@ -945,6 +946,46 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 `server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
+## 41. API keys are configured as sha256 digests, with optional expiry
+
+In 3.x `auth.api_keys[].key` held the key itself, or `env:VAR` whose value was the key. Anyone
+who could read the config, the environment or a debug log could replay it. The gateway only
+ever needs the key's hash, so 4.0 stores the digest instead.
+
+- **A plaintext `key` fails the load.** The error names the key and says to run
+  `mcp-gateway hash-key`. It says the same for `key: env:VAR`, and the variable is not read.
+  Setting both `key` and `key_sha256`, or neither, also fails the load. The file is not
+  rewritten for you: a rewrite would drop comments, and an `env:` key lives outside the file.
+- **Migrate each key.** Run `printf %s "$KEY" | mcp-gateway hash-key` and put the output in
+  `key_sha256`:
+
+  ```yaml
+  auth:
+    api_keys:
+      - name: laptop
+        key_sha256: "sha256:<64 lowercase hex>"
+  ```
+
+  The key is read from stdin, never an argument, so it stays out of shell history. One trailing
+  newline is stripped, so `echo "$KEY" |` gives the same digest. Check a digest with
+  `printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>` (exit 0 match, 1 mismatch,
+  2 malformed).
+- **For `env:` keys, store the digest in the variable or secret instead of the key.** A
+  variable that still holds the key fails the load, and the error names the variable, never
+  its value. Nothing is silently hashed.
+- **Clients keep the same key.** Only the config changes. `principal` values, session owners
+  and log lines are unchanged: the principal is the first 12 hex characters of the digest,
+  which is what 3.x derived from the key.
+- **Optional `expires_at`** (RFC 3339, for example `"2027-01-01T00:00:00Z"`). After it, a
+  matching key is refused with 401 and a `warn` naming the key. An expired key does not stop
+  the gateway from starting; it logs a `warn` at startup instead. Omitting `expires_at` keeps
+  the 3.x behaviour. Removing or renewing a key still needs a config edit and a restart.
+- `auth.bearer_token` and `key_server.admin_token` are unchanged and still plaintext.
+- **Library API:** `ApiKeyConfig::key` is now `Option<String>` and is refused at load;
+  `ApiKeyConfig::resolve_key()` is replaced by `resolve_digest()`, which returns the 32 digest
+  bytes. `ResolvedApiKey::key` is replaced by `digest` and `expires_at`. The new
+  `mcp_gateway::config::api_key_digest_spec(&[u8])` returns the `sha256:<hex>` form.
+
 ## 43. With auth on, the audit log is required and fails closed
 
 An authenticated gateway used to run with no tool-call audit, and when the log did run it
@@ -1021,7 +1062,9 @@ These need no action and have no startup notice.
 
 ## Rolling back
 
-Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade
+Keep the 3.x `gateway.yaml` you had before migrating API keys (item 41): 3.x reads `key` and
+cannot read `key_sha256`, so a rollback puts that copy back. Beyond that, downgrading loads the
+same file, because 4.0.0 itself never edited it. The upgrade
 leaves the 3.x token files in place — its migration prints the notice and stamps the version,
 and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
