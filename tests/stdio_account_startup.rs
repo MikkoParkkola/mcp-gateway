@@ -11,10 +11,10 @@ async fn startup(invalid_account: bool) -> (std::process::Output, bool) {
     let caps = temp.path().join("caps");
     if invalid_account {
         std::fs::create_dir(&caps).unwrap();
-        std::fs::write(caps.join("bad.yaml"), "name: isolated_read\ndescription: Synthetic account admission probe\nauth:\n  required: true\n  type: bearer\n  key: oauth:google\n  account: no-such-account\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: http://127.0.0.1:9\n      path: /read\n      method: GET\n").unwrap();
+        mcp_gateway::gateway::test_helpers::write_owner_only(caps.join("bad.yaml"), "name: isolated_read\ndescription: Synthetic account admission probe\nauth:\n  required: true\n  type: bearer\n  key: oauth:google\n  account: no-such-account\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: http://127.0.0.1:9\n      path: /read\n      method: GET\n").unwrap();
     }
     let config = temp.path().join("gateway.yaml");
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
         format!(
             "capabilities:\n  enabled: true\n  directories:\n    - {}\n",

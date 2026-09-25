@@ -649,7 +649,11 @@ fn std_runner_passes_an_env_file_only_key_to_the_child() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("runtime.env");
-    std::fs::write(&path, "RUNTIME_OVERLAY_ONLY_KEY=from-the-env-file\n").expect("write env file");
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        "RUNTIME_OVERLAY_ONLY_KEY=from-the-env-file\n",
+    )
+    .expect("write env file");
     let overlay = crate::config::EnvOverlay::from_paths(std::slice::from_ref(&path));
     let live = Arc::new(crate::config::LiveEnv::new(
         Arc::new(overlay),

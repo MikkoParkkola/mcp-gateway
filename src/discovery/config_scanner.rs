@@ -761,7 +761,11 @@ mod tests {
         // being applied to the process.
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(&env_file, "MCP_SERVER_ROTATED_URL=http://127.0.0.1:9931\n").unwrap();
+        crate::gateway::test_helpers::write_owner_only(
+            &env_file,
+            "MCP_SERVER_ROTATED_URL=http://127.0.0.1:9931\n",
+        )
+        .unwrap();
         let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
         let env = Arc::new(crate::config::LiveEnv::new(
             Arc::clone(&overlay),

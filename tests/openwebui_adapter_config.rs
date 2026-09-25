@@ -75,7 +75,7 @@
 //!     owed by a separate env-backed test that enables the store; this file
 //!     must not be read as evidence that they hold.
 
-use mcp_gateway::config::Config;
+use mcp_gateway::{config::Config, gateway::test_helpers::write_owner_only};
 
 /// A complete, otherwise-valid `accounts` block with `adapters` spliced in.
 ///
@@ -1002,7 +1002,7 @@ fn store_key_b64(byte: u8) -> String {
 /// `env_files` overlay, with `gateway_key` deciding whether they collide.
 fn enabled_store_yaml(dir: &std::path::Path, adapter_secret: &str, gateway_key: &str) -> String {
     let env_path = dir.join("adapter-separation.env");
-    std::fs::write(
+    write_owner_only(
         &env_path,
         format!(
             "OWUI_SEP_STORE_KEY={}\nOWUI_SEP_ADAPTER_HMAC={adapter_secret}\n\
@@ -1117,7 +1117,7 @@ fn one_variable_named_by_both_an_adapter_and_a_bearer_token_is_refused_while_dis
     let dir = tempfile::TempDir::new().expect("temp dir");
     let env_path = dir.path().join("adapter-alias.env");
     let aliased = filler_32('z');
-    std::fs::write(&env_path, format!("OWUI_SEP_ALIASED={aliased}\n"))
+    write_owner_only(&env_path, format!("OWUI_SEP_ALIASED={aliased}\n"))
         .expect("fixture env file must be writable");
 
     let yaml = format!(
@@ -1186,10 +1186,10 @@ fn write_load_fixture(
     env_body: &str,
 ) -> std::path::PathBuf {
     let env_path = dir.join("adapter-load.env");
-    std::fs::write(&env_path, env_body).expect("fixture env file must be writable");
+    write_owner_only(&env_path, env_body).expect("fixture env file must be writable");
 
     let config_path = dir.join("config.yaml");
-    std::fs::write(
+    write_owner_only(
         &config_path,
         format!(
             "\

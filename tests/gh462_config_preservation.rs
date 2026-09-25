@@ -4,8 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use mcp_gateway::backend::{Backend, BackendRegistry};
 use mcp_gateway::config::{BackendConfig, Config, LiveEnv, TransportConfig};
@@ -13,6 +12,7 @@ use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
 use mcp_gateway::config_reload::{
     ConfigMutation, ConfigWriteError, LiveConfig, ReloadContext, mutate_config_and_reload,
 };
+use mcp_gateway::gateway::test_helpers::write_owner_only;
 
 const MALFORMED: &str =
     "# preserve this operator edit\nbackends:\n  sentinel:\n    command: \"unfinished\n";
@@ -99,7 +99,7 @@ macro_rules! invalid_mutation_case {
             let original = $original;
             let home = tempfile::tempdir().unwrap();
             let path = home.path().join("gateway.yaml");
-            std::fs::write(&path, original).unwrap();
+            write_owner_only(&path, original).unwrap();
             assert_invalid_fixture(&path, original);
             let before = tree_snapshot(home.path());
             refused_mutation(&path, $with_context).await;
@@ -191,7 +191,7 @@ async fn gh462_rejected_mutation_leaves_valid_config_exactly_unchanged() {
 
 fn reference_config(home: &Path) -> Config {
     let env_file = home.join("credentials.env");
-    std::fs::write(&env_file, format!("GH462_REFERENCE_TOKEN={SECRET}\n")).unwrap();
+    write_owner_only(&env_file, format!("GH462_REFERENCE_TOKEN={SECRET}\n")).unwrap();
     let mut config = baseline();
     config.env_files = vec![env_file.display().to_string()];
     config.auth.enabled = true;
@@ -298,7 +298,7 @@ fn gh462_shared_loader_distinguishes_missing_valid_and_invalid_files() {
     write_config(&path, &baseline()).unwrap();
     assert_eq!(load_existing_or_default(&path).unwrap().server.port, 39462);
     for original in [MALFORMED, SEMANTIC] {
-        std::fs::write(&path, original).unwrap();
+        write_owner_only(&path, original).unwrap();
         assert_invalid_fixture(&path, original);
         let before = tree_snapshot(home.path());
         assert!(load_existing_or_default(&path).is_err());
@@ -479,7 +479,7 @@ mod cli {
     const IMPORTED: &str = "gh462-fixture-import";
 
     fn seed_client(home: &Path) {
-        std::fs::write(
+        write_owner_only(
             home.join(".claude.json"),
             serde_json::to_vec(&serde_json::json!({
                 "operatorSetting": "preserve client sentinel",
@@ -489,7 +489,7 @@ mod cli {
         )
         .unwrap();
         std::fs::create_dir(home.join(".cursor")).unwrap();
-        std::fs::write(
+        write_owner_only(
             home.join(".cursor/mcp.json"),
             b"{\"mcpServers\":{},\"sentinel\":true}\n",
         )
@@ -589,7 +589,7 @@ mod cli {
                 let home = tempfile::tempdir().unwrap();
                 seed_client(home.path());
                 let path = home.path().join("gateway.yaml");
-                std::fs::write(&path, original).unwrap();
+                write_owner_only(&path, original).unwrap();
                 assert_invalid_fixture(&path, original);
                 let before = tree_snapshot(home.path());
                 let output = run(home.path(), &path, $setup, $configure_client).await;
@@ -616,7 +616,7 @@ mod cli {
     async fn invalid_empty_discovery(configure_client: bool) {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("gateway.yaml");
-        std::fs::write(&path, MALFORMED).unwrap();
+        write_owner_only(&path, MALFORMED).unwrap();
         let before = tree_snapshot(home.path());
         let output = run(home.path(), &path, true, configure_client).await;
         assert_refused(&output, &path, true);

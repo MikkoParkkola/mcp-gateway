@@ -95,7 +95,7 @@ impl Harness {
         use base64::Engine as _;
         let root = tempfile::tempdir().expect("temp dir");
         let key = base64::engine::general_purpose::STANDARD.encode([0x51_u8; 32]);
-        std::fs::write(
+        crate::gateway::test_helpers::write_owner_only(
             root.path().join("accounts.env"),
             format!("ACCOUNTS_KEY={key}\n"),
         )
@@ -110,7 +110,11 @@ impl Harness {
             .expect("chmod env");
         }
         let path = root.path().join("gateway.yaml");
-        std::fs::write(&path, config_yaml(root.path(), extra_backends)).expect("config");
+        crate::gateway::test_helpers::write_owner_only(
+            &path,
+            config_yaml(root.path(), extra_backends),
+        )
+        .expect("config");
         let evaluated = Config::load_evaluated(Some(&path)).expect("the fixture config must load");
 
         let oauth = root.path().join("oauth");
@@ -139,7 +143,7 @@ impl Harness {
     /// Seed a 3.x credential under a BACKEND REGISTRY NAME.
     fn seed(&self, backend_name: &str, tag: &str) {
         let path = self.legacy.token_path(backend_name, RESOURCE);
-        std::fs::write(&path, legacy_json(tag)).expect("seed");
+        crate::gateway::test_helpers::write_owner_only(&path, legacy_json(tag)).expect("seed");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
