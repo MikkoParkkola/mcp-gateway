@@ -42,11 +42,34 @@ async fn spawn_ws_peer() -> String {
                             "type": "text",
                             "text": format!("ws-echo:{}", frame["params"]["arguments"]),
                         }]}),
-                        _ => json!({}),
+                        "ping" => json!({}),
+                        // A legacy peer: anything else, `server/discover`
+                        // included, is not a method it has.
+                        _ => {
+                            let error = json!({"code": -32601, "message": "method not found"});
+                            let reply = json!({"jsonrpc": "2.0", "id": id, "error": error});
+                            if write.send(Message::Text(reply.to_string().into())).await.is_err() {
+                                return;
+                            }
+                            continue;
+                        }
                     };
-                    let reply = json!({"jsonrpc": "2.0", "id": id, "result": result});
-                    if write.send(Message::Text(reply.to_string().into())).await.is_err() {
-                        return;
+                    // F16: a call that carries a progress token gets one
+                    // progress frame, carrying that token, before its result.
+                    let token = frame["params"]["_meta"]["progressToken"].clone();
+                    let mut replies = Vec::new();
+                    if frame["method"] == "tools/call" && !token.is_null() {
+                        replies.push(json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/progress",
+                            "params": {"progressToken": token, "progress": 1, "total": 2},
+                        }));
+                    }
+                    replies.push(json!({"jsonrpc": "2.0", "id": id, "result": result}));
+                    for reply in replies {
+                        if write.send(Message::Text(reply.to_string().into())).await.is_err() {
+                            return;
+                        }
                     }
                 }
             });
@@ -75,6 +98,42 @@ async fn f17_a_ws_url_backend_answers_a_gateway_invoke() {
     assert!(
         text.contains("ws-echo:") && text.contains("f17-t2"),
         "the peer's answer must come back through the gateway: {text}"
+    );
+    session.shutdown().await;
+}
+
+/// F16: a `ws_url` backend's `notifications/progress` for a `gateway_invoke`
+/// reaches the caller before the result, carrying the caller's own token (the
+/// backend saw only the gateway-minted one), exactly as on stdio.
+#[tokio::test]
+async fn f16_a_ws_url_backends_progress_reaches_the_caller_with_its_own_token() {
+    let url = spawn_ws_peer().await;
+    let home = tempfile::tempdir().expect("temp home");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        home.path().join("gateway.yaml"),
+        format!("backends:\n  {BACKEND}:\n    ws_url: \"{url}\"\n"),
+    )
+    .expect("write gateway.yaml");
+    let mut session = stdio_session(home.path()).await;
+    let client_token = "client-token-ws";
+    session
+        .send(&invoke(
+            2,
+            "ws_echo",
+            &json!({}),
+            &json!({"progressToken": client_token}),
+        ))
+        .await;
+    let (frames, result) = session.read_until(|frame| has_id(frame, 2)).await;
+    assert!(result.is_some(), "the call must complete; frames: {frames:?}");
+    let progress = frames
+        .iter()
+        .find(|frame| is_method(frame, "notifications/progress"))
+        .unwrap_or_else(|| panic!("no progress reached the caller before the result: {frames:?}"));
+    assert_eq!(
+        progress_token_of(progress),
+        Some(&json!(client_token)),
+        "the caller gets its own token back, not the gateway-minted one"
     );
     session.shutdown().await;
 }
