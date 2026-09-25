@@ -266,7 +266,11 @@ mod tests {
         // value an env file assigns once env files load into an overlay.
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(&env_file, "MCP_GATEWAY_FIREWALL_SKIP_KEYS=release_notes\n").unwrap();
+        crate::gateway::test_helpers::write_owner_only(
+            &env_file,
+            "MCP_GATEWAY_FIREWALL_SKIP_KEYS=release_notes\n",
+        )
+        .unwrap();
         let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
         let env = Arc::new(crate::config::LiveEnv::new(
             Arc::clone(&overlay),

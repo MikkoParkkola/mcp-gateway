@@ -196,7 +196,7 @@ impl HttpGateway {
         let port = reservation.local_addr().expect("reserved address").port();
         config["server"]["port"] = json!(port);
         let config_path = directory.path().join("gateway.yaml");
-        std::fs::write(
+        mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
             serde_yaml::to_string(&config).expect("config YAML"),
         )

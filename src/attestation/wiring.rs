@@ -140,7 +140,11 @@ mod tests {
     fn mode_from_an_env_file_reaches_the_wiring() {
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
-        std::fs::write(&env_file, "GATEWAY_ATTESTATION_MODE=observe\n").unwrap();
+        crate::gateway::test_helpers::write_owner_only(
+            &env_file,
+            "GATEWAY_ATTESTATION_MODE=observe\n",
+        )
+        .unwrap();
         let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
 
         assert!(
@@ -160,7 +164,11 @@ mod tests {
             ("enforcee", "enforcee"),
         ] {
             let env_file = dir.path().join(format!("{raw}.env"));
-            std::fs::write(&env_file, format!("{ATTESTATION_MODE_ENV}={raw}\n")).unwrap();
+            crate::gateway::test_helpers::write_owner_only(
+                &env_file,
+                format!("{ATTESTATION_MODE_ENV}={raw}\n"),
+            )
+            .unwrap();
             let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
             let err = attestation_wiring_from_overlay(&overlay)
                 .map(|w| w.map(|(_, mode)| mode))

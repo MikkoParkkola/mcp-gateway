@@ -111,8 +111,11 @@ impl StdioGateway {
 }
 
 fn write_yaml(path: &Path, config: &Value) {
-    std::fs::write(path, serde_yaml::to_string(config).expect("config YAML"))
-        .expect("write gateway config");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        path,
+        serde_yaml::to_string(config).expect("config YAML"),
+    )
+    .expect("write gateway config");
 }
 
 fn backend_result(sentinel: &str) -> Value {
@@ -409,7 +412,7 @@ fn unique_suffix(path: &Path) -> String {
 }
 
 fn write_env(path: &Path, current_name: &str, previous_name: &str, current: &str, previous: &str) {
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         path,
         format!("{current_name}='{current}'\n{previous_name}='{previous}'\n"),
     )

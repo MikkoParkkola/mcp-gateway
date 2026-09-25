@@ -116,7 +116,7 @@ struct Gateway {
 async fn gateway(shape: Shape) -> Gateway {
     let dir = tempfile::tempdir().unwrap();
     let env = dir.path().join("adapter.env");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &env,
         format!("OWUI_ROUTE_HMAC={HMAC}\nOWUI_PLAIN_HMAC={PLAIN_HMAC}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"),
     )

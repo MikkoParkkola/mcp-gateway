@@ -14,7 +14,7 @@ use mcp_gateway::config::Config;
 fn load(yaml: &str) -> (tempfile::TempDir, PathBuf, mcp_gateway::Result<Config>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, yaml).expect("write config");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let result = Config::load(Some(&path));
     (dir, path, result)
 }
@@ -258,7 +258,9 @@ fn env_root_keys_and_shipped_examples_load() {
     let names = shipped_examples(&examples);
     assert!(names.len() >= 8, "examples/ sweep found only {names:?}");
     for name in &names {
-        let result = Config::load(Some(&examples.join(name)));
+        // Through a 0600 copy: a git checkout is 0644, which CONFIG.2 refuses.
+        let body = std::fs::read_to_string(examples.join(name)).expect("read example");
+        let (_dir, _path, result) = load(&body);
         let expected = FAILS_BEFORE_C1.iter().find(|(file, _)| file == name);
         match (result, expected) {
             (Ok(_), None) => {}
@@ -289,7 +291,7 @@ fn env_root_keys_and_shipped_examples_load() {
     ] {
         let dir = tempfile::tempdir().expect("tempdir");
         let env = dir.path().join("gateway.env");
-        std::fs::write(
+        mcp_gateway::gateway::test_helpers::write_owner_only(
             &env,
             "MCP_GATEWAY_TOKEN=c1-positive-control-token-0123456789abcdef\n\
              MCP_GATEWAY_LOG_LEVEL=info\nMCP_GATEWAY_LOG_FORMAT=json\n",
@@ -340,7 +342,7 @@ async fn refused_reload_keeps_the_running_config() {
         Duration::from_secs(60),
     );
 
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  keep:\n    command: echo keep\n    description: after\nserverr: {}\n",
     )
@@ -360,7 +362,7 @@ async fn refused_reload_keeps_the_running_config() {
     );
 
     // Control: the same edit without the typo is published.
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  keep:\n    command: echo keep\n    description: after\n",
     )
