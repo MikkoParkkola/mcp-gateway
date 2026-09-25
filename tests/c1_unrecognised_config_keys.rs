@@ -65,6 +65,21 @@ fn unrecognised_key_under_flattened_backend_refused() {
     );
 }
 
+/// `TransportConfig` is untagged, so a backend that names two transports
+/// resolves to the first that fits and drops the other's keys in silence:
+/// `command` wins, and `http_url` is read by nothing.
+#[test]
+fn keys_of_an_unselected_transport_refused() {
+    let message = refusal(
+        "backends:\n  x:\n    command: y\n    http_url: http://127.0.0.1:1/mcp\n",
+        &["backends.x.http_url"],
+    );
+    assert!(
+        !message.contains("backends.x.command"),
+        "the selected transport's key is read; got: {message}"
+    );
+}
+
 #[test]
 fn all_unrecognised_keys_reported_together() {
     refusal(
