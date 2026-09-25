@@ -597,12 +597,6 @@ async fn drain_list_pages(
         cursor = Some(next);
     }
     if let Some(reason) = stop {
-        telemetry_metrics::counter!(
-            "mcp_backend_list_truncated_total",
-            "backend" => backend.to_owned(),
-            "reason" => reason
-        )
-        .increment(1);
         tracing::warn!(
             backend,
             method = family.method,
