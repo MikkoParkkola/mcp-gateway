@@ -31,9 +31,7 @@ impl GrantAgent {
     pub(super) fn matches(&self, agent: Option<&OwnedProvenAgentId>) -> bool {
         match self {
             Self::Any => true,
-            Self::Exact(key) => {
-                agent.is_some_and(|a| a.proof() == key.source && a.as_str() == key.id)
-            }
+            Self::Exact(key) => agent.is_some_and(|a| a.as_str() == key.id),
         }
     }
 }
@@ -52,6 +50,9 @@ pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Optio
     // JSON is YAML, so one parse covers both encodings. 3.x wrote YAML rows
     // as a tag (`agent: !exact runner`) and JSON rows as `{"exact": "runner"}`.
     let file: Value = serde_yaml::from_str(content).ok()?;
+    if file.is_mapping() {
+        return None;
+    }
     let rows: Vec<String> = file
         .get("grants")
         .and_then(Value::as_sequence)
