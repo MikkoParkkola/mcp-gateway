@@ -882,7 +882,7 @@ fn build_lease_proposal(
         subject: identity.clone(),
         agent: request.agent_id.as_ref().map_or(GrantAgent::Any, |agent| {
             GrantAgent::Exact(GrantAgentKey {
-                source: agent.proof(),
+                source: crate::security::ProofSource::MutualTls,
                 id: agent.as_str().to_string(),
             })
         }),
