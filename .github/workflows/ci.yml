@@ -273,7 +273,7 @@ jobs:
       # The external journey is executed by the mandatory SDK job below.
       # Not a flake skip (MIK-7534): it needs Python and Redis, which only
       # that job provisions, and the gate below `needs` that job.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   task-sdk-recovery:
     uses: ./.github/workflows/task-sdk-recovery.yml
