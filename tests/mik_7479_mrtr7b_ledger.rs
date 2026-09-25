@@ -52,6 +52,16 @@ const FIRST_CALL_ID: i64 = 2;
 /// `StdioSession::send` has no bound of its own; a parked reader fails here.
 const BURST_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The cause phrases the burst assertions count, each from the gateway's own
+/// text: `meta_mcp/invoke.rs` (capability auto-disable, bridged ask failure),
+/// `backend/ops.rs` via the tool envelope (open breaker), and
+/// `gateway/server/mod.rs` (stdio admission refusal). Pinned against real
+/// envelopes by `kind_names_each_cause_the_burst_counts`.
+const CAPABILITY_DISABLED: &str = "temporarily disabled due to a high error rate";
+const ASK_EXPIRED: &str = "asked for input and the bridged exchange could not be completed";
+const BREAKER_OPEN: &str = "Circuit breaker open";
+const SERVER_BUSY: &str = "server busy: too many stdio requests in flight";
+
 // ---------------------------------------------------------------- the ledger
 
 /// What became of every call id in a burst.
@@ -76,30 +86,32 @@ fn terminal_id(frame: &Value) -> Option<i64> {
     frame.get("id").and_then(Value::as_i64)
 }
 
-/// A terminal frame's outcome, as a histogram key.
+/// A terminal frame's outcome, as a histogram key: its shape plus the text
+/// that names the cause, whitespace collapsed.
+///
+/// The code alone is ambiguous (-32000 and -32003 each carry several meanings
+/// here), and a tool-level refusal can arrive as text nested inside a result,
+/// so assertions match a cause phrase anywhere in the key ([`Run::kind`]).
 fn kind_of(frame: &Value) -> String {
-    if let Some(code) = frame.pointer("/error/code").and_then(Value::as_i64) {
-        // The code alone is ambiguous (-32000 and -32003 each carry several
-        // meanings here), so the message head names which one it was.
-        let message = frame
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let head: String = message.chars().take(60).collect();
-        return format!("error {code}: {head}");
-    }
-    let result = frame.get("result").unwrap_or(&Value::Null);
-    if result.get("requestState").is_some() {
-        "continuation".to_owned()
-    } else if result.get("isError").and_then(Value::as_bool) == Some(true) {
-        "isError".to_owned()
+    let (shape, text) = if let Some(code) = frame.pointer("/error/code").and_then(Value::as_i64) {
+        (
+            format!("error {code}"),
+            frame.pointer("/error/message").cloned(),
+        )
     } else {
-        let text = result
-            .pointer("/content/0/text")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        format!("result: {}", text.chars().take(60).collect::<String>())
-    }
+        let result = frame.get("result").unwrap_or(&Value::Null);
+        let shape = if result.get("requestState").is_some() {
+            "continuation"
+        } else if result.get("isError").and_then(Value::as_bool) == Some(true) {
+            "isError"
+        } else {
+            "result"
+        };
+        (shape.to_owned(), result.pointer("/content/0/text").cloned())
+    };
+    let text = text.as_ref().and_then(Value::as_str).unwrap_or("");
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{shape}: {}", flat.chars().take(240).collect::<String>())
 }
 
 impl Ledger {
@@ -201,6 +213,74 @@ fn ledger_never_counts_an_ask_as_terminal() {
     let ledger = Ledger::from_frames(2..=4, &frames);
     assert_eq!(ledger.unaccounted, vec![2, 3, 4]);
     assert_eq!(ledger.terminals(), 0);
+}
+
+/// The burst assertions count causes by phrase; this pins each phrase against
+/// the envelope shape the gateway actually writes, so an envelope change fails
+/// here in milliseconds instead of silently zeroing a burst assertion.
+#[test]
+fn kind_names_each_cause_the_burst_counts() {
+    let error = |code: i64, message: &str| json!({"error": {"code": code, "message": message}});
+    let frames = [
+        response(
+            2,
+            &error(
+                -32000,
+                "JSON-RPC error -32000: Capability 'needs_input' on server \
+            'fixture' is temporarily disabled due to a high error rate. It will auto-recover",
+            ),
+        ),
+        response(
+            3,
+            &error(
+                -32003,
+                "JSON-RPC error -32003: Tool 'needs_input' on server \
+            'fixture' asked for input and the bridged exchange could not be completed",
+            ),
+        ),
+        response(
+            4,
+            &error(
+                -32000,
+                "server busy: too many stdio requests in flight, retry this request",
+            ),
+        ),
+        // As observed on the wire: the refusal envelope nested as text in a result.
+        response(
+            5,
+            &json!({"result": {"content": [{"type": "text",
+            "text": "{\n  \"content\": [\n    {\n      \"text\": \"Circuit breaker open for backend 'fixture'\""}]}}),
+        ),
+        response(6, &error(-32003, "Forbidden: something else")),
+    ];
+    let run = Run {
+        ledger: Ledger::from_frames(2..=6, &frames),
+        asks: 1,
+        unparsable: 0,
+        ended: "fixture",
+        elapsed: Duration::ZERO,
+        stderr: Vec::new(),
+    };
+    assert_eq!(
+        run.kind(&[CAPABILITY_DISABLED]),
+        1,
+        "{:?}",
+        run.ledger.kinds
+    );
+    assert_eq!(
+        run.kind(&["error -32003", ASK_EXPIRED]),
+        1,
+        "{:?}",
+        run.ledger.kinds
+    );
+    assert_eq!(run.kind(&["error -32003"]), 2, "{:?}", run.ledger.kinds);
+    assert_eq!(
+        run.kind(&["error -32000", SERVER_BUSY]),
+        1,
+        "{:?}",
+        run.ledger.kinds
+    );
+    assert_eq!(run.kind(&[BREAKER_OPEN]), 1, "{:?}", run.ledger.kinds);
 }
 
 // ------------------------------------------------ the fixture (as the 7b row)
@@ -523,8 +603,8 @@ fn assert_capture_worked(run: &Run) {
 /// failures ahead of the slow asking dispatches, surfaced as "Circuit breaker
 /// open", and auto-disabled the capability.
 fn assert_drained_behind_unanswered_asks(run: &Run) {
-    let disabled = run.kind("error -32000: JSON-RPC error -32000: Capability");
-    let breaker = run.kind("result: Circuit breaker open");
+    let disabled = run.kind(&[CAPABILITY_DISABLED]);
+    let breaker = run.kind(&[BREAKER_OPEN]);
     assert_eq!(
         (disabled, breaker),
         (0, 0),
@@ -537,10 +617,16 @@ fn assert_drained_behind_unanswered_asks(run: &Run) {
         "no call asked, so nothing drained: {}",
         run.report()
     );
+    // Both counts, because -32003 has other meanings: an unrelated -32003
+    // must not stand in for an ask that never expired.
     assert_eq!(
-        run.kind("error -32003"),
-        run.asks,
-        "every call that asked must end in its expired ask, once: {}",
+        (
+            run.kind(&["error -32003", ASK_EXPIRED]),
+            run.kind(&["error -32003"])
+        ),
+        (run.asks, run.asks),
+        "every call that asked must end in its expired ask, once, and nothing \
+         else may end -32003: {}",
         run.report()
     );
 }
@@ -593,7 +679,7 @@ async fn mik_7479_full_burst_every_call_reaches_one_terminal_frame() {
     );
     assert_drained_behind_unanswered_asks(&run);
     assert!(
-        run.stderr_count("refusing a request") >= run.kind("error -32000: server busy"),
+        run.stderr_count("refusing a request") >= run.kind(&["error -32000", SERVER_BUSY]),
         "each busy refusal logs one WARN, so fewer WARNs than refusals means a broken capture: {}",
         run.report()
     );
