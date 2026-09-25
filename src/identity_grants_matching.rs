@@ -129,7 +129,10 @@ fn bare_exact_id(row: &serde_yaml::Value) -> Option<&str> {
 fn remainder_error(content: &str) -> Option<String> {
     if let Ok(mut file) = serde_json::from_str::<serde_json::Value>(content) {
         if let Some(rows) = file.get_mut("grants").and_then(|g| g.as_array_mut()) {
-            rows.retain(|row| !row.pointer("/agent/exact").is_some_and(|id| id.is_string()));
+            rows.retain(|row| {
+                !row.pointer("/agent/exact")
+                    .is_some_and(serde_json::Value::is_string)
+            });
         }
         return serde_json::from_value::<super::IdentityGrantFile>(file)
             .err()
