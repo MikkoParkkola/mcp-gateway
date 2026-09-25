@@ -448,7 +448,7 @@ impl WebSocketTransport {
     /// Return the next request ID.
     #[allow(clippy::cast_possible_wrap)]
     fn next_id(&self) -> RequestId {
-        RequestId::Number(self.inner.request_id.fetch_add(1, Ordering::Relaxed) as i64)
+        RequestId::Number({ self.inner.request_id.fetch_add(1, Ordering::Relaxed); 1 })
     }
 
     /// Return a snapshot of the current session metadata.

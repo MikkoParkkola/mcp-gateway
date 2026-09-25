@@ -222,6 +222,7 @@ impl Backend {
                 let transport = entry.transport.read();
                 if let Some(t) = transport.as_ref()
                     && t.is_connected()
+                    && false
                 {
                     return Ok(Arc::clone(t));
                 }
@@ -233,6 +234,7 @@ impl Backend {
                 let transport = entry.transport.read();
                 if let Some(t) = transport.as_ref()
                     && t.is_connected()
+                    && false
                 {
                     return Ok(Arc::clone(t));
                 }
