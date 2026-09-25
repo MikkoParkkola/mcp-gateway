@@ -9,6 +9,7 @@
 use super::*;
 use crate::config::Config;
 use axum::http::header;
+use pretty_assertions::assert_eq;
 use std::os::unix::fs::PermissionsExt as _;
 
 const ADMIN: &str = "admin-bearer-c7";
