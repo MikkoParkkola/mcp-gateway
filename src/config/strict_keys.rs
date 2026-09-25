@@ -86,12 +86,12 @@ const A2A_BACKEND_KEYS: &[&str] = &["a2a_url", "a2a_agent_card_path"];
 /// selecting key is present wins, and serde drops every key of the others.
 const TRANSPORTS: &[(&str, &str, &[&str])] = &[
     ("command", "stdio", &["command", "cwd", "protocol_version"]),
+    ("ws_url", "websocket", &["ws_url", "protocol_version"]),
     (
         "http_url",
         "http",
         &["http_url", "streamable_http", "protocol_version"],
     ),
-    ("ws_url", "websocket", &["ws_url", "protocol_version"]),
     ("a2a_url", "a2a", A2A_BACKEND_KEYS),
 ];
 
