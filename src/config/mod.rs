@@ -1320,6 +1320,17 @@ pub struct ServerConfig {
     /// Whether a modern `tools/call` must carry `_meta`
     /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §28).
     pub idempotency_key: IdempotencyKeyMode,
+    /// Bearer token a scraper presents to `/metrics` (UPGRADING-4.0 §31).
+    ///
+    /// A literal or `env:VAR`. Unset, or an `env:` variable that is missing or
+    /// empty, means no token: `/metrics` answers 401 to everyone and startup
+    /// logs a WARN. It never fails the load, unlike `auth.bearer_token`: a
+    /// scrape credential must not be able to take the gateway down. Under
+    /// `server` rather than `auth` because a mesh deployment has no `auth`
+    /// section and still needs scraping. The admin bearer never opens
+    /// `/metrics`, and this token never opens anything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_token: Option<String>,
 }
 
 /// `server.idempotency_key`: see [`ServerConfig::idempotency_key`].
@@ -1348,6 +1359,7 @@ impl Default for ServerConfig {
             public_url: None,
             allow_unauthenticated_network_bind: false,
             idempotency_key: IdempotencyKeyMode::Optional,
+            metrics_token: None,
         }
     }
 }
