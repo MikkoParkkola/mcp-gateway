@@ -175,7 +175,7 @@ fn apply_intersection(
         intersect_scope_list(&policy.tools, &requested.tools)
     };
 
-    if backends.is_empty() {
+    if backends.is_empty() && !requested.backends.is_empty() {
         debug!("Matched policy grants no backend for this request");
         return Err(ScopeRefusal::NoBackendsGranted);
     }
