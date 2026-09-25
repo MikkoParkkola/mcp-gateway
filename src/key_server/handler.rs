@@ -482,6 +482,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn empty_admin_token_never_authenticates() {
+        // Defence in depth behind the load-time refusal: a KeyServer built in
+        // code with an empty admin token must not accept an empty bearer.
+        let ks = KeyServer::new(crate::config::KeyServerConfig {
+            admin_token: Some(String::new()),
+            ..crate::config::KeyServerConfig::default()
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer ".parse().expect("header"));
+        assert!(check_admin_auth(&ks, &headers).is_err());
+    }
+
+    #[test]
     fn debug_output_redacts_exchange_tokens() {
         // CWE-532 / MIK-6733 sibling: {:?} must never leak the OIDC subject
         // token or the issued bearer.

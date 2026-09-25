@@ -2285,6 +2285,9 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 mod grant_delta;
 
 #[cfg(test)]
+mod c4_enable_tests;
+
+#[cfg(test)]
 mod grant_change_trigger_tests;
 
 #[cfg(test)]

@@ -133,3 +133,93 @@ fn missing_env_file_named_in_error() {
         "error must name the absent env file: {msg}"
     );
 }
+
+#[test]
+fn set_but_empty_template_var_refused() {
+    // POSIX `:-`: an empty variable takes the default, and with no default it
+    // is refused like an unset one. `${VAR:-}` stays the explicit empty.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = env_file_c4(dir.path(), "MCP_GW_C4_BLANK=\n");
+    let backend = |header: &str| {
+        format!(
+            "env_files: ['{env}']\nbackends:\n  x:\n    http_url: http://127.0.0.1:9/mcp\n    \
+             headers:\n      Authorization: \"{header}\"\n"
+        )
+    };
+    let err = load_c4(dir.path(), &backend("Bearer ${MCP_GW_C4_BLANK}"))
+        .expect_err("a set-but-empty ${VAR} must not ship an empty credential");
+    assert!(err.to_string().contains("MCP_GW_C4_BLANK"), "got: {err}");
+    let cfg = load_c4(dir.path(), &backend("Bearer ${MCP_GW_C4_BLANK:-d}")).expect("default");
+    assert_eq!(cfg.backends["x"].headers["Authorization"], "Bearer d");
+    let cfg = load_c4(dir.path(), &backend("Bearer ${MCP_GW_C4_BLANK:-}")).expect("opt-out");
+    assert_eq!(cfg.backends["x"].headers["Authorization"], "Bearer ");
+}
+
+#[test]
+fn every_unresolved_reference_is_reported() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = load_c4(
+        dir.path(),
+        "backends:\n  a:\n    http_url: http://127.0.0.1:9/mcp\n    headers:\n      \
+         X-A: \"${MCP_GW_C4_NOPE_A}\"\n  b:\n    http_url: http://127.0.0.1:9/mcp\n    \
+         env:\n      B: \"${MCP_GW_C4_NOPE_B}\"\n",
+    )
+    .expect_err("unset references must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("MCP_GW_C4_NOPE_A") && msg.contains("MCP_GW_C4_NOPE_B"),
+        "one load must report every unresolved reference: {msg}"
+    );
+}
+
+#[test]
+fn empty_admin_token_refused_by_resolve() {
+    // Where the key server's comparator gets its token: an empty literal would
+    // match `Authorization: Bearer ` with nothing after it.
+    let ks = KeyServerConfig {
+        enabled: true,
+        admin_token: Some(String::new()),
+        ..KeyServerConfig::default()
+    };
+    let err = ks
+        .resolve_admin_token(&EnvOverlay::none())
+        .expect_err("an empty admin token must be refused");
+    assert!(
+        err.to_string().contains("key_server.admin_token"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn empty_hs256_literal_refused_by_resolve() {
+    let agent = AgentDefinitionConfig {
+        client_id: "svc".to_string(),
+        name: "svc".to_string(),
+        hs256_secret: Some(String::new()),
+        rs256_public_key: None,
+        scopes: Vec::new(),
+        issuer: None,
+        audience: Some("mcp-gateway-test".to_string()),
+    };
+    let err = agent
+        .resolved_hs256_secret(&EnvOverlay::none())
+        .expect_err("an empty hs256 secret must be refused");
+    assert!(err.to_string().contains("svc"), "got: {err}");
+}
+
+#[test]
+fn overlay_only_bearer_resolves_in_try_from_config() {
+    // The runtime resolvers read the load overlay, not only the process env.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = env_file_c4(dir.path(), "MCP_GW_C4_OVERLAY_ONLY=tok-from-env-file\n");
+    let overlay = EnvOverlay::from_paths(&[std::path::PathBuf::from(env)]);
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some("env:MCP_GW_C4_OVERLAY_ONLY".to_string()),
+        ..AuthConfig::default()
+    };
+    assert_eq!(
+        auth.resolve_bearer_token(&overlay).expect("resolves"),
+        Some("tok-from-env-file".to_string())
+    );
+}
