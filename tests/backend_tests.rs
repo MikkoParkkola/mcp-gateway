@@ -26,6 +26,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         secrets: Vec::new(),
         passthrough: false,
         allow_cleartext_credentials: false,
+        input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
         runtime_profile: None,
         identity_propagation: None,
         account: None,
