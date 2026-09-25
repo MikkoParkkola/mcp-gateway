@@ -342,3 +342,35 @@ fn a_ref_to_a_free_map_in_any_of_matches_the_inlined_form() {
         assert!(!refused(schema, &json!({"b": 1})), "{schema}");
     }
 }
+
+/// F14e with `$id`: a level carrying its own `$id` resolves its `$ref`
+/// against itself, not the outer document. Here the outer `free` is closed
+/// and the inner one open, so only the inner base admits the extra key.
+#[test]
+fn a_ref_under_an_id_resolves_against_that_level() {
+    let schema = json!({
+        "$defs": {"free": closed(&json!({"a": {}}))},
+        "type": "object",
+        "properties": {"opts": {
+            "$id": "urn:example:opts",
+            "$defs": {"free": {"type": "object"}},
+            "$ref": "#/$defs/free"
+        }}
+    });
+    assert!(!refused(&schema, &json!({"opts": {"b": 1}})));
+}
+
+/// An unresolvable `$ref` stays refused under `closed`, with or without an
+/// `$id`, and a pointer that only the outer document could satisfy does not
+/// resolve under an inner `$id`.
+#[test]
+fn an_unresolvable_ref_under_an_id_stays_refused() {
+    let missing = json!({"$id": "urn:example:x", "$ref": "#/$defs/missing"});
+    assert!(refused(&missing, &json!({"b": 1})));
+    let outer_only = json!({
+        "$defs": {"free": {"type": "object"}},
+        "type": "object",
+        "properties": {"opts": {"$id": "urn:example:opts", "$ref": "#/$defs/free"}}
+    });
+    assert!(refused(&outer_only, &json!({"opts": {"b": 1}})));
+}
