@@ -909,6 +909,71 @@ class PublishCheckTests(unittest.TestCase):
             0,
         )
 
+    # A 4.0.0 prerelease (beta, rc) ships to opt-in channels before the scope is
+    # complete, by owner decision of 2026-09-25. It still runs every consistency
+    # check above; only the completed-acceptance requirement is lifted.
+    def test_beta_tag_and_manifest_pending_publish_is_consistency_only(self):
+        self._write_manifest("4.0.0-beta.1")
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0-beta.1",
+            ),
+            0,
+            self.last.stderr,
+        )
+        self.assertIn("Plan check only; not release approval.", self.last.stdout)
+
+    def test_beta_dispatch_input_tag_pending_publish_is_consistency_only(self):
+        self._write_manifest("4.0.0-beta.1")
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="workflow_dispatch",
+                GITHUB_REF="refs/heads/main",
+                INPUT_TAG="v4.0.0-beta.1",
+            ),
+            0,
+            self.last.stderr,
+        )
+
+    def test_build_metadata_on_4_0_0_still_requires_acceptance(self):
+        self._write_manifest("4.0.0+build.7")
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0+build.7",
+            ),
+            1,
+        )
+
+    def test_beta_manifest_under_a_final_tag_still_requires_acceptance(self):
+        self._write_manifest("4.0.0-beta.1")
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0",
+            ),
+            1,
+        )
+
+    def test_beta_publish_still_rejects_an_invalid_contract(self):
+        self._write_manifest("4.0.0-beta.1")
+        self._write_contract(pending=False, waived=True)
+        status = self.root / gate.STATUS
+        status.write_text(
+            status.read_text().replace(
+                '"waived_by": "reference_personal_account_journey"',
+                '"waived_by": "absent_ruling"',
+            )
+        )
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0-beta.1",
+            ),
+            2,
+        )
+
 
 if __name__ == "__main__":
     # unittest discovers this imported TestCase when running the workflow entry point.

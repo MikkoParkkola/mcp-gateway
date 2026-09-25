@@ -6,7 +6,7 @@ step named here exists in `.github/workflows/release.yml`, `.github/workflows/ci
 or `.github/workflows/docker.yml`, or under `scripts/release/`; if a name here stops
 matching, the workflow changed and this file is stale.
 
-For a release candidate (`v4.0.0-rc.N`) see
+For a beta or release candidate (`v4.0.0-beta.N`, `v4.0.0-rc.N`) see
 [`docs/release/v4.0.0-prerelease-channel.md`](docs/release/v4.0.0-prerelease-channel.md),
 which lists what each channel does on a prerelease tag.
 
@@ -47,8 +47,10 @@ release is ready.
 Readiness is gated by the `release-criteria` job (in both `release.yml` and `ci.yml`), in
 particular `Require completed acceptance in publishing context`, which runs
 `scripts/release/check_scope_acceptance.py --publish-check`. On a tag whose version is
-`4.0.0` (including `4.0.0-rc.N`) it exits 1 while any scope criterion is pending. That
+`4.0.0` (or `4.0.0+build`) it exits 1 while any scope criterion is pending. That
 makes it the gate that keeps an accidental `v4.0.0` tag push from reaching crates.io.
+A prerelease (`4.0.0-beta.N`, `4.0.0-rc.N`) gets the consistency checks only, by owner
+decision of 2026-09-25, so a beta can reach the opt-in channels before the scope is done.
 It checks only what the ledgers record, so it is only as good as their grading. **It
 applies only when the manifest or tag version is `4.0.0`.** On any other version
 (`4.0.1`, say) nothing between the tag and `cargo publish` checks readiness beyond

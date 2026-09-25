@@ -16,8 +16,11 @@ and pending so an accepted shortfall cannot read as finished work.
 additionally requires completed acceptance when GITHUB_EVENT_NAME/GITHUB_REF
 (and, for workflow_dispatch, INPUT_TAG) show a tag push or manual dispatch
 (publishing context) whose Cargo.toml [package].version or normalized tag/
-input is 4.0.0. The manifest must exist and parse with a valid version in
-that context regardless of which version it names.
+input is 4.0.0 (build metadata allowed). A 4.0.0 prerelease such as
+4.0.0-beta.1 or 4.0.0-rc.1 is not the release: by owner decision of
+2026-09-25 it ships to the opt-in channels before acceptance completes, so
+it gets the consistency checks only. The manifest must exist and parse with
+a valid version in that context regardless of which version it names.
 """
 
 import argparse
@@ -38,7 +41,7 @@ BASELINE = DOCS / "RELEASE-4.0.0-criteria-status.md"
 MANIFEST = pathlib.Path("Cargo.toml")
 REQUIRED_DECISIONS = {"reference_personal_account_journey"}
 ID = re.compile(r"^\| ((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?) \|", re.M)
-VERSION_400 = re.compile(r"^4\.0\.0([+-].*)?$")
+VERSION_400 = re.compile(r"^4\.0\.0(\+[0-9A-Za-z.-]+)?$")
 VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
 
 spec = importlib.util.spec_from_file_location(
@@ -439,7 +442,7 @@ def main(argv=None):
     mode.add_argument(
         "--publish-check",
         action="store_true",
-        help="enforce completed 4.0.0 acceptance in publish context",
+        help="enforce completed 4.0.0 acceptance on a final publish",
     )
     args = parser.parse_args(argv)
     try:

@@ -1196,7 +1196,7 @@ mod tests {
         let stamp_after_first = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
         // GH475.MIG.2: pinned to the literal so a future version bump cannot
         // silently stop testing the 4.0.0 behaviour this case was written for.
-        assert_eq!(stamp_after_first, "4.0.0");
+        assert_eq!(SemVer::parse(&stamp_after_first), SemVer::parse("4.0.0"));
         let content_after_first = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_first, original);
 
@@ -1208,7 +1208,7 @@ mod tests {
         // branch (idempotency guaranteed by the version stamp, not by the
         // migration's own logic).
         let stamp_after_second = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(stamp_after_second, "4.0.0");
+        assert_eq!(SemVer::parse(&stamp_after_second), SemVer::parse("4.0.0"));
         let content_after_second = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_second, original);
     }
@@ -1230,15 +1230,15 @@ mod tests {
         // so it would keep passing after a version bump while no longer
         // proving anything about the 4.0.0 upgrade this case exists to cover.
         assert_eq!(
-            read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
-            "4.0.0"
+            SemVer::parse(&read_stamp(&stamp_path(dir.path())).unwrap().unwrap()),
+            SemVer::parse("4.0.0")
         );
         assert_eq!(std::fs::read_to_string(&yaml).unwrap(), original);
 
         check_upgrade(dir.path()).unwrap();
         assert_eq!(
-            read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
-            "4.0.0"
+            SemVer::parse(&read_stamp(&stamp_path(dir.path())).unwrap().unwrap()),
+            SemVer::parse("4.0.0")
         );
         assert_eq!(
             std::fs::read_to_string(&yaml).unwrap(),
