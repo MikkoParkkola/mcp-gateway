@@ -26,7 +26,7 @@ pub enum CircuitState {
 }
 
 impl CircuitState {
-    /// Return the lowercase snake_case label used in API responses.
+    /// Return the lowercase `snake_case` label used in API responses.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
