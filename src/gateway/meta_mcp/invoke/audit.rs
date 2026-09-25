@@ -6,7 +6,9 @@
 use serde_json::Value;
 
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
-use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
+use crate::security::audit::{
+    AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
+};
 use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
 use crate::{Error, Result};
 
@@ -15,13 +17,12 @@ impl AuditWho {
     /// `who` comes from the request's credential and verified subject, never
     /// from a label or an email.
     pub(crate) fn from_caller(caller: &MetaMcpCallerContext<'_>) -> Self {
-        Self {
-            credential_kind: Some(caller.credential_kind),
-            principal: caller.credential_principal.unwrap_or_default().to_string(),
-            account: caller.api_key_name.unwrap_or("anonymous").to_string(),
-            authority: caller.grant_subject.as_ref().map(|g| g.authority.clone()),
-            subject: caller.grant_subject.as_ref().map(|g| g.subject.clone()),
-        }
+        Self::from_parts(
+            caller.credential_kind,
+            caller.credential_principal,
+            caller.api_key_name,
+            caller.grant_subject.as_ref(),
+        )
     }
 }
 
@@ -120,8 +121,7 @@ impl MetaMcp {
         let written = log.log_invocation_correlated(
             key,
             &envelope,
-            server,
-            tool,
+            InvocationTarget::meta(server, tool),
             &sha256_of(args),
             response_hash.as_deref(),
         );

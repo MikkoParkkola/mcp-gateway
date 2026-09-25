@@ -220,6 +220,82 @@ impl AuditWho {
     pub fn account(&self) -> &str {
         &self.account
     }
+
+    /// The caller of a direct-route request (D2-d): its credential and
+    /// verified subject, never a label or an email.
+    #[must_use]
+    pub fn from_request(
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    ) -> Self {
+        Self::from_parts(
+            CredentialKind::of(client),
+            client.map(|c| c.principal.as_str()),
+            client.map(|c| c.name.as_str()),
+            grant_subject,
+        )
+    }
+
+    /// The one invocation-caller constructor both routes delegate to.
+    /// `authority` and `subject` come only from the verified grant subject.
+    pub(crate) fn from_parts(
+        credential_kind: CredentialKind,
+        principal: Option<&str>,
+        account: Option<&str>,
+        grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    ) -> Self {
+        Self {
+            credential_kind: Some(credential_kind),
+            principal: principal.unwrap_or_default().to_string(),
+            account: account.unwrap_or("anonymous").to_string(),
+            authority: grant_subject.map(|g| g.authority.clone()),
+            subject: grant_subject.map(|g| g.subject.clone()),
+        }
+    }
+}
+
+/// Which route served an invocation (D2-f).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationRoute {
+    /// `gateway_invoke` on the meta route.
+    Meta,
+    /// `tools/call` on `POST /mcp/{name}`.
+    Direct,
+}
+
+impl InvocationRoute {
+    /// The `route` field value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Meta => "meta",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+/// What an invocation record is about. `tool` is `None` when a malformed
+/// call named none; the record then has no `tool` key.
+#[derive(Debug, Clone, Copy)]
+pub struct InvocationTarget<'a> {
+    /// The route that served the call.
+    pub route: InvocationRoute,
+    /// The backend.
+    pub server: &'a str,
+    /// The tool, when the call named one.
+    pub tool: Option<&'a str>,
+}
+
+impl<'a> InvocationTarget<'a> {
+    /// A `gateway_invoke` of `tool` on `server`.
+    #[must_use]
+    pub const fn meta(server: &'a str, tool: &'a str) -> Self {
+        Self {
+            route: InvocationRoute::Meta,
+            server,
+            tool: Some(tool),
+        }
+    }
 }
 
 fn parse_oidc_actor(actor: &str) -> Option<(String, String)> {
