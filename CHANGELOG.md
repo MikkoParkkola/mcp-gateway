@@ -96,6 +96,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   admin at once. A `role: admin` rule whose only condition is `domain` fails to load,
   and each admin rule logs a warning at load. Header identities never confer admin.
   See `docs/UPGRADING-4.0.md` item 51 (E1, MIK-7570.ADMINSSO.1).
+- **Admin actions write an `admin_action` audit record and are refused while the
+  audit log is down.** Admin meta-tool calls, allowed or refused, and every
+  non-`GET` `/ui/api/*` request, control-plane POSTs included, record who acted
+  (issuer and subject for an SSO admin), the tool or route template, and the
+  outcome; bodies and queries are never logged. With auth on they answer 503
+  while the log cannot be written. See `docs/UPGRADING-4.0.md` item 51.
 
 ### Fixed
 

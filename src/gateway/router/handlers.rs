@@ -1321,7 +1321,13 @@ async fn meta_mcp_dispatch(
             // refusal instead of asking two sites to word one answer alike.
             if state.meta_mcp.exposes_meta_tool(tool_name)
                 && is_admin_meta_tool(tool_name)
-                && let Err(e) = require_admin_tool_access(client.as_ref(), tool_name)
+                && let Err(e) = require_admin_tool_access(
+                    state.transparency_log.as_ref(),
+                    client.as_ref(),
+                    grant_subject.as_ref(),
+                    tool_name,
+                )
+                .await
             {
                 return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
             }

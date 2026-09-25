@@ -255,5 +255,7 @@ async fn standing_of(
 #[path = "sso_admin_tests/cells.rs"]
 mod cells;
 
+// Its helpers serve the UI cells, so the module needs the UI.
+#[cfg(feature = "webui")]
 #[path = "sso_admin_tests/admin_action.rs"]
 mod admin_action;
