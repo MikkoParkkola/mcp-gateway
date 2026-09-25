@@ -300,7 +300,8 @@ a caller that sent `X-Gateway-Identity-Authority: https://accounts.google.com` w
 - **Rewrite grants.** Grants for the `trusted_header` authority, or for an authority a proxy used
   to send, move to the configured `authority`. Access grants key on
   `(https://<team_domain>, <Access sub>)`, not on email.
-- **Stricter values.** A repeated identity header, a non-UTF-8 one, or one over 512 bytes is
+- **Stricter values.** A repeated identity header, a non-UTF-8 one, an `X-Gateway-Identity-*` value over
+  512 bytes, or a `Cf-Access-Jwt-Assertion` over 8 KiB is
   refused with 400 instead of truncated or first-wins.
 
 Embedders: `MetaMcp::with_trusted_identity_headers(bool)` and

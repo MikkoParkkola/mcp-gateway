@@ -216,7 +216,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cf-Access-Jwt-Assertion` (team certs, `aud`, `exp`) and answers
   `Cf-Access-Authenticated-User-*` without one with 401. Before, any client
   that reached the gateway chose its own subject and authority, including an
-  OIDC issuer's. A repeated identity header, or one over 512 bytes, is refused
+  OIDC issuer's. A repeated identity header, an `X-Gateway-Identity-*` value over 512 bytes, or a
+  `Cf-Access-Jwt-Assertion` over 8 KiB is refused
   instead of truncated. Refusals count in `mcp_identity_header_refused_total`,
   ignored headers in `mcp_identity_header_ignored_total`. Loopback proxies need
   `auth.enabled: true`. `KeyServerOidcConfig.max_token_age_secs` becomes
