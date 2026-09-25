@@ -92,6 +92,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A config key the gateway does not read fails the load (breaking).** A
+  misspelt key such as `key_server: {enabeld: true}` used to load in silence
+  and leave the setting at its default. The config file is now checked after
+  it parses, and one `ConfigValidation` error lists every offending key as a
+  dotted path with `[index]` for list entries, for example
+  `auth.api_keys[0].bakends` or `backends.brave.timout`. Backend keys hidden
+  by the flattened transport are checked against a fixed list. The retired
+  `backends.<name>.idle_timeout`, which only warned, is refused with its
+  explanation. `MCP_GATEWAY_*` environment variables are not checked. Reloads
+  run the same check and keep the running config on refusal. See
+  UPGRADING-4.0.md item 28.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
