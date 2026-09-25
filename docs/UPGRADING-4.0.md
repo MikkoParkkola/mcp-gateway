@@ -1,10 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It loads unchanged unless items 8, 12 or 29 refuse it.
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29 or 30 refuses it
+(listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11 and 23-28 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27 and 30 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -614,6 +615,8 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
   refuse what it claims to. The error names `observe` and `off`.
 - **Any other value fails startup** with an error naming the value. The value is still trimmed and
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
+- **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
+  `GATEWAY_ATTESTATION_MODE=observe`. Deleting the variable turns attestation off.
 
 ## After upgrading
 
