@@ -77,7 +77,6 @@ pub mod secrets;
 pub mod security;
 #[cfg(feature = "semantic-search")]
 pub mod semantic_search;
-pub mod session_sandbox;
 pub mod simhash;
 pub mod skills;
 pub mod stats;
@@ -89,7 +88,6 @@ pub mod transform;
 pub mod transition;
 pub mod transport;
 pub mod trust;
-pub mod tunnel;
 pub mod validator;
 
 pub use error::{Error, Result};

@@ -571,7 +571,7 @@ mod restart_required_tests {
 /// consumer that reads it, so a reader can check the claim rather than trust it.
 ///
 /// - `server.public_url` — `router/well_known.rs`, `router/origin_guard.rs`
-/// - `control_plane.role_mapping` — `ui/control_plane.rs`
+/// - `control_plane.role_mapping` — `ui/control_plane.rs`, `gateway/auth_live.rs`
 fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str> {
     let mut pending = Vec::new();
 
@@ -623,7 +623,7 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
 /// process. Live-applied sections are excluded by name, and that list is short
 /// enough to check: `backends` is applied by the reload itself,
 /// `server.public_url` and `control_plane.role_mapping` are re-read per request
-/// (see `router::well_known`, `router::origin_guard`, `ui::control_plane`).
+/// (see `router::well_known`, `router::origin_guard`, `ui::control_plane`, `auth::live`).
 fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, bool)> {
     // A macro rather than sixteen hand-written comparisons: the point is that
     // the list is exhaustive, and a shape that makes adding one a single line
@@ -1395,6 +1395,7 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
         .map(ToString::to_string)
         .collect();
     let mut keys: Vec<String> = keys.into_iter().collect();
+    keys.extend(evaluated.overlay.rotated_secret_files(startup));
     // A `~` entry is expanded against the `HOME` in force AT THAT POINT in the
     // sequence (`Config::evaluate`), not the one left standing at the end, so
     // an env file can move where a LATER entry reads while the final value is
@@ -2290,6 +2291,8 @@ mod grant_delta;
 
 #[cfg(test)]
 mod c4_enable_tests;
+#[cfg(test)]
+mod c9_file_ref_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;

@@ -9,11 +9,11 @@
     "id": "1141522724"
   },
   "websiteUrl": "https://github.com/MikkoParkkola/mcp-gateway#readme",
-  "version": "4.0.0-beta.1",
+  "version": "4.0.0-beta.2",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1",
+      "identifier": "ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2",
       "runtimeHint": "docker",
       "packageArguments": [
         {
@@ -37,7 +37,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Attestation mode: off (default) or observe (audits only). Any other value, enforce included, fails startup.",
+          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls; needs GATEWAY_ATTESTATION_SIGNING_KEY). Any other value fails startup.",
           "isRequired": false,
           "isSecret": false
         },
@@ -77,7 +77,7 @@
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "mcp-gateway",
-      "version": "4.0.0-beta.1",
+      "version": "4.0.0-beta.2",
       "packageArguments": [
         {
           "type": "positional",
@@ -100,7 +100,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Attestation mode: off (default) or observe (audits only). Any other value, enforce included, fails startup.",
+          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls; needs GATEWAY_ATTESTATION_SIGNING_KEY). Any other value fails startup.",
           "isRequired": false,
           "isSecret": false
         },

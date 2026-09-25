@@ -31,7 +31,7 @@ use crate::security::{sanitize_json_value, validate_tool_name};
 use crate::trust::project_tool_descriptors_trust_cards;
 
 type BackendRejection = (StatusCode, Json<Value>);
-type BackendSecurityResult = Option<Result<Option<Value>, BackendRejection>>;
+type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
 
 /// Forwarded passthrough headers paired with the caller's stable upstream-session
 /// bucket key (MIK-6785): `Some(sha256_hex(credential))` when a credential is
@@ -48,9 +48,11 @@ struct BackendAuthContext<'a> {
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
 /// request arriving at the direct backend endpoint.
 ///
-/// Returns `None` when there are no params or no tool name (nothing to check),
-/// `Some(Ok(sanitized))` when all checks pass, or `Some(Err(response))` when
-/// a check fails and the caller should return an HTTP error immediately.
+/// Returns `Ok(Some(sanitized))` when all checks pass, `Ok(None)` for a
+/// passthrough backend, or `Err(response)` when a check fails and the caller
+/// should return an HTTP error immediately. A call with no params or no tool
+/// name is refused (400, -32602): with no name there is nothing to authorize,
+/// so forwarding it would skip the per-tool check (D2).
 ///
 /// Order of checks matches `meta_mcp_handler`:
 /// 1. `validate_tool_name` — rejects dangerous names before any policy lookup.
@@ -66,15 +68,21 @@ fn apply_backend_tool_call_security(
     backend: &crate::backend::Backend,
     identity_key: Option<&str>,
 ) -> BackendSecurityResult {
-    let params = params?;
+    let unnamed = || {
+        let message = "tools/call requires params.name";
+        build_http_error_response(Some(id.clone()), -32602, message, StatusCode::BAD_REQUEST)
+    };
+    let Some(params) = params else {
+        return Err(unnamed());
+    };
     let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
     if tool_name.is_empty() {
-        return None;
+        return Err(unnamed());
     }
 
     if let Err(e) = validate_tool_name(tool_name) {
         warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");
-        return Some(Err(backend_security_error(id, &e)));
+        return Err(backend_security_error(id, &e));
     }
 
     let arguments = params.get("arguments").unwrap_or(params);
@@ -91,9 +99,9 @@ fn apply_backend_tool_call_security(
         target,
     ) {
         warn!(backend = %backend_name, tool = %tool_name, "Tool blocked by authorization");
-        return Some(Err(backend_security_error_with_status(
+        return Err(backend_security_error_with_status(
             id, e.code, &e.message, e.status,
-        )));
+        ));
     }
 
     #[cfg(feature = "firewall")]
@@ -126,10 +134,10 @@ fn apply_backend_tool_call_security(
                 .map_or("Security firewall blocked this request", |f| {
                     f.description.as_str()
                 });
-            return Some(Err(backend_security_error(
+            return Err(backend_security_error(
                 id,
                 &format!("Firewall blocked: {desc}"),
-            )));
+            ));
         }
     }
 
@@ -140,20 +148,27 @@ fn apply_backend_tool_call_security(
     if let Some(text) = backend.undeclared_key_refusal(identity_key, tool_name, call_arguments) {
         let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
         let response = JsonRpcResponse::success(id.clone(), result);
-        return Some(Err(build_http_response(&response, StatusCode::OK)));
+        return Err(build_http_response(&response, StatusCode::OK));
     }
 
     if backend.passthrough() {
-        return Some(Ok(None));
+        return Ok(None);
     }
 
     match sanitize_json_value(params) {
-        Ok(sanitized) => Some(Ok(Some(sanitized))),
+        Ok(sanitized) => Ok(Some(sanitized)),
         Err(e) => {
             warn!(backend = %backend_name, tool = %tool_name, "Input sanitization failed");
-            Some(Err(backend_security_error(id, &e.to_string())))
+            Err(backend_security_error(id, &e.to_string()))
         }
     }
+}
+
+/// Remove the attestation token from `params._meta` and return it if a string.
+fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
+    let meta = params?.get_mut("_meta")?.as_object_mut()?;
+    let token = meta.remove(crate::protocol::mrtr::ATTESTATION_META)?;
+    token.as_str().map(str::to_owned)
 }
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
@@ -417,7 +432,6 @@ async fn dispatch_in_scope(
 }
 
 /// Backend handler (POST /mcp/{name})
-#[allow(clippy::too_many_lines)]
 pub(super) async fn backend_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -426,8 +440,9 @@ pub(super) async fn backend_handler(
     // Track in-flight request for graceful drain
     let _inflight_permit = state.inflight.acquire().await;
 
-    // D1-f: this route writes no invocation record (D2), but while the audit
-    // log is down it must not serve, or it is a second, unaudited route.
+    // D1-f: while the audit log is down this route must not serve, or it is a
+    // second, unaudited route. Checked before the body is read, so no D2 slot
+    // exists yet and no record is attempted for this refusal.
     if let Some(log) = &state.transparency_log
         && log.admit().await.is_err()
     {
@@ -440,6 +455,22 @@ pub(super) async fn backend_handler(
         );
     }
 
+    // D2: one write per tools/call, whichever of the inner returns answered.
+    let mut call = None;
+    let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
+    match call {
+        Some(call) => direct_audit::record(&state, &name, call, answer),
+        None => answer,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn backend_handler_inner(
+    state: Arc<AppState>,
+    name: String,
+    request: axum::http::Request<axum::body::Body>,
+    call: &mut Option<direct_audit::DirectCall>,
+) -> (StatusCode, Json<Value>) {
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     let cert_identity = request.extensions().get::<CertIdentity>().cloned();
@@ -505,18 +536,6 @@ pub(super) async fn backend_handler(
         Err(refusal) => return super::identity::identity_refusal_response(refusal),
     };
 
-    // Check backend access if auth is enabled
-    if let Some(ref client) = client
-        && !client.can_access_backend(&name)
-    {
-        return build_http_error_response(
-            None,
-            -32003,
-            client.backend_refusal(&name),
-            StatusCode::FORBIDDEN,
-        );
-    }
-
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(request).await {
         Ok(bytes) => bytes,
@@ -535,6 +554,35 @@ pub(super) async fn backend_handler(
         }
     };
 
+    // D2-a: the slot is filled before the envelope is validated, so a
+    // malformed tools/call is recorded as `invalid` too.
+    *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
+
+    // Parse request
+    let (id, method, mut params) = match parse_request(&json_request) {
+        Ok(parsed) => parsed,
+        Err(response) => {
+            return build_http_response(&response, StatusCode::BAD_REQUEST);
+        }
+    };
+    // Out of the owned params before anything reads or forwards them, so no
+    // arm (sanitized, passthrough, no-tool, other methods) sends it upstream.
+    let attestation = take_attestation_token(params.as_mut());
+
+    // D2-b: scope is checked after the parse, so its refusal names the tool,
+    // and before the backend lookup, so a scoped key gets 403 for an unknown
+    // backend as for a forbidden one, never a 404 existence oracle.
+    if let Some(ref client) = client
+        && !client.can_access_backend(&name)
+    {
+        return build_http_error_response(
+            None,
+            -32003,
+            client.backend_refusal(&name),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
     // Find backend
     let Some(backend) = state.backends.get(&name) else {
         return build_http_error_response(
@@ -543,14 +591,6 @@ pub(super) async fn backend_handler(
             format!("Backend not found: {name}"),
             StatusCode::NOT_FOUND,
         );
-    };
-
-    // Parse request
-    let (id, method, params) = match parse_request(&json_request) {
-        Ok(parsed) => parsed,
-        Err(response) => {
-            return build_http_response(&response, StatusCode::BAD_REQUEST);
-        }
     };
 
     let protocol_header = inbound_headers
@@ -826,6 +866,21 @@ pub(super) async fn backend_handler(
         );
     }
 
+    // MIK-7570.ATTEST.1: attested like `gateway_invoke`, for every tools/call
+    // shape, and ahead of the idempotency guard so a replay needs a token too.
+    if method == "tools/call" {
+        let tool = params.as_ref().and_then(|p| p.get("name")).cloned();
+        let envelope = json!({"tool": tool, "attestation": attestation});
+        let agent = client.as_ref().map(|c| c.name.as_str());
+        if let Err(e) = state
+            .meta_mcp
+            .check_attestation(&envelope, agent, "direct_route")
+        {
+            let (code, message) = (e.to_rpc_code(), e.to_string());
+            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
+        }
+    }
+
     // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the
     // same shape as the isolation guard above. A broken stream forces re-issue
     // with a NEW request id, so without this the duplicate side effect lands
@@ -882,7 +937,7 @@ pub(super) async fn backend_handler(
             &backend,
             identity_key.as_deref(),
         ) {
-            Some(Ok(Some(sanitized_params))) => {
+            Ok(Some(sanitized_params)) => {
                 // Forward the sanitized params to the backend
                 let forward = dispatch_in_scope(
                     &backend,
@@ -933,8 +988,8 @@ pub(super) async fn backend_handler(
                     }
                 };
             }
-            Some(Err(rejection)) => return rejection,
-            Some(Ok(None)) | None => {} // no tool name present; fall through to normal forwarding
+            Err(rejection) => return rejection,
+            Ok(None) => {} // passthrough backend: forward the params as sent
         }
     }
 
@@ -1273,6 +1328,7 @@ pub(super) async fn costs_handler(
     (StatusCode::OK, Json(body)).into_response()
 }
 
+mod direct_audit;
 mod direct_list;
 
 #[cfg(test)]

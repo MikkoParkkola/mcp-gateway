@@ -24,6 +24,8 @@ mod replica_state_tests;
 mod signing_allocation_tests;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_nonce;
+pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
@@ -973,15 +975,16 @@ impl Gateway {
         // ── Per-action attestation (MIK-5223 / MIK-6163, B1-IDENT) ────────────
         // Wire the attestation validator from operator config (env-driven).
         // Default is OFF: no validator. `observe` audits every presented token
-        // at the `gateway_invoke` boundary but never blocks a call. `enforce`
-        // and unknown values fail startup (`resolve_attestation_wiring`).
+        // but never blocks a call. `enforce` refuses unattested calls on the
+        // meta and direct routes. Unknown values, and `enforce` without a
+        // signing key, fail startup (`resolve_attestation_wiring`).
         if let Some((validator, mode)) =
             crate::attestation::attestation_wiring_from_overlay(&self.env.get())
                 .map_err(Error::Config)?
         {
             info!(
                 ?mode,
-                "Per-action attestation wired at gateway_invoke boundary"
+                "Per-action attestation wired on the meta and direct routes"
             );
             meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
         }
@@ -1800,6 +1803,7 @@ impl Gateway {
                     dashboard_bootstrap: Arc::clone(&dashboard_bootstrap),
                     // Only the session cookie reads this; re-validation sets none.
                     tls_enabled: false,
+                    live_config: Arc::clone(&live_config),
                 },
             ),
         );
@@ -2242,6 +2246,8 @@ impl Gateway {
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
         );
+        // Drawn before the first request, not inside one (MIK-7570.STDIO.1).
+        StdioNonce::process();
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
@@ -3151,6 +3157,8 @@ impl Gateway {
             agent_declared: None,
             grant_subject: None,
             verified_identity: None,
+            // The one client this process serves, for binding continuations.
+            stdio_nonce: Some(StdioNonce::process()),
             // Same `RequestShape` the `initialize` arm advertises against.
             era: request_shape.era(),
             // The serve loop's own channel: a stdio client reads the same
@@ -3666,6 +3674,7 @@ fn stdio_caller_context<'a>(
         agent_declared: None,
         grant_subject: None,
         verified_identity: None,
+        stdio_nonce: Some(StdioNonce::process()),
         // stdio speaks to one process over two pipes and
         // has no elicitation channel: there is no operator
         // this transport can reach, so a destructive call

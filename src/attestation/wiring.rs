@@ -11,9 +11,12 @@
 //! - Default is **off**: unset, empty or `off` attaches no validator at all —
 //!   a pure no-op, byte-identical to the pre-wiring gateway.
 //! - `observe` audits every presented token but never blocks a call.
-//! - `enforce` is a load error in this build. The direct `/mcp/{name}` route
-//!   and synthesized envelopes carry no token yet, so an enforce that only
-//!   guarded `gateway_invoke` would claim more than it refuses.
+//! - `enforce` refuses a call whose token is missing or invalid (-32002). It
+//!   needs a signing key: enforce without one would refuse every call, so that
+//!   is a load error. The token rides in the `attestation` argument on
+//!   `gateway_invoke`, and in `_meta["io.mcp-gateway/attestation"]` on the
+//!   direct `/mcp/{name}` route and on surfaced tools. Playbooks and code-mode
+//!   plans carry no token and are refused under enforce.
 //! - Any other value is a load error, never a silent downgrade.
 //!
 //! [`MetaMcp::with_attestation`]: crate::gateway::meta_mcp::MetaMcp::with_attestation
@@ -25,16 +28,15 @@ use super::signer::BnautAttestationSigner;
 use super::validator::{AttestationMode, AttestationValidator};
 
 /// Env var selecting the wired attestation mode at the `gateway_invoke`
-/// boundary: `off` (default) or `observe`.
-///
-/// `enforce` is refused at load in this build — see the module docs.
+/// boundary: `off` (default), `observe` or `enforce` — see the module docs.
 pub const ATTESTATION_MODE_ENV: &str = "GATEWAY_ATTESTATION_MODE";
 
 /// Env var carrying the HMAC-SHA256 signing key shared with bnaut-attestation.
 ///
-/// When unset/empty/whitespace-only the validator still initialises; in
-/// observe mode every presented token simply fails signature verification
-/// and is audit-logged (the call is never blocked). A whitespace-only value
+/// When unset/empty/whitespace-only the observe validator still initialises;
+/// every presented token simply fails signature verification and is
+/// audit-logged (the call is never blocked). `enforce` refuses to start
+/// without it. A whitespace-only value
 /// is normalized to the same empty-key posture rather than used verbatim as
 /// low-entropy HMAC key material (MIK-6909 item 1).
 pub const ATTESTATION_SIGNING_KEY_ENV: &str = "GATEWAY_ATTESTATION_SIGNING_KEY";
@@ -50,9 +52,9 @@ pub const DEFAULT_KEY_ID: &str = "gateway";
 /// core that performs no process-environment reads.
 ///
 /// The mode is matched case-insensitively after trimming. Unset, empty or
-/// `off` returns `Ok(None)` (attach no validator — the default). `observe`
-/// returns `Ok(Some((validator, Observe)))`. `enforce`, which is not wired in
-/// this build, and any unrecognised value return `Err` for startup to report.
+/// `off` returns `Ok(None)` (attach no validator — the default). `observe` and
+/// `enforce` return the validator with their mode. `enforce` without a signing
+/// key, and any other value, return `Err` for startup to report.
 pub fn resolve_attestation_wiring(
     mode: Option<&str>,
     signing_key: Option<&[u8]>,
@@ -62,21 +64,23 @@ pub fn resolve_attestation_wiring(
     let mode = match normalized.as_deref() {
         None | Some("" | "off") => return Ok(None),
         Some("observe") => AttestationMode::Observe,
-        Some("enforce") => {
-            return Err(format!(
-                "{ATTESTATION_MODE_ENV}=enforce is not available in this build; \
-                 use `observe` (audit only) or `off`"
-            ));
-        }
+        Some("enforce") => AttestationMode::Enforce,
         Some(other) => {
             return Err(format!(
                 "{ATTESTATION_MODE_ENV}={other:?} is not a valid mode; \
-                 use `observe` or `off`"
+                 use `off`, `observe` or `enforce`"
             ));
         }
     };
 
     let key = signing_key.unwrap_or_default();
+    let blank = std::str::from_utf8(key).is_ok_and(|s| s.trim().is_empty());
+    if blank && mode == AttestationMode::Enforce {
+        return Err(format!(
+            "{ATTESTATION_MODE_ENV}=enforce needs {ATTESTATION_SIGNING_KEY_ENV}; \
+             without a key every call would be refused"
+        ));
+    }
     // Whitespace-only key material is exactly as low-entropy as an empty
     // key (MIK-6909 item 1) — normalize both to the same "no key" posture
     // rather than using the whitespace bytes verbatim as the HMAC key.
@@ -86,7 +90,7 @@ pub fn resolve_attestation_wiring(
     // to empty, subsuming the pre-existing empty-key check. Non-UTF-8 bytes
     // are treated as *not* whitespace and used verbatim — the correct
     // fail-open-to-use posture for an opaque binary key.
-    let key = if std::str::from_utf8(key).is_ok_and(|s| s.trim().is_empty()) {
+    let key = if blank {
         tracing::warn!(
             env = ATTESTATION_SIGNING_KEY_ENV,
             "attestation observe mode enabled without a signing key; presented tokens \
@@ -154,26 +158,41 @@ mod tests {
         assert!(std::env::var(ATTESTATION_MODE_ENV).is_err());
     }
 
-    /// MIK-7570.ATTEST.1: the refusals hold on the env-file path too, not only
-    /// on the pure core, so an env file cannot turn `enforce` back into observe.
+    /// MIK-7570.ATTEST.1: the env-file path reaches every arm of the parse, so
+    /// an env file can select enforce, and cannot slip in a bad mode value or
+    /// enforce without a key.
     #[test]
-    fn an_env_file_mode_of_enforce_or_an_unknown_value_is_refused() {
+    fn an_env_file_selects_enforce_and_refuses_bad_settings() {
         let dir = tempfile::tempdir().unwrap();
-        for (raw, expect) in [
-            ("enforce", "not available in this build"),
-            ("enforcee", "enforcee"),
+        let overlay_of = |name: &str, body: String| {
+            let env_file = dir.path().join(name);
+            crate::gateway::test_helpers::write_owner_only(&env_file, body).unwrap();
+            crate::config::EnvOverlay::from_paths(&[env_file])
+        };
+        let enforce = overlay_of(
+            "enforce.env",
+            format!("{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}=k\n"),
+        );
+        assert_eq!(
+            attestation_wiring_from_overlay(&enforce).map(|w| w.map(|(_, mode)| mode)),
+            Ok(Some(AttestationMode::Enforce))
+        );
+        for (name, body, expect) in [
+            (
+                "bad-mode.env",
+                format!("{ATTESTATION_MODE_ENV}=enforcee\n"),
+                "enforcee",
+            ),
+            (
+                "keyless.env",
+                format!("{ATTESTATION_MODE_ENV}=enforce\n"),
+                ATTESTATION_SIGNING_KEY_ENV,
+            ),
         ] {
-            let env_file = dir.path().join(format!("{raw}.env"));
-            crate::gateway::test_helpers::write_owner_only(
-                &env_file,
-                format!("{ATTESTATION_MODE_ENV}={raw}\n"),
-            )
-            .unwrap();
-            let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
-            let err = attestation_wiring_from_overlay(&overlay)
+            let err = attestation_wiring_from_overlay(&overlay_of(name, body))
                 .map(|w| w.map(|(_, mode)| mode))
                 .expect_err("an env-file mode must be refused like a process one");
-            assert!(err.contains(expect), "{raw}: {err}");
+            assert!(err.contains(expect), "{name}: {err}");
         }
     }
 
@@ -212,8 +231,12 @@ mod tests {
         for raw in ["OFF", "  Off ", "\toff\n"] {
             assert_eq!(mode_of(Some(raw)), Ok(None), "{raw:?}");
         }
-        for raw in ["ENFORCE", " Enforce ", "\tenforce\n"] {
-            assert!(mode_of(Some(raw)).is_err(), "{raw:?} must be refused");
+        for raw in ["enforce", "ENFORCE", " Enforce ", "\tenforce\n"] {
+            assert_eq!(
+                mode_of(Some(raw)),
+                Ok(Some(AttestationMode::Enforce)),
+                "{raw:?}"
+            );
         }
     }
 
@@ -227,14 +250,25 @@ mod tests {
         ));
     }
 
-    /// `enforce` is not wired in this build, so it is refused at load rather
-    /// than downgraded to observe. The message says so and names the values
-    /// that do work.
+    /// MIK-7570.ATTEST.1: `enforce` resolves to Enforce, never a downgrade.
     #[test]
-    fn enforce_is_refused_at_load() {
-        let err = mode_of(Some("enforce")).expect_err("enforce must be a load error");
-        assert!(err.contains("not available in this build"), "{err}");
-        assert!(err.contains("observe") && err.contains("off"), "{err}");
+    fn enforce_value_resolves_to_enforce() {
+        let (_, mode) = resolve_attestation_wiring(Some("enforce"), Some(b"k"), Some("kid"))
+            .expect("enforce with a key must parse")
+            .expect("enforce must attach a validator");
+        assert_eq!(mode, AttestationMode::Enforce);
+    }
+
+    /// Enforce with no key would reject every call: an outage, not a posture.
+    /// Refused at load, naming the missing setting.
+    #[test]
+    fn enforce_without_key_is_refused() {
+        for key in [None, Some(&b""[..]), Some(&b"  "[..])] {
+            let err = resolve_attestation_wiring(Some("enforce"), key, None)
+                .map(|w| w.map(|(_, mode)| mode))
+                .expect_err("enforce without a key must be a load error");
+            assert!(err.contains(ATTESTATION_SIGNING_KEY_ENV), "{key:?}: {err}");
+        }
     }
 
     #[test]
@@ -242,8 +276,9 @@ mod tests {
         for raw in ["enforcee", "block", "true", "1"] {
             let err = mode_of(Some(raw)).expect_err("an unknown mode must be a load error");
             assert!(err.contains(raw), "error must name the value: {err}");
-            assert!(err.contains("observe") && err.contains("off"), "{err}");
-            assert!(!err.contains("not available in this build"), "{err}");
+            for legal in ["off", "observe", "enforce"] {
+                assert!(err.contains(legal), "must name `{legal}`: {err}");
+            }
         }
     }
 

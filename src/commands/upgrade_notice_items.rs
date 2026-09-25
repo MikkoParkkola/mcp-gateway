@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The eighteen 4.0.0 changes, in the order they are printed.
+/// The twenty 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -63,9 +63,9 @@ error lists every such row. Rewrite each as `!exact {source: mtls, id: ...}` or 
 `!exact {source: jwt, id: ...}`; the gateway will not pick the source. Until \
 then personal capabilities fail closed. `identity grants grant --agent` takes \
 `mtls:<id>` or `jwt:<id>`.",
-    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set: an unset mode no longer \
-writes `attestation_observe_reject` audit lines (set `observe` to keep them), and `enforce` or \
-any unrecognised value now FAILS STARTUP instead of falling back to observe.",
+    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set (set `observe` to keep the \
+audit lines). `enforce` now refuses unattested calls, playbooks and code mode, and needs a \
+signing key; enforce with no key, or any unrecognised value, now FAILS STARTUP.",
     "A tool call carrying an argument key its schema does not declare, at any depth, is \
 refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
     super::backend_grant_notice::ITEM,
@@ -85,4 +85,7 @@ body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks no
 it), and a failed append refuses calls with 503 and unreadies `/readyz` until it recovers. Records \
 carry `schema_version: 2`, `who` and `outcome`, including refused and failed calls. On Kubernetes \
 the chart's audit volume is an emptyDir: set `audit.existingClaim` to keep the log.",
+    "`/health` now answers 503 `degraded` while any backend's circuit breaker is open; before, \
+only a failing health tracker did. Monitors on `/health` will see it. `/livez` and `/readyz` stay \
+backend-blind, so Kubernetes probes are unaffected.",
 ];

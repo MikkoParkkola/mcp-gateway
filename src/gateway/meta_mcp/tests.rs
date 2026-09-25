@@ -41,6 +41,7 @@ fn allow_all_ctx_named<'a>(
         agent_id,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -74,6 +75,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -797,6 +799,7 @@ providers:
                     )),
                     agent_declared: None,
                     grant_subject: Some(subject),
+                    stdio_nonce: None,
                     verified_identity: None,
                     is_admin: false,
                     input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -2007,6 +2010,10 @@ fn scan_tool_list_value_without_firewall_is_a_pure_no_op() {
 #[path = "attestation_wiring_tests.rs"]
 mod attestation_wiring;
 
+#[cfg(test)]
+#[path = "attestation_plan_tests.rs"]
+mod attestation_plan;
+
 /// `gateway_cost_report`'s own schema calls `include_all_sessions` an "admin
 /// view". It read the flag straight from the arguments, so any caller got the
 /// cross-session report, including the anonymous identity used when
@@ -3121,6 +3128,7 @@ fn allow_all_ctx_declaring(
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: Some(&NAMED_CALLER),
         is_admin: false,
         input_capabilities: declared,
