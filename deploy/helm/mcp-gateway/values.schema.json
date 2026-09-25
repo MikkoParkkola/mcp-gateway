@@ -111,7 +111,7 @@
         },
         "fsGroup": {
           "type": "integer",
-          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render."
+          "description": "Must be 1001, the image's gateway GID; any other value fails the render. The gateway reads its root-owned config through this group (CONFIG.2)."
         }
       }
     },
@@ -122,6 +122,18 @@
         "sizeLimit": {
           "type": "string",
           "description": "sizeLimit of the state emptyDir (HOME); past it the kubelet evicts the pod."
+        }
+      }
+    },
+    "configVolume": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultMode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 511,
+          "description": "Mode of the projected config file, in decimal: 288 is octal 0440. No world bit, or the gateway refuses the file."
         }
       }
     },

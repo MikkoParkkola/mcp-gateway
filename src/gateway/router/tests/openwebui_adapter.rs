@@ -19,7 +19,7 @@ async fn openwebui_assertion_is_checked_after_real_gateway_authentication() {
     let dir = tempfile::tempdir().unwrap();
     let env_path = dir.path().join("adapter.env");
     let secret = "fixture-adapter-signing-secret-123456789";
-    std::fs::write(&env_path, format!(
+    crate::gateway::test_helpers::write_owner_only(&env_path, format!(
         "OWUI_ROUTE_HMAC={secret}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"
     )).unwrap();
     let config: crate::config::Config = serde_yaml::from_str(&format!(
@@ -187,7 +187,7 @@ async fn installations_sharing_one_header_each_verify_with_their_own_key() {
     let env_path = dir.path().join("shared-header.env");
     let desk_secret = "fixture-desk-installation-signing-secret-1";
     let laptop_secret = "fixture-laptop-installation-signing-secret-2";
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &env_path,
         format!(
             "OWUI_DESK_HMAC={desk_secret}\nOWUI_LAPTOP_HMAC={laptop_secret}\n\

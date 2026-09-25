@@ -46,7 +46,7 @@ use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 use mcp_gateway::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, TaskExecutor, TaskService, auth_state, create_router,
-    open_runtime,
+    open_runtime, write_owner_only,
 };
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
@@ -739,7 +739,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     // Write a minimal config
     let cfg = Config::default();
     let yaml = serde_yaml::to_string(&cfg).unwrap();
-    std::fs::write(&config_path, &yaml).unwrap();
+    write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
     let router = create_router(state);
@@ -802,7 +802,7 @@ async fn test_remove_backend_not_found_returns_404() {
     let config_path = tmp.path().join("gateway.yaml");
     let cfg = Config::default();
     let yaml = serde_yaml::to_string(&cfg).unwrap();
-    std::fs::write(&config_path, &yaml).unwrap();
+    write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path)).await;
     let router = create_router(state);
@@ -831,7 +831,7 @@ async fn test_add_remove_backend_lifecycle() {
     let config_path = tmp.path().join("gateway.yaml");
     let cfg = Config::default();
     let yaml = serde_yaml::to_string(&cfg).unwrap();
-    std::fs::write(&config_path, &yaml).unwrap();
+    write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
     let router = create_router(state);
@@ -888,7 +888,7 @@ async fn test_patch_backend_updates_description() {
         },
     );
     let yaml = serde_yaml::to_string(&cfg).unwrap();
-    std::fs::write(&config_path, &yaml).unwrap();
+    write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
     let router = create_router(state);
@@ -926,7 +926,7 @@ async fn test_add_backend_returns_reload_outcome_when_context_available() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let cfg = Config::default();
-    std::fs::write(&config_path, serde_yaml::to_string(&cfg).unwrap()).unwrap();
+    write_owner_only(&config_path, serde_yaml::to_string(&cfg).unwrap()).unwrap();
 
     let (state, _, _store) = make_app_state_with_reload(cfg, None, config_path.clone()).await;
     let router = create_router(Arc::clone(&state));
@@ -982,7 +982,7 @@ async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let initial = Config::default();
-    std::fs::write(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+    write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
 
     let (state, live_config, _store) =
         make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
@@ -998,7 +998,7 @@ async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
         },
     );
     updated.default_routing_profile = "research".to_string();
-    std::fs::write(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
+    write_owner_only(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
 
     let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
 
@@ -1028,7 +1028,7 @@ async fn test_reload_endpoint_reports_restart_required_for_server_change() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let initial = Config::default();
-    std::fs::write(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+    write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
 
     let (state, _, _store) =
         make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
@@ -1036,7 +1036,7 @@ async fn test_reload_endpoint_reports_restart_required_for_server_change() {
 
     let mut updated = initial;
     updated.server.port += 1;
-    std::fs::write(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
+    write_owner_only(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
 
     let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
 
@@ -1159,7 +1159,7 @@ async fn test_capability_put_updates_content() {
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
     let cap_file = tmp.path().join("updatable.yaml");
-    std::fs::write(&cap_file, VALID_YAML).unwrap();
+    write_owner_only(&cap_file, VALID_YAML).unwrap();
 
     let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
@@ -1924,7 +1924,7 @@ async fn a_reload_does_not_change_request_time_authentication() {
         auth: admin_auth_config(),
         ..Config::default()
     };
-    std::fs::write(
+    write_owner_only(
         &config_path,
         "auth:\n  enabled: true\n  bearer_token: \"test-admin-token\"\n",
     )
@@ -1963,7 +1963,7 @@ async fn a_reload_does_not_change_request_time_authentication() {
     // WHEN: the file turns authentication OFF and is reloaded through the live
     // snapshot the router reads. Nothing here refuses — no public URL is
     // declared — so the reload applies and publishes.
-    std::fs::write(&config_path, "auth:\n  enabled: false\n").unwrap();
+    write_owner_only(&config_path, "auth:\n  enabled: false\n").unwrap();
     let ctx = ReloadContext::new(
         config_path,
         Arc::clone(&live_config),

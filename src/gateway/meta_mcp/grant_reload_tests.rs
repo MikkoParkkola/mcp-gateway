@@ -595,7 +595,7 @@ async fn t9_a_config_refusal_still_reports_and_applies_the_revocation() {
     meta.set_reload_context(Arc::new(ctx));
 
     // Publishing a URL over open tools is refused before any publication.
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &config_path,
         "server:\n  public_url: \"https://gw.example.com\"\n",
     )

@@ -27,7 +27,7 @@ fn decode_fixture(encoded: &str, fill: u8) -> Vec<u8> {
 
 fn write_env(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("keys.env");
-    fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         format!(
             "{CURRENT_VAR}={CURRENT_B64}\n{RETIRED_VAR}={RETIRED_B64}\n{DECOY_VAR}={DECOY_B64}\n"
@@ -39,7 +39,7 @@ fn write_env(dir: &Path) -> std::path::PathBuf {
 
 fn write_yaml(dir: &Path, body: &str) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
-    fs::write(&path, body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
     path
 }
 
@@ -337,7 +337,7 @@ fn legacy_secret_refs_and_port_zero_survive_alongside_account_key_references() {
         env_body,
         "{BEARER_VAR}={BEARER_VALUE}\n{API_KEY_VAR}={API_KEY_VALUE}\n{AGENT_SECRET_VAR}={AGENT_SECRET_VALUE}\n{ADMIN_TOKEN_VAR}={ADMIN_TOKEN_VALUE}\n"
     );
-    fs::write(&env_path, env_body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&env_path, env_body).unwrap();
 
     let config_path = write_yaml(
         dir,

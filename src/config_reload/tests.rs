@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::config::{BackendConfig, Config, ServerConfig, TransportConfig};
+use crate::gateway::test_helpers::write_owner_only;
 use notify::event::EventAttributes;
 
 // -------------------------------------------------------------------------
@@ -527,7 +528,7 @@ fn matching_env_file_returns_first_matching_path_among_multiple() {
 fn load_config_patch_rejects_invalid_config() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    write_owner_only(
         &config_path,
         r#"
 backends:
@@ -785,7 +786,7 @@ async fn concurrent_reloads_do_not_both_add_the_same_backend() {
     // GIVEN: a live config with no backends, and a file on disk that adds one
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    write_owner_only(
         &config_path,
         "backends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
@@ -1219,7 +1220,7 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: the file declares a public URL, leaving the tools reachable
-    std::fs::write(&path, "server:\n  public_url: \"https://gw.example.com\"\n").unwrap();
+    write_owner_only(&path, "server:\n  public_url: \"https://gw.example.com\"\n").unwrap();
     let ctx = posture_context(&path, clean_running());
 
     let err = ctx
@@ -1302,7 +1303,7 @@ async fn enabling_auth_in_the_same_edit_does_not_mask_the_exposure() {
     // `auth`: the router snapshots it at construction, so the request path is
     // still running the old, permissive state while the origin gate has already
     // started admitting the new host.
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
@@ -1324,7 +1325,7 @@ async fn setting_the_override_in_the_same_edit_does_not_mask_it_either() {
     // WHEN: the file declares a public URL and sets the escape hatch. Like
     // `auth`, the override is restart-only, so it silences nothing on a running
     // process. A refusal that read the file would let it silence this one.
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\n  allow_unauthenticated_network_bind: true\n",
     )
@@ -1344,7 +1345,7 @@ async fn a_refused_reload_applies_nothing_at_all() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: one edit adds both a backend and the public URL that refuses
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
@@ -1383,7 +1384,7 @@ async fn a_reload_that_does_not_open_the_tools_still_applies() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: the same public URL is declared, over tools that need a credential
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
@@ -1412,7 +1413,7 @@ async fn a_published_but_not_running_auth_value_does_not_mask_it_either() {
     // is not in force: the router is still running the startup auth state.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    write_owner_only(
         &path,
         "auth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
@@ -1432,7 +1433,7 @@ async fn a_published_but_not_running_auth_value_does_not_mask_it_either() {
 
     // WHEN: they then add the public URL — a second reload, against a published
     // snapshot that disagrees with what is running
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
@@ -1512,7 +1513,7 @@ fn the_live_field_allow_list_has_not_grown() {
 async fn the_watcher_recognises_a_posture_refusal_and_not_as_a_broken_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, "server:\n  public_url: \"https://gw.example.com\"\n").unwrap();
+    write_owner_only(&path, "server:\n  public_url: \"https://gw.example.com\"\n").unwrap();
     let ctx = posture_context(&path, clean_running());
 
     let err = ctx
@@ -1547,7 +1548,7 @@ async fn a_reload_is_not_refused_for_a_state_it_did_not_cause() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: it reloads something unrelated
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  host: \"0.0.0.0\"\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
@@ -1584,7 +1585,7 @@ async fn a_blank_public_path_in_force_is_tools_open_and_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: the file supplies the other half — a name it is reached by
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n    - \"\"\n",
     )
@@ -1609,7 +1610,7 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
     // WHEN: one edit declares the public URL and turns authentication on — the
     // fix, written correctly. A reload still cannot apply it, because the auth
     // half needs a restart while the public_url half would take effect at once.
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
@@ -1649,7 +1650,7 @@ async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
     let path = dir.path().join("gateway.yaml");
     // WHEN: one edit publishes the gateway by name AND closes `/mcp` — both
     // halves of the correct fix, written together
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
@@ -1689,7 +1690,7 @@ async fn a_refusal_reads_as_a_sentence_on_both_branches() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(&path, file).unwrap();
+        write_owner_only(&path, file).unwrap();
         let ctx = posture_context(&path, clean_running());
 
         let err = ctx
@@ -1718,7 +1719,7 @@ async fn the_override_is_reported_as_a_file_a_restart_accepts() {
     // the tools open on purpose, which reads like the revert case.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    write_owner_only(
         &path,
         "server:\n  public_url: \"https://gw.example.com\"\n  allow_unauthenticated_network_bind: true\n",
     )
@@ -1791,7 +1792,7 @@ fn absolute_watch_path_resolves_relative_paths() {
 fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
     let dir = tempfile::tempdir().expect("tempdir");
     let real = dir.path().join("release.yaml");
-    std::fs::write(&real, "servers: {}\n").expect("write");
+    write_owner_only(&real, "servers: {}\n").expect("write");
     let link = dir.path().join("gateway.yaml");
     std::os::unix::fs::symlink(&real, &link).expect("symlink");
 
@@ -1816,7 +1817,7 @@ fn config_watch_paths_covers_the_symlink_and_its_target() {
     // GIVEN: a config the operator names through a symlink
     let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("release.yaml");
-    std::fs::write(&target, "backends: {}\n").expect("write target");
+    write_owner_only(&target, "backends: {}\n").expect("write target");
     let link = dir.path().join("gateway.yaml");
     std::os::unix::fs::symlink(&target, &link).expect("symlink");
 
@@ -1840,7 +1841,7 @@ fn config_watch_paths_covers_the_symlink_and_its_target() {
 fn config_watch_paths_of_a_plain_file_is_a_single_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("gateway.yaml");
-    std::fs::write(&file, "backends: {}\n").expect("write");
+    write_owner_only(&file, "backends: {}\n").expect("write");
 
     let paths = super::config_watch_paths(file);
 
@@ -1858,8 +1859,8 @@ fn a_retargeted_symlink_is_matched_at_its_new_target() {
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.yaml");
     let second = dir.path().join("second.yaml");
-    std::fs::write(&first, "a: 1").unwrap();
-    std::fs::write(&second, "a: 2").unwrap();
+    write_owner_only(&first, "a: 1").unwrap();
+    write_owner_only(&second, "a: 2").unwrap();
     let link = dir.path().join("gateway.yaml");
     std::os::unix::fs::symlink(&first, &link).unwrap();
     let paths_at_startup = super::config_watch_paths(link.clone());
@@ -1901,8 +1902,7 @@ fn a_retargeted_symlink_is_matched_at_its_new_target() {
 // -------------------------------------------------------------------------
 
 use crate::config::{EnvOverlay, Evaluated, HomeResolver, LiveEnv};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, atomic::AtomicBool};
 
 /// A home resolver that answers exactly as production does — the overlay under
 /// construction first, `dirs::home_dir()` otherwise — while recording what it
@@ -1981,7 +1981,7 @@ impl HomeResolver for RecordingHome {
 /// Writes `contents` to `dir/name` and returns the path.
 fn env_file(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, contents).unwrap();
+    write_owner_only(&path, contents).unwrap();
     path
 }
 
@@ -1993,7 +1993,7 @@ fn config_naming_env_files(dir: &std::path::Path, entries: &[&str]) -> std::path
         writeln!(yaml, "  - \"{e}\"").unwrap();
     }
     let path = dir.join("gateway.yaml");
-    std::fs::write(&path, yaml).unwrap();
+    write_owner_only(&path, yaml).unwrap();
     path
 }
 
@@ -2157,7 +2157,7 @@ async fn envfile_19e_a_reload_assigning_home_reports_restart_required_without_re
 
     // WHEN: the env file is rewritten to assign `HOME` elsewhere, and reloaded
     home.finish_startup();
-    std::fs::write(
+    write_owner_only(
         &recorded_path,
         format!(
             "HOME={}\nMCP_GW_TEST_ENVFILE19E_KEY=rotated-value\n",
@@ -2228,7 +2228,7 @@ async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_o
         let startup = startup_through(&cfg, &home);
         home.finish_startup();
 
-        std::fs::write(
+        write_owner_only(
             &path,
             format!(
                 "HOME={}\nMCP_GW_TEST_ENVFILE19F_A=two\n",
@@ -2263,7 +2263,7 @@ async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_o
         let startup = startup_through(&cfg, &home);
         home.finish_startup();
 
-        std::fs::write(&recorded_path, "MCP_GW_TEST_ENVFILE19F_B=two\n").unwrap();
+        write_owner_only(&recorded_path, "MCP_GW_TEST_ENVFILE19F_B=two\n").unwrap();
 
         let outcome = reload_context_with_env(&cfg, &startup)
             .reload_outcome()
@@ -2310,7 +2310,7 @@ async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required()
 
     // WHEN: the file is rewritten with the SAME `HOME` and a rotated value
     home.finish_startup();
-    std::fs::write(
+    write_owner_only(
         &recorded_path,
         format!(
             "HOME={}\nMCP_GW_TEST_ENVFILE19G_KEY=rotated-value\n",
@@ -2369,7 +2369,7 @@ async fn envfile_19h_a_reload_removing_the_home_assignment_reports_restart_requi
 
     // WHEN: the `HOME` line is deleted and the file reloaded
     home.finish_startup();
-    std::fs::write(&recorded_path, "MCP_GW_TEST_ENVFILE19H_KEY=rotated-value\n").unwrap();
+    write_owner_only(&recorded_path, "MCP_GW_TEST_ENVFILE19H_KEY=rotated-value\n").unwrap();
 
     let ctx = reload_context_with_env(&cfg, &startup);
     let outcome = ctx.reload_outcome().await.unwrap();
@@ -2433,7 +2433,7 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
     // WHEN: the first file moves `HOME` somewhere else, leaving the final
     // value untouched — the second file still assigns it back
     home.finish_startup();
-    std::fs::write(&mover, format!("HOME={}\n", home_c.path().display())).unwrap();
+    write_owner_only(&mover, format!("HOME={}\n", home_c.path().display())).unwrap();
 
     let ctx = reload_context_with_env(&cfg, &startup);
     let outcome = ctx.reload_outcome().await.unwrap();
@@ -2507,8 +2507,8 @@ async fn envfile_19j_deleting_the_move_still_reports_when_the_restored_value_is_
 
     // WHEN: both `HOME` lines are deleted
     home.finish_startup();
-    std::fs::write(&mover, "MCP_GW_TEST_ENVFILE19J_KEY=rotated-value\n").unwrap();
-    std::fs::write(&late, "MCP_GW_TEST_ENVFILE19J_OTHER=x\n").unwrap();
+    write_owner_only(&mover, "MCP_GW_TEST_ENVFILE19J_KEY=rotated-value\n").unwrap();
+    write_owner_only(&late, "MCP_GW_TEST_ENVFILE19J_OTHER=x\n").unwrap();
 
     let ctx = reload_context_with_env(&cfg, &startup);
     let outcome = ctx.reload_outcome().await.unwrap();
@@ -2541,7 +2541,7 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
     let dir = tempfile::tempdir().unwrap();
     let env_path = env_file(dir.path(), "auth.env", &format!("{KEY}={OLD}\n"));
     let cfg = dir.path().join("gateway.yaml");
-    std::fs::write(
+    write_owner_only(
         &cfg,
         format!(
             "env_files:\n  - \"{}\"\nauth:\n  enabled: true\n  bearer_token: \"env:{KEY}\"\n",
@@ -2555,7 +2555,7 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
     home.finish_startup();
 
     // WHEN: the env file rotates the value and the reload is accepted
-    std::fs::write(&env_path, format!("{KEY}={NEW}\n")).unwrap();
+    write_owner_only(&env_path, format!("{KEY}={NEW}\n")).unwrap();
     let outcome = reload_context_with_env(&cfg, &startup)
         .reload_outcome()
         .await
@@ -2754,7 +2754,7 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         let env_path = env_file(dir.path(), "secrets.env", &format!("{key}={old}\n"));
         let cfg = dir.path().join("gateway.yaml");
         let yaml = format!("env_files:\n  - \"{}\"\n{section}", env_path.display());
-        std::fs::write(&cfg, &yaml).unwrap();
+        write_owner_only(&cfg, &yaml).unwrap();
 
         let home = RecordingHome::new();
         let startup = startup_through(&cfg, &home);
@@ -2768,8 +2768,8 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         // WHEN: only the env file's value changes. The config file is rewritten
         // BYTE-IDENTICALLY, so the tracked-section reporting that already exists
         // has nothing of its own to report — the rotation is the whole change.
-        std::fs::write(&cfg, &yaml).unwrap();
-        std::fs::write(&env_path, format!("{key}={new}\n")).unwrap();
+        write_owner_only(&cfg, &yaml).unwrap();
+        write_owner_only(&env_path, format!("{key}={new}\n")).unwrap();
 
         let ctx = reload_context_with_env(&cfg, &startup);
         let outcome = ctx.reload_outcome().await.unwrap();
@@ -2830,7 +2830,7 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
     let defining_path = dir.path().join("defining.env");
     let env_path = dir.path().join("gateway.env");
     let config_path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    write_owner_only(
         &config_path,
         format!(
             "env_files:\n  - \"{}\"\n  - \"{}\"\n",
@@ -2839,8 +2839,8 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
         ),
     )
     .unwrap();
-    std::fs::write(&defining_path, "MCP_GW_TEST_BASE=https://host\n").unwrap();
-    std::fs::write(&env_path, "MCP_GW_TEST_OTHER=plain\n").unwrap();
+    write_owner_only(&defining_path, "MCP_GW_TEST_BASE=https://host\n").unwrap();
+    write_owner_only(&env_path, "MCP_GW_TEST_OTHER=plain\n").unwrap();
 
     // GIVEN: a gateway started from env files that hold no substitution
     let startup = Config::load_evaluated(Some(&config_path)).unwrap();
@@ -2848,7 +2848,7 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
     // WHEN: a cross-file substitution is added and the files are reloaded.
     // Startup refuses these files outright, so an edit after startup is the
     // only way the reload path ever sees one.
-    std::fs::write(
+    write_owner_only(
         &env_path,
         "MCP_GW_TEST_OTHER=plain\nMCP_GW_TEST_URL=${MCP_GW_TEST_BASE}/v1\n",
     )
@@ -2878,7 +2878,7 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
 /// Builds an overlay holding exactly `assignments`.
 fn overlay_of(dir: &std::path::Path, name: &str, assignments: &str) -> Arc<EnvOverlay> {
     let path = dir.join(name);
-    std::fs::write(&path, assignments).expect("write env file");
+    write_owner_only(&path, assignments).expect("write env file");
     Arc::new(EnvOverlay::from_paths(std::slice::from_ref(&path)))
 }
 

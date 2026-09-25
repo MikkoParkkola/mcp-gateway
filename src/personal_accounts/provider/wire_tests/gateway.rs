@@ -83,7 +83,8 @@ fn gateway_fixture(origin: &str) -> GatewayFixture {
         .canonicalize()
         .expect("the fixture root resolves");
     let env_path = root.join("accounts.env");
-    std::fs::write(&env_path, format!("{KEY_VAR}={KEY_B64}\n")).expect("write the env file");
+    crate::gateway::test_helpers::write_owner_only(&env_path, format!("{KEY_VAR}={KEY_B64}\n"))
+        .expect("write the env file");
 
     let body = format!(
         "env_files:\n  - {env}\nserver:\n  port: 18493\naccounts:\n  schema_version: accounts.v1\n  \
@@ -101,7 +102,8 @@ fn gateway_fixture(origin: &str) -> GatewayFixture {
         authority = root.join("authority").display(),
     );
     let config_path = root.join("config.yaml");
-    std::fs::write(&config_path, body).expect("write the fixture config");
+    crate::gateway::test_helpers::write_owner_only(&config_path, body)
+        .expect("write the fixture config");
 
     GatewayFixture {
         _root: temp,
