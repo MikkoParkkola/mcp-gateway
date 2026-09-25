@@ -505,7 +505,7 @@ mod http {
             .expect("the ack opens the stream");
         let subscription = ack["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"].clone();
 
-        state.announce_tools_changed();
+        state.announce_tools_changed("any").await;
 
         let event = next_data(&mut stream)
             .await
@@ -529,7 +529,7 @@ mod http {
             .await
             .expect("the ack opens the stream");
 
-        state.announce_tools_changed();
+        state.announce_tools_changed("any").await;
 
         assert!(
             next_data(&mut stream).await.is_none(),

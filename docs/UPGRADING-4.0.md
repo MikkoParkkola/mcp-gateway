@@ -4,7 +4,7 @@ From any 3.x release. No migration edits your `gateway.yaml`, and the gateway ma
 change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11 and 23 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23 and 24 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -41,6 +41,7 @@ upgrading a running deployment.
 | 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
 | 23 | `logging/setLevel` on `/mcp` and `/mcp/{name}` needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
+| 24 | `notifications/tools/list_changed` from backend edits reaches only callers of that backend | None; a key that must hear about every backend needs `backends: ["*"]` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -420,6 +421,25 @@ stdio backend's level through that backend's own `env:` entry or arguments in `g
 The 2026-07-28 protocol revision removed this method, so only older clients send it, usually right
 after `initialize`. To receive fewer log messages, declare a level per request in `_meta`; the
 gateway's own `notifications/message` already follow that level.
+
+## 24. Backend edits notify only the callers of that backend
+
+In 3.x, adding, removing or reviving a backend from the admin UI sent
+`notifications/tools/list_changed` to every session on the legacy GET stream. The frame has no
+content, but its timing told every caller that an operator had edited some backend, including
+backends the caller could not use.
+
+On an authenticated gateway the frame now reaches a session only if its API key may access the
+edited backend: the same check that gates tool calls to it. A key whose `backends` list is `["*"]`
+or empty is still told about every edit. After a removal, the callers whose key named the removed
+backend are told, because the check reads the key, not the registry. The check runs at delivery
+against the credential the session was opened with, so a revoked or expired key-server token is not
+told. A session that presented no credential is told nothing. With authentication off, every
+session is told, as before.
+
+Nothing errors: a client that is no longer told keeps its cached tool list until it next calls
+`tools/list`. Listeners on `subscriptions/listen` are still told about every edit; scoping that
+stream is a separate change.
 
 ## After upgrading
 

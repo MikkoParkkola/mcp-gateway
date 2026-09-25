@@ -553,11 +553,15 @@
     },
     {
       "id": "MIK-7570.NOTIFY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/proxy_scope_tests.rs",
+        "src/gateway/proxy.rs",
+        "src/gateway/streaming.rs"
+      ],
+      "note": "Graded 2026-09-25 (A5b). Green CI run 36100218022 at ef13a35a (rebased on aa16b052 as 6e85c166): lib 5539 passed, 0 failed. Red first: run 36099712343 at 285f88e9 failed exactly the 2 new scope cells (5537 passed, 2 failed), each on its negative assertion after its positive control passed: tools_list_changed_reaches_only_sessions_in_scope_for_the_changed_backend (K2 scoped to beta received alpha's frame; K1 told) and a_revoked_session_is_not_told_about_tools_list_changes (revoked key-server token received it; kept token told). with_auth_off_every_session_is_told_about_tools_list_changes and the three all-sessions proxy rows (now under an auth-off authorizer) passed red and green. broadcast_tools_list_changed now routes through broadcast_to_backend, which re-validates each session's credential at delivery; the three admin backend handlers (create, remove, revive) pass the edited backend; broadcast_roots_changed (no production caller) is removed. Delete-the-branch, each cell run by exact name (1 run): at 0a8a89cb (tree-equal to ef13a35a) can_access_backend replaced by live.is_some() reddens the scope cell only (revocation and auth-off stay green, as designed); reverting to broadcast is the red tree 285f88e9, which differs from the fix only in proxy.rs, and reddens both scope cells. RESIDUAL: the three admin handlers passing the edited backend's name is covered by review only, no handler-level cell; subscriptions/listen is still told unscoped (MIK-7570.NOTIFY.2, A5c); delivery re-validates sessions sequentially (#762 follow-up); auth-config reload that narrows a key mid-session: not possible in 4.0 (auth reload without restart is E3, deferred to 4.1)."
     },
     {
       "id": "MIK-7570.NOTIFY.2",

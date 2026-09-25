@@ -452,35 +452,12 @@ impl ProxyManager {
         }
     }
 
-    /// Fan `notifications/roots/list_changed` out to the connected *client*
-    /// sessions when the client reports a roots change.
+    /// Tell the sessions whose caller may access `backend` that its tools changed.
     ///
-    /// Not to backends, despite what this comment said until 2026-09-11:
-    /// `StreamingManager::broadcast` iterates client sessions. The distinction
-    /// matters because the method is in `REMOVED_IN_2026_07_28`, so a reader
-    /// trusting the old wording would count this as a fifth outbound sender to
-    /// gate (`MIK-7217.OUTBOUND.1`) when there is no backend send here at all.
-    pub fn broadcast_roots_changed(&self) {
-        let notification = TaggedNotification {
-            source: "client".to_string(),
-            event_type: "notification".to_string(),
-            data: json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/roots/list_changed"
-            }),
-            event_id: Some(self.multiplexer.next_event_id()),
-        };
-
-        self.multiplexer.broadcast(notification);
-        debug!("Broadcast roots/list_changed to all sessions");
-    }
-
-    /// Broadcast `notifications/tools/list_changed` to all connected clients.
-    ///
-    /// Call this whenever the effective tool list may have changed — e.g. on
-    /// config reload, backend connect/disconnect, or surfaced-tool cache warm.
-    /// Follows the same pattern as [`Self::broadcast_roots_changed`].
-    pub fn broadcast_tools_list_changed(&self) {
+    /// The frame has no content, but its timing still tells a caller that an
+    /// operator edited a backend it cannot use, so out-of-scope sessions are
+    /// skipped. Scope is re-checked per session at delivery.
+    pub async fn broadcast_tools_list_changed(&self, backend: &str) {
         let notification = TaggedNotification {
             source: "gateway".to_string(),
             event_type: "notification".to_string(),
@@ -491,8 +468,11 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        self.multiplexer.broadcast(notification);
-        debug!("Broadcast notifications/tools/list_changed to all sessions");
+        let reached = self
+            .multiplexer
+            .broadcast_to_backend(&notification, backend)
+            .await;
+        debug!(backend, reached, "Sent notifications/tools/list_changed");
     }
 
     /// Update the cached roots (e.g., from a client's roots/list response).
@@ -906,35 +886,34 @@ mod tests {
         assert_eq!(received.data["params"]["maxTokens"], 1024);
     }
 
-    // ── Roots changed broadcast ────────────────────────────────────────
-
-    #[tokio::test]
-    async fn broadcast_roots_changed_reaches_all_sessions() {
-        let mux = make_multiplexer();
-        let (_id1, mut rx1) = mux.get_or_create_session(Some("session-a"));
-        let (_id2, mut rx2) = mux.get_or_create_session(Some("session-b"));
-        let proxy = ProxyManager::new(Arc::clone(&mux));
-
-        proxy.broadcast_roots_changed();
-
-        let r1 = rx1.recv().await.unwrap();
-        let r2 = rx2.recv().await.unwrap();
-        assert_eq!(r1.data["method"], "notifications/roots/list_changed");
-        assert_eq!(r2.data["method"], "notifications/roots/list_changed");
-    }
-
     // ── T2.8: tools/list_changed broadcast ────────────────────────────
+    // Scoped delivery reaches nobody without an authorizer; auth off keeps
+    // "every session" the meaning of these rows. Scope rows: proxy_scope_tests.
+
+    fn auth_off_multiplexer() -> Arc<NotificationMultiplexer> {
+        let mux = make_multiplexer();
+        let config = crate::config::AuthConfig::default();
+        mux.set_authorizer(crate::gateway::auth::AuthState {
+            auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+                &config,
+            )),
+            key_server: None,
+            dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+            tls_enabled: false,
+        });
+        mux
+    }
 
     #[tokio::test]
     async fn broadcast_tools_list_changed_reaches_all_sessions() {
         // GIVEN: two connected sessions
-        let mux = make_multiplexer();
+        let mux = auth_off_multiplexer();
         let (_id1, mut rx1) = mux.get_or_create_session(Some("tools-session-a"));
         let (_id2, mut rx2) = mux.get_or_create_session(Some("tools-session-b"));
         let proxy = ProxyManager::new(Arc::clone(&mux));
 
         // WHEN: broadcasting tools/list_changed
-        proxy.broadcast_tools_list_changed();
+        proxy.broadcast_tools_list_changed("alpha").await;
 
         // THEN: both sessions receive the correct MCP notification
         let r1 = rx1.recv().await.unwrap();
@@ -946,14 +925,14 @@ mod tests {
     #[tokio::test]
     async fn broadcast_tools_list_changed_uses_notification_event_type() {
         // GIVEN: one session
-        let mux = make_multiplexer();
+        let mux = auth_off_multiplexer();
         let (_id, mut rx) = mux.get_or_create_session(Some("tools-session-c"));
         let proxy = ProxyManager::new(Arc::clone(&mux));
 
         // WHEN: broadcasting
-        proxy.broadcast_tools_list_changed();
+        proxy.broadcast_tools_list_changed("alpha").await;
 
-        // THEN: event_type is "notification" (same as roots_changed)
+        // THEN: event_type is "notification"
         let received = rx.recv().await.unwrap();
         assert_eq!(received.event_type, "notification");
         assert_eq!(received.source, "gateway");
@@ -962,11 +941,11 @@ mod tests {
     #[tokio::test]
     async fn broadcast_tools_list_changed_no_op_when_no_sessions() {
         // GIVEN: no connected sessions
-        let mux = make_multiplexer();
+        let mux = auth_off_multiplexer();
         let proxy = ProxyManager::new(Arc::clone(&mux));
 
         // WHEN / THEN: no panic
-        proxy.broadcast_tools_list_changed();
+        proxy.broadcast_tools_list_changed("alpha").await;
     }
 
     // ── Undeliverable prompts must not leak their pending entry ────────
