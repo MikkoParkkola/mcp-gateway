@@ -123,7 +123,7 @@ pub struct EnforcementResult {
 
 // ── EnforcerSnapshot ─────────────────────────────────────────────────────────
 
-/// Serializable snapshot of current enforcer state (for `/ui/api/costs` and stats).
+/// Serializable snapshot of current enforcer state (for persistence and stats).
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnforcerSnapshot {
