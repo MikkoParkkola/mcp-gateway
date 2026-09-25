@@ -42,8 +42,16 @@ pub const DELIVERY_PROBES: &[(&str, &str)] = &[(
     "f24_tools_changed_delivery::every_tool_set_change_reaches_both_eras_once",
 )];
 
+/// A missing object fails: `resources` and `prompts` stay, because their list,
+/// read and get methods are served. A missing flag inside one reads as false.
 fn flags(capabilities: &Value) -> [bool; 4] {
-    FLAGS.map(|(object, field)| capabilities[object][field].as_bool().unwrap_or(false))
+    FLAGS.map(|(object, field)| {
+        assert!(
+            capabilities[object].is_object(),
+            "the `{object}` capability must still be advertised: {capabilities}"
+        );
+        capabilities[object][field].as_bool().unwrap_or(false)
+    })
 }
 
 fn config() -> Value {
