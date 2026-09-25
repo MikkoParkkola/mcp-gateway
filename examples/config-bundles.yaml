@@ -8,7 +8,6 @@
 server:
   host: "127.0.0.1"
   port: 39401
-  request_timeout: 30s
   shutdown_timeout: 5s
 
 capabilities:

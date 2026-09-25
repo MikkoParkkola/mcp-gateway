@@ -8,6 +8,7 @@
 pub(crate) mod account_bindings;
 #[cfg(test)]
 mod attestation_start_tests;
+mod cleartext;
 mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
@@ -25,7 +26,8 @@ mod support;
 // would be IN FORCE, so it goes through the overlay. A restart-only edit asks
 // what the NEXT START does with the file, which is the startup check itself —
 // the same function the bind path calls, named here for the caller.
-pub(crate) use support::{reload_posture_refusal, start_refusal as next_start_refusal};
+pub(crate) use cleartext::reload_posture_refusal;
+pub(crate) use support::start_refusal as next_start_refusal;
 mod warmstart;
 
 use std::net::SocketAddr;
@@ -2008,6 +2010,9 @@ impl Gateway {
                  callers on the network that it has not authenticated. Authentication \
                  is expected to terminate in front of it."
             );
+        }
+        if let Some(warning) = cleartext::cleartext_http_warning(&self.config) {
+            warn!("{warning}");
         }
 
         // Bound ONCE, here, and handed to whichever path serves it.
