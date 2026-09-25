@@ -320,7 +320,7 @@ investigated here, and it is a correctness question, not a latency one.
 
 ### Method
 
-`~/perf-workload/fw_probe.sh` on the measurement host. **This is a diagnostic
+`<bench-dir>/fw_probe.sh` on the measurement host. **This is a diagnostic
 probe, not a graded run**: the `ablate` arms deliberately do not use the pinned
 config artefact, so no row here is gradeable against `NFR.WORKLOAD.1`.
 
@@ -504,11 +504,11 @@ Two cheap additions, neither a blocker on this diagnosis:
 
 ## Artefacts
 
-Host: measurement box, `~/perf-workload/runs/2026-09-16-fwprobe/`.
+Host: measurement box, `<bench-dir>/runs/2026-09-16-fwprobe/`.
 Eight `*.summary.json`, eight `*.k6.txt`, per-rep gateway stdout/stderr (all
 empty), `config.sha256`, `quiet-gate.log`. Probe script
-`~/perf-workload/fw_probe.sh`. Source read at the pinned arm checkouts
-`~/perf-workload/arms/{B,C}`. Payload sizes measured against a C-arm gateway
+`<bench-dir>/fw_probe.sh`. Source read at the pinned arm checkouts
+`<bench-dir>/arms/{B,C}`. Payload sizes measured against a C-arm gateway
 launched on `cfg/pinned.yaml`, one `curl` per method.
 
 Extracts copied into this directory as `04-fwprobe-artefacts.txt`: config

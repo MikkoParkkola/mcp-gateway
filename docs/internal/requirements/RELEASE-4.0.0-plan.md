@@ -41,7 +41,7 @@ clean over 400 files. `#![deny(unsafe_code)]` holds at `src/lib.rs:1`. NFR.SEC.6
 tickets as closed in this release and two of them, MIK-7249 and MIK-7262, have no reference
 anywhere under `src/` or `tests/`.
 NFR.PERF.1-2 required a measurement against 3.5.0 that no code read could substitute for, and
-it was run on 2026-09-03 — `v3.5.0` (`32f135a6`) against `5c29494a` on `spark`, recorded in
+it was run on 2026-09-03 — `v3.5.0` (`32f135a6`) against `5c29494a` on `bench-host`, recorded in
 `RELEASE-4.0.0-performance.md`. NFR.PERF.2 is MET by its own consequence: header-first routing
 did not ship, and the numbers show the most it could have saved is about 1.2% of a per-call
 composite. NFR.PERF.1 is PARTIAL, not MET: nothing regressed near either budget, but criterion
@@ -284,7 +284,7 @@ scheduled independently of that cluster; the five that stand alone are the excep
 | OBS.3 | with era detection — there is nothing to observe until it lands |
 | OBS.1, OBS.2 | the stdio dispatch path, above |
 | COMPAT.1 | with MIK-7272 — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and the revision surface (MIK-7272, rollup cluster C) unblocks, not a separate task |
-| PERF.1, PERF.2 | wave 0, measured 2026-09-03 on `spark`. PERF.2 is MET; PERF.1 stays open as PARTIAL — the harness yields no P50 or P99, and only an end-to-end comparison against a 3.5.0 binary does |
+| PERF.1, PERF.2 | wave 0, measured 2026-09-03 on `bench-host`. PERF.2 is MET; PERF.1 stays open as PARTIAL — the harness yields no P50 or P99, and only an end-to-end comparison against a 3.5.0 binary does |
 | PERF.4 | closed 2026-09-08. The ruling settled the mechanism: the tool is enumerated when the webhook registry is attached, and the band is 14-17 |
 | SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
 | SEC.6 | wave 3 — one test on the MIK-7262 early return, plus a ruling on whether an unlabelled fix counts as closed |
@@ -292,7 +292,7 @@ scheduled independently of that cluster; the five that stand alone are the excep
 
 Nine of the fourteen therefore have no schedule of their own: they land when their cluster does,
 and a cluster is not done until they read MET. The other five are named in a wave above.
-`NFR.PERF.2` was the sixth until the Spark run closed it, which is why this partition is nine
+`NFR.PERF.2` was the sixth until the bench-host run closed it, which is why this partition is nine
 plus five and not nine plus six.
 
 ## Order of work
@@ -370,7 +370,7 @@ existing shape rather than a new defect, and it is now symmetric across both dir
 present in one. The revision surface is the schedule now.
 
 **Wave 5 — the two measurements.** `NFR.PERF.1` needs a P50 and a P99 that the component
-session on `spark` could not produce: no wire, no backend, no queue, therefore no latency
+session on `bench-host` could not produce: no wire, no backend, no queue, therefore no latency
 distribution. Only an end-to-end comparison against a 3.5.0 binary closes it. `NFR.COMPAT.4`
 needs the dual-role matrix run. Neither turns on any other cluster, and neither can be
 satisfied by reading source, which is why they are last and why they must not be discovered

@@ -121,7 +121,7 @@ request bytes are unchanged by `03a21d63` (`IS_MODERN_ERA` is false for
 `2025-06-18`, so neither `_meta` nor the mirrored headers are added on A/B/C)
 — B ran clean four times in `2026-09-14-hdrfix-v2` with identical bytes.
 
-This is consistent with co-residency, and not established as its cause: Spark
+This is consistent with co-residency, and not established as its cause: bench-host
 was running a peer agent's `cargo clippy --all-targets` at the time
 (`stdiochk` sessions at 16:33:30Z and 16:37:24Z), and a 172 KB allocation
 failing on a box reporting 78 GB available one minute later fits a transient
@@ -141,7 +141,7 @@ whose request bytes are identical to these.
 
 ### Verdict
 
-`python3 eval_workload.py /home/mikko/perf-workload/runs/2026-09-14-modernfix-v1`,
+`python3 eval_workload.py /home/<redacted>/perf-workload/runs/2026-09-14-modernfix-v1`,
 complete output:
 
 ```

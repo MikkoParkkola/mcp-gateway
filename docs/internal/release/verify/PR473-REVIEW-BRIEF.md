@@ -21,13 +21,13 @@ binds a verdict to what was actually read.
 
 ## Run two vendors on IDENTICAL material, via stdin
 
-    ~/.claude/bin/gpt-review  < payload.diff
-    ~/.claude/bin/grok-review < payload.diff     # kimi-review if grok errors
+    <review-tools>/gpt-review  < payload.diff
+    <review-tools>/grok-review < payload.diff     # kimi-review if grok errors
 
 - Material goes on STDIN. A path argument makes the reviewer review the filename.
 - Run them in your task's FOREGROUND. `nohup` inside a background task dies with it.
 - Reasoning takes minutes: Bash timeout >= 300000ms.
-- A verdict is the LEDGER ROW (`~/.claude/data/{gpt,grok,kimi}-review-ledger.jsonl`),
+- A verdict is the LEDGER ROW (`<review-archive>/{gpt,grok,kimi}-review-ledger.jsonl`),
   never text scraped from the output. `process_status` must be `ok`; a nonzero
   exit is ERROR, not a verdict.
 - An empty run file may be a race. MISSING only after the process exits.

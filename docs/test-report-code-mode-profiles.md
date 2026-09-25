@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-25
 **Gateway:** mcp-gateway v2.4.0 @ http://127.0.0.1:39401
-**Config:** ~/.claude/mcp_servers/mcp-gateway-rs/servers.yaml
+**Config:** <gateway-config-dir>/servers.yaml
 
 ---
 
@@ -204,8 +204,8 @@ xh POST http://127.0.0.1:39401/mcp \
 
 1. **[BUG] Profile config schema mismatch** (Test 2a)
    - **Severity:** High -- profiles feature is completely non-functional in production
-   - **File:** `/Users/mikko/github/mcp-gateway/src/config.rs` (line 50)
-   - **Config:** `/Users/mikko/.claude/mcp_servers/mcp-gateway-rs/servers.yaml` (lines 40-103)
+   - **File:** `<repos>/mcp-gateway/src/config.rs` (line 50)
+   - **Config:** `<gateway-config-dir>/servers.yaml` (lines 40-103)
    - **Impact:** All 6 configured profiles (coding, research, communication, devops, intelligence, full) are silently ignored. Sessions always use the allow-all default profile.
    - **Fix options:**
      - **(A) Fix YAML** to match struct: rename `profiles.configs` entries to top-level `routing_profiles` and `profiles.default_profile` to `default_routing_profile`

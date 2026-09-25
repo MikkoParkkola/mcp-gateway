@@ -141,7 +141,7 @@ fn test_load_env_files_empty() {
 fn test_env_files_deserialized_from_yaml() {
     let yaml = r#"
 env_files:
-  - ~/.claude/secrets.env
+  - ~/.config/mcp-gateway/secrets.env
   - /tmp/extra.env
 server:
   host: "127.0.0.1"
@@ -149,7 +149,7 @@ server:
 "#;
     let config: Config = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(config.env_files.len(), 2);
-    assert_eq!(config.env_files[0], "~/.claude/secrets.env");
+    assert_eq!(config.env_files[0], "~/.config/mcp-gateway/secrets.env");
 }
 
 #[test]

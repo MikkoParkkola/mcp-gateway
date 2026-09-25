@@ -7,7 +7,7 @@
 # Variables are set into the process environment for {env.VAR} resolution.
 env_files:
   - ~/.mcp-gateway/.env
-  # - ~/.claude/secrets.env
+  # - ~/.config/mcp-gateway/secrets.env
 
 # --- Server ---
 
