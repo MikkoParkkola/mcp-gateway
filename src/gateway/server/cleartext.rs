@@ -76,7 +76,7 @@ pub(super) fn cleartext_credential_refusal(config: &Config) -> Option<String> {
         CleartextHttp::Refuse => {}
         CleartextHttp::TlsTerminatedUpstream | CleartextHttp::HostLocalPublish => return None,
         CleartextHttp::ClusterInternal => {
-            if service_host(config).is_some() {
+            if public_url_host(config).is_some() {
                 return None;
             }
             let named = public_url_host(config)
