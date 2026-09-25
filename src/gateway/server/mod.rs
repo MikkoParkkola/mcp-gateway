@@ -13,6 +13,8 @@ mod control_plane_store;
 mod gh475_budget_decides_tests;
 mod persistence;
 #[cfg(test)]
+mod replica_state_tests;
+#[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
 mod stdio_catalogue;

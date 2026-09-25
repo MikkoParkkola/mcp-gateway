@@ -56,7 +56,9 @@ fn crds_cover_gateway_server_policy_trustcard_and_runtime_profile() {
 fn deployment_defaults_are_ha_safe_probe_backed_and_restricted() {
     let deployment = docs(DEPLOYMENT).remove(0);
     assert_eq!(str_at(&deployment, &["kind"]), "Deployment");
-    assert_eq!(deployment["spec"]["replicas"].as_i64(), Some(2));
+    // One: key-server tokens, accounts custody and task records are per process
+    // (UPGRADING-4.0 item 37), and the modern protocol reaches the task store.
+    assert_eq!(deployment["spec"]["replicas"].as_i64(), Some(1));
     assert_eq!(
         deployment["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"].as_i64(),
         Some(0)
@@ -127,7 +129,7 @@ fn network_policy_has_ingress_and_egress_defaults() {
 fn values_expose_enterprise_boundary_human_gates_and_protected_value_provider() {
     let values: Value = serde_yaml::from_str(VALUES).expect("values parse");
     assert_eq!(values["licenseTier"].as_str(), Some("enterprise"));
-    assert_eq!(values["replicaCount"].as_i64(), Some(2));
+    assert_eq!(values["replicaCount"].as_i64(), Some(1));
     assert_eq!(values["policy"]["networkEgress"].as_str(), Some("deny_all"));
     assert_eq!(
         values["protectedValues"]["provider"].as_str(),
@@ -539,4 +541,27 @@ fn enterprise_alpha_config_loads() {
     if let Err(e) = evaluated.config.validate_with_env(&evaluated.overlay) {
         panic!("the enterprise-alpha gateway.yaml must validate: {e}");
     }
+}
+
+/// Kustomize cannot template `server.replicas` from `spec.replicas`, so the
+/// declaration the startup refusal reads is kept true here instead. A config
+/// left at the default of 1 under a scaled manifest would let per-process state
+/// start on every replica unrefused.
+#[test]
+fn enterprise_alpha_declared_replicas_match_manifest() {
+    let deployment = docs(DEPLOYMENT).remove(0);
+    let config = docs(BASE_CONFIGMAP)
+        .into_iter()
+        .next()
+        .expect("configmap document");
+    let gateway: Value =
+        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+    let declared = gateway["server"]["replicas"]
+        .as_i64()
+        .expect("base/configmap.yaml must declare server.replicas");
+    assert_eq!(
+        Some(declared),
+        deployment["spec"]["replicas"].as_i64(),
+        "server.replicas must equal the Deployment's spec.replicas"
+    );
 }

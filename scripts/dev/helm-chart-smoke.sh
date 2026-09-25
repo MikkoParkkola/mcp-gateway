@@ -167,6 +167,34 @@ mesh="$("$HELM" template t "$CHART" --set auth.mode=mesh --set metrics.existingS
 grep -q 'metrics_token: env:MCP_GATEWAY_METRICS_TOKEN' <<<"$mesh" \
   || fail "mesh mode drops server.metrics_token"
 
+echo "== helm_replicas_guard_per_process_state =="
+# UPGRADING-4.0 §37: key-server tokens, accounts custody and task records live in
+# one process, so more than one replica fails the render when any is on. The
+# modern protocol (on unless config.server.modern_protocol is false) reaches the
+# task store.
+grep -qE '^  replicas: 1$' <<<"$dep" || fail "default replicaCount is not 1"
+grep -qE '^      replicas: 1$' <<<"$cm" || fail "rendered gateway.yaml does not declare server.replicas: 1"
+grep -qE '^    type: RollingUpdate$' <<<"$dep" || fail "a default install lost RollingUpdate"
+two=(--set replicaCount=2 --set config.server.modern_protocol=false)
+for case in "key_server.enabled=true:InMemoryTokenStore" "accounts.enabled=true:single_process"; do
+  out="$("$HELM" template t "$CHART" "${two[@]}" --set "config.${case%%:*}" 2>&1)" \
+    && fail "config.${case%%:*} with replicaCount=2 rendered"
+  grep -q "Error:.*${case##*:}" <<<"$out" || fail "config.${case%%:*} refusal does not name ${case##*:}"
+done
+out="$("$HELM" template t "$CHART" --set replicaCount=2 2>&1)" \
+  && fail "replicaCount=2 with the modern protocol on rendered"
+grep -q 'Error:.*task store' <<<"$out" || fail "modern-protocol refusal does not name the task store"
+out="$("$HELM" template t "$CHART" --set config.server.replicas=3 2>&1)" \
+  && fail "config.server.replicas disagreeing with replicaCount rendered"
+multi="$("$HELM" template t "$CHART" "${two[@]}" 2>&1)" \
+  || fail "replicaCount=2 with modern_protocol=false did not render"
+grep -qE '^      replicas: 2$' <<<"$multi" || fail "server.replicas does not follow replicaCount=2"
+ks="$("$HELM" template t "$CHART" --set config.key_server.enabled=true --show-only templates/deployment.yaml 2>&1)"
+grep -qE '^    type: Recreate$' <<<"$ks" || fail "key_server does not render strategy Recreate"
+grep -q 'rollingUpdate' <<<"$ks" && fail "Recreate still renders a rollingUpdate block"
+acc="$("$HELM" template t "$CHART" --set config.accounts.enabled=true --show-only templates/deployment.yaml 2>&1)"
+grep -qE '^    type: Recreate$' <<<"$acc" || fail "accounts does not render strategy Recreate"
+
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 
 echo "helm chart smoke passed"
