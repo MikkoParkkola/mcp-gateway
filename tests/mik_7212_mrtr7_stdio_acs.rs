@@ -1054,11 +1054,19 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
          -32000 rather than queued; nothing was refused at all",
         last_over_cap - FIRST_CALL_ID + 1
     );
-    // Evidence of the one-for-one match between busy refusals and the excess.
-    let over_cap_group = last_over_cap - last_below_cap;
+    // Busy refusals match the excess one for one, to within the handshake's
+    // own permit (see the doc above): a count outside that window is a
+    // refusal the cap did not cause, or excess the cap let through.
+    let over_cap_group = usize::try_from(last_over_cap - last_below_cap).expect("positive");
     eprintln!(
         "7b server-busy refusals: {} of {over_cap_group} over the cap",
         refused.len()
+    );
+    assert!(
+        (over_cap_group - 1..=over_cap_group).contains(&refused.len()),
+        "{} of the {over_cap_group} calls past the cap were refused busy. {}",
+        refused.len(),
+        census_of(&lines)
     );
 
     // The refusal is not the whole invariant: a gateway that refuses everything
@@ -1100,7 +1108,9 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         declined.len(),
         census_of(&lines)
     );
-    let answered = prompts[0]
+    let answered = prompts
+        .first()
+        .expect("the count above admits a run of pure refusals; one question must remain to answer")
         .get("id")
         .cloned()
         .expect("an elicitation/create the gateway wrote carries an id");
