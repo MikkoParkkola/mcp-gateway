@@ -152,6 +152,12 @@ impl crate::transport::Transport for PerIdentityTools {
 /// complete mutation table because every fixture was `per_user`, and no
 /// mutation could reach the arm that was broken. `stateless` is the arm.
 fn stateless_backend() -> Arc<Backend> {
+    backend_in(SessionMode::Stateless)
+}
+
+/// [`stateless_backend`] with the session mode as the only free variable, so
+/// a `stateless` cell and its `per_user` twin differ in nothing else.
+fn backend_in(session_mode: SessionMode) -> Arc<Backend> {
     Arc::new(Backend::new(
         "stateless_tools",
         BackendConfig {
@@ -159,7 +165,7 @@ fn stateless_backend() -> Arc<Backend> {
                 strategy: PropagationStrategyKind::SignedAssertion,
                 audience: "ledger".to_string(),
                 required: false,
-                session_mode: SessionMode::Stateless,
+                session_mode,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
             }),
@@ -200,6 +206,24 @@ fn minted(subject: &str) -> Vec<(String, String)> {
         "Authorization".to_string(),
         format!("Bearer minted-for-{subject}"),
     )]
+}
+
+/// The grant subject a revocation names, on a fixed test issuer.
+fn subject(name: &str) -> crate::identity_grants::GrantSubject {
+    crate::identity_grants::GrantSubject::new("https://issuer.example.invalid", name, None)
+}
+
+/// The prefix `config_reload` hands `evict_identity_slots` for `name`: what
+/// `identity_binding_prefix` builds, never a restated formula.
+fn prefix(name: &str) -> String {
+    crate::identity_propagation::identity_binding_prefix(&subject(name))
+        .expect("an issuer authority yields a prefix")
+}
+
+/// `name`'s cache binding on the `ledger` audience, built on [`prefix`] plus
+/// `cache_binding`'s audience half, so a revocation of `name` matches it.
+fn bind(name: &str) -> String {
+    format!("{}{}:{}", prefix(name), "ledger".len(), "ledger")
 }
 
 fn names(tools: &[Tool]) -> Vec<String> {
@@ -353,3 +377,9 @@ async fn a_stateless_fill_without_a_binding_drops_minted_headers() {
 /// `backend::mod` so `super::` reaches this file's fixture.
 #[path = "stateless_slot_lifecycle_tests.rs"]
 mod stateless_slot_lifecycle_tests;
+
+/// MIK-7548: revocation racing a fill that is already on the wire. Declared
+/// here for the same reason as the lifecycle cells: `super::` reaches the
+/// fixture.
+#[path = "mid_fill_eviction_tests.rs"]
+mod mid_fill_eviction_tests;
