@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [4.0.0-beta.2] - 2026-09-25
 
 > **Pre-release.** The second 4.0 beta. It is the first beta with container images:
