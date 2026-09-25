@@ -89,7 +89,6 @@ pub(crate) fn expand_template(
         out.push_str(&text[end..whole.start()]);
         let value = overlay
             .resolve(&caps[1])
-            .filter(|value| !value.is_empty())
             .or_else(|| caps.get(2).map(|d| d.as_str().to_owned()))
             .ok_or_else(|| caps[1].to_owned())?;
         out.push_str(&value);
