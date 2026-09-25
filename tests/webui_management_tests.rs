@@ -1622,7 +1622,7 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
             key: "scoped-key".to_string(),
             name: "scoped".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,

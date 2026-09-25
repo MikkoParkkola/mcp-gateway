@@ -159,7 +159,7 @@ fn identity(iss: &str, email: &str) -> VerifiedIdentity {
 fn matches(engine: &PolicyEngine, id: &VerifiedIdentity) -> bool {
     engine
         .resolve_scopes(id, &RequestedScopes::default())
-        .is_some()
+        .is_ok()
 }
 
 const GRANT: &str = "    scopes: { backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }\n";
@@ -185,7 +185,7 @@ async fn unverified_email_does_not_match_email_rule() {
     assert!(
         h.ks.policy
             .resolve_scopes(&id, &RequestedScopes::default())
-            .is_none(),
+            .is_err(),
         "an unverified email must not satisfy an email rule"
     );
     let (status, _) = h.exchange(&token).await;
@@ -202,7 +202,7 @@ async fn missing_email_verified_is_unverified() {
     assert!(
         h.ks.policy
             .resolve_scopes(&id, &RequestedScopes::default())
-            .is_none()
+            .is_err()
     );
 }
 
@@ -443,4 +443,28 @@ async fn revoke_without_issuer_is_400() {
     let h = Harness::start(&both_issuers("")).await;
     let (status, body) = h.revoke("subject=123").await;
     assert_eq!(status, 400, "{body}");
+}
+
+// ── BACKENDGRANT.1: an empty backend grant is its own refusal ───────────
+
+#[tokio::test]
+async fn empty_backend_grant_is_refused_with_its_own_code() {
+    let rules = format!("  - match: {{ issuer: \"{ISS_A}\" }}\n    scopes: {{ tools: [\"*\"] }}\n");
+    let h = Harness::start(&config_yaml("[]", &policies(&rules))).await;
+
+    let token = h.mint(ISS_A, "no-backends", &json!({}));
+    let (status, body) = h.exchange(&token).await;
+    assert_eq!(status, 403, "no token that reaches nothing: {body}");
+    assert_eq!(body["error"], "no_backends_granted", "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("backends")),
+        "the refusal names the fix: {body}"
+    );
+
+    let token = h.mint(ISS_B, "no-rule", &json!({}));
+    let (status, body) = h.exchange(&token).await;
+    assert_eq!(status, 403);
+    assert_eq!(body["error"], "access_denied", "no matching rule: {body}");
 }

@@ -29,6 +29,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[path = "upgrade_backend_grant_notice.rs"]
+mod backend_grant_notice;
 #[path = "upgrade_webhook_notice.rs"]
 mod webhook_notice;
 
@@ -235,7 +237,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The thirteen 4.0.0 changes, in the order they are printed.
+/// The fourteen 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -295,6 +297,7 @@ writes `attestation_observe_reject` audit lines (set `observe` to keep them), an
 any unrecognised value now FAILS STARTUP instead of falling back to observe.",
     "A tool call carrying an argument key its schema does not declare, at any depth, is \
 refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
+    backend_grant_notice::ITEM,
 ];
 
 /// Emit the one-time 4.0.0 notice.

@@ -98,7 +98,7 @@ fn api_key(name: &str, key: &str) -> ApiKeyConfig {
         key: key.to_string(),
         name: name.to_string(),
         rate_limit: 0,
-        backends: Vec::new(),
+        backends: vec!["*".to_string()],
         allowed_tools: None,
         denied_tools: None,
         admin: false,
