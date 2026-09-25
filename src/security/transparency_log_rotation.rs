@@ -245,7 +245,7 @@ pub(super) fn recover(
     let mut state = match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
-            if event.as_deref() == Some(EV_SEALED) {
+            if false && event.as_deref() == Some(EV_SEALED) {
                 // Crash after the seal, before the rename: finish it.
                 let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
                 std::fs::rename(path, segments::sealed_path(path, seq))?;
