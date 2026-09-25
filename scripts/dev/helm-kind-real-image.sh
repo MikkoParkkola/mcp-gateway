@@ -184,4 +184,17 @@ if ! assert_result 2 tools <<<"$tools"; then
   exit 1
 fi
 
+echo "== the start WARN names cluster_internal (C3) =="
+# The chart serves bearer tokens over plain HTTP on 0.0.0.0 and starts only
+# because it renders server.cleartext_http: cluster_internal, which must say so
+# on every start.
+pod="$("$KUBECTL" get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
+  -o jsonpath='{.items[0].metadata.name}')"
+logs="$("$KUBECTL" logs -n "$NAMESPACE" "$pod" 2>&1 || true)"
+if ! grep -q 'cleartext_http = cluster_internal' <<<"$logs"; then
+  echo "FAIL: no cluster_internal WARN in $pod's log" >&2
+  diagnose
+  exit 1
+fi
+
 echo "helm kind real image passed: $IMAGE Ready, /livez 200, initialize + tools/list answered, wrong bearer 401 on $CLUSTER"
