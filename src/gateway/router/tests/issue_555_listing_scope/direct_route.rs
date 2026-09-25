@@ -284,7 +284,7 @@ fn audit_records(buffer: &parking_lot::Mutex<Vec<u8>>) -> usize {
 }
 
 /// An HS256 agent scoped to `alpha`, and a token it presents.
-fn agent_token(registry: &crate::gateway::oauth::AgentRegistry) -> String {
+pub(super) fn agent_token(registry: &crate::gateway::oauth::AgentRegistry) -> String {
     let secret = "a3-listing-scope-agent-secret-0123456789";
     registry.register(crate::gateway::oauth::AgentDefinition {
         client_id: "a3-agent".to_string(),

@@ -32,6 +32,7 @@ use crate::identity_grants::{
 };
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+mod backend_scope;
 mod direct_route;
 mod guide;
 mod meta_tools;
