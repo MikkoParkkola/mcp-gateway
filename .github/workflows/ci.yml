@@ -257,6 +257,10 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       # The external journey is executed by the mandatory SDK job below.
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+      - name: TypeScript upgrade harness
+        run: |
+          npm install --prefix /tmp/ts-harness --ignore-scripts typescript@5.9.3
+          TSC=/tmp/ts-harness/node_modules/.bin/tsc node --test scripts/ts-upgrade/validate.test.mjs
 
   task-sdk-recovery:
     uses: ./.github/workflows/task-sdk-recovery.yml
