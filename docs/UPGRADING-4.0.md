@@ -1475,6 +1475,26 @@ custody does not start, and with it the gateway. The file is sealed, so the fiel
 removed by hand. It is removed for an account when that account's token next rotates or the
 user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
 
+## 63. Error results are never served from a response cache
+
+In 3.x and in the 4.0 betas, the response cache stored an error result like any answer and
+served it to every later call with the same key until the TTL ran out (60 s by default). That
+included the gateway's own refusals: a rate-limit refusal, an open breaker, a failed connect.
+One 10 ms throttle could therefore answer hundreds of calls with a stale refusal after the
+bucket had refilled, and a backend that recovered kept being reported as failing.
+
+- **A result with `isError: true` is no longer cached**, whether the gateway produced it or the
+  backend returned it. The next call is dispatched again.
+- **The capability cache behaves the same way.** A 2xx upstream body carrying `isError: true`
+  is not stored (a non-2xx response never was).
+- Successful results are cached exactly as before, under the same keys and TTLs.
+- The idempotency store is unchanged: a caller retrying with the same idempotency key still
+  receives its own settled outcome, including a failure, as ADR-012 requires.
+
+What to check: a deployment that leaned on a cached error to shed load from a failing backend
+now reaches that backend on every call. Use the circuit breaker and `failsafe.rate_limit`
+for that; they are the load-shedding controls.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
