@@ -98,6 +98,14 @@ pub enum Error {
     #[error("Circuit breaker open for backend '{0}'")]
     CircuitOpen(String),
 
+    /// The gateway's own per-backend rate limiter refused the request before
+    /// dispatch. Not a breaker trip and not a backend failure: the backend was
+    /// never asked, so this is never sampled into the error budgets (F23).
+    ///
+    /// Carries the backend name. JSON-RPC code -32000, as for `CircuitOpen`.
+    #[error("Rate limit exceeded for backend '{0}'")]
+    RateLimited(String),
+
     /// Tool not found in any connected backend.
     ///
     /// Carries the tool name that was requested.
@@ -297,6 +305,7 @@ impl Error {
         matches!(
             self,
             Self::CircuitOpen(_)
+                | Self::RateLimited(_)
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
@@ -316,6 +325,7 @@ impl Error {
             Self::AuditUnavailable => -32005,
             Self::BackendUnavailable(_)
             | Self::CircuitOpen(_)
+            | Self::RateLimited(_)
             | Self::BackendTimeout(_)
             | Self::Transport(_)
             // A connect failure is the same class on the wire; the variant
