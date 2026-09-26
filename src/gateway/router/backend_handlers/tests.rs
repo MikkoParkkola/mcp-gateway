@@ -169,7 +169,7 @@ mod identity_propagation_audit {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    fn open_logger() -> (NamedTempFile, TransparencyLogger) {
+    fn open_logger() -> (NamedTempFile, Arc<TransparencyLogger>) {
         let file = NamedTempFile::new().expect("tempfile");
         let cfg = Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -177,7 +177,7 @@ mod identity_propagation_audit {
             key_id: "test".to_string(),
             ..TransparencyLogConfig::default()
         });
-        let logger = TransparencyLogger::open(cfg).expect("logger opens");
+        let logger = Arc::new(TransparencyLogger::open(cfg).expect("logger opens"));
         (file, logger)
     }
 
@@ -218,8 +218,8 @@ mod identity_propagation_audit {
     // A disabled transparency log (`logger = None`) must not panic and
     // must not create a log file — pure no-op success, not a failure (the
     // mint path must not be blocked when no transparency log is configured).
-    #[test]
-    fn audit_identity_propagation_is_noop_when_logger_disabled() {
+    #[tokio::test]
+    async fn audit_identity_propagation_is_noop_when_logger_disabled() {
         let result = audit_identity_propagation(
             None,
             "idp_mint",
@@ -227,14 +227,15 @@ mod identity_propagation_audit {
             "some-backend",
             Some("https://aud.test.invalid"),
             None,
-        );
+        )
+        .await;
         assert_eq!(result, Ok(()));
     }
 
     // IDP4.1 — a successful mint records `action="idp_mint"` with subject,
     // audience, backend, and timestamp; no `reason` field is present.
-    #[test]
-    fn mint_records_idp_mint_with_domain_fields() {
+    #[tokio::test]
+    async fn mint_records_idp_mint_with_domain_fields() {
         let (file, logger) = open_logger();
         let id = identity("alice");
         let subject = audit_subject(Some(&id));
@@ -246,7 +247,8 @@ mod identity_propagation_audit {
             "github",
             Some("https://github.test.invalid/api"),
             None,
-        );
+        )
+        .await;
         assert_eq!(result, Ok(()));
 
         let entries = read_entries(file.path());
@@ -263,8 +265,8 @@ mod identity_propagation_audit {
     // IDP4.2 — a fail-closed refusal records `action="idp_refuse"` with
     // subject ("unauthenticated" when no identity was presented), backend,
     // and the fail-closed reason string.
-    #[test]
-    fn refuse_records_idp_refuse_with_reason_and_unauthenticated_subject() {
+    #[tokio::test]
+    async fn refuse_records_idp_refuse_with_reason_and_unauthenticated_subject() {
         let (file, logger) = open_logger();
         let subject = audit_subject(None);
 
@@ -278,7 +280,8 @@ mod identity_propagation_audit {
                 "identity propagation required for this backend but the caller supplied \
                      no passthrough credential (ADR-008 D.3, fail-closed)",
             ),
-        );
+        )
+        .await;
         assert_eq!(result, Ok(()));
 
         let entries = read_entries(file.path());
@@ -301,8 +304,8 @@ mod identity_propagation_audit {
     // assert those bytes never appear anywhere in the on-disk log and only
     // the whitelisted domain fields (plus the chain fields the logger
     // itself adds) exist on each entry.
-    #[test]
-    fn no_secret_or_token_bytes_ever_reach_the_log() {
+    #[tokio::test]
+    async fn no_secret_or_token_bytes_ever_reach_the_log() {
         // A LIVE, credential-shaped canary. The point of this test (IDP4.3 /
         // fail-fast: "no raw assertion/token appears in any audit entry") is
         // defeated if the canary is a value we simply never hand to the audit
@@ -360,6 +363,7 @@ mod identity_propagation_audit {
             Some(audience),
             None,
         )
+        .await
         .expect("mint audit write succeeds");
         // A refuse: the reason string is a fixed fail-closed message, never
         // the credential the caller failed to supply.
@@ -371,6 +375,7 @@ mod identity_propagation_audit {
             Some("https://backend-b.test.invalid"),
             Some("identity propagation required but no credential was supplied"),
         )
+        .await
         .expect("refuse audit write succeeds");
 
         let raw = std::fs::read_to_string(file.path()).expect("log file readable");
@@ -433,8 +438,8 @@ mod identity_propagation_audit {
     // `unsafe` code, no new dependency, isolated to the child only. Unix-only
     // (the technique is POSIX shell + rlimit).
     #[cfg(unix)]
-    #[test]
-    fn mint_write_failure_is_fail_closed() {
+    #[tokio::test]
+    async fn mint_write_failure_is_fail_closed() {
         const ENV_VAR: &str = "IDP_AUDIT_FSIZE_CHILD_PATH_BACKEND_HANDLERS";
         const MARK_OK: &str = "AUDIT_WRITE_FAILED_AS_EXPECTED";
         const TEST_PATH: &str = "gateway::router::backend_handlers::tests::\
@@ -453,8 +458,9 @@ mod identity_propagation_audit {
             // `open()` performs no write (only reads an existing tail, if
             // any), so it must still succeed under the zero file-size limit —
             // only the append write below is expected to fail.
-            let logger =
-                TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed");
+            let logger = Arc::new(
+                TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed"),
+            );
             let result = audit_identity_propagation(
                 Some(&logger),
                 "idp_mint",
@@ -462,7 +468,8 @@ mod identity_propagation_audit {
                 "github",
                 Some("https://github.test.invalid/api"),
                 None,
-            );
+            )
+            .await;
             match result {
                 Err(crate::identity_propagation::PropagationError::AuditFailed(_)) => {
                     println!("{MARK_OK}");

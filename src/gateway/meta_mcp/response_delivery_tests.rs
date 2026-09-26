@@ -78,6 +78,8 @@ impl Fixture {
         }
     }
 
+    /// The delivery path is async since F20 (bounded audit append); these
+    /// rows stay synchronous and drive it on a private runtime.
     fn finalize(
         &self,
         method: &str,
@@ -85,16 +87,20 @@ impl Fixture {
         targets: &[ResponsePolicyTarget],
         mutation: ResponseMutationPolicy,
     ) -> JsonRpcResponse {
-        self.meta.finalize_response_for_delivery(
-            response,
-            &ResponseDeliveryContext {
-                method,
-                targets,
-                correlation: correlation(),
-                mutation,
-                signing: None,
-            },
-        )
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(self.meta.finalize_response_for_delivery(
+                response,
+                &ResponseDeliveryContext {
+                    method,
+                    targets,
+                    correlation: correlation(),
+                    mutation,
+                    signing: None,
+                },
+            ))
     }
 
     fn audits(&self) -> Vec<Value> {
