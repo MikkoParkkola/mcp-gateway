@@ -271,9 +271,18 @@ jobs:
       - name: The debug exe starts
         shell: bash
         run: |
+          set +e
           out=$(./target/debug/mcp-gateway.exe --version 2>&1)
+          rc=$?
           echo "$out"
-          [[ "$out" == mcp-gateway\ * ]]
+          echo "--version exited $rc"
+          [[ $rc -eq 0 && "$out" == mcp-gateway\ * ]] || exit 1
+          # A status the command returns (not a clap exit) reaches the shell:
+          # an empty key makes `hash-key` return ExitCode 2.
+          printf '' | ./target/debug/mcp-gateway.exe hash-key
+          rc=$?
+          echo "hash-key on an empty key exited $rc"
+          [[ $rc -eq 2 ]]
       # Library and binary unit tests. Two module trees are skipped rather than
       # run, both for one reason: their fixtures open the task store or the
       # personal-account store, which refuse on non-unix by design (W1, #1142).
