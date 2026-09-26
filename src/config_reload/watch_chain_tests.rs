@@ -233,8 +233,9 @@ mod real_watcher {
         start_retrying_every(named, super::super::CHAIN_RETRY)
     }
 
-    /// `start` with the broken-chain retry at `retry_every`. An hour keeps
-    /// the timer out of a test, so only an event can move the chain.
+    /// `start` with the broken-chain retry at `retry_every`. With an hour, the
+    /// only timer retry in a test is the immediate one on entering the broken
+    /// state; after it, only an event can move the chain.
     fn start_retrying_every(named: &Path, retry_every: Duration) -> Harness {
         let (tx, events) = tokio::sync::mpsc::channel(32);
         let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
