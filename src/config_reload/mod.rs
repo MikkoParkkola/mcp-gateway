@@ -1137,7 +1137,7 @@ impl ConfigWatcher {
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
     ) -> Result<Arc<watch_chain::ChainWatch>> {
-        let named_config_path = config_path.to_path_buf();
+        let named_config_path = absolute_watch_path(config_path.to_path_buf());
         let closure_config_path = named_config_path.clone();
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
