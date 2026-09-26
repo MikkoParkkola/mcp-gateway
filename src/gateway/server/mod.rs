@@ -2585,7 +2585,10 @@ impl Gateway {
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
                     if let Some(response) = response {
-                        send_frame(&writer, response).await;
+                        // MUTANT M-H2 (throwaway): H2 made real for one id.
+                        if response.get("id").and_then(serde_json::Value::as_i64) != Some(7) {
+                            send_frame(&writer, response).await;
+                        }
                     }
                 }
             };
