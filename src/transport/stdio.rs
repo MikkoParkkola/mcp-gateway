@@ -157,6 +157,8 @@ pub struct StdioTransport {
     /// flushing them when the call ends is collect-then-emit, which ADR-014 §1
     /// rejects: a progress update that arrives with the result is not progress.
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
+    /// How the last start ended if the child died before `initialize` (#526).
+    start: early_exit::StartState,
 }
 
 impl StdioTransport {
@@ -185,6 +187,7 @@ impl StdioTransport {
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
             progress_destinations: dashmap::DashMap::new(),
+            start: early_exit::StartState::default(),
         })
     }
 
@@ -256,6 +259,8 @@ impl StdioTransport {
 
         *self.writer.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
+        let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
+        self.start.begin(eof_rx);
 
         // Spawn reader task.
         //
@@ -299,31 +304,25 @@ impl StdioTransport {
                 }
             }
 
+            let _ = eof_tx.send(true);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
             }
             debug!("Stdio reader task ended");
         });
 
-        let command = self.diagnostic_command();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                debug!(command = %command, line_len = line.len(), "Received line from stderr");
-            }
-        });
+        let stderr_tail = early_exit::spawn_stderr_tail(stderr, self.diagnostic_command());
 
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now rather than waiting for the
         // caller to drop its handle: `start` is called on an `Arc<Self>` the
         // caller usually keeps, so a failed start would otherwise leave the
         // child running until that handle happens to go away.
-        //
-        // This used to be load-bearing for a different reason - the reader task
-        // held a strong `Arc`, so nothing but an explicit close could ever reap
-        // the child. It holds a `Weak` now, so drop alone is sufficient and this
-        // is only about being prompt.
-        if let Err(error) = self.initialize().await {
+        // (Promptness only: the reader holds a `Weak`, so a drop would reap it.)
+        if let Err(mut error) = self.initialize().await {
+            if self.start.exited_early() {
+                error = self.early_exit_error(stderr_tail, &parts).await;
+            }
             if let Err(close_error) = self.close().await {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
             }
@@ -365,9 +364,7 @@ impl StdioTransport {
             "Sending MCP initialize"
         );
 
-        let response = self
-            .request("initialize", Some(Self::build_init_params(&version)))
-            .await?;
+        let response = self.init_request(Self::build_init_params(&version)).await?;
 
         if let Some(ref error) = response.error {
             let error_msg = &error.message;
@@ -432,7 +429,7 @@ impl StdioTransport {
 
         // Retry with negotiated version
         let retry_response = self
-            .request("initialize", Some(Self::build_init_params(negotiated)))
+            .init_request(Self::build_init_params(negotiated))
             .await?;
 
         if let Some(ref error) = retry_response.error {
