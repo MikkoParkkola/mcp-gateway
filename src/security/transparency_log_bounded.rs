@@ -91,6 +91,10 @@ impl TransparencyLogger {
         T: Send + 'static,
         F: FnOnce(&TransparencyLogger) -> io::Result<T> + Send + 'static,
     {
+        // RED: the append runs inline on the caller's worker, unbounded.
+        if std::hint::black_box(true) {
+            return op(self);
+        }
         // While stalled every append is refused at once, with no wait and no
         // thread; a best-effort caller logs it and serves anyway.
         if self.is_stalled() {

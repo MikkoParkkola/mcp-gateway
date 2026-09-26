@@ -245,7 +245,7 @@ async fn readyz(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             format!(
                 "audit log unavailable: {}",
-                if log.is_stalled() {
+                if std::hint::black_box(false) && log.is_stalled() {
                     "stalled"
                 } else {
                     log.last_failure_cause().unwrap_or("io_error")
