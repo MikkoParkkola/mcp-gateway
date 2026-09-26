@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
 Status: REVISION 9, DESIGN FINAL for implementation. Eight review rounds; round 8: SHIP and SHIP-WITH-FIXES (one LOW, adopted). Every finding is
-dispositioned in §7-§16. Visibility settled by maintainer decision (§6 Q4).
+dispositioned in §7-§17. Visibility settled by maintainer decision (§6 Q4).
 
 ## 1. Problem
 
@@ -83,7 +83,7 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    isolation change during an input wait therefore refuses the resume. A guard refusal of an
    admitted task is settled directly, not through `classify_dispatch` (which only reads a
    backend response): the worker calls `settle_cas` with `TaskTransition::Fail(guard_error)`,
-   the same pre-dispatch Fail shape used at `worker.rs:327`, then drops its handoff and permit.
+   the same `TaskTransition::Fail` shape `worker.rs:327` builds (there after dispatch, here before it), then drops its handoff and permit.
    The task is `failed` carrying the guard's error, never an ownerless `working` row. The extracted chain
    keeps the per-backend passthrough opt-out (`backend_handlers.rs:957-959`) exactly as today.
    Named function: `DirectRouteGuards::run`, in the router, `pub(crate)` so the worker in
@@ -170,10 +170,10 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    one global generation channel. It waits ONLY while the row is still `input_required` (the
    occupant is the unwinding producer); if on any check the id is occupied and the row is no
    longer `input_required` (a racing completing update won), it refuses `-32602` at once. On
-   timeout while still `input_required` the refusal is `-32603` "task busy, retry"), then
+   timeout while still `input_required` the refusal is `-32603` "task busy, retry"., then
    ONE store write that takes the permit through the same try-acquire closure create uses
    (`execution.rs:370-390`) and performs the `input_required -> working` CAS together, then the
-   spawn. If that write loses (a cancel already settled the row) the handoff and any permit are
+   spawn. If that write loses (a cancel already settled the row, or another update already moved it to `working`: refused `-32602`) the handoff and any permit are
    released (RAII). Cancel on an `input_required` row always performs its own store transition
    to `cancelled`, whether or not an owner is registered, so a cancel that raced a losing resume
    leaves the row `cancelled`, never `working`. `cancel_rx` is threaded into the same dispatch
@@ -253,6 +253,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | cancel races resume | cancel arrives between CAS and spawn: task `cancelled`, no backend call | handoff registered after the CAS |
 | racing completing updates | two concurrent completing updates: one resume, the other `-32602`, cancel still reaches the one worker | overwrite-on-insert handoff |
 | produce-seam update | a completing update sent the instant `input_required` is visible (producer still holding its handoff): succeeds, with a second live task releasing concurrently | no wait on `released` |
+| lost race does not wait | a completing update arrives while another update's resume owns the id and the row is `working`: `-32602` at once, no 1 s wait (timed) | wait applied regardless of row state |
+| winner holds past the timeout | two completing updates queue behind the producer; the winner's resume keeps its handoff beyond 1 s: the loser gets `-32602`, the winner is still cancellable | loser takes the timeout path |
 | answers over the cap | an answer pushing `accepted_inputs` past the byte cap: refused, nothing written | cap check removed |
 | expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
 | cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
@@ -399,3 +401,9 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | header range omitted §15 | LOW | ADOPTED |
 | finality next to an open visibility question | LOW | ADOPTED: question settled |
 | §15 dispositions not written into the body (produce-time room rule, `expired_input_rounds`, second live task, state-only `working`, §4.5 reason) | improvement | ADOPTED: §4.1, §4.4, §5, §4.3b, §4.5 |
+
+## 17. Delta review of the final fixes (two seats: SHIP, SHIP)
+
+Improvements adopted: the `worker.rs:327` reference reworded (it builds the Fail shape after dispatch);
+dangling parenthesis removed; the losing-write refusal code named; two test rows pin the
+no-wait branch and a winner holding past the timeout. DESIGN FINAL.
