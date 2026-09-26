@@ -124,6 +124,25 @@ class OrphanGuard(unittest.TestCase):
         )
         self.assertEqual(found, [])
 
+    def test_path_pattern_is_linear_on_repeated_slashes(self):
+        # `#[path]` followed by a long run of `//` made the pattern backtrack
+        # exponentially: 44 slashes took minutes. Run it in a child process so a
+        # regression fails in seconds instead of hanging the gate.
+        import multiprocessing
+
+        guard = load_guard(SCRIPT.resolve().parents[2])
+        text = '#[path="x.rs"]' + "//" * 40
+        child = multiprocessing.get_context("fork").Process(
+            target=guard.PATH_MOD.search, args=(text,)
+        )
+        child.start()
+        child.join(5)
+        hung = child.is_alive()
+        if hung:
+            child.kill()
+            child.join()
+        self.assertFalse(hung, "PATH_MOD backtracks on repeated '//'")
+
     def test_the_real_tree_is_clean(self):
         # The guard must pass on the repository it ships in; a guard that is
         # red on arrival gets disabled rather than obeyed.
