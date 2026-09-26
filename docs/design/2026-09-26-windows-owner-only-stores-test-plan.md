@@ -1,6 +1,6 @@
 # Windows owner-only stores: test plan
 
-Status: REVISION 2 after test-plan review round 1 (both seats SHIP-WITH-FIXES). Design: `2026-09-26-windows-owner-only-stores.md`
+Status: REVISION 3 after test-plan review rounds 1-2 (dispositions §9-§10). Design: `2026-09-26-windows-owner-only-stores.md`
 (reviewed, SHIP x2). Code, probes and the red commit wait for the ADR-016 decision.
 
 ## 1. What the plan asserts against
@@ -57,7 +57,7 @@ item 2 is complete).
 | Id | Test fn | Setup | Assert | Red reason (stubs) |
 |---|---|---|---|---|
 | W-T1 | `created_objects_carry_only_the_user_ace` | init a personal-account store and a task store in a test-owned tree | for each store dir, `authority.json`, a record, `journeys.json`, a task record, both lock sidecars: PowerShell `(Get-Acl p).GetSecurityDescriptorSddlForm('Owner, Access')` == `O:<sid>D:P(A;OICI;FA;;;<sid>)` for dirs, `O:<sid>D:P(A;;FA;;;<sid>)` for files (group section excluded: Windows supplies it) | SDDL shows inherited ACEs (no `P`): string mismatch |
-| W-T1b | `objects_are_private_at_the_instant_of_creation` | `cfg(test)` fault boundary `AfterCreate` fires immediately after each `create_*_private` returns, before any other call; the hook runs the W-T1 PowerShell read | same literal SDDL at that instant | permissive stub creates with inherited DACL: mismatch |
+| W-T1b | `objects_are_private_at_the_instant_of_creation` | `cfg(test)` fault boundary `AfterCreate` sits INSIDE `create_dir_private` / `create_file_private`, immediately after the `CreateDirectoryW` / `CreateFileW` call returns and before any other statement, so a create-then-protect body cannot finish protecting first; the hook runs the W-T1 PowerShell read | same literal SDDL at that instant | permissive stub creates with inherited DACL: mismatch |
 | W-T2 | `foreign_ace_on_store_dir_refuses` | init, close, `icacls d /grant *S-1-1-0:R` | reopen refuses, reason `ForeignSid(S-1-1-0)` | stub accepts: reopen succeeds |
 | W-T3 | `inherited_ace_on_store_dir_refuses` | store under a test-created parent whose inheritable DACL grants ONLY the current user (so inheritance adds no foreign SID); close; `icacls d /inheritance:e` | reason `NotProtected` (P2 cannot fail by construction) | accepts |
 | W-T4 | `foreign_ace_on_each_file_refuses` | table-driven over the six file kinds of W-T1; grant Everyone on one | the operation reading that file refuses with `ForeignSid` (authority on open, record on lookup, journeys on first journey op, task record on load, lease/sidecar on custody) | accepts |
@@ -78,19 +78,40 @@ item 2 is complete).
 | W-T16 | `open_store_blocks_ancestor_swap` | store open; rename parent; replace parent with a junction | both fail; a lookup afterwards still returns the committed record | as W-T16a |
 | W-T17 | `reader_closes_before_replace` | barrier AFTER the reader releases the authority lock and BEFORE any escaped handle could drop; writer commits `refresh_tokens` at that barrier. Attempts are counted inside `private_fs::replace`, a wrapper shared by stub and production bodies | commit succeeds on attempt 1 | **green-in-red regression guard**: the un-gated read path already closes inside the lock, so this row is expected GREEN in the red run; its proof is M17 (a reader that keeps its handle makes attempt 1 fail), stated here rather than claimed as red |
 | W-T19 | `other_ace_type_refuses` | `Set-Acl` SDDL `O:<sid>D:P(A;;FA;;;<sid>)(XA;;FR;;;WD;(Member_of {SID(BA)}))` (a conditional callback ACE; every other rule passes) | reason `OtherAceType` | accepts |
-| W-T20 | `external_holder_retry_is_bounded` | a thread holds the destination record open (std handle, no delete share). Case A: release after 25 ms; Case B: never release | A: commit succeeds with 2 <= attempts <= 3. B: `StorageUnavailable` after exactly 3 attempts, and a lookup afterwards returns the PREVIOUS committed version (nothing acknowledged) | stub `fs::rename` does not retry or count: A attempts == 1 (std rename may use POSIX semantics and succeed), B commits instead of refusing |
-| W-T21 | `foreign_deny_ace_is_accepted` | SDDL `O:<sid>D:P(D;;FW;;;WD)(A;;FA;;;<sid>)` (a deny for Everyone, the user allow) | store opens and reads normally | **green-in-red regression guard** against over-strict P2; proof is M22 |
+| W-T20 | `external_holder_retry_is_bounded` | a thread holds the destination record open (std handle, no delete share). Case A: the holder releases when a test hook in `private_fs::replace` reports attempt 1 failed. Case B: never release; the test runs under a 10 s watchdog that fails the test (not hangs CI) on expiry | A: commit succeeds with attempts == 2 exactly. B: `StorageUnavailable` after exactly 3 attempts, and a lookup afterwards returns the PREVIOUS committed version | stub `fs::rename` neither retries nor reports attempts: A sees attempts == 1 or a hang caught by the watchdog, B commits instead of refusing |
+| W-T21 | `foreign_deny_ace_is_accepted` | fixture first asserts via `whoami /groups` that the runner token does NOT contain BUILTIN\Guests (S-1-5-32-546); SDDL `O:<sid>D:P(D;;FA;;;S-1-5-32-546)(A;;FA;;;<sid>)` | store opens and reads normally | **green-in-red regression guard** against over-strict P2; proof is M22 |
+| W-T22 | `durability_calls_are_made` | commit one grant and one task record with a test-only trace in `private_fs::sync_file` and `private_fs::replace` | per commit: `sync_file` precedes `replace`, and `replace` was called with the write-through flag set | stub does not trace: empty trace. Limitation: this proves the CALLS are made, not that the disk honours them (§7) |
 | W-T18 | `path_swap_between_walk_and_open_refuses` | `cfg(test)` fault boundary `AfterPathWalk` replaces ancestor with a junction to another private store of the same user | reason `PathMismatch` | stub `final_path` echoes input: accepts |
 
-Fixture discipline (all plants): after planting, the helper reads the SDDL back with
-PowerShell and asserts it equals the intended literal, and that exactly the rule the
-row names fails, before the store is invoked. A plant that Windows altered (default
-owner, inheritance, `Set-Acl` normalisation) fails as a FIXTURE error, never as a
-misleading refusal reason.
+Fixture discipline (all plants):
 
-Red-run gate: a CI script compares the red run's failing test names with the list of
-rows marked red above and fails the red PR on any difference, so a row that is
-unexpectedly green (or red) cannot be hand-recorded past.
+1. Baseline first: before planting, the fixture sets a KNOWN VALID descriptor on the
+   object with PowerShell `Set-Acl` (`O:<sid>D:P(A;;FA;;;<sid>)`, or the directory
+   form). Objects the permissive red stubs created with inherited DACLs therefore start
+   from the same baseline as green-run objects.
+2. Plant, then read back with PowerShell and assert the literal intended SDDL.
+3. Each row states its EXPECTED FAILURE SET (below); the fixture asserts, with its own
+   SDDL parser in the test helper (not `inspect`), that the planted descriptor fails
+   exactly that set. Mismatch is a FIXTURE error, never a refusal assertion.
+
+| Row | Expected failure set |
+|---|---|
+| W-T2, W-T4 | {P2} |
+| W-T3 | {P5} |
+| W-T8 | {P1, P3} (reason asserted: `NullDacl`, which the plan requires be reported first) |
+| W-T8b | {P3} |
+| W-T10 | {P5} plus any foreign inherited SIDs the runner's temp tree adds (read back and listed, not assumed) |
+| W-T10b | {P2, P4, P5} before remediation, {} after |
+| W-T11 | {P4} |
+| W-T13 | {P5} |
+| W-T19 | {P2 other-ACE-type} |
+| W-T21 | {} |
+
+Red-run gate: every row's decisive assertion message starts with a unique marker
+`WT-ASSERT <id>`; fixture failures start `WT-FIXTURE <id>`. A CI script over the test
+output requires, for the red run: every red-marked row EXECUTED, FAILED, and failed with
+its own `WT-ASSERT <id>` marker; no `WT-FIXTURE` line; no panic outside a marker; and
+the two green-in-red guards (W-T17, W-T21) passed. Any difference fails the red PR.
 
 Existing coverage that now also runs on Windows: size bounds and non-regular-file
 refusals in `src/personal_accounts/store_tests.rs` (`install_bound_fixture` cases) and
@@ -124,6 +145,8 @@ Windows counterparts are W-T1..W-T21.
 | M20 | create with std, THEN protect (throwaway branch only; adds a `SetSecurityInfo` call) | W-T1b |
 | M21 | no retry on sharing violation / unbounded retry | W-T20 (A, B) |
 | M22 | treat any DENY ACE as foreign | W-T21 |
+| M23 | drop `sync_file` before `replace` | W-T22 |
+| M24 | drop `MOVEFILE_WRITE_THROUGH` | W-T22 |
 
 The ignored CI-step tests (W-T12, W-T14, W-T15) live in module `win_privileged` and run in the mutant PRs too: each mutant PR
 runs the full Windows job including the privileged step.
@@ -147,8 +170,13 @@ runs the full Windows job including the privileged step.
 
 1. existing `cargo test --no-run`;
 2. `cargo test --all-features --lib --bins --no-fail-fast` (no skips);
-3. privileged step: create `mgw-probe` user, `net use X:`, attach FAT32 VHD, then
-   `cargo test --lib -- --ignored win_privileged::`; teardown always runs (`if: always()`).
+3. privileged step, `if: always() && steps.build.outcome == 'success'` so a red or
+   mutant run in step 2 does not skip it: create `mgw-probe`, `net use X: \\localhost\C$`,
+   create and attach two 64 MB VHDs with `diskpart` formatted FAT32 (`F:`) and exFAT
+   (`E:`), then `cargo test --all-features --lib -- --ignored win_privileged::`;
+4. teardown, `if: always()`: remove the user, the mapping and the VHDs;
+5. aggregate, `if: always()`: fail the job if step 2 or step 3 failed (both outcomes
+   are read explicitly, so neither can hide the other).
 
 ## 7. Not tested here, with reasons
 
@@ -160,7 +188,7 @@ runs the full Windows job including the privileged step.
 
 ## 8. Evidence to record
 
-Red run id (throwaway PR), green run id, one run id per mutant M1-M22, before/after
+Red run id (throwaway PR), green run id, one run id per mutant M1-M24, before/after
 unix test counts, the list of residual Windows failures by name.
 
 ## 9. Review round 1 dispositions
@@ -176,3 +204,17 @@ unix test counts, the list of residual Windows failures by name.
 | MEDIUM: W-T17 red reason measured missing instrumentation | Fixed: counter in a shared wrapper, barrier before handle drop; row declared a green-in-red regression guard proven by M17 |
 | MEDIUM: bounded retry untested | Fixed: W-T20 (release and persistent cases), M21 |
 | Improvements | Adopted: deny-ACE row W-T21 + M22; exFAT beside FAT32; plant read-back discipline; automated red-run name comparison; existing-coverage map (§3) |
+
+
+## 10. Review round 2 dispositions
+
+| Finding | Disposition |
+|---|---|
+| HIGH: `AfterCreate` could fire after a create-then-protect helper finished | Fixed: boundary inside the helper, right after the create call (W-T1b) |
+| MEDIUM: W-T21 denied write to Everyone, which also blocks the user's reads | Fixed: deny Guests, verified absent from the runner token |
+| MEDIUM: "exactly one rule fails" contradicted W-T8/W-T10b; stub-created objects lack a baseline | Fixed: externally set baseline descriptor; per-row expected failure sets |
+| MEDIUM: name-only red gate accepts fixture errors and panics | Fixed: `WT-ASSERT` / `WT-FIXTURE` markers, execution and marker checks |
+| MEDIUM: W-T20 timing-dependent, unbounded mutant could hang CI | Fixed: release on observed failed attempt; 10 s watchdog |
+| MEDIUM: privileged step skipped after expected failures | Fixed: `always() && build success`, explicit aggregate step |
+| Improvement: durability-call mutants | Adopted: W-T22, M23, M24, with the stated limit that they prove calls, not disk behaviour |
+| Improvement: consistent privileged provisioning incl. exFAT | Adopted (§6 step 3) |
