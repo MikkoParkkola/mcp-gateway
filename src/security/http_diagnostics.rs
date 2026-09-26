@@ -122,7 +122,11 @@ pub(crate) fn status_refusal(
     body: &str,
 ) -> Error {
     match typed {
-        Some(e) if is_deterministic_refusal(status) => Error::Http(e.without_url()),
+        // A 401/403 whose body says the session expired keeps the marker, so
+        // the transport re-initializes the session instead (as for 400/404).
+        Some(e) if is_deterministic_refusal(status) && !carries_session_expiry(body) => {
+            Error::Http(e.without_url())
+        }
         _ => safe_http_status_error(status, body),
     }
 }
@@ -139,9 +143,14 @@ pub fn safe_oauth_http_error(context: &str, status: StatusCode, body: &str) -> S
     format!("{context}: {}", safe_status_text(status, body))
 }
 
+/// Whether a non-2xx body says the MCP session expired (JSON-RPC `-32015` or
+/// "session not found"), which the transport answers by re-initializing.
+fn carries_session_expiry(body: &str) -> bool {
+    body.contains("-32015") || body.to_ascii_lowercase().contains("session not found")
+}
+
 fn safe_status_text(status: StatusCode, body: &str) -> String {
-    let lower = body.to_ascii_lowercase();
-    if body.contains("-32015") || lower.contains("session not found") {
+    if carries_session_expiry(body) {
         format!("HTTP {status}: {SESSION_EXPIRED_MARKER}")
     } else {
         format!("HTTP {status}")

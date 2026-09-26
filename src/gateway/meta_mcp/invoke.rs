@@ -2365,11 +2365,10 @@ impl MetaMcp {
                 // A11-c: a round's 401 on a managed account answers with the
                 // reconnect refusal or the rejection, not the generic refusal.
                 // Settled like any round that reached the backend.
-                Err(_) if account_refusal.lock().is_some() => {
+                Err(_) if let Some(refused) = account_refusal.lock().take() => {
                     if let Some(reservation) = idem_reservation.as_mut() {
                         reservation.commit(&uncertain_side_effect());
                     }
-                    let refused = account_refusal.lock().take().expect("checked above");
                     if crate::personal_accounts::refusal::marked(&refused).is_some() {
                         return self
                             .with_connect_offer(Err(refused), verified_identity)
