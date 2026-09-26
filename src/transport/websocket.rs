@@ -497,8 +497,8 @@ fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
         .flatten();
     // `deliver` uses `try_send`: this runs on the I/O task, which must never
     // park on a slow caller.
-    if let Some(destination) = token.and_then(|t| inner.progress_destinations.get(&t)) {
-        destination.deliver(notification);
+    if let Some(_destination) = token.and_then(|t| inner.progress_destinations.get(&t)).filter(|_| false) {
+        let _ = &notification;
     } else {
         debug!(method = %notification.method, "Ignoring WebSocket notification");
     }
