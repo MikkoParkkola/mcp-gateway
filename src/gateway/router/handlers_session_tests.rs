@@ -61,7 +61,10 @@ async fn an_empty_or_blank_session_id_is_never_a_session() {
     for blank in ["", "   "] {
         let (state, _store) = test_router_app_state().await;
         let router = create_router(Arc::clone(&state));
-        let response = router.oneshot(legacy_post(Some(blank), ping())).await.unwrap();
+        let response = router
+            .oneshot(legacy_post(Some(blank), ping()))
+            .await
+            .unwrap();
         assert!(
             !state.multiplexer.has_session(blank),
             "{blank:?} must not become a session"
@@ -118,7 +121,10 @@ async fn anonymous_sessions_are_kept_apart_by_their_minted_ids() {
     assert_eq!(m.get_or_create_session_for(Some(&a), &anon).0, a);
     assert_eq!(m.get_or_create_session_for(Some(&b), &anon).0, b);
     let (c, _rc) = m.get_or_create_session_for(Some("gw-not-live"), &anon);
-    assert!(c != a && c != b && c != "gw-not-live", "a third, minted id: {c}");
+    assert!(
+        c != a && c != b && c != "gw-not-live",
+        "a third, minted id: {c}"
+    );
 }
 
 // F9-T4b
@@ -142,8 +148,14 @@ async fn credential_and_anonymous_sessions_never_resume_each_other() {
     let cred = session_owner(Some(&credential("p1")));
     let (anon_id, _ra) = m.get_or_create_session_for(None, &anon);
     let (cred_id, _rc) = m.get_or_create_session_for(None, &cred);
-    assert_ne!(m.get_or_create_session_for(Some(&anon_id), &cred).0, anon_id);
-    assert_ne!(m.get_or_create_session_for(Some(&cred_id), &anon).0, cred_id);
+    assert_ne!(
+        m.get_or_create_session_for(Some(&anon_id), &cred).0,
+        anon_id
+    );
+    assert_ne!(
+        m.get_or_create_session_for(Some(&cred_id), &anon).0,
+        cred_id
+    );
 }
 
 fn delete(session: &str) -> Request<Body> {
@@ -219,7 +231,10 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
             .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!call.is_finished(), "a POST-back from B must not complete A's prompt");
+    assert!(
+        !call.is_finished(),
+        "a POST-back from B must not complete A's prompt"
+    );
     // AND: A's own POST-back on its minted id completes it
     create_router(Arc::clone(&state))
         .oneshot(legacy_post(Some(&a_id), accept))
@@ -281,7 +296,10 @@ async fn get_and_delete_log_session_fingerprints_only() {
         .header("accept", "text/event-stream")
         .body(Body::empty())
         .unwrap();
-    let response = create_router(Arc::clone(&state)).oneshot(get).await.unwrap();
+    let response = create_router(Arc::clone(&state))
+        .oneshot(get)
+        .await
+        .unwrap();
     let streamed = session_header(&response).expect("minted id");
     drop(response);
     let (owned, _rx) = state
@@ -309,7 +327,10 @@ async fn a_non_utf8_session_id_is_treated_as_absent() {
         "mcp-session-id",
         axum::http::HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
     );
-    let response = create_router(Arc::clone(&state)).oneshot(request).await.unwrap();
+    let response = create_router(Arc::clone(&state))
+        .oneshot(request)
+        .await
+        .unwrap();
     let minted = session_header(&response).expect("a minted id comes back");
     assert!(minted.starts_with("gw-"), "minted: {minted:?}");
 }
@@ -319,10 +340,14 @@ async fn a_non_utf8_session_id_is_treated_as_absent() {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn the_dashboard_shows_session_fingerprints_and_the_admin_api_takes_raw_ids() {
-    use crate::gateway::router::tests::{scoped_auth_config, test_router_app_state_with_auth_and_config};
-    let (state, _store) =
-        test_router_app_state_with_auth_and_config(&scoped_auth_config(true), crate::config::Config::default())
-            .await;
+    use crate::gateway::router::tests::{
+        scoped_auth_config, test_router_app_state_with_auth_and_config,
+    };
+    let (state, _store) = test_router_app_state_with_auth_and_config(
+        &scoped_auth_config(true),
+        crate::config::Config::default(),
+    )
+    .await;
     let raw = "gw-c057000-costed-session";
     state
         .meta_mcp
@@ -338,16 +363,24 @@ async fn the_dashboard_shows_session_fingerprints_and_the_admin_api_takes_raw_id
     };
     let read = |response: axum::response::Response| async move {
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         String::from_utf8(body.to_vec()).unwrap()
     };
     let dashboard = read(
-        create_router(Arc::clone(&state)).oneshot(get("/ui/api/costs")).await.unwrap(),
+        create_router(Arc::clone(&state))
+            .oneshot(get("/ui/api/costs"))
+            .await
+            .unwrap(),
     )
     .await;
     let fp = crate::gateway::session_id::session_fp(raw);
     assert!(dashboard.contains(&fp), "{dashboard}");
-    assert!(!dashboard.contains(raw), "the dashboard shows a raw session id: {dashboard}");
+    assert!(
+        !dashboard.contains(raw),
+        "the dashboard shows a raw session id: {dashboard}"
+    );
     let inspected = read(
         create_router(Arc::clone(&state))
             .oneshot(get(&format!("/api/costs?session={raw}")))
@@ -355,8 +388,20 @@ async fn the_dashboard_shows_session_fingerprints_and_the_admin_api_takes_raw_id
             .unwrap(),
     )
     .await;
-    assert!(inspected.contains(raw), "inspect-by-id finds the session: {inspected}");
+    assert!(
+        inspected.contains(raw),
+        "inspect-by-id finds the session: {inspected}"
+    );
     // The admin API's own listing stays raw: it is where an admin gets the id to inspect.
-    let listing = read(create_router(Arc::clone(&state)).oneshot(get("/api/costs")).await.unwrap()).await;
-    assert!(listing.contains(raw), "the admin listing keeps raw ids: {listing}");
+    let listing = read(
+        create_router(Arc::clone(&state))
+            .oneshot(get("/api/costs"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        listing.contains(raw),
+        "the admin listing keeps raw ids: {listing}"
+    );
 }

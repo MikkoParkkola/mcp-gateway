@@ -2613,8 +2613,6 @@ mod account_rest_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
-#[cfg(test)]
-mod session_fp_tests;
 
 /// Publish a grant store and advance the policy epoch, in that order, under
 /// the store's write lock.

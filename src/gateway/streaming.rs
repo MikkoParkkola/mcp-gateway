@@ -232,7 +232,10 @@ impl NotificationMultiplexer {
         if let Some(session) = session_id.and_then(|id| sessions.get(id))
             && session.owner == *owner
         {
-            return (session.id.expose_secret().to_string(), session.tx.subscribe());
+            return (
+                session.id.expose_secret().to_string(),
+                session.tx.subscribe(),
+            );
         }
         let id = format!("gw-{}", Uuid::new_v4());
         let rx = self.insert_session(&mut sessions, &id, owner.clone());

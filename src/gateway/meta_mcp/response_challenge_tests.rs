@@ -112,7 +112,10 @@ fn assert_event(firewall: &Firewall, directory: &TempDir, action: &str, finding:
         event["policy_targets"],
         json!([{"server":"origin-backend", "tool":"ask_user"}])
     );
-    assert_eq!(event["session_id"], crate::gateway::session_id::session_fp("bound-legacy-session"));
+    assert_eq!(
+        event["session_id"],
+        crate::gateway::session_id::session_fp("bound-legacy-session")
+    );
     assert_eq!(event["caller"], "known-caller");
     assert_eq!(event["server"], "gateway");
     assert_eq!(event["tool"], "gateway_invoke");

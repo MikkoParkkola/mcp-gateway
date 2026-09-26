@@ -117,7 +117,11 @@ async fn every_prompt_sender_logs_the_session_by_fingerprint() {
     assert_fingerprinted(&text, "Failed to forward elicitation/create", dead);
     assert_fingerprinted(&text, "Forwarded sampling/createMessage to client", &live);
     assert_fingerprinted(&text, "Failed to forward sampling/createMessage", dead);
-    assert_fingerprinted(&text, "Sent sampling/createMessage to the originating", &live);
+    assert_fingerprinted(
+        &text,
+        "Sent sampling/createMessage to the originating",
+        &live,
+    );
     assert_fingerprinted(&text, "Sent roots/list to the originating session", &live);
     assert_fingerprinted(&text, "Sent bridged request to the originating", &live);
 }
@@ -225,8 +229,14 @@ fn the_transparency_log_stores_a_session_fingerprint() {
     assert_eq!(found[0]["session_id"], session_fp(id));
     // An entry written before F9 carries the raw id and stays findable by it.
     let legacy = "gw-1e9ac700-pre-upgrade-session";
-    let mut file = std::fs::OpenOptions::new().append(true).open(tmp.path()).unwrap();
-    std::io::Write::write_all(&mut file, format!("{{\"session_id\":\"{legacy}\"}}\n").as_bytes())
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(tmp.path())
         .unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        format!("{{\"session_id\":\"{legacy}\"}}\n").as_bytes(),
+    )
+    .unwrap();
     assert_eq!(show_session_entries(tmp.path(), legacy).unwrap().len(), 1);
 }

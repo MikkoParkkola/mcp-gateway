@@ -101,7 +101,10 @@ fn firewall_response_single_target_audit_has_v2_contract() {
         json!([{"server":"backend-a", "tool":"inspect_me"}])
     );
     assert_eq!(event["action"], "block");
-    assert_eq!(event["session_id"], crate::gateway::session_id::session_fp("session-a"));
+    assert_eq!(
+        event["session_id"],
+        crate::gateway::session_id::session_fp("session-a")
+    );
     assert_eq!(event["caller"], "caller-a");
     assert_eq!(event["server"], "backend-a");
     assert_eq!(event["tool"], "inspect_me");

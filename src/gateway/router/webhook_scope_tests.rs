@@ -36,7 +36,10 @@ async fn a_session_created_by_the_mcp_handler_receives_in_scope_webhook_events()
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     // The id the gateway minted for this caller (F9: never one it chose).
-    let session = response.headers()["mcp-session-id"].to_str().unwrap().to_string();
+    let session = response.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_string();
     assert!(state.multiplexer.has_session(&session));
 
     // The owner resuming its own session: the stream the handler created.

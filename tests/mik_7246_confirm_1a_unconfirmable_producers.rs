@@ -115,10 +115,7 @@ async fn a_confirmation_channel_that_dies_is_unconfirmable() {
 
     let asking = tokio::spawn({
         let proxy = Arc::clone(&proxy);
-        async move {
-            require_destructive_confirmation(&proxy, &session, "kill server 'payments'")
-                .await
-        }
+        async move { require_destructive_confirmation(&proxy, &session, "kill server 'payments'").await }
     });
 
     let frame = tokio::time::timeout(Duration::from_secs(5), rx.recv())

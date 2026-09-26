@@ -49,8 +49,8 @@ mod server;
 /// `identity_propagation::caller_proof` classifies it as a trusted transport
 /// rather than a presented secret, and must compare against this exact value.
 pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
-pub mod session_lifecycle;
 pub(crate) mod session_id;
+pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
 pub mod subscription_registry;

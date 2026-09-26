@@ -350,9 +350,9 @@ impl TransparencyLogger {
         }
         fields.insert("route".into(), target.route.as_str().into());
         fields.insert("server".into(), target.server.into());
-        // A session id is its holder's credential (F9): the audit copy is a fingerprint.
         let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
-        fields.insert("session_id".into(), fp.unwrap_or_else(|| key.id.into()).into());
+        let session_id: String = fp.unwrap_or_else(|| key.id.into());
+        fields.insert("session_id".into(), session_id.into());
         fields.insert("timestamp".into(), timestamp.into());
         if let Some(tool) = target.tool {
             fields.insert("tool".into(), tool.into());
@@ -727,7 +727,6 @@ fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResu
 /// Returns `io::Error` if the file cannot be read.
 pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_json::Value>> {
     let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
-    let fp = session_fp(session);
     let mut results = Vec::new();
 
     for raw in content.lines() {
@@ -743,7 +742,7 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_
             }
         };
         let stored = entry.get("session_id").and_then(|v| v.as_str());
-        if stored == Some(session) || stored == Some(fp.as_str()) {
+        if stored.is_some_and(|s| s == session || s == session_fp(session)) {
             results.push(entry);
         }
     }
@@ -1092,7 +1091,8 @@ mod tests {
         let entries = show_session_entries(tmp.path(), "alpha").unwrap();
         // THEN: only "alpha" entries are returned, stored as its fingerprint
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|e| e["session_id"] == session_fp("alpha")));
+        let fp = session_fp("alpha");
+        assert!(entries.iter().all(|e| e["session_id"] == fp));
     }
 
     // ── Test 5: crash recovery restores counter and chain ────────────────────
