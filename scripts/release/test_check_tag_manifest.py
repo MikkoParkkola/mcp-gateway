@@ -734,7 +734,7 @@ def gate_steps(workflow, job):
     """`job`'s own steps that run the tag gate under `id: meta`."""
     return [
         block
-        for block in steps(workflow, job=job)
+        for block in steps(workflow)
         if any(line.strip() in ("id: meta", "- id: meta") for line in block)
         and any(runs(command, TAG_GATE) for command in joined(block))
     ]
