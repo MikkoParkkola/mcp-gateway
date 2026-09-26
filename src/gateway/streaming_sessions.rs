@@ -45,7 +45,7 @@ impl NotificationMultiplexer {
     ) -> (Arc<ClientSession>, broadcast::Receiver<TaggedNotification>) {
         let resumed = session_id.and_then(|id| {
             let sessions = self.sessions.read();
-            let session = sessions.get(id).filter(|s| s.owner == *owner)?;
+            let session = sessions.get(id)?;
             Some((Arc::clone(session), session.tx.subscribe()))
         });
         resumed.unwrap_or_else(|| {
