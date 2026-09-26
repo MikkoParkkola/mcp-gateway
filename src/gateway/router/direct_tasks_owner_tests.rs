@@ -169,6 +169,7 @@ async fn caller_a_creates_a_task(state: &Arc<super::AppState>, wire: &TaskBacken
         wire.saw("tools/call"),
         "setup: A's call never reached the backend"
     );
+    assert_eq!(body["result"]["task"]["taskId"], TASK_A, "setup: {body}");
 }
 
 /// B's refusal: -32601 on B's own id, no A data, and zero `tasks/*` calls on the wire.
@@ -261,15 +262,15 @@ async fn caller_b_task_subscription_never_reaches_backend() {
     let (state, wire) = gateway().await;
     caller_a_creates_a_task(&state, &wire).await;
 
-    let (status, body) = send(
-        &state,
-        KEY_B,
-        "subscriptions/listen",
-        json!({ "taskIds": [TASK_A] }),
-    )
-    .await;
-
-    assert_refused_without_forward("subscriptions/listen", status, &body, &wire);
+    for (method, params) in [
+        ("subscriptions/listen", json!({ "taskIds": [TASK_A] })),
+        ("Subscriptions/Listen", json!({ "taskIds": [TASK_A] })),
+        ("subscriptions/listen", json!({ "taskIds": [] })),
+        ("subscriptions/listen", json!({ "taskIds": null })),
+    ] {
+        let (status, body) = send(&state, KEY_B, method, params).await;
+        assert_refused_without_forward(method, status, &body, &wire);
+    }
 }
 
 /// The refusal sits after the backend scope check, so a caller not allowed on

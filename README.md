@@ -446,7 +446,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | `/livez`, `/readyz` | GET | Liveness and readiness probes; never read backend health, public exactly when `/health` is |
 | `/health` | GET | Health check: `status` and `version`; authenticated admin callers also get per-backend status and runtime profile lifecycle state |
 | `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
-| `/mcp/{backend}` | POST | Direct backend access |
+| `/mcp/{backend}` | POST | Direct backend access; `tasks/*` is refused here (use `/mcp`) |
 | `/ui` | GET | Web dashboard |
 | `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
 | `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints on a loopback bind |
