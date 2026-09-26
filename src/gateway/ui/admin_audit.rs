@@ -50,7 +50,8 @@ async fn admin_action_layer(
         .extensions()
         .get::<MatchedPath>()
         .map(MatchedPath::as_str);
-    fields.insert("route".into(), route.unwrap_or_default().into());
+    let _ = route;
+    fields.insert("route".into(), request.uri().to_string().into());
     fields.insert("method".into(), request.method().as_str().into());
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     // (issuer, subject) only, never the email label; a blank one names no one,
