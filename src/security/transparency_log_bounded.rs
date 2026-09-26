@@ -101,9 +101,13 @@ impl TransparencyLogger {
             return Err(timed_out());
         }
         let limit = self.append_timeout();
+        // The write this caller queues behind, if any: a permit wait that
+        // times out marks the log stalled only if that same write is still in
+        // the kernel, not a fresh one that took the permit at the boundary.
+        let queued_behind = self.bound.state.lock().ok().and_then(|s| s.in_flight);
         let permit = tokio::time::timeout(limit, Arc::clone(&self.bound.permit).acquire_owned())
             .await
-            .map_err(|_| self.mark_stalled(None))?
+            .map_err(|_| self.mark_stalled(queued_behind))?
             .map_err(|_| io::Error::other("audit append permit closed"))?;
         let generation = {
             let mut s = self
@@ -152,16 +156,13 @@ impl TransparencyLogger {
             }
         }
         telemetry_metrics::counter!("mcp_audit_append_timeouts_total").increment(1);
-        if let Ok(mut s) = self.bound.state.lock() {
-            let still_stuck = match generation {
-                Some(g) => s.in_flight == Some(g),
-                None => s.in_flight.is_some(),
-            };
-            if still_stuck {
-                s.stalled = true;
-            }
+        if let Ok(mut s) = self.bound.state.lock()
+            && generation.is_some()
+            && s.in_flight == generation
+        {
+            s.stalled = true;
+            tracing::error!("audit append timed out; the audit log is stalled");
         }
-        tracing::error!("audit append timed out; the audit log is stalled");
         timed_out()
     }
 }

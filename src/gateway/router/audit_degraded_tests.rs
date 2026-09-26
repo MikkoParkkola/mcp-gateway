@@ -341,3 +341,75 @@ async fn delivery_attempt_append_is_bounded() {
     assert!(fx.log.is_stalled());
     release.release();
 }
+
+/// F20 T3 / #1133 fail-fast. The invocation append stalls and the call is
+/// withheld with 503. Delivering that 503 writes no delivery-attempt row:
+/// the log is stalled, so the append refuses at once. When the stuck write
+/// lands, the log holds an invocation record with no delivery attempt,
+/// which is how a withheld result reads (UPGRADING item 50).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn withheld_call_leaves_no_delivery_attempt_row() {
+    use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
+    use crate::security::response_policy::{
+        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
+    };
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let release = fx.log.stall_next_write_for_test(F20_BOUND);
+    let start = std::time::Instant::now();
+    let withheld = invoke(&fx, 1).await;
+    assert_audit_unavailable(&withheld, "stalled call");
+    assert!(fx.log.is_stalled());
+    let delivered = fx
+        .state
+        .meta_mcp
+        .finalize_response_for_delivery(
+            withheld,
+            &ResponseDeliveryContext {
+                method: "tools/call",
+                targets: &[ResponsePolicyTarget {
+                    server: "alpha".into(),
+                    tool: "read".into(),
+                }],
+                correlation: ResponseCorrelation {
+                    session_id: "s",
+                    caller: "c",
+                    external_server: "gateway",
+                    external_tool: "gateway_invoke",
+                },
+                mutation: ResponseMutationPolicy::Redact,
+                signing: None,
+            },
+        )
+        .await;
+    assert_audit_unavailable(&delivered, "delivering the withheld call");
+    assert!(
+        start.elapsed() < F20_BOUND * 5,
+        "bounded: {:?}",
+        start.elapsed()
+    );
+    release.release();
+    let rows = || -> Vec<Value> {
+        std::fs::read_to_string(fx.log.path())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    };
+    for _ in 0..200 {
+        if rows().iter().any(|r| r.get("request_hash").is_some()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let rows = rows();
+    assert!(
+        rows.iter().any(|r| r.get("request_hash").is_some()),
+        "the late invocation record landed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r["event"] == "response_delivery_attempt"),
+        "no delivery-attempt row for a withheld call: {rows:?}"
+    );
+}
