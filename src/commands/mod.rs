@@ -508,11 +508,10 @@ fn read_ca_files(
         eprintln!("Error: CA key path is not valid UTF-8");
         ExitCode::FAILURE
     })?;
-    let key = mcp_gateway::mtls::cert_manager::load_private_key(key_path)
+    let key = std::fs::read_to_string(key_path)
         .map_err(|e| e.to_string())
         .and_then(|der| {
-            rcgen::KeyPair::try_from(&der)
-                .map(|pair| pair.serialize_pem())
+            Ok::<String, rcgen::Error>(der)
                 .map_err(|e| format!("Cannot use CA key '{}': {e}", ca_key.display()))
         })
         .map_err(|e| {
