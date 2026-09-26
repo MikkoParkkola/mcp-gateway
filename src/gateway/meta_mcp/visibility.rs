@@ -225,11 +225,17 @@ impl MetaMcp {
             && let Some(def) = capabilities.get(tool)
             && crate::capability::definition::creates_caller_addressed_external_state(&def)
         {
-            return Err(Error::Config(format!(
-                "'{tool}' registers a caller-supplied address with a third party, which \
-                 then delivers to it using this gateway's credential. That requires an \
-                 admin credential."
-            )));
+            // A deliberate, permanent refusal: the admin-denial shape admin-only
+            // tools answer with (403, -32600), never a retriable internal error.
+            return Err(Error::Forbidden {
+                code: -32600,
+                status: 403,
+                message: format!(
+                    "'{tool}' registers a caller-supplied address with a third party, which \
+                     then delivers to it using this gateway's credential. That requires an \
+                     admin credential."
+                ),
+            });
         }
         Ok(())
     }

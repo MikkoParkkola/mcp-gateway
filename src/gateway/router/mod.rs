@@ -63,6 +63,8 @@ mod audit_degraded_tests;
 #[cfg(test)]
 mod body_limit_tests;
 #[cfg(test)]
+mod callback_admin_denial_tests;
+#[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
