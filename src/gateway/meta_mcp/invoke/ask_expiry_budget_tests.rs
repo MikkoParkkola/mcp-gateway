@@ -140,6 +140,11 @@ async fn an_expired_ask_is_not_charged_to_the_capability() {
     for r in &results {
         let err = r.as_ref().expect_err("an expired ask cannot succeed");
         assert_eq!(err.to_rpc_code(), -32003, "the bridge's own expiry: {err}");
+        assert!(
+            err.to_string()
+                .contains("asked for input and the bridged exchange could not be completed"),
+            "the -32003 must be the bridged exchange's, not another refusal: {err}"
+        );
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -149,6 +154,12 @@ async fn an_expired_ask_is_not_charged_to_the_capability() {
     let (ok, failed) = meta.kill_switch.capability_window_counts("asker", "book");
     eprintln!("P1 capability window: ok={ok} failed={failed}");
     assert_eq!(failed, 0, "an expired ask is not a backend failure");
+    // Exactly one sample per call: the first round's `input_required`, a
+    // success. An expiry sampled as anything, success included, would show here.
+    assert_eq!(
+        ok, CALLS,
+        "only the first round is sampled, never the expiry"
+    );
     assert!(
         !meta.kill_switch.is_capability_disabled("asker", "book"),
         "expired asks disabled the capability for every caller"
