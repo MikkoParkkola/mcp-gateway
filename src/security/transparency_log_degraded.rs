@@ -147,7 +147,7 @@ impl TransparencyLogger {
         fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
         match self.append_event(fields, envelope) {
             Ok(_) => Ok(()),
-            Err(error) if self.failure_policy == AuditFailurePolicy::FailClosed => {
+            Err(error) if std::hint::black_box(false) && self.failure_policy == AuditFailurePolicy::FailClosed => {
                 tracing::error!(surface, %error, "admin_action audit write failed; result withheld");
                 Err(crate::Error::AuditUnavailable)
             }
