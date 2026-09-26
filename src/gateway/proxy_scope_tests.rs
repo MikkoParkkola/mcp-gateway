@@ -62,7 +62,7 @@ fn open_session(
         headers.insert(axum::http::header::AUTHORIZATION, value);
         held_credential(&headers)
     });
-    let owner = format!("credential:{id}");
+    let owner = crate::gateway::session_id::SessionOwner::Credential(id.to_string());
     mux.get_or_create_session_scoped(Some(id), &owner, held).1
 }
 

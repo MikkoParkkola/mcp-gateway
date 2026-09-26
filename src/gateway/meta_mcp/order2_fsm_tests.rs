@@ -110,3 +110,23 @@ async fn nonempty_legacy_and_stdio_keys_retain_isolated_state_changes() {
         assert_membership(&meta, Some(""), STAGED_DEFAULT_TOOLS).await;
     }
 }
+
+/// F9-T7c: the FSM transition log names the session by fingerprint only.
+#[tokio::test]
+async fn a_state_transition_logs_the_session_by_fingerprint() {
+    use crate::gateway::session_id::log_capture::{assert_fingerprinted, capture_debug};
+    let meta = meta_with_state_staged_capabilities().await;
+    let id = "gw-f5a70000-stateful-session";
+    let (captured, guard) = capture_debug();
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(41),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        Some(id),
+        allow_all_ctx(),
+    ))
+    .await;
+    drop(guard);
+    assert!(response.error.is_none(), "{response:?}");
+    assert_fingerprinted(&captured.text(), "Session FSM state transition", id);
+}

@@ -1165,20 +1165,42 @@ tool.
 - **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
   signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
   `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
-  `_meta` key before forwarding on the direct route, for every method and for passthrough
-  backends too, so no backend receives the token.
+  `_meta` key on the direct route right after the audit record hashes the params as sent,
+  and before parsing, telemetry and forwarding, for every method and for passthrough
+  backends too. Only the audit hash and the attestation check see the token; neither
+  protocol telemetry nor any backend receives it.
 - **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
   route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
-  the idempotency guard, so a replayed call needs a valid token as well.
+  identity-propagation minting and before the idempotency guard, so an unattested call
+  mints no per-user credential, and a replayed call needs a valid token as well.
+- **Every direct-route method that reaches a backend is checked.** What the token must grant:
+
+  | Method on `/mcp/{backend}` | The token must grant |
+  |---|---|
+  | `tools/call`, `prompts/get` | the tool or prompt `name` |
+  | `resources/read`, `resources/subscribe`, `resources/unsubscribe` | the resource `uri` |
+  | `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `completion/complete`, `logging/setLevel` | nothing: any authentic, unexpired token |
+  | any other method | `"*"` |
+  | `initialize`, `ping`, `notifications/*` | exempt |
+
+  A call missing its `name` or `uri` needs `"*"`. Capability strings are not namespaced: a
+  token granting `search` grants the tool `search` and a prompt named `search`, so issue
+  tokens narrowly.
 - **Tasks.** A task-mode `gateway_invoke` re-checks its original token when the worker
   dispatches it, so a queued task needs a token that outlives the queue. A surfaced tool run
-  as a task has no token at dispatch and is refused. Task recovery reads need a fresh token in
+  as a task carries the creating request's `_meta` token to its dispatch, where it is
+  re-checked the same way. Task recovery reads need a fresh token in
   `_meta["io.mcp-gateway/recovery"].attestation`.
 - **Playbooks and code mode are refused.** Under enforce, `gateway_run_playbook` and
   `gateway_execute` answer -32002 "multi-step plans carry no attestation in 4.0.0", keyed
   or not. Their steps are synthesized and carry no token. Call each tool with its own token.
-- **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
-  other methods are forwarded without an attestation check.
+- **A subscription does not outlive its token, because no update outlives the call that
+  carried it.** The gateway keeps no subscription state and relays no later
+  `notifications/resources/updated`. The direct route discards every backend notification.
+  The meta route streams a notification to a client only while the call that raised it is in
+  flight, and a stdio backend's notifications reach a caller only as progress on its own
+  call. So an attested `resources/subscribe` opens no data flow that the token's expiry
+  would have to end. This limitation predates 4.0.0; it is not a change.
 
 ## 47. WebSocket backends (`ws_url`)
 
@@ -1253,6 +1275,21 @@ user could not be a gateway admin at all.
 - Header identities (`trusted_proxy`, `cloudflare_access`) and mTLS certificates
   never confer admin. The static bearer and `api_keys[].admin: true` are
   unchanged.
+- **Every admin action is audited, and refused while the audit log is down.** An
+  admin meta-tool call (kill, revive, reload, stats, webhook status), allowed or
+  refused, writes an `admin_action` record with `surface: "meta_tool"` and the
+  `tool`. Its `outcome` is the admin decision (`ok` or `denied`), written before
+  the tool runs, not the tool's result. Every request to `/ui/api/*` other than
+  `GET` or `HEAD` (reload, backends, capabilities, import, and the control-plane
+  grant, policy and decision POSTs) writes one with `surface: "admin_ui"`, the
+  matched `route` template, `method` and `http_status`. The body and the query
+  are never logged. Each record's `who` names the caller: the credential and,
+  for an SSO admin, the issuer and subject, never an email. With auth on, while
+  the log is known to be down these requests answer 503 (`AuditUnavailable`) and
+  the action does not run; a control-plane POST then answers 503, not 409. If
+  the log fails on the record for a UI request that has already run, the answer
+  is also 503: the action may have happened, so check before retrying. An admin
+  meta-tool call is recorded before it runs, so a 503 there means it did not.
 
 To make SSO users admins, add:
 
@@ -1353,6 +1390,46 @@ held to item 35.
 - **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
 - `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
+
+## 58. Session ids are always minted by the gateway
+
+A legacy HTTP session id is the only thing that proves a session is yours when
+the caller has no credential, so the gateway now treats it as a secret.
+
+- **A client-supplied `Mcp-Session-Id` that names no live session is replaced.**
+  The new id comes back in the `Mcp-Session-Id` response header. A client that
+  keeps sending its own id instead of the one it was given gets a new session on
+  every request and receives no server-to-client prompts (elicitation, sampling,
+  roots). Before this release the gateway adopted the id the client chose, which
+  let any caller pick an id before another caller and share its stream.
+- **An empty or whitespace-only `Mcp-Session-Id` counts as absent.** On `DELETE`
+  it is a 400, the same as a missing header (it was a 404, "no owned session").
+- **Every unauthenticated caller is one class.** With auth off that is every
+  caller; with auth on it is callers on public paths. Whatever name they carry,
+  the session id is the only thing that tells them apart, so anyone who holds an
+  id owns that session. To separate users, turn auth on and keep `/mcp` off the
+  public paths.
+- **Logs carry an 8-hex fingerprint, not the id.** So do the firewall audit log
+  and the transparency log when they are on. `mcp-gateway audit show --session`,
+  which reads the transparency log, accepts the raw id or its fingerprint; entries
+  written before the upgrade hold the raw id and are found by the raw id only. A fingerprint is for correlation only:
+  two sessions can share one, so a lookup can return another session's entries. The `session_id` field keeps its
+  name in the firewall audit NDJSON and the transparency log; tools that parse it
+  get an 8-hex value from this release on. Ids in files written before the upgrade
+  stay raw, but they name no live session: sessions do not survive the restart.
+  The dashboard's cost view (`/ui/api/costs`, `by_session[].session_id`) shows the
+  fingerprint too; the admin API `/api/costs` keeps raw ids, since inspecting a
+  session by id needs one.
+- **Header-logging middleware brings the leak back.** A layer you add that logs
+  request headers (for example a tower-http trace layer configured to log
+  headers) prints the raw `Mcp-Session-Id` whatever the gateway's own log fields
+  do.
+- A legacy destructive call with no usable session, an empty id included, is
+  unchanged: it runs with a warning that nobody could be asked.
+- Library users: `NotificationMultiplexer::first_session_id` and
+  `ProxyManager::first_session_id` are removed, `get_or_create_session_for` is
+  no longer public, and `get_or_create_session(Some(id))` returns `id` only when
+  that session is already live.
 
 ## After upgrading
 

@@ -775,11 +775,17 @@
     },
     {
       "id": "MIK-7570.ATTEST.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570. Stage 1 of C5 (#895): default is off, unrecognised modes fail startup. Stage 2 (branch fix/c5-attestation-enforce): enforce is wired on gateway_invoke, surfaced tools and the direct route, plans are refused under it, and enforce without a key fails startup. Pending until stage 2 merges and is graded. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/tests/attestation_routes/methods.rs",
+        "src/gateway/router/tests/task_execution_adapter/attestation_tasks.rs",
+        "src/gateway/router/tests/task_execution_adapter/signing_joint/policy.rs",
+        "src/gateway/router/direct_audit_tests.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (C5 part 3, PR #1130). Stage 1 (#895): off by default, unrecognised modes fail startup. Part 2 (#1003): enforce on gateway_invoke, surfaced tools and direct-route tools/call; plans refused; enforce without a key fails startup. Part 3: every direct-route method is attested under enforce (URI for resources/read, subscribe and unsubscribe; name for tools/call and prompts/get; an authentic token for list methods, completion/complete and logging/setLevel; '*' for any other method; initialize, ping and notifications exempt; a missing name or uri needs '*'). The check runs before identity minting, a surfaced tool run as a task carries its _meta token into dispatch, and the token is stripped after the audit hash, before telemetry and forwarding. Option A: no resources/updated outlives its call, so there is no subscription to cut. Tests: src/gateway/router/tests/attestation_routes/methods.rs, task_execution_adapter/attestation_tasks.rs, signing_joint/policy.rs, query_serialization.rs, direct_audit_tests.rs. Red CI run 36179731401, green 36215088680. Mutants, each reddening its named test: uri-scope 36198498378, prompt-name 36198478581, missing-field 36198474387, unknown-default 36198493569, methods 36198470278, strip-deleted 36198483291, task-carry 36198488695, after-minting 36217117465, list-authentic 36217120658. Documented in UPGRADING-4.0 item 46."
     },
     {
       "id": "MIK-7570.AUDIT.1",
@@ -817,11 +823,17 @@
     },
     {
       "id": "MIK-7570.ADMINSSO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/sso_admin_tests/cells.rs",
+        "src/gateway/router/sso_admin_tests/admin_action.rs",
+        "src/gateway/router/authorization.rs",
+        "src/gateway/ui/admin_audit.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (E1-core PR #1027, E1 part 2 PR #1166). An issuer-scoped control_plane.role_mapping role: admin rule makes a key-server SSO identity a gateway admin on every surface, decided per request from the live mapping; a domain-only admin rule fails to load; email rules need email_verified; header and mTLS identities never confer admin (E1-core cells in cells.rs). Every admin action is audited: the admin meta-tool gate admits, records admin_action {surface: meta_tool, tool} as ok or denied(-32600) before the tool runs; one layer on /ui/api records every request other than GET/HEAD {surface: admin_ui, route template, method, http_status} with the outcome from AuditOutcome::from_http_status, control-plane POSTs included (409 error, RBAC 403 denied; design amendment A1); who names the issuer and subject, never the email; body and query never logged; FailClosed refuses while degraded and withholds on a failed append (503 AuditUnavailable). Red CI run 36197657309 (tests commit alone, 11 cells fail) and 36220442917 (PATCH cell). Mutants killed in CI: m1 gate record 36216286648, m2 UI layer 36216289398, m3 GET 36216292404, m4 control-plane skip 36216295474, m5 raw path 36216298334, m6 layer admit 36220333899, m7 gate admit 36220337308, m8 best effort 36220340265. UPGRADING-4.0 item 51."
     },
     {
       "id": "MIK-7479.STDIO.1",

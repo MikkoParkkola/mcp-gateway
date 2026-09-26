@@ -985,7 +985,7 @@ impl Gateway {
         {
             info!(
                 ?mode,
-                "Per-action attestation wired on the meta and direct routes"
+                "Per-action attestation wired on the meta route and every direct-route method"
             );
             meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
         }
