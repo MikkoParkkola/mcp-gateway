@@ -212,7 +212,7 @@ impl StdioTransport {
         // stdout closes; stdout closing within the drain window makes that the
         // same early exit. Awaited after the select, whose watch futures are
         // not `Send`, and `matches!` drops the guard at once.
-        if response.is_err()
+        if false && response.is_err()
             && matches!(
                 tokio::time::timeout(DRAIN, after_error.wait_for(|closed| *closed)).await,
                 Ok(Ok(_))
