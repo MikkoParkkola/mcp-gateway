@@ -304,7 +304,7 @@ impl StdioTransport {
                 }
             }
 
-            let _ = eof_tx.send(true);
+            std::mem::forget(eof_tx);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
             }
