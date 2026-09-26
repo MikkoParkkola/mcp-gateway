@@ -41,7 +41,7 @@ Companion (different question, same boundary): [MITRE Fight Fraud Framework mapp
 | Per-caller discovery and cache isolation | `src/gateway/meta_mcp/visibility.rs`, `src/gateway/meta_mcp/search.rs`, `src/identity_propagation/mod.rs` |
 | Identity, roles and attestation | `src/mtls/`, `src/oauth/`, `src/security/caller_identity.rs`, `src/control_plane/role_mapping.rs`, `src/identity_grants.rs`, `src/attestation/wiring.rs` |
 | Capability and remote provenance | `src/capability/hash.rs`, `src/capability/watcher.rs`, `src/security/remote_provenance.rs`, `src/config/mod.rs` |
-| RCE / SSRF / SQL-sink protection | `src/security/firewall/input_scanner.rs`, `src/security/ssrf/`, `tests/firewall_integration.rs` |
+| RCE / SSRF / SQL-sink protection | `src/security/firewall/input_scanner.rs`, `src/security/ssrf.rs`, `tests/firewall_integration.rs` |
 | Memory and context poisoning | `src/security/firewall/memory_scanner.rs`, `src/context_integrity/`, `src/config/features/security.rs` |
 | Message signing and replay protection | `src/security/message_signing.rs`, `src/gateway/meta_mcp/signing.rs`, `docs/adr/ADR-001-inter-agent-message-signing.md` |
 | Resilience and cost containment | `src/failsafe/`, `src/gateway/auth.rs`, `src/gateway/webhooks/`, `src/cost_accounting/enforcer.rs` |
