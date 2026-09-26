@@ -70,6 +70,7 @@ cargo test anomaly_above_block_threshold_is_rejected
 These items strengthen coverage; the first is 4.0 scope.
 
 - Withhold tools whose descriptors fail the tool-poisoning validator on every served tool list (GitHub #1441); ASI01 returns to COVERED when it lands.
+- Run the kill switch, cost budget and every other meta-dispatch control on the direct route `/mcp/{name}` too (GitHub #1452); the meta-layer qualifiers in ASI08-ASI10 go when it lands.
 - Sign release binaries and attach an SBOM to them, as the container images already are.
 - Define a live remote attestation discovery protocol for remote MCP servers.
 - Add signed-hop chaining for multi-gateway deployments.
