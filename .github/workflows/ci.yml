@@ -483,6 +483,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the drift probes (fail when a probe stops discriminating)
         run: python3 scripts/dev/test_check_control_drift.py
+      # Same question at the document boundary (MIK-7570.OWASP.1): the published
+      # OWASP self-assessment may cite only paths and tests that still exist.
+      - name: Check the OWASP self-assessment cites the current tree
+        run: python3 scripts/dev/test_check_owasp_citations.py
 
   docker-build:
     name: Docker (${{ matrix.arch }})

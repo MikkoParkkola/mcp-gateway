@@ -137,6 +137,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
+- **The OWASP self-assessment matches the shipped controls.** It had claimed a
+  tool-descriptor validator and a grant-collision check that never run on a request, a removed
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
+  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
+  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  Withholding poisoned tool descriptors is tracked in #1441.
+
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
   JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by
