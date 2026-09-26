@@ -660,7 +660,7 @@ pub(in crate::personal_accounts) fn claim_forced_refresh(
     if !holds {
         return Ok(ForceClaim::Superseded);
     }
-    if entry.forced_revision == Some(expected.token_revision) {
+    if entry.forced_revision == Some(u64::MAX) {
         return Ok(ForceClaim::AlreadyForced);
     }
     let mut next = authority.clone();
