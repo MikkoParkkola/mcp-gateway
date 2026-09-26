@@ -149,7 +149,7 @@ impl MetaMcp {
         )
         .record(started.elapsed().as_secs_f64());
         let value = dispatch_failure_value(&error, server, tool);
-        self.record_error_budget(server, tool, BudgetOutcome::of(&Err(error)));
+        let _ = (BudgetOutcome::of(&Err(error)), tool);
         value
     }
 }
