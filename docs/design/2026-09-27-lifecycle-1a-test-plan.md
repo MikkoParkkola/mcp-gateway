@@ -112,7 +112,7 @@ and MIK-7311 is not closed by the 1a PR.
   inbound headers a passthrough backend reads its per-caller credential from. 1a keeps that context
   in the in-memory intent only (never persisted), the way `/mcp` keeps `OwnedCallerContext`.
 - Q2. `subscriptions/listen {taskIds}` stays `-32601` on the direct route in 1a (design §3 A.3 names
-  only `tasks/*`). Serving it there is a follow-up, not silently dropped.
+  only `tasks/*`). Serving it there is 4.0 scope and ships in 1b (design §18).
 
 ## 8. Review dispositions (round 1: two independent reviews, both SHIP-WITH-FIXES)
 
