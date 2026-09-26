@@ -188,8 +188,8 @@ fn direct_route_attestation_scope<'a>(
         | "resources/list"
         | "resources/templates/list"
         | "prompts/list"
-        | "completion/complete"
-        | "logging/setLevel" => AttestationScope::AuthenticOnly,
+        | "completion/complete" => AttestationScope::Capability(field("name")),
+        "logging/setLevel" => AttestationScope::AuthenticOnly,
         _ => AttestationScope::Capability("*"),
     }
 }
