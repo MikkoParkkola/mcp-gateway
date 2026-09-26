@@ -268,6 +268,7 @@ pub(super) fn spawn_rewatch_task(
                     chain
                         .wakes_handled
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    chain.reconcile(&BTreeSet::new());
                     continue; // keep the last good set; the timer and the next event retry
                 }
             };
