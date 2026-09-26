@@ -282,6 +282,34 @@ fn kind_names_each_cause_the_burst_counts() {
     assert_eq!(run.kind(&[BREAKER_OPEN]), 1, "{:?}", run.ledger.kinds);
 }
 
+/// The phrases are the gateway's own text, not the test's: each one must
+/// appear in the source that writes it (Rust string continuations joined), so
+/// a rewording there fails here instead of silently zeroing a burst assertion.
+#[test]
+fn cause_phrases_are_the_gateways_own_text() {
+    fn joined(source: &str) -> String {
+        source
+            .split("\\\n")
+            .enumerate()
+            .map(|(i, piece)| if i == 0 { piece } else { piece.trim_start() })
+            .collect()
+    }
+    let invoke = joined(include_str!("../src/gateway/meta_mcp/invoke.rs"));
+    let error = joined(include_str!("../src/error.rs"));
+    let server = joined(include_str!("../src/gateway/server/mod.rs"));
+    for (phrase, source, file) in [
+        (CAPABILITY_DISABLED, &invoke, "meta_mcp/invoke.rs"),
+        (ASK_EXPIRED, &invoke, "meta_mcp/invoke.rs"),
+        (BREAKER_OPEN, &error, "error.rs"),
+        (SERVER_BUSY, &server, "gateway/server/mod.rs"),
+    ] {
+        assert!(
+            source.contains(phrase),
+            "{file} no longer writes {phrase:?}"
+        );
+    }
+}
+
 // ------------------------------------------------ the fixture (as the 7b row)
 
 /// An HTTP MCP backend whose one tool asks: a first call gets the MRTR interim
@@ -410,10 +438,13 @@ fn drain_deadline(accepted: i64) -> Duration {
     PER_PROMPT * waves + Duration::from_secs(30)
 }
 
+/// The whole post-collection settle, however chatty the child.
+const SETTLE_CAP: Duration = Duration::from_secs(10);
+
 /// Collection also ends when the ledger has not moved for this long, but only
 /// once it has moved at all: the first `-32003` wave lands a full ask timeout
 /// in, and an idle stop armed from the start could fire before it.
-const IDLE_STOP: Duration = Duration::from_secs(35);
+const IDLE_STOP: Duration = Duration::from_secs(PER_PROMPT.as_secs() * 2);
 
 struct Run {
     ledger: Ledger,
@@ -553,7 +584,11 @@ async fn run_burst(last_id: i64, client: Client, deadline: Duration) -> Run {
                 session.send(&elicitation_answer(id)).await;
             }
         } else if let Some(id) = terminal_id(&frame) {
-            if ids.contains(&id) && terminated.insert(id) {
+            if ids.contains(&id) {
+                // Any response keeps the run alive, not only a first one:
+                // a burst of refusals is progress even when it answers ids
+                // already seen.
+                terminated.insert(id);
                 last_change = Some(Instant::now());
             }
             responses.push(frame);
@@ -562,13 +597,19 @@ async fn run_burst(last_id: i64, client: Client, deadline: Duration) -> Run {
     let elapsed = started.elapsed();
     // A duplicate can only follow its terminal; a short settle gives it the
     // chance to arrive rather than ending the run on the frame before it.
-    while let Ok(Some(line)) = session.next_line(Duration::from_secs(2)).await {
-        if let Ok(frame) = serde_json::from_str::<Value>(&line)
-            && terminal_id(&frame).is_some()
-        {
-            responses.push(frame);
+    // Bounded as a whole as well as per line: a child that keeps writing
+    // would otherwise keep this loop alive forever.
+    let _ = timeout(SETTLE_CAP, async {
+        while let Ok(Some(line)) = session.next_line(Duration::from_secs(2)).await {
+            if let Ok(frame) = serde_json::from_str::<Value>(&line)
+                && terminal_id(&frame).is_some()
+            {
+                responses.push(frame);
+            }
         }
-    }
+    })
+    .await;
+
     let stderr = session.finish_capturing(captured).await;
     Run {
         ledger: Ledger::from_frames(ids, &responses),
