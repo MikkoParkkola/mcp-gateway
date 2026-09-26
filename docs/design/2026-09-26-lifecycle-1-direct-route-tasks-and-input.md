@@ -88,6 +88,9 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    keeps the per-backend passthrough opt-out (`backend_handlers.rs:957-959`) exactly as today.
    Named function: `DirectRouteGuards::run`, in the router, `pub(crate)` so the worker in
    `task_service` can call it (maintainer decision 2026-09-26, §6 Q4).
+   ONE chain only: the direct route also lacks the kill switch and cost budget that meta
+   dispatch checks (security lane finding, 2026-09-26). Those checks join this same function;
+   whichever change lands first creates `DirectRouteGuards::run`, the other adds to it.
 2b. **Upstream-armed jobs keep today's path.** When a trusted recovery adapter claims the
    backend, the worker arms `UpstreamSubmission` (`worker.rs:113-178`) and the backend owns
    the task; its `input_required` is the backend's own task state and stays under the reviewed
