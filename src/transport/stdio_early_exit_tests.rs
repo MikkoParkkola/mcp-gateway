@@ -154,15 +154,19 @@ async fn t4_a_child_that_closes_stdout_and_stays_is_reported_and_killed() {
 #[tokio::test]
 async fn t6_a_child_that_answered_is_not_an_early_exit() {
     let reply = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}"#;
-    let t = transport(&format!("read line; echo {reply:?}; exit 0"), &[]);
-    let outcome = tokio::time::timeout(ROW_LIMIT, t.start()).await;
-    if let Ok(Err(err)) = outcome {
-        assert!(!err.to_string().contains("before initialize"), "{err}");
+    // The reply and the exit race; without `biased` the EOF wins about half
+    // the time, so enough iterations make that ordering a certain failure.
+    for _ in 0..50 {
+        let t = transport(&format!("read line; echo {reply:?}; exit 0"), &[]);
+        let outcome = tokio::time::timeout(ROW_LIMIT, t.start()).await;
+        if let Ok(Err(err)) = outcome {
+            assert!(!err.to_string().contains("before initialize"), "{err}");
+        }
+        assert!(
+            t.start_failure_excerpt().is_none(),
+            "an answered start kept an excerpt"
+        );
     }
-    assert!(
-        t.start_failure_excerpt().is_none(),
-        "an answered start kept an excerpt"
-    );
 }
 
 /// T8: a previous generation's exit cannot answer the next start's race.

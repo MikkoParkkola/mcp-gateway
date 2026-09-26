@@ -110,6 +110,8 @@ pub(super) struct StartState {
 impl StartState {
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
+        // An excerpt describes the last start only.
+        *self.failure.lock() = None;
         self.exited
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
