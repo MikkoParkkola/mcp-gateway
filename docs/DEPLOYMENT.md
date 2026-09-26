@@ -625,7 +625,8 @@ prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
 - `mcp_backend_rate_limited_total` -- per backend, requests and notifications refused by
   the gateway's own `failsafe.rate_limit` before dispatch. Breaker refusals are not
   counted, and neither are a backend's own 429s, which are
-  `mcp_backend_requests_total{status="rate_limited"}`. One series per configured backend.
+  `mcp_backend_requests_total{status="rate_limited"}`. At most one series per configured
+  backend; a backend's series appears on its first refusal, so an absent series means zero.
 - `mcp_circuit_breaker_opened_total` -- breaker trips
 - `mcp_tool_invocations_total`, `mcp_tool_invocation_duration_seconds` -- per-tool calls and latency
 - `mcp_cache_hits_total` -- response cache hits

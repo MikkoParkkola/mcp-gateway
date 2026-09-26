@@ -211,10 +211,12 @@ fn metrics_gauge_reads_zero_while_breaker_open() {
     assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("0"));
 }
 
-/// A backend whose own limiter holds one token (1 rps, burst 1), with retry off:
-/// a retry would spend the bucket, or wait for a refill, inside one request and
-/// blur which request met the empty bucket. Nothing listens on port 9, so an
-/// admitted request fails fast after the limiter has already decided.
+/// A backend whose own limiter holds one token (1 rps, burst 1). `admit` runs
+/// once per request, outside `with_retry`, so retry cannot spend a token; it is
+/// off so its backoff cannot open a refill window between back-to-back calls.
+/// Nothing listens on port 9, so an admitted request fails fast after the
+/// limiter has already decided. A stall of over a second between calls would
+/// refill the bucket; T5 carries the same exposure.
 #[cfg(feature = "metrics")]
 fn limited_backend() -> crate::backend::Backend {
     let mut failsafe = crate::config::FailsafeConfig::default();
