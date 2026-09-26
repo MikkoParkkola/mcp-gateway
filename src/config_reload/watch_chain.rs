@@ -144,8 +144,6 @@ pub(super) struct ChainWatch {
     /// every wake does not repeat it. Cleared on success, and pruned when the
     /// directory leaves the chain.
     warned: Mutex<BTreeSet<PathBuf>>,
-    /// Env-file directories, watched outside the chain and never unwatched here.
-    protected: BTreeSet<PathBuf>,
     /// Wakes the rewatch task has finished handling (tests wait on it).
     #[cfg(test)]
     pub(super) wakes_handled: std::sync::atomic::AtomicUsize,
@@ -155,12 +153,11 @@ pub(super) struct ChainWatch {
 }
 
 impl ChainWatch {
-    pub(super) fn new(watcher: RecommendedWatcher, protected: BTreeSet<PathBuf>) -> Arc<Self> {
+    pub(super) fn new(watcher: RecommendedWatcher) -> Arc<Self> {
         Arc::new(Self {
             watcher: Mutex::new(Some(watcher)),
             ledger: Mutex::new(BTreeSet::new()),
             warned: Mutex::new(BTreeSet::new()),
-            protected,
             #[cfg(test)]
             wakes_handled: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -178,10 +175,7 @@ impl ChainWatch {
         let mut ledger = self.ledger.lock();
         let mut warned = self.warned.lock();
         let before = ledger.clone();
-        for dir in wanted
-            .difference(&before)
-            .filter(|dir| !self.protected.contains(*dir))
-        {
+        for dir in wanted.difference(&before) {
             match watcher.watch(dir, RecursiveMode::NonRecursive) {
                 Ok(()) => {
                     ledger.insert(dir.clone());
@@ -197,10 +191,7 @@ impl ChainWatch {
                 }
             }
         }
-        for dir in before
-            .difference(wanted)
-            .filter(|dir| !self.protected.contains(*dir))
-        {
+        for dir in before.difference(wanted) {
             // A directory already deleted (the old `ConfigMap` generation) has
             // lost its watch with it; either way it is no longer watched.
             if let Err(e) = watcher.unwatch(dir) {
@@ -238,8 +229,8 @@ pub(super) fn spawn_rewatch_task(
     reload: tokio::sync::mpsc::Sender<ReloadTrigger>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     retry_every: std::time::Duration,
-    _env: std::sync::Arc<crate::config::LiveEnv>,
-    _env_poll_every: std::time::Duration,
+    env: Arc<crate::config::LiveEnv>,
+    env_poll_every: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_end: Option<PathBuf> = None;
@@ -250,6 +241,10 @@ pub(super) fn spawn_rewatch_task(
         let mut broken = false;
         let mut retry = tokio::time::interval(retry_every);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Env files are polled by content, never watched (#1286): a watch
+        // goes stale when a link in the path is retargeted.
+        let mut env_poll = tokio::time::interval(env_poll_every);
+        env_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 changed = wake.changed() => {
@@ -258,6 +253,16 @@ pub(super) fn spawn_rewatch_task(
                     }
                 }
                 _ = retry.tick(), if broken => {}
+                _ = env_poll.tick() => {
+                    // No memo: a file that differs is re-triggered every tick
+                    // until a reload succeeds; the debounce coalesces them.
+                    if let Some(path) =
+                        super::env_poll::env_poll(&env.get(), env.env_paths().as_paths())
+                    {
+                        let _ = reload.try_send(ReloadTrigger::EnvFile(path));
+                    }
+                    continue;
+                }
                 _ = shutdown.recv() => break,
             }
             let (wanted, end) = match chain_dirs(&named) {
@@ -293,41 +298,6 @@ pub(super) fn spawn_rewatch_task(
         // Drop the watcher so its thread and watches end with the task.
         chain.watcher.lock().take();
     })
-}
-
-/// Watch each env file's parent directory once, `NonRecursive`, as before #453.
-/// Returns the set, which the chain reconcile must never unwatch.
-pub(super) fn watch_env_dirs(
-    watcher: &mut RecommendedWatcher,
-    env_file_paths: &[PathBuf],
-) -> BTreeSet<PathBuf> {
-    // Only a directory actually watched is protected from the chain's
-    // reconcile: a missing or unwatchable one is left for the chain to watch
-    // if the config lives there too, and for its startup check to report.
-    let mut seen = BTreeSet::new();
-    let mut env_dirs = BTreeSet::new();
-    for env_path in env_file_paths {
-        let dir = watch_dir_of(env_path);
-        if !seen.insert(dir.clone()) {
-            continue;
-        }
-        if !dir.exists() {
-            warn!(dir = %dir.display(), "Config watcher: env-file directory does not exist, skipping");
-            continue;
-        }
-        match watcher.watch(&dir, RecursiveMode::NonRecursive) {
-            Ok(()) => {
-                info!(dir = %dir.display(), "Config watcher: watching env-file directory");
-                env_dirs.insert(dir);
-            }
-            Err(e) => warn!(
-                dir = %dir.display(),
-                error = %e,
-                "Config watcher: failed to watch env-file directory"
-            ),
-        }
-    }
-    env_dirs
 }
 
 #[cfg(all(test, unix))]

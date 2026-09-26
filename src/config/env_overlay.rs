@@ -86,7 +86,7 @@ pub struct EnvOverlay {
     ///
     /// Kept so the substitution scan and the parser cannot disagree. Reopening
     /// a path re-reads whatever is there at that moment, and a reload is
-    /// triggered by a watcher on exactly these paths, so a rewrite between the
+    /// triggered by a poll of exactly these paths, so a rewrite between the
     /// two reads is the expected interleaving rather than an exotic one.
     sources: Vec<(PathBuf, String)>,
     /// Listed env files that did not exist. Still legal; named in any
@@ -413,12 +413,20 @@ impl EnvOverlay {
 
     /// Whether `path` on disk now differs from what this overlay loaded from
     /// it (#1286).
-    #[expect(
-        clippy::unused_self,
-        reason = "red-first stub; the fix reads the overlay"
-    )]
-    pub(crate) fn differs_on_disk(&self, _path: &Path) -> bool {
-        false
+    ///
+    /// Read through the loader's own read, whole: content is compared, never
+    /// size or mtime. Missing matches only a path this overlay found missing;
+    /// an unreadable or refused file, or a path this overlay neither loaded
+    /// nor found missing (a failed load), always differs.
+    pub(crate) fn differs_on_disk(&self, path: &Path) -> bool {
+        // `exists` follows links, as `apply_file`'s absence check does.
+        if !path.exists() {
+            return !self.absent.iter().any(|p| p == path);
+        }
+        match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
+            Ok(text) => !self.sources.iter().any(|(p, t)| p == path && *t == text),
+            Err(_) => true,
+        }
     }
 
     /// Everything the overlay contributes, for consumers that need a map rather

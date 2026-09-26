@@ -164,16 +164,6 @@ fn t6_a_directory_link_cycle_is_an_error_not_a_hang() {
     assert!(chain_dirs(&r.join("a").join("cfg.yaml")).is_err());
 }
 
-/// T9: an env-file directory that is not watched is not protected, so the
-/// chain can still watch it when the config lives there too.
-#[test]
-fn t9_an_env_directory_that_was_not_watched_is_not_protected() {
-    let root = tempfile::tempdir().expect("root");
-    let mut watcher = notify::recommended_watcher(|_| {}).expect("watcher");
-    let missing = root.path().join("missing").join(".env");
-    assert!(super::watch_env_dirs(&mut watcher, &[missing]).is_empty());
-}
-
 /// T12: a directory that cannot be watched warns once until it leaves the
 /// wanted set, and again if it comes back and still fails.
 #[test]
@@ -182,7 +172,7 @@ fn t12_a_repeated_watch_failure_warns_once() {
     let root = tempfile::tempdir().expect("root");
     let missing = root.path().join("missing");
     let watcher = notify::recommended_watcher(|_| {}).expect("watcher");
-    let chain = super::ChainWatch::new(watcher, BTreeSet::new());
+    let chain = super::ChainWatch::new(watcher);
     let wanted = BTreeSet::from([missing.clone()]);
     chain.reconcile(&wanted);
     chain.reconcile(&wanted);
@@ -243,7 +233,7 @@ mod real_watcher {
         // As `ConfigWatcher::start` does: the operator's path, made absolute
         // without resolving links, and one resolve once the watches are live.
         let named = super::super::named_config_path(named.to_path_buf());
-        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
+        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named)
             .expect("watcher starts");
         wake_rx.mark_changed();
         let task = spawn_rewatch_task(
@@ -471,7 +461,7 @@ mod real_watcher {
         let (wake_tx, _wake_rx) = tokio::sync::watch::channel(());
         let named = super::super::named_config_path(r.join("current").join("cfg.yaml"));
         let chain =
-            ConfigWatcher::create_notify_watcher(tx, wake_tx, &named, &[]).expect("watcher starts");
+            ConfigWatcher::create_notify_watcher(tx, wake_tx, &named).expect("watcher starts");
         assert_eq!(chain.watched(), set(&[&r, &r.join("rel1")]));
     }
 
@@ -591,7 +581,7 @@ mod real_watcher {
         let (tx, _events) = tokio::sync::mpsc::channel(32);
         let (wake_tx, _wake_rx) = tokio::sync::watch::channel(());
         let named = super::super::named_config_path(c.join("l"));
-        let chain = ConfigWatcher::create_notify_watcher(tx, wake_tx, &named, &[])
+        let chain = ConfigWatcher::create_notify_watcher(tx, wake_tx, &named)
             .expect("a dangling link does not fail the start");
         assert_eq!(chain.watched(), set(&[&c]));
     }
@@ -630,7 +620,7 @@ mod real_watcher {
         let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
         let named = super::super::named_config_path(c.join("l"));
-        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
+        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named)
             .expect("watcher starts");
         retarget(&c.join("l"), &a.join("cfg2.yaml"));
         tokio::time::sleep(Duration::from_millis(300)).await;

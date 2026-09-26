@@ -9,8 +9,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use super::ReloadTrigger;
 use crate::config::EnvOverlay;
 
 /// How often the recorded env files are read and compared.
@@ -23,19 +25,23 @@ pub(super) const DEBOUNCE: Duration = Duration::from_millis(500);
 /// How often the reload task checks whether the debounce has elapsed.
 pub(super) const RELOAD_TICK: Duration = Duration::from_millis(100);
 
-/// The poll interval the end-to-end tests inject.
+/// The poll interval tests run with: above `DEBOUNCE + RELOAD_TICK`, as every
+/// poll interval must be, or each trigger restarts the debounce forever.
 #[cfg(test)]
 pub(super) const TEST_ENV_POLL: Duration = Duration::from_millis(700);
+
+/// The interval the watcher polls at.
+#[cfg(not(test))]
+pub(super) const POLL_EVERY: Duration = ENV_POLL;
+#[cfg(test)]
+pub(super) const POLL_EVERY: Duration = TEST_ENV_POLL;
 
 /// How long a path's repeated, unchanged reload error stays at debug.
 const WARN_EVERY: Duration = Duration::from_secs(60);
 
 /// The first recorded env file whose content differs from what `applied` was
 /// built from, in `paths` order.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "red-first stub; the fix wires it in")
-)]
+/// A failing file keeps differing, so it is retried every tick.
 pub(super) fn env_poll(applied: &EnvOverlay, paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|p| applied.differs_on_disk(p)).cloned()
 }
@@ -49,13 +55,15 @@ pub(super) struct WarnLimiter {
 
 impl WarnLimiter {
     /// Whether this failure of `path` should be logged at warn (else debug).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "red-first stub; the fix wires it in")
-    )]
-    pub(super) fn should_warn(&mut self, _path: &Path, _error: &str, _now: Instant) -> bool {
-        let _ = (&self.last, WARN_EVERY);
-        true
+    pub(super) fn should_warn(&mut self, path: &Path, error: &str, now: Instant) -> bool {
+        let warn = self.last.get(path).is_none_or(|(last_error, at)| {
+            last_error != error || now.duration_since(*at) >= WARN_EVERY
+        });
+        if warn {
+            self.last
+                .insert(path.to_path_buf(), (error.to_owned(), now));
+        }
+        warn
     }
 }
 
@@ -64,11 +72,35 @@ impl WarnLimiter {
 #[derive(Default)]
 pub(super) struct EnvReloadCounts {
     pub(super) attempts: std::sync::atomic::AtomicUsize,
-    #[cfg_attr(
-        not(all(test, target_os = "linux")),
-        expect(dead_code, reason = "red-first stub; the fix wires it in")
-    )]
     pub(super) warns: std::sync::atomic::AtomicUsize,
+}
+
+impl EnvReloadCounts {
+    /// Count a reload that an `EnvFile` trigger started.
+    pub(super) fn count_attempt(&self, trigger: &ReloadTrigger) {
+        if matches!(trigger, ReloadTrigger::EnvFile(_)) {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Log a failed env-file reload: warn when `limiter` allows, else debug.
+    pub(super) fn report_failure(&self, limiter: &mut WarnLimiter, path: &Path, error: &str) {
+        if limiter.should_warn(path, error, Instant::now()) {
+            self.warns.fetch_add(1, Ordering::SeqCst);
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "Config reload: env file changed but the reload failed; \
+                 keeping the current config and retrying every poll"
+            );
+        } else {
+            tracing::debug!(
+                path = %path.display(),
+                error = %error,
+                "Config reload: env-file reload still failing"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

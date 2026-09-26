@@ -347,6 +347,16 @@ the offending line is the secret. A `~` in an `env_files` path resolves once, at
 against the home directory in force at that moment; each file is applied before the next
 is expanded, so a file that sets `HOME` moves where a later `~` points.
 
+The running gateway re-reads every env file every 2 seconds and reloads when its
+content differs from what is loaded. Env files are compared by content rather than
+watched, so this also works on NFS and FUSE mounts and through a retargeted link
+(`current/.env` after `current` moves to a new release, or an env file that is itself
+a symlink). A listed file that was missing is picked up when it appears, including
+when its directory appears later. A file that fails to load (malformed, refused mode)
+leaves the running values in place and is retried every 2 seconds; its warning is
+logged at most once a minute per file unless the error changes. Each tick reads every
+listed file in full.
+
 Env files supply values to configuration references, and also the attestation signing
 key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same
 overlay under those fixed names, rather than named in a config file through a
@@ -939,8 +949,6 @@ Limits:
 - a directory link higher in the path (`/srv/app` itself a link, macOS `/var`)
   is resolved but not watched;
 - renaming a real (not linked) parent directory is not heard;
-- env files keep their startup path: an env file under `current/` stays on the
-  old release after a retarget (#1286);
 - a chain longer than 40 links is treated as a loop: the watcher keeps its last
   good watches and logs the error.
 

@@ -89,6 +89,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **Env files follow a retargeted link.** An env file reached through a link (`current/.env`
+  after a release switch, or an env file that is itself a symlink) kept reloading from the old
+  target, because its directory watch was fixed at startup. Env files are now re-read every
+  2 seconds and reloaded when their content differs from what is loaded, which also works on
+  NFS and FUSE mounts. A file that fails to load keeps the running values and is retried, with
+  at most one warning a minute per file unless the error changes. See `docs/DEPLOYMENT.md`. (#1286)
+
 - **An error result is never replayed from a cache.** The response cache and the capability
   cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
   refusals, and served them to every call with the same key for the whole TTL (60 s by default).

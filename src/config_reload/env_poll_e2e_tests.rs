@@ -39,7 +39,7 @@ fn start(root: &Path, env_paths: Vec<PathBuf>) -> Started {
         ResolvedEnvFiles::new(env_paths, false),
     ));
     let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
-    let watcher = ConfigWatcher::start_polling_every(
+    let watcher = ConfigWatcher::start(
         cfg,
         Arc::new(super::LiveConfig::new(Config::default())),
         Arc::new(crate::backend::BackendRegistry::new()),
@@ -47,7 +47,6 @@ fn start(root: &Path, env_paths: Vec<PathBuf>) -> Started {
         Arc::clone(&env),
         None,
         shutdown_rx,
-        TEST_ENV_POLL,
     )
     .expect("the watcher starts");
     Started {
