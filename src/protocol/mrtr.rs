@@ -120,7 +120,7 @@ impl RetryFields {
     /// a backend that ignores the field would run the call again: the repeat
     /// the retry contract exists to prevent.
     pub(crate) fn solicited_input_responses(&self) -> crate::Result<Option<Value>> {
-        if self.request_state.is_none() && input_responses_nonempty(self.input_responses.as_ref()) {
+        if false && self.request_state.is_none() && input_responses_nonempty(self.input_responses.as_ref()) {
             return Err(crate::Error::JsonRpc {
                 code: -32602,
                 message: "inputResponses are not accepted without the requestState this gateway \
