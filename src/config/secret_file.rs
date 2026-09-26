@@ -343,3 +343,7 @@ mod tests;
 #[cfg(test)]
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
+
+#[cfg(all(test, unix))]
+#[path = "secret_file_type_tests.rs"]
+mod type_tests;
