@@ -2149,12 +2149,7 @@ impl MetaMcp {
                 // refresh, then either asks the user to reconnect (an offer,
                 // returned as the refusal it is) or tells the caller whether a
                 // retry can help (the recovery hint below).
-                let e = match caller_credential.managed.as_ref() {
-                    Some(managed) if is_upstream_unauthorized(&e) => {
-                        managed.after_upstream_401(e).await
-                    }
-                    _ => e,
-                };
+                // RED THROWAWAY: the meta dispatch arm's 401 site is removed.
                 if crate::personal_accounts::refusal::marked(&e).is_some() {
                     // Settled like every dispatched failure (ADR-012).
                     if let Some(reservation) = idem_reservation.as_mut() {
