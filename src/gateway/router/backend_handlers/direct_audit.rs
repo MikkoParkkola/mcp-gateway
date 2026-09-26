@@ -114,8 +114,7 @@ pub(super) async fn record(
     );
     // F20: on the blocking pool under the append bound, so a stalled disk
     // answers 503 instead of pinning a runtime worker.
-    let written = log
-        .append_bounded(move |log| {
+    let written = (move |log: &crate::security::TransparencyLogger| {
             let key = match otel.as_deref() {
                 Some(otel) => CorrelationKey {
                     id: otel,
@@ -138,8 +137,7 @@ pub(super) async fn record(
                 &request_hash,
                 response_hash.as_deref(),
             )
-        })
-        .await;
+        })(&**log);
     match written {
         Ok(()) => answer,
         Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
