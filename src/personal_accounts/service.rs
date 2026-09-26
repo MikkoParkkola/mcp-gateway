@@ -287,7 +287,19 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         }
         let expected = version_of(&current);
         match self.provider.refresh(account, &current).await {
-            Ok(rotated) => self.apply(account, &current, &expected, rotated),
+            Ok(rotated) => {
+                let next = self.apply(account, &current, &expected, rotated)?;
+                self.store.claim_forced_refresh(
+                    account,
+                    &GrantVersion {
+                        generation: next.generation.clone(),
+                        token_revision: next.token_revision,
+                        authorization_epoch: next.authorization_epoch,
+                        descriptor_revision: next.descriptor_revision.clone(),
+                    },
+                )?;
+                Ok(next)
+            }
             // Transient. Nothing durable moves, so the account stays connected
             // and the next attempt costs the user nothing.
             Err(ProviderRefreshError::Unavailable) => Err(AccountServiceError::ProviderUnavailable),
