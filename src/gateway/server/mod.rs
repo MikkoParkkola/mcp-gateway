@@ -1405,6 +1405,7 @@ impl Gateway {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
 
+                cap_backend_for_load.mark_initial_scan_complete();
                 let mut total_caps = 0;
                 // Every capability the account admission gate refused during the
                 // INITIAL scan. A missing or unreadable optional directory is
