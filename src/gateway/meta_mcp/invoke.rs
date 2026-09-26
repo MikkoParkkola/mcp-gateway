@@ -1006,8 +1006,9 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
 }
 
 /// A miss on `tool`, with a "did you mean?" hint drawn from `candidates`
-/// (names this caller could invoke, A3) when one is close enough. Shared by
-/// the dispatch miss and R2's text A (F13), so both answer a miss alike.
+/// (names this caller could invoke, A3) when one is close enough. The
+/// dispatch miss's wording; R2's text A (F13) keeps its own and appends the
+/// same hint.
 fn miss_with_hint(server: &str, tool: &str, candidates: &[&str], fallback: &str) -> String {
     match did_you_mean(tool, candidates, 3, 3) {
         Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
@@ -3257,23 +3258,41 @@ impl MetaMcp {
         };
         let text = Box::pin(backend.undeclared_key_refusal(identity_key, headers, tool, arguments))
             .await?;
-        // F13 text A (the backend's complete list lacks the tool) is a miss,
-        // so it carries the profile-scoped "did you mean?" hint the miss path
-        // after dispatch gave before (T14, MIK-7518).
+        // F13 text A (the backend's complete list lacks the tool) is a miss.
+        // It keeps the design's exact wording on both routes; on this route
+        // only, the profile-scoped "did you mean?" hint the miss after
+        // dispatch gave before is appended (amendment: text A plus an
+        // optional hint, keeping the #555 / MIK-7518 suggestion contract).
         let text = text.map(|text| {
             if text != crate::backend::text_absent(tool) {
                 return text;
             }
             let names = backend.get_cached_tool_names_for(identity_key);
-            let candidates: Vec<&str> = names
-                .iter()
-                .map(String::as_str)
-                .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
-                .collect();
-            miss_with_hint(server, tool, &candidates, &text)
+            let candidates = self.miss_hint_pool(&names, server, (scope, session_id));
+            match did_you_mean(tool, &candidates, 3, 3) {
+                Some(hint) => format!("{text}. {hint}"),
+                None => text,
+            }
         });
         Ok(text
             .map(|text| json!({ "content": [{ "type": "text", "text": text }], "isError": true })))
+    }
+
+    /// The "did you mean?" pool for a miss on `server`: the `names` from this
+    /// caller's slot that it could invoke (A3). The ONE pool source for every
+    /// miss hint (the dispatch miss and R2's text A, F13), so a fix to what
+    /// the pool admits reaches every site at once.
+    fn miss_hint_pool<'n>(
+        &self,
+        names: &'n [String],
+        server: &str,
+        (scope, session_id): (super::InvokeScope<'_>, Option<&str>),
+    ) -> Vec<&'n str> {
+        names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
+            .collect()
     }
 
     /// Account a check-site fill the slot's failsafe refused (F13) exactly as
@@ -3660,12 +3679,7 @@ impl MetaMcp {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
             let message = if !cached_names.is_empty() && !tool_is_cached {
-                // Drawn only from names this caller could invoke (A3).
-                let candidates: Vec<&str> = cached_names
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
-                    .collect();
+                let candidates = self.miss_hint_pool(&cached_names, server, (scope, session_id));
                 miss_with_hint(server, tool, &candidates, &error.message)
             } else {
                 error.message
@@ -6149,6 +6163,9 @@ mod circuit_open_hint_tests;
 
 #[cfg(test)]
 mod f13_bridge_tests;
+
+#[cfg(test)]
+mod f13_hint_scope_tests;
 
 #[cfg(test)]
 mod session_fp_tests;
