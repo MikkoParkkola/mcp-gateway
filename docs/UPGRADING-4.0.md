@@ -1156,20 +1156,42 @@ tool.
 - **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
   signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
   `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
-  `_meta` key before forwarding on the direct route, for every method and for passthrough
-  backends too, so no backend receives the token.
+  `_meta` key on the direct route right after the audit record hashes the params as sent,
+  and before parsing, telemetry and forwarding, for every method and for passthrough
+  backends too. Only the audit hash and the attestation check see the token; neither
+  protocol telemetry nor any backend receives it.
 - **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
   route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
-  the idempotency guard, so a replayed call needs a valid token as well.
+  identity-propagation minting and before the idempotency guard, so an unattested call
+  mints no per-user credential, and a replayed call needs a valid token as well.
+- **Every direct-route method that reaches a backend is checked.** What the token must grant:
+
+  | Method on `/mcp/{backend}` | The token must grant |
+  |---|---|
+  | `tools/call`, `prompts/get` | the tool or prompt `name` |
+  | `resources/read`, `resources/subscribe`, `resources/unsubscribe` | the resource `uri` |
+  | `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `completion/complete`, `logging/setLevel` | nothing: any authentic, unexpired token |
+  | any other method | `"*"` |
+  | `initialize`, `ping`, `notifications/*` | exempt |
+
+  A call missing its `name` or `uri` needs `"*"`. Capability strings are not namespaced: a
+  token granting `search` grants the tool `search` and a prompt named `search`, so issue
+  tokens narrowly.
 - **Tasks.** A task-mode `gateway_invoke` re-checks its original token when the worker
   dispatches it, so a queued task needs a token that outlives the queue. A surfaced tool run
-  as a task has no token at dispatch and is refused. Task recovery reads need a fresh token in
+  as a task carries the creating request's `_meta` token to its dispatch, where it is
+  re-checked the same way. Task recovery reads need a fresh token in
   `_meta["io.mcp-gateway/recovery"].attestation`.
 - **Playbooks and code mode are refused.** Under enforce, `gateway_run_playbook` and
   `gateway_execute` answer -32002 "multi-step plans carry no attestation in 4.0.0", keyed
   or not. Their steps are synthesized and carry no token. Call each tool with its own token.
-- **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
-  other methods are forwarded without an attestation check.
+- **A subscription does not outlive its token, because no update outlives the call that
+  carried it.** The gateway keeps no subscription state and relays no later
+  `notifications/resources/updated`. The direct route discards every backend notification.
+  The meta route streams a notification to a client only while the call that raised it is in
+  flight, and a stdio backend's notifications reach a caller only as progress on its own
+  call. So an attested `resources/subscribe` opens no data flow that the token's expiry
+  would have to end. This limitation predates 4.0.0; it is not a change.
 
 ## 47. WebSocket backends (`ws_url`)
 

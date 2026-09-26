@@ -545,3 +545,75 @@ async fn a_cancelled_read_does_not_strand_the_next_read_of_the_record() {
         "the read that followed a cancelled one still recovers the row: {fetched}"
     );
 }
+
+// ── MIK-7570.ATTEST.1 part 3 (c): recovery reads under Enforce from config ──
+
+const RECOVERY_KEY: &str = "recovery-read-attestation-key-32b";
+
+fn recovery_token() -> String {
+    crate::attestation::BnautAttestationSigner::new(RECOVERY_KEY.as_bytes().to_vec(), "recovery")
+        .issue(
+            &crate::attestation::TokenRequest {
+                agent_identity: "alice".to_string(),
+                task_uuid: uuid::Uuid::new_v4(),
+                capabilities: vec![TOOL.to_string()],
+            },
+            chrono::Utc::now(),
+            chrono::TimeDelta::minutes(5),
+        )
+        .encoded()
+        .to_string()
+}
+
+/// A `tasks/get` carrying a fresh recovery token when given.
+async fn get_task_with_recovery_token(
+    state: &Arc<AppState>,
+    id: &str,
+    token: Option<&str>,
+) -> Value {
+    let mut body = task_method(9_001, "tasks/get", json!({ "taskId": id }));
+    if let Some(token) = token {
+        body["params"]["_meta"][crate::gateway::meta_mcp::upstream::RECOVERY_META] =
+            json!({ "attestation": token });
+    }
+    post(state, "key-a", body).await
+}
+
+/// Enforce from an env file: a recovery read with no fresh token in
+/// `_meta["io.mcp-gateway/recovery"].attestation` is denied before any
+/// upstream query; with one, it is served.
+#[tokio::test]
+async fn recovery_read_enforce_from_config_needs_fresh_token() {
+    let (state, transport, adapter, _store) = armed_fixture(Script::RetainThenHold).await;
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let meta =
+        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
+    let (validator, mode) =
+        crate::attestation::wiring::enforce_from_env_file(RECOVERY_KEY, "recovery");
+    app.meta_mcp = Arc::new(meta.with_attestation(validator, mode));
+    let state = Arc::new(app);
+
+    let mut body = task_invoke(1, "recovery-attested", json!({ "n": 1 }));
+    body["params"]["arguments"]["attestation"] = json!(recovery_token());
+    let id = task_id(&post(&state, "key-a", body).await);
+    adapter.wait_for_queries(1).await;
+    join_workers(&state).await;
+    adapter.release_all();
+
+    let denied = get_task_with_recovery_token(&state, &id, None).await;
+    std::assert_ne!(status_of(&denied), "completed", "{denied}");
+    std::assert_eq!(
+        adapter.queries(),
+        1,
+        "a denied read makes no upstream query"
+    );
+
+    let served = get_task_with_recovery_token(&state, &id, Some(&recovery_token())).await;
+    std::assert_eq!(status_of(&served), "completed", "{served}");
+    std::assert_eq!(
+        adapter.queries(),
+        2,
+        "the attested read makes exactly one query"
+    );
+    std::assert_eq!(transport.calls(), 1, "recovery never resubmits the call");
+}

@@ -769,11 +769,17 @@
     },
     {
       "id": "MIK-7570.ATTEST.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570. Stage 1 of C5 (#895): default is off, unrecognised modes fail startup. Stage 2 (branch fix/c5-attestation-enforce): enforce is wired on gateway_invoke, surfaced tools and the direct route, plans are refused under it, and enforce without a key fails startup. Pending until stage 2 merges and is graded. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/tests/attestation_routes/methods.rs",
+        "src/gateway/router/tests/task_execution_adapter/attestation_tasks.rs",
+        "src/gateway/router/tests/task_execution_adapter/signing_joint/policy.rs",
+        "src/gateway/router/direct_audit_tests.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (C5 part 3, PR #1130). Stage 1 (#895): off by default, unrecognised modes fail startup. Part 2 (#1003): enforce on gateway_invoke, surfaced tools and direct-route tools/call; plans refused; enforce without a key fails startup. Part 3: every direct-route method is attested under enforce (URI for resources/read, subscribe and unsubscribe; name for tools/call and prompts/get; an authentic token for list methods, completion/complete and logging/setLevel; '*' for any other method; initialize, ping and notifications exempt; a missing name or uri needs '*'). The check runs before identity minting, a surfaced tool run as a task carries its _meta token into dispatch, and the token is stripped after the audit hash, before telemetry and forwarding. Option A: no resources/updated outlives its call, so there is no subscription to cut. Tests: src/gateway/router/tests/attestation_routes/methods.rs, task_execution_adapter/attestation_tasks.rs, signing_joint/policy.rs, query_serialization.rs, direct_audit_tests.rs. Red CI run 36179731401, green 36215088680. Mutants, each reddening its named test: uri-scope 36198498378, prompt-name 36198478581, missing-field 36198474387, unknown-default 36198493569, methods 36198470278, strip-deleted 36198483291, task-carry 36198488695, after-minting 36217117465, list-authentic 36217120658. Documented in UPGRADING-4.0 item 46."
     },
     {
       "id": "MIK-7570.AUDIT.1",

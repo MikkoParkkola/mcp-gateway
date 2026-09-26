@@ -64,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
   forwarded without the per-tool authorization check.
   See UPGRADING-4.0 item 43.
+- **Attestation `enforce` covers every method on the direct route (breaking)**
+  (MIK-7570.ATTEST.1). `POST /mcp/{name}` now refuses, with -32002 and HTTP 403,
+  any forwarded method whose token is missing or does not grant its target:
+  `resources/read`, `resources/subscribe` and `resources/unsubscribe` match the
+  URI, `prompts/get` the prompt name, list methods need an authentic token, and
+  a method outside the table needs a `"*"` token. `initialize`, `ping` and
+  notifications are exempt. The check runs before identity minting, and the
+  token is stripped before telemetry. A surfaced tool run as a task carries its
+  `_meta` token to dispatch. See UPGRADING-4.0 item 46.
 
 ## [4.0.0-beta.2] - 2026-09-25
 
