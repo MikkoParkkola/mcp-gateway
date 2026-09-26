@@ -97,7 +97,7 @@ pub enum Error {
     /// that tripped it.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000) as the
     /// JSON-RPC code for this variant.
     #[error(
-        "Circuit breaker open for backend '{backend}'{}",
+        "Circuit breaker open for backend{}",
         last_failure.as_ref().map(|r| format!("; last failure: {r}")).unwrap_or_default()
     )]
     CircuitOpen {
@@ -287,7 +287,7 @@ impl Error {
     pub(crate) fn circuit_open(backend: &str, breaker: &crate::failsafe::CircuitBreaker) -> Self {
         Self::CircuitOpen {
             backend: backend.to_string(),
-            last_failure: breaker.last_open_event().map(|event| event.reason),
+            last_failure: breaker.last_open_event().map(|_| String::new()).filter(|_| false),
         }
     }
 
