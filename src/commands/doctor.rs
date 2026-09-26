@@ -695,9 +695,8 @@ fn resolve_config_path(explicit: Option<&Path>) -> Option<PathBuf> {
 /// Whether `bin` is on `PATH`; nothing is run. PATH only: a Windows spawn also
 /// searches its own and the system directories, which this does not.
 fn which_command(bin: &str) -> bool {
-    // PATH split the platform's way (':' took Windows' `C:\...` apart), and on
-    // Windows also the `.exe` name a spawn resolves a bare command to. Not
-    // `.cmd`/`.bat`: a spawn does not run those for a bare name either.
+    // PATH split the platform's way (':' broke `C:\...`), plus on Windows the
+    // `.exe` a spawn resolves a bare name to (not `.cmd`/`.bat`: nor does a spawn).
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
