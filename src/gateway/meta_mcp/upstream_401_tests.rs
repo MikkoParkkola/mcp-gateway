@@ -18,11 +18,11 @@ use std::sync::Arc;
 use crate::personal_accounts::AccountCustody;
 use crate::personal_accounts::refusal::{AccountState, marked, upstream_rejection};
 
-use super::account_resolver_fixture::{
+use super::super::account_resolver_fixture::{
     ALICE_WORK_TOKEN, Custody, ProviderStep, ROTATED_TOKEN, WORK, account_key, custody_with_steps,
     grant,
 };
-use super::account_rest_fixture::{
+use super::super::account_rest_fixture::{
     Captured, backend_with, call, capability, capture_endpoint_answering, installed_gateway,
     managed,
 };
