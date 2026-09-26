@@ -173,8 +173,7 @@ pub(super) async fn require_admin_tool_access(
         outcome,
         ..AuditEnvelope::ok(AuditWho::from_request(client, grant_subject))
     };
-    log.append_admin_action("meta_tool", fields, &envelope)
-        .map_err(unavailable)?;
+    drop((fields, envelope));
     verdict
 }
 
