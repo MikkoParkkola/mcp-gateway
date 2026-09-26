@@ -138,3 +138,8 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 
     Ok(())
 }
+
+#[allow(dead_code)]
+fn f18_population_mutant() -> std::io::Result<Vec<u8>> {
+    std::fs::read("/nonexistent")
+}
