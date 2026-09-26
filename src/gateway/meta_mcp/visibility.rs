@@ -229,7 +229,7 @@ impl MetaMcp {
             // tools answer with (403, -32600), never a retriable internal error.
             return Err(Error::Forbidden {
                 code: -32600,
-                status: 403,
+                status: 500,
                 message: format!(
                     "'{tool}' registers a caller-supplied address with a third party, which \
                      then delivers to it using this gateway's credential. That requires an \
