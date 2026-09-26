@@ -60,7 +60,7 @@ pub fn strip_sha256_line(content: &str) -> String {
             // escape the pin. The line's own CRLF terminator is not such a line.
             let brk = line
                 .char_indices()
-                .find(|(_, c)| matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'));
+                .find(|(_, c)| matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}'));
             if let Some((at, c)) = brk {
                 let rest = &line[at + c.len_utf8()..];
                 if !(c == '\r' && rest == "\n") {
