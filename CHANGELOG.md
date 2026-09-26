@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
   (C9, MIK-7570.SECRET.2)
 - A per-call-id ledger for stdio bursts against a client that never answers its asks: every call
-  must reach exactly one terminal response. 194 calls run per PR; the ticket's 1026-call burst runs
-  nightly and on a labelled PR in `mrtr7b-full-burst.yml`. (MIK-7479.STDIO.1)
+  must reach exactly one terminal response, and one client's silence must not disable the capability
+  for other callers. A 194-call and the ticket's 1026-call burst both run per PR. (MIK-7479.STDIO.1)
 
 ### Changed
 

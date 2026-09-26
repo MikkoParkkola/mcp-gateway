@@ -16,11 +16,10 @@
 //! for X is its terminal; any later one is a **duplicate**, a protocol
 //! violation of its own, never a second terminal.
 //!
-//! The full 1026-call burst is given up to eight and a half minutes (sixteen
-//! admission waves of ask timeouts, if every accepted call asks), so it runs
-//! in its own workflow (`mrtr7b-full-burst.yml`), and the per-PR job
-//! skips it. Locally: `cargo test --test mik_7479_mrtr7b_ledger -- --skip
-//! mik_7479_full_burst`.
+//! Both bursts run per PR. Their deadlines are upper bounds sized for a burst
+//! in which every accepted call asks (sixteen 30s waves for the full one); the
+//! per-backend rate limiter refuses most of a burst at once, so each finishes
+//! in about one ask timeout.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::RangeInclusive;
@@ -433,7 +432,6 @@ impl Run {
             .count()
     }
 
-    /// Terminals whose kind starts with `prefix`, e.g. `"error -32003"`.
     /// The child's WARN/ERROR lines, histogrammed by their text past the
     /// timestamp, so a red run names what the gateway itself saw fail.
     fn warn_histogram(&self) -> BTreeMap<String, usize> {
@@ -466,11 +464,12 @@ impl Run {
         seen
     }
 
-    fn kind(&self, prefix: &str) -> usize {
+    /// Terminals whose kind contains every one of `needles`.
+    fn kind(&self, needles: &[&str]) -> usize {
         self.ledger
             .kinds
             .iter()
-            .filter(|(kind, _)| kind.starts_with(prefix))
+            .filter(|(kind, _)| needles.iter().all(|needle| kind.contains(needle)))
             .map(|(_, count)| count)
             .sum()
     }
@@ -664,9 +663,7 @@ async fn ac_mrtr_7b_every_call_reaches_one_terminal_frame() {
 }
 
 /// The ticket's exact scenario: 1026 calls, the excess past the inflight cap
-/// refused `-32000`, the rest asking or refused by the rate limiter. Up to
-/// eight and a half minutes, so it runs in `mrtr7b-full-burst.yml` and the
-/// per-PR job skips it.
+/// refused `-32000`, the rest asking or refused by the rate limiter.
 #[tokio::test]
 async fn mik_7479_full_burst_every_call_reaches_one_terminal_frame() {
     let last_id = FIRST_CALL_ID + INFLIGHT_CAP + 1;
