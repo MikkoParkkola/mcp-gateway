@@ -53,6 +53,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
   idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
 
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
 - **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
   the startup capability scan has read every directory, so a pod or container is no longer
   sent traffic while its catalogue is empty; the admin `/health` view adds
@@ -93,6 +97,14 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
+  about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
+  thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
+  Release builds were not affected.
+- **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
+  durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
+  non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
+  handed a `client_id` that another writer then replaced on disk. The lock is now `LockFileEx`.
 - **An error result is never replayed from a cache.** The response cache and the capability
   cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
   refusals, and served them to every call with the same key for the whole TTL (60 s by default).
