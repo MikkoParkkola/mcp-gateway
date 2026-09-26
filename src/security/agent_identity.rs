@@ -747,7 +747,7 @@ pub(crate) fn log_agent_identity(
         // The ruling's "turning the vulnerability into detection": a proven
         // principal and a label that differ, in a namespace the operator has
         // been told is incomparable. Accepted, and alertable.
-        tracing::warn!(
+        tracing::debug!(
             agent_proven = proven,
             agent_proof = proof.as_deref(),
             agent_secondary_proof = secondary,
