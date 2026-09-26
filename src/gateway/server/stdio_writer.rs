@@ -8,6 +8,25 @@ use tracing::{debug, warn};
 use super::Gateway;
 
 impl Gateway {
+    pub(super) async fn run_stdout_writer_prio<W: tokio::io::AsyncWrite + Unpin>(
+        mut sink: W,
+        mut queue: tokio::sync::mpsc::Receiver<serde_json::Value>,
+        mut bridge: tokio::sync::mpsc::Receiver<serde_json::Value>,
+    ) {
+        loop {
+            let frame = tokio::select! {
+                biased;
+                Some(frame) = bridge.recv() => frame,
+                Some(frame) = queue.recv() => frame,
+                else => break,
+            };
+            if !Self::write_response(&mut sink, &frame).await {
+                queue.close();
+                break;
+            }
+        }
+    }
+
     /// Drain `queue` onto `sink`, closing the queue once the sink is gone.
     ///
     /// A dead sink ends the writer: staying open would let the dispatch tasks

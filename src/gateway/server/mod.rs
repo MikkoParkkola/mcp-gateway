@@ -2424,11 +2424,12 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+        let (bridge_lane, bridge_queue) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
+        let writer_task = tokio::spawn(Self::run_stdout_writer_prio(output, queue, bridge_queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
-        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
+        let channel = Arc::new(stdio_channel::StdioClientChannel::new(bridge_lane));
         let mut dispatches: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
         // Admission, not just concurrency: a client that writes faster than the
         // backends answer would otherwise pile one task per line onto the
