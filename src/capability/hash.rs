@@ -191,6 +191,20 @@ mod tests {
         assert_eq!(compute_capability_hash(lf), compute_capability_hash(crlf));
     }
 
+    /// A lone CR on the pin line cannot hide YAML from the hash. YAML reads a
+    /// lone CR as a line break, so `sha256: x\rinjected: y` parses as two
+    /// keys; stripping the whole LF-delimited line would drop `injected: y`
+    /// from the hash while the loader still reads it.
+    #[test]
+    fn a_lone_cr_on_the_pin_line_does_not_hide_a_key_from_the_hash() {
+        let clean = "sha256: x\nname: foo\n";
+        let smuggled = "sha256: x\rinjected: y\nname: foo\n";
+        assert_ne!(
+            compute_capability_hash(clean),
+            compute_capability_hash(smuggled)
+        );
+    }
+
     /// Only the CRLF pair is a line ending. A lone CR is content, and a file
     /// that gained one is a different file.
     #[test]
