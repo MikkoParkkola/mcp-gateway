@@ -22,7 +22,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tracing::{debug, info, trace, warn};
-use uuid::Uuid;
 
 use crate::Result;
 use crate::backend::BackendRegistry;
@@ -215,75 +214,12 @@ impl NotificationMultiplexer {
         self.get_or_create_session_for(session_id, &SessionOwner::Anonymous)
     }
 
-    /// Resume `owner`'s live session named `session_id`, or open a new one
-    /// under a freshly minted id.
-    ///
-    /// A presented id is never adopted. Adoption let a caller pick an id
-    /// before its victim did and then share the victim's stream, because every
-    /// anonymous caller has the same owner (F9). An id that names someone
-    /// else's session gets a fresh one too: joining it would hand over their
-    /// stream, and refusing would break a client that legitimately collides.
-    pub(crate) fn get_or_create_session_for(
-        &self,
-        session_id: Option<&str>,
-        owner: &SessionOwner,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
-        let mut sessions = self.sessions.write();
-        if let Some(session) = session_id.and_then(|id| sessions.get(id))
-            && session.owner == *owner
-        {
-            return (
-                session.id.expose_secret().to_string(),
-                session.tx.subscribe(),
-            );
-        }
-        let id = format!("gw-{}", Uuid::new_v4());
-        let rx = self.insert_session(&mut sessions, &id, owner.clone());
-        info!(session_id = %session_fp(&id), "Created new streaming session");
-        (id, rx)
-    }
-
-    /// The one place a session enters the store.
-    fn insert_session(
-        &self,
-        sessions: &mut HashMap<SessionId, Arc<ClientSession>>,
-        id: &str,
-        owner: SessionOwner,
-    ) -> broadcast::Receiver<TaggedNotification> {
-        let (tx, rx) = broadcast::channel(self.config.buffer_size);
-        let id = SessionId::new(id);
-        let session = ClientSession {
-            id: id.clone(),
-            tx,
-            last_event_id: RwLock::new(None),
-            subscribed_backends: RwLock::new(Vec::new()),
-            created_at: Instant::now(),
-            owner,
-            credential: RwLock::new(None),
-        };
-        sessions.insert(id, Arc::new(session));
-        rx
-    }
-
-    /// Create or resume a session for `owner`, holding the credential it presented.
-    pub(crate) fn get_or_create_session_scoped(
-        &self,
-        session_id: Option<&str>,
-        owner: &SessionOwner,
-        credential: Option<HeldCredential>,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
-        let (id, rx) = self.get_or_create_session_for(session_id, owner);
-        if let Some(session) = self.sessions.read().get(id.as_str()) {
-            *session.credential.write() = credential;
-        }
-        (id, rx)
-    }
-
     /// Test seam: an anonymous session under a chosen id, which production
     /// never creates (every production id is minted, F9).
     #[cfg(test)]
     pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<TaggedNotification> {
         self.insert_session(&mut self.sessions.write(), id, SessionOwner::Anonymous)
+            .1
     }
 
     /// Deliver to every session whose caller may access `backend` now; returns the count.
@@ -861,6 +797,12 @@ where
     );
     response
 }
+
+#[path = "streaming_sessions.rs"]
+mod sessions;
+#[cfg(test)]
+#[path = "streaming_sessions_tests.rs"]
+mod sessions_tests;
 
 #[cfg(test)]
 mod tests {
