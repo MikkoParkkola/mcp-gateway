@@ -1,6 +1,8 @@
 # NFR.UPGRADE.1 rehearsal — results
 
-**VERDICT: 17/17 PASS.** Re-run 2026-09-25 against 4.0.0-beta.1: **19/19 PASS**; see the last section.
+**VERDICT: 19/19 PASS in CI** (run 36237869096, 2026-09-26); the `upgrade-rehearsal` job in
+`.github/workflows/ci.yml` now repeats the rehearsal on every pull request. Earlier manual
+runs: 17/17 at `e3b8a24f`, 19/19 at `a0f11387e`; see the last two sections.
 
 Criterion (`docs/requirements/RELEASE-4.0.0-scope-update.md`): "Upgrade from 3.5.1 and
 exercise modern-off/rollback with config, credentials, permissions, mounts and active
@@ -203,3 +205,57 @@ Run on the Linux aarch64 benchmark host, tree `a0f11387e`, `BIN_351` = the v3.5.
 `mcp-gateway-linux-aarch64` (checked against `SHA256SUMS.txt`), `BIN_400` = a debug build
 of that tree (`mcp-gateway 4.0.0-beta.1`): **19 conjuncts, 19 PASS**, including
 `PHASE4.*` (rollback to 3.5.1 from the kept 3.x config).
+
+## CI run 2026-09-26: every pull request
+
+The `upgrade-rehearsal` job (`.github/workflows/ci.yml`) runs this script on each pull
+request against the release line, with no `continue-on-error` and every step under
+`set -euo pipefail`:
+
+- `BIN_351`: the v3.5.1 release asset `mcp-gateway-linux-x86_64`, checked against the
+  release's `SHA256SUMS.txt` and against a hash pinned in the workflow
+  (`198b2d7a…e157`).
+- `BIN_400`: a `cargo build --locked` debug build of the pull request head.
+- The script now exits 1 when any recorded check is FAIL (before this change it exited 0
+  whatever the results). A second step reads `results.json`, prints every check to the
+  log and the job summary, and fails unless the check ids equal the pinned list of 19 in
+  order and all are PASS.
+
+First run: CI run 36237869096, job 108392851958, head `126a88cca`, x86_64 Linux runner
+(the 2026-09-25 run was aarch64), `mcp-gateway 3.5.1` to `mcp-gateway 4.0.0-beta.2`:
+**19 checks, 0 failed**.
+
+| id | status |
+|---|---|
+| PHASE1.BASELINE_INITIALIZE | PASS |
+| PHASE1.ACTIVE_CALLER_BASELINE | PASS |
+| PHASE1.STAMP_WRITTEN | PASS |
+| PHASE2.STAMP_ADVANCED | PASS |
+| PHASE2.CONFIG_PRESERVED | PASS |
+| PHASE2.CREDENTIALS_PRESERVED | PASS |
+| PHASE2.PERMISSIONS_AND_MOUNTS_PRESERVED | PASS |
+| PHASE2.API_KEY_MIGRATED_TO_DIGEST | PASS |
+| PHASE2.MODERN_INITIALIZE_ON | PASS |
+| PHASE2.MODERN_DISCOVER_ADVERTISES | PASS |
+| PHASE2.ACTIVE_CALLER_POST_UPGRADE | PASS |
+| PHASE2.AUDIT_LOG_WRITTEN | PASS |
+| PHASE3.MODERN_OFF_INITIALIZE_REFUSED | PASS |
+| PHASE3.MODERN_OFF_DISCOVER_HIDES | PASS |
+| PHASE4.STAMP_UNCHANGED | PASS |
+| PHASE4.DOWNGRADE_WARNING_LOGGED | PASS |
+| PHASE4.GATEWAY_STARTS_NORMALLY | PASS |
+| PHASE4.ACTIVE_CALLER_POST_ROLLBACK | PASS |
+| PHASE4.CONFIG_AND_CREDENTIALS_STILL_INTACT | PASS |
+
+Mutation proof (throwaway pull requests, closed unmerged): each one turned the job red.
+
+| mutant | change | CI run / job | result |
+|---|---|---|---|
+| A | `upgrade` deletes the OAuth token directory after writing the stamp | 36243767511 / 108409024463 | `[FAIL] PHASE2.CREDENTIALS_PRESERVED`; script exit 1; results step 18/19 |
+| B | script ends with `exit 3` after every check | 36243769918 / 108409031239 | 19/19 PASS and results step green; job red on exit code 3 alone |
+| C | one passing check (`PHASE2.MODERN_DISCOVER_ADVERTISES`) not recorded | 36243773866 / 108409041917 | script exit 0 with 18/18; results step red on the id list |
+| D | `upgrade` rewrites `enabled: true` in `gateway.yaml`, and the script's FAIL exit is disabled | 36243776968 / 108409049941 | run step green; results step red, 10/19, including `PHASE2.CONFIG_PRESERVED` and `PHASE2.PERMISSIONS_AND_MOUNTS_PRESERVED` |
+
+Mutant A also shows a limit: `PHASE4.CONFIG_AND_CREDENTIALS_STILL_INTACT` compares the
+token file before and after the rollback run only, so a token already lost in the upgrade
+still passes it. `PHASE2.CREDENTIALS_PRESERVED` is the check that covers the loss.
