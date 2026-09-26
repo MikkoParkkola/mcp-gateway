@@ -69,8 +69,10 @@ fn oauth_token_world_readable_not_loaded() {
     let (loaded, log) = logs(|| store.load("f18-world", URL));
     assert!(loaded.is_none(), "a 0644 token file is not loaded");
     assert!(
-        log.contains("OAuth token file") && log.contains("mode 0644"),
-        "{log}"
+        log.lines().any(|l| l.contains("ERROR")
+            && l.contains("OAuth token file")
+            && l.contains("mode 0644")),
+        "the refusal must be an ERROR naming the file and mode: {log}"
     );
     assert!(
         !log.contains("f18-first"),
