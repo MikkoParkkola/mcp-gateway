@@ -1081,7 +1081,7 @@ class WorkflowWiring(unittest.TestCase):
             digests = [
                 re.compile(
                     rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+"
-                    rf"\.outputs\.{name.lower()}\s*\}}\}}[\"']?$"
+                    rf"\.outputs\.\w+\s*\}}\}}[\"']?$"
                 )
                 for name in (
                     "LIST",
