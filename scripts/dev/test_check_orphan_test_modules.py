@@ -147,9 +147,70 @@ class OrphanGuard(unittest.TestCase):
         found = self.orphans_of({"src/a/mod.rs": "", "src/a/helper.rs": ""})
         self.assertEqual(found, ["src/a/helper.rs"])
 
-    def test_a_crate_root_in_src_bin_owns_its_directory(self):
+    def test_a_directory_binary_root_owns_its_directory(self):
+        # `src/bin/tool/main.rs` is a crate root; `helper.rs` beside it is
+        # not, so only the root's declaration can reach it.
         found = self.orphans_of(
-            {"src/bin/tool.rs": "mod helper;\n", "src/bin/helper.rs": ""}
+            {"src/bin/tool/main.rs": "mod helper;\n", "src/bin/tool/helper.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_path_declaration_does_not_also_claim_the_default_file(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": '#[path = "actual.rs"]\nmod named;\n',
+                "src/a/actual.rs": "",
+                "src/a/named.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/named.rs"])
+
+    def test_a_raw_identifier_path_declaration_declares_its_file(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": '#[path = "kind.rs"]\nmod r#type;\n', "src/a/kind.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_declaration_inside_a_string_declares_nothing(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": 'const DOC: &str = "mod foo;";\nconst RAW: &str = r#"mod bar;"#;\n',
+                "src/a/foo.rs": "",
+                "src/a/bar.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/bar.rs", "src/a/foo.rs"])
+
+    def test_a_declaration_inside_a_nested_block_comment_declares_nothing(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": "/* outer /* inner */ mod foo; */\n", "src/a/foo.rs": ""}
+        )
+        self.assertEqual(found, ["src/a/foo.rs"])
+
+    def test_an_inline_module_does_not_lend_its_name_to_a_sibling_declaration(self):
+        # `mod inner;` sits OUTSIDE `mod tests { }`, so it names `a/inner.rs`,
+        # and `a/tests/inner.rs` is in no compilation unit.
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "mod tests {\n}\nmod inner;\n",
+                "src/a/inner.rs": "",
+                "src/a/tests/inner.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/tests/inner.rs"])
+
+    def test_a_quote_char_literal_does_not_open_a_string(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": "const Q: char = '\"';\nfn f<'a>(_: &'a str) {}\nmod foo;\n", "src/a/foo.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_nested_inline_modules_resolve_through_every_level(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "mod x {\n    fn f() {}\n    mod y {\n        mod z;\n    }\n}\n",
+                "src/a/x/y/z.rs": "",
+            }
         )
         self.assertEqual(found, [])
 

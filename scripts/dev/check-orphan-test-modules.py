@@ -37,8 +37,8 @@ compilation unit for some configuration.
 So declarations are resolved to the file path they actually name, following
 Rust's own rules, and compared against the file on disk. Three further traps
 the resolution has to avoid: a ``mod foo { .. }`` block declares an *inline*
-module and backs no file; a ``mod`` line inside a comment declares nothing;
-and ``#[path]`` is relative to the directory of the declaring file.
+module and backs no file; a ``mod`` line inside a comment or a string declares
+nothing; and ``#[path]`` is relative to the directory of the declaring file.
 
 Usage:
     check-orphan-test-modules.py    # check, exit 1 when a file is unreachable
@@ -53,34 +53,84 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SKIP_DIRS = {".git", "target", "node_modules"}
 
-# Only `mod foo;` backs a file. `mod foo { .. }` is inline and backs none, so
-# the semicolon is load-bearing rather than incidental.
-MOD_DECL = re.compile(r"\bmod\s+(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*;")
-# `mod foo { .. }` -- an inline module. A `mod bar;` inside it names
-# `<dir>/foo/bar.rs`, so its name is a candidate directory for the file's
-# plain declarations.
-INLINE_MOD = re.compile(r"\bmod\s+(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*\{")
-# `#[path = "..."]` immediately preceding a `mod foo;`, allowing other
-# attributes and doc comments between the two.
-PATH_MOD = re.compile(
-    r"""#\s*\[\s*path\s*=\s*["']([^"']+)["']\s*\]"""
-    r"""(?:\s*(?:\#\s*\[[^\]]*\]|//[^\n]*))*"""
-    r"""\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;""",
-    re.S,
+# One token stream over code with comments and literal contents blanked:
+# a `#[path = "` opener (its value is read back from the literal table), a
+# `mod name;` (backs a file) or `mod name {` (inline, backs none), and the
+# braces that tell which inline modules enclose a declaration.
+TOKEN = re.compile(
+    r"""(?P<path>\#\s*\[\s*path\s*=\s*)(?P<quote>")"""
+    r"""|\bmod\s+(?:r\#)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<end>[;{])"""
+    r"""|(?P<open>\{)|(?P<close>\})"""
 )
-LINE_COMMENT = re.compile(r"//[^\n]*")
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+RAW_STRING = re.compile(r'b?r(#*)"')
 
 
-def strip_comments(text: str) -> str:
-    """Blank out comments, preserving newlines so offsets stay usable.
+def blank(text: str) -> tuple[str, dict[int, str]]:
+    """Blank comments and literal contents; keep quotes, newlines and offsets.
 
-    A `mod foo;` inside a comment declares nothing. Left in, it would let a
-    commented-out declaration keep answering for a file the compiler no longer
-    sees -- the exact shape this guard exists to catch.
+    A `mod foo;` inside a comment or a string declares nothing. Left in, it
+    would let a commented-out declaration keep answering for a file the
+    compiler no longer sees -- the exact shape this guard exists to catch.
+    Block comments nest in Rust, so they are matched by depth. Returns the
+    blanked text and each string literal's value keyed by its opening quote.
     """
-    text = BLOCK_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
-    return LINE_COMMENT.sub("", text)
+    out = list(text)
+    literals: dict[int, str] = {}
+    n = len(text)
+
+    def wipe(start: int, stop: int) -> None:
+        for k in range(start, stop):
+            if out[k] != "\n":
+                out[k] = " "
+
+    i = 0
+    while i < n:
+        ident_before = i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            wipe(i, j)
+            i = j
+        elif text.startswith("/*", i):
+            depth, j = 0, i
+            while j < n:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                    if depth == 0:
+                        break
+                else:
+                    j += 1
+            wipe(i, j)
+            i = j
+        elif not ident_before and (m := RAW_STRING.match(text, i)):
+            quote = m.end() - 1
+            j = text.find('"' + m.group(1), m.end())
+            j = n if j < 0 else j
+            literals[quote] = text[m.end() : j]
+            wipe(m.end(), j)
+            i = j + 1 + len(m.group(1))
+        elif text[i] == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            literals[i] = text[i + 1 : j]
+            wipe(i + 1, j)
+            i = j + 1
+        elif text[i] == "'":
+            # A char literal ('x', '\n', '"') or a lifetime ('a): only the
+            # literal forms are skipped, so a lifetime never swallows code.
+            if text.startswith("\\", i + 1):
+                j = text.find("'", i + 3)
+                i = n if j < 0 else j + 1
+            elif i + 2 < n and text[i + 2] == "'":
+                i += 3
+            else:
+                i += 1
+        else:
+            i += 1
+    return "".join(out), literals
 
 
 def src_sources() -> list[Path]:
@@ -96,6 +146,7 @@ def crate_roots() -> list[Path]:
     """Every file cargo compiles as the root of a crate in this package."""
     src = ROOT / "src"
     roots = [src / "lib.rs", src / "main.rs", *src.joinpath("bin").glob("*.rs")]
+    roots += src.joinpath("bin").glob("*/main.rs")
     for target in ("tests", "benches", "examples"):
         roots += ROOT.joinpath(target).glob("*.rs")
         roots += ROOT.joinpath(target).glob("*/main.rs")
@@ -114,26 +165,41 @@ def module_dir(source: Path, is_root: bool) -> Path:
 
 
 def declarations(source: Path, is_root: bool) -> set[Path]:
-    """Resolve every declaration in `source` to the file path it names."""
-    declared: set[Path] = set()
-    text = strip_comments(source.read_text(encoding="utf-8", errors="replace"))
+    """Resolve every file-backed declaration in `source` to the path it names.
 
-    # `#[path = "rel"] mod name;` -- relative to the DECLARING FILE'S
-    # directory, per the Rust reference, not to the module directory.
-    for rel, _name in PATH_MOD.findall(text):
-        declared.add((source.parent / rel).resolve())
-
-    # Plain `mod name;` -- `dir/name.rs` or `dir/name/mod.rs`.
-    # ponytail: which inline module encloses a `mod name;` is not tracked --
-    # that needs brace matching through string literals. Each inline module
-    # name in the file is tried as one extra directory level instead; nesting
-    # deeper than one inline level would read as a false orphan.
+    Per the Rust reference: a plain `mod name;` resolves under the module
+    directory plus each enclosing inline module; a `#[path]` resolves against
+    the declaring file's directory at top level, and against the module
+    directory plus enclosing inline modules inside one. A `#[path]`
+    declaration names only its path, never also the default file.
+    """
+    code, literals = blank(source.read_text(encoding="utf-8", errors="replace"))
     base = module_dir(source, is_root)
-    dirs = [base, *(base / inline for inline in INLINE_MOD.findall(text))]
-    for name in MOD_DECL.findall(text):
-        for directory in dirs:
-            declared.add((directory / f"{name}.rs").resolve())
-            declared.add((directory / name / "mod.rs").resolve())
+    declared: set[Path] = set()
+    inline: list[str | None] = []
+    pending_path: str | None = None
+    for m in TOKEN.finditer(code):
+        if m.group("quote"):
+            pending_path = literals.get(m.start("quote"))
+        elif m.group("name"):
+            nested = [name for name in inline if name]
+            if m.group("end") == "{":
+                inline.append(m.group("name"))
+            elif pending_path is not None:
+                start = base.joinpath(*nested) if nested else source.parent
+                declared.add((start / pending_path).resolve())
+            else:
+                directory = base.joinpath(*nested)
+                declared.add((directory / f"{m.group('name')}.rs").resolve())
+                declared.add((directory / m.group("name") / "mod.rs").resolve())
+            pending_path = None
+        elif m.group("open"):
+            inline.append(None)
+            pending_path = None
+        elif m.group("close"):
+            if inline:
+                inline.pop()
+            pending_path = None
     return declared
 
 
