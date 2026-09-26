@@ -154,7 +154,6 @@ impl TransparencyLogger {
         telemetry_metrics::counter!("mcp_audit_append_timeouts_total").increment(1);
         if let Ok(mut s) = self.bound.state.lock()
             && generation.is_some()
-            && s.in_flight == generation
         {
             s.stalled = true;
             tracing::error!("audit append timed out; the audit log is stalled");
