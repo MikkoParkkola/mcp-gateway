@@ -198,6 +198,8 @@ impl Backend {
         if !discarded {
             return;
         }
+        self.unserved_consecutive
+            .store(0, std::sync::atomic::Ordering::SeqCst);
 
         let era = Arc::clone(&self.era);
         let transport = Arc::clone(transport);
