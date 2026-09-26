@@ -134,11 +134,10 @@ fn show_session_filters_correctly() {
     // WHEN: show is called for session "alpha"
     let entries = show_session_entries(tmp.path(), "alpha").unwrap();
 
-    // THEN: only "alpha" entries are returned
+    // THEN: only "alpha" entries are returned, stored as its fingerprint
     assert_eq!(entries.len(), 2);
-    for e in &entries {
-        assert_eq!(e["session_id"], "alpha");
-    }
+    let fp = crate::gateway::session_id::session_fp("alpha");
+    assert!(entries.iter().all(|e| e["session_id"] == fp));
 }
 
 // ── Test 5: crash recovery restores counter and chain ────────────────────

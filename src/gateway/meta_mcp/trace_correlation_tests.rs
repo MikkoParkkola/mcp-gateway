@@ -153,9 +153,11 @@ async fn ac_control_3_no_trace_id_falls_back_to_the_session_id() {
         .expect("invoke ok");
 
     let raw = std::fs::read_to_string(&log_path).expect("read log");
+    // Keyed by the session's fingerprint: the id itself is a credential (F9).
+    let fp = crate::gateway::session_id::session_fp("legacy-session-2");
     assert!(
-        raw.contains("legacy-session-2"),
-        "with no trace id, the session id must still be the correlation key: {raw}"
+        raw.contains(&format!("\"session_id\":\"{fp}\"")) && !raw.contains("legacy-session-2"),
+        "with no trace id, the session fingerprint must be the correlation key: {raw}"
     );
 }
 

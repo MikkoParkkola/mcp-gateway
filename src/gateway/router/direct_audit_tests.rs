@@ -223,6 +223,24 @@ fn only_invocation(fx: &Fixture) -> Value {
     all.remove(0)
 }
 
+/// MIK-7570.ATTEST.1: the attestation token is stripped from the request
+/// after the audit hash, so the hash still covers the params as sent (D2-e)
+/// while the token string itself never reaches the log.
+#[tokio::test]
+async fn direct_audit_hash_covers_the_token_as_sent() {
+    let fx = fixture(Setup::default()).await;
+    let token = "tok-audit-as-sent";
+    let params = json!({"name": "t", "arguments": {"q": 1},
+                        "_meta": {(crate::protocol::mrtr::ATTESTATION_META): token}});
+    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params});
+    let (status, answer) = post(&fx, "alpha", &body.to_string(), &Caller::Oidc).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let expected = format!("sha256:{}", crate::hashing::canonical_json_sha256(&params));
+    assert_eq!(only_invocation(&fx)["request_hash"], expected.as_str());
+    let raw = std::fs::read_to_string(&fx.path).unwrap();
+    assert!(!raw.contains(token), "the token reached the audit log");
+}
+
 /// D2-T1. A verified caller's direct tool call writes one full record.
 #[tokio::test]
 async fn direct_tool_call_writes_invocation_record() {

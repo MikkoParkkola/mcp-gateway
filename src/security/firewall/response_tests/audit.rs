@@ -75,7 +75,14 @@ pub(crate) fn assert_v2_event(
         .collect();
     assert_eq!(parsed.policy_targets, expected);
     assert_eq!(parsed.legacy.event, "response");
-    assert_eq!(parsed.legacy.session_id, correlation.session_id);
+    // F9: the audit copy is the fingerprint, never the raw id.
+    assert_eq!(
+        parsed.legacy.session_id,
+        crate::gateway::session_id::session_fp(correlation.session_id)
+    );
+    assert!(
+        correlation.session_id.is_empty() || parsed.legacy.session_id != correlation.session_id
+    );
     assert_eq!(parsed.legacy.caller, correlation.caller);
     assert_eq!(parsed.legacy.server, correlation.external_server);
     assert_eq!(parsed.legacy.tool, correlation.external_tool);

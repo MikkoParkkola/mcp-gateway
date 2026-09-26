@@ -76,7 +76,9 @@ fn legacy_record_json() -> String {
 fn store_with_legacy_record() -> (tempfile::TempDir, TokenStorage) {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join(legacy_file_name(BACKEND, RESOURCE));
-    std::fs::write(&path, legacy_record_json()).expect("seed legacy record");
+    // 3.x wrote token files 0600, as 4.0 does; a looser one is refused (F18).
+    crate::gateway::test_helpers::write_owner_only(&path, legacy_record_json())
+        .expect("seed legacy record");
     let store = TokenStorage::new(dir.path().to_path_buf()).expect("open store");
     (dir, store)
 }

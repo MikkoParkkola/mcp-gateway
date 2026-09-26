@@ -103,8 +103,8 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-/// Every entry whose `session_id` is `session`, oldest first, across the
-/// sealed segments and the active file.
+/// Every entry whose `session_id` is `session` or, since F9, its
+/// fingerprint, oldest first, across the sealed segments and the active file.
 ///
 /// # Errors
 ///
@@ -112,11 +112,17 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
 /// segment cannot be read.
 pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>> {
     let mut results = Vec::new();
+    let fp = crate::gateway::session_id::session_fp(session);
     for (_, file) in existing_log_files(path)? {
         let content = bounded_read_to_string(&file, MAX_AUDIT_READ_BYTES)?;
         for raw in content.lines().filter(|l| !l.trim().is_empty()) {
             match serde_json::from_str::<Value>(raw.trim()) {
-                Ok(entry) if entry.get("session_id").and_then(Value::as_str) == Some(session) => {
+                Ok(entry)
+                    if entry
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| s == session || s == fp) =>
+                {
                     results.push(entry);
                 }
                 Ok(_) => {}

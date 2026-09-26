@@ -96,6 +96,7 @@ pub use verify::{
     verify_log, verify_log_signed,
 };
 
+use crate::gateway::session_id::session_fp;
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 
@@ -369,7 +370,9 @@ impl TransparencyLogger {
         }
         fields.insert("route".into(), target.route.as_str().into());
         fields.insert("server".into(), target.server.into());
-        fields.insert("session_id".into(), key.id.into());
+        let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
+        let session_id: String = fp.unwrap_or_else(|| key.id.into());
+        fields.insert("session_id".into(), session_id.into());
         fields.insert("timestamp".into(), timestamp.into());
         if let Some(tool) = target.tool {
             fields.insert("tool".into(), tool.into());

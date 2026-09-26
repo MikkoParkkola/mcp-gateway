@@ -207,6 +207,9 @@ fn no_override_uses_auto_detect() {
     let substrate = d.effective_substrate();
     #[cfg(target_os = "linux")]
     assert_eq!(substrate, Substrate::GVisor);
+    // Any other platform takes the unsupported-platform fallback.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert_eq!(substrate, Substrate::GVisor);
     #[cfg(target_os = "macos")]
     assert_eq!(substrate, Substrate::AppleVm);
 }

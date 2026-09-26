@@ -985,7 +985,7 @@ impl Gateway {
         {
             info!(
                 ?mode,
-                "Per-action attestation wired on the meta and direct routes"
+                "Per-action attestation wired on the meta route and every direct-route method"
             );
             meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
         }
@@ -4643,7 +4643,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("identity-grants.json");
         let body = serde_json::to_string_pretty(&test_grant_file()).unwrap();
-        tokio::fs::write(&path, body).await.unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
 
         let config = IdentityGrantsConfig {
             enabled: true,

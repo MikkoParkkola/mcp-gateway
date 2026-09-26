@@ -365,7 +365,7 @@ fn emit_projection_ab_event(
         target: "projection_ab",
         // Un-sessioned calls log "none" and are always control (see
         // projection_decision); exclude them when joining arm -> task outcome.
-        session_id = session_id.unwrap_or("none"),
+        session_id = %session_id.map_or_else(|| "none".to_string(), crate::gateway::session_id::session_fp),
         server = server,
         tool = tool,
         arm = rec.arm,
@@ -1170,9 +1170,6 @@ impl MetaMcp {
         agent_id: Option<&str>,
         boundary: &str,
     ) -> Result<()> {
-        let Some(validator) = self.attestation_validator.as_ref() else {
-            return Ok(());
-        };
         let token = args.get("attestation").and_then(Value::as_str);
         // The requested action is the tool being invoked: the token's capability
         // allow-list must grant it (MIK-6163). Missing tool → empty action,
@@ -1180,8 +1177,39 @@ impl MetaMcp {
         // authenticity checks still run first, so a forged/expired token is
         // rejected on those grounds regardless of capability.
         let requested = args.get("tool").and_then(Value::as_str).unwrap_or_default();
-        match validator.validate_boundary_call(token, boundary, Some(requested), chrono::Utc::now())
-        {
+        self.check_attestation_scoped(
+            token,
+            crate::attestation::validator::AttestationScope::Capability(requested),
+            agent_id,
+            boundary,
+        )
+    }
+
+    /// The body of [`Self::check_attestation`], taking the token and what it
+    /// must grant directly. The direct route calls this for methods whose
+    /// target is not a tool (MIK-7570.ATTEST.1 part 3).
+    ///
+    /// # Errors
+    ///
+    /// Returns a JSON-RPC -32002 error only in enforce mode when the token is
+    /// missing or fails validation.
+    pub(crate) fn check_attestation_scoped(
+        &self,
+        token: Option<&str>,
+        scope: crate::attestation::validator::AttestationScope<'_>,
+        agent_id: Option<&str>,
+        boundary: &str,
+    ) -> Result<()> {
+        let Some(validator) = self.attestation_validator.as_ref() else {
+            return Ok(());
+        };
+        let required = match scope {
+            crate::attestation::validator::AttestationScope::Capability(capability) => {
+                Some(capability)
+            }
+            crate::attestation::validator::AttestationScope::AuthenticOnly => None,
+        };
+        match validator.validate_boundary_call(token, boundary, required, chrono::Utc::now()) {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
                 crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(
@@ -6029,3 +6057,12 @@ mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
+
+#[cfg(test)]
+mod session_fp_tests;
+
+#[cfg(test)]
+mod response_cache_error_tests;
+
+#[cfg(test)]
+mod ask_expiry_budget_tests;
