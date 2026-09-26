@@ -76,6 +76,7 @@ upgrading a running deployment.
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
+| 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 
 Numbers 18-20 are intentionally unused.
