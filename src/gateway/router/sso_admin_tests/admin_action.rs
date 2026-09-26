@@ -374,7 +374,11 @@ async fn ui_patch_writes_admin_action() {
     let uri = "/ui/api/backends/alpha";
     let body = json!({"url": format!("wss://{BODY_CANARY}.example/mcp")});
     let (status, answer) = fx.send(ui("PATCH", uri, &fx.alice(), &body)).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "no config path: {answer}");
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no config path: {answer}"
+    );
     let (status, answer) = fx.send(ui("PATCH", uri, STANDARD_KEY, &body)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
     let records = fx.admin_actions();
@@ -389,7 +393,10 @@ async fn ui_patch_writes_admin_action() {
         assert_eq!(record["http_status"], status, "{record}");
     }
     assert_alice(&records[0]);
-    assert!(!fx.raw().contains(BODY_CANARY), "the request body was logged");
+    assert!(
+        !fx.raw().contains(BODY_CANARY),
+        "the request body was logged"
+    );
 }
 
 /// E1-T12c (amended): a control-plane POST writes one `admin_action` each,
