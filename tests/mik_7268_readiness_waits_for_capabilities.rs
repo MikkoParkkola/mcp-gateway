@@ -35,6 +35,10 @@ fn spawn(directory: &Path, port: u16) -> Child {
     let config = json!({
         "server": {"host": "127.0.0.1", "port": port},
         "auth": {"enabled": true, "bearer_token": TOKEN, "public_paths": ["/health"]},
+        // Auth on requires an audit log (UPGRADING-4.0 item 43).
+        "security": {"transparency_log": {
+            "enabled": true, "path": directory.join("audit").join("log.jsonl")
+        }},
         "capabilities": {"enabled": true, "directories": [caps.to_string_lossy()]},
     });
     let config_path = directory.join("gateway.yaml");
@@ -97,6 +101,7 @@ async fn readyz_until_ready(
 async fn readyz_is_not_ready_until_every_capability_has_loaded() {
     let directory = tempfile::tempdir().expect("gateway directory");
     write_capabilities(&directory.path().join("caps"));
+    std::fs::create_dir_all(directory.path().join("audit")).expect("audit dir");
     let port = {
         let reservation = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
         reservation.local_addr().expect("address").port()

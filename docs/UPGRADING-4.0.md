@@ -1511,6 +1511,8 @@ so a slow scan never restarts a pod. Hot reloads after startup do not affect rea
 The shipped manifests follow: the compose healthcheck probes `/readyz` instead of `/livez`,
 and the example `RuntimeProfile` the `Gateway` references probes readiness on `/readyz` and
 liveness on `/livez` instead of `/health`. The container image healthcheck stays on `/livez`.
+The CRD's `RuntimeProfile` defaults stay `/health`, because `MCPServer` resources use the same
+profile type and an MCP server has no `/readyz`.
 
 **Action:** a startup probe on `/readyz` must allow for the scan. The shipped Kubernetes
 and Helm startup probe allows 60 seconds; the bundled catalogue loads in well under one.
