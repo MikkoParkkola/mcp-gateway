@@ -71,6 +71,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "audit export cursor and log; no secret, append-only",
     ),
     (
+        "src/control_plane/export_segments.rs",
+        "reads sealed audit log segments for export; no secret",
+    ),
+    (
         "src/control_plane/store.rs",
         "collections read through read_guarded_file (I4); raw opens are the generation probe, the 0600 writer and a dir sync",
     ),
@@ -116,6 +120,18 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/firewall/audit.rs",
         "append-only audit log; no secret",
+    ),
+    (
+        "src/security/transparency_log_rotation.rs",
+        "rotates the audit log: seal, rename, open record, reserve; no secret",
+    ),
+    (
+        "src/security/transparency_log_segments.rs",
+        "audit log segments, high-water mark and reserve; no secret",
+    ),
+    (
+        "src/security/transparency_log_verify.rs",
+        "reads audit log segments to verify the chain; no secret",
     ),
     ("src/skills/installer.rs", "skill bundles; public"),
     ("src/skills/parser.rs", "skill files; public"),

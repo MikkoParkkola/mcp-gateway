@@ -15,8 +15,6 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-#[cfg(test)]
-use super::TransparencyLogger;
 use super::segments::{self, HighWater, Segment};
 use super::{
     MAX_TAIL_SCAN_BYTES, TransparencyLogConfig, chain_line, read_last_nonempty_line,
@@ -94,6 +92,22 @@ pub(super) fn file_id(meta: &std::fs::Metadata) -> (u64, u64) {
     (meta.dev(), meta.ino())
 }
 
+/// A new active file's creation time is its identity off unix. NTFS
+/// "tunnels" the creation time of a file renamed away onto a new file created
+/// under the same name within seconds, which would hide a rotation from the
+/// other writers; stamping it now keeps the identities apart.
+#[cfg(windows)]
+fn stamp_created(file: &std::fs::File) -> io::Result<()> {
+    use std::os::windows::fs::FileTimesExt;
+    file.set_times(std::fs::FileTimes::new().set_created(std::time::SystemTime::now()))
+}
+
+#[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)] // the Windows variant can fail
+const fn stamp_created(_file: &std::fs::File) -> io::Result<()> {
+    Ok(())
+}
+
 #[cfg(not(unix))]
 pub(super) fn file_id(meta: &std::fs::Metadata) -> (u64, u64) {
     // No inode off unix: creation time stands in, best effort.
@@ -103,62 +117,6 @@ pub(super) fn file_id(meta: &std::fs::Metadata) -> (u64, u64) {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
     (0, t)
-}
-
-// ── Test seams ────────────────────────────────────────────────────────────────
-
-/// A write fault the tests arm on one logger.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WriteFault {
-    /// Write half the line, then ENOSPC on every write until `<path>.reserve`
-    /// is unlinked.
-    FullUntilReserveFreed,
-    /// ENOSPC on every write, and the reserve cannot be unlinked either.
-    FullForever,
-    /// The expiry record writes, its `sync_all` fails.
-    ExpirySyncFails,
-    /// ENOSPC on the open-record write right after a rename, once.
-    FullAfterRename,
-}
-
-#[cfg(test)]
-#[derive(Default)]
-pub(crate) struct TestHooks {
-    pub(crate) fault: std::sync::Mutex<Option<WriteFault>>,
-    pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
-    pub(crate) clock_offset: std::sync::atomic::AtomicI64,
-    /// Set once the disk-full path has unlinked the reserve.
-    pub(crate) reserve_released: std::sync::atomic::AtomicBool,
-    /// Set while an expiry record is being written.
-    pub(crate) expiry_in_flight: std::sync::atomic::AtomicBool,
-    /// Called between rename and the new open record, with the logger.
-    #[allow(clippy::type_complexity)]
-    pub(crate) in_rotation: std::sync::Mutex<Option<Box<dyn Fn(&TransparencyLogger) + Send>>>,
-}
-
-#[cfg(test)]
-impl TransparencyLogger {
-    pub(crate) fn arm_write_fault(&self, fault: Option<WriteFault>) {
-        *self.hooks.fault.lock().unwrap() = fault;
-    }
-    pub(crate) fn write_faults_fired(&self) -> usize {
-        self.hooks
-            .fault_fired
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-    pub(crate) fn set_clock_offset(&self, secs: i64) {
-        self.hooks
-            .clock_offset
-            .store(secs, std::sync::atomic::Ordering::Release);
-    }
-    pub(crate) fn on_rotation_window(&self, f: Box<dyn Fn(&TransparencyLogger) + Send>) {
-        *self.hooks.in_rotation.lock().unwrap() = Some(f);
-    }
-    /// Whether another thread could take `Inner` right now.
-    pub(crate) fn inner_is_free(&self) -> bool {
-        self.inner.try_lock().is_ok()
-    }
 }
 
 // ── Record helpers ────────────────────────────────────────────────────────────
@@ -355,11 +313,13 @@ pub(super) fn open_after_seal(
 ) -> io::Result<Recovered> {
     // Truncate, never `create_new`: an empty or torn-open active may exist.
     let fresh = || {
-        OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(path)
+            .open(path)?;
+        stamp_created(&file)?;
+        Ok::<_, io::Error>(file)
     };
     let file_seg = |seq| SegState {
         seq,
@@ -535,4 +495,61 @@ fn finish_pending_expiry(path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+// ── Test seams ────────────────────────────────────────────────────────────────
+
+/// A write fault the tests arm on one logger.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteFault {
+    /// Write half the line, then ENOSPC on every write until `<path>.reserve`
+    /// is unlinked.
+    FullUntilReserveFreed,
+    /// ENOSPC on every write, and the reserve cannot be unlinked either.
+    FullForever,
+    /// The expiry record writes, its `sync_all` fails.
+    ExpirySyncFails,
+    /// ENOSPC on the open-record write right after a rename, once.
+    FullAfterRename,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct TestHooks {
+    pub(crate) fault: std::sync::Mutex<Option<WriteFault>>,
+    pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
+    pub(crate) clock_offset: std::sync::atomic::AtomicI64,
+    /// Set once the disk-full path has unlinked the reserve.
+    pub(crate) reserve_released: std::sync::atomic::AtomicBool,
+    /// Set while an expiry record is being written.
+    pub(crate) expiry_in_flight: std::sync::atomic::AtomicBool,
+    /// Called between rename and the new open record, with the logger.
+    #[allow(clippy::type_complexity)]
+    pub(crate) in_rotation:
+        std::sync::Mutex<Option<Box<dyn Fn(&super::TransparencyLogger) + Send>>>,
+}
+
+#[cfg(test)]
+impl super::TransparencyLogger {
+    pub(crate) fn arm_write_fault(&self, fault: Option<WriteFault>) {
+        *self.hooks.fault.lock().unwrap() = fault;
+    }
+    pub(crate) fn write_faults_fired(&self) -> usize {
+        self.hooks
+            .fault_fired
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn set_clock_offset(&self, secs: i64) {
+        self.hooks
+            .clock_offset
+            .store(secs, std::sync::atomic::Ordering::Release);
+    }
+    pub(crate) fn on_rotation_window(&self, f: Box<dyn Fn(&super::TransparencyLogger) + Send>) {
+        *self.hooks.in_rotation.lock().unwrap() = Some(f);
+    }
+    /// Whether another thread could take `Inner` right now.
+    pub(crate) fn inner_is_free(&self) -> bool {
+        self.inner.try_lock().is_ok()
+    }
 }

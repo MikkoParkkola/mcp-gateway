@@ -83,7 +83,7 @@ fn legacy_read_audit_cursor_after_rotation_resets() {
         .unwrap()
         .len();
     fill_until_rotated(&store, dir.path(), 1);
-    let filter = AuditFilter::new(10_000).resume(AuditCursor::legacy_for_test(len));
+    let filter = AuditFilter::new(10_000).resume(AuditCursor::at(len));
     let page = store.read_audit(&filter).unwrap();
     assert!(
         page.cursor_reset,

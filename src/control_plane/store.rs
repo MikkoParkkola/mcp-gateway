@@ -137,12 +137,6 @@ impl AuditCursor {
             segment: None,
         }
     }
-
-    /// A pre-D6 offset-only cursor, for the legacy-cursor test.
-    #[cfg(test)]
-    pub(crate) const fn legacy_for_test(offset: u64) -> Self {
-        Self::at(offset)
-    }
 }
 
 /// One bounded page of audit events, newest first.
