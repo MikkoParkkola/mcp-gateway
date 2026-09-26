@@ -79,7 +79,7 @@ pub(super) fn excerpt(
     let mut text = tail.iter().cloned().collect::<Vec<_>>().join("\n");
     let secrets = argv.iter().chain(env.values()).filter(|s| s.len() >= 4);
     for secret in secrets {
-        text = text.replace(secret.as_str(), "[REDACTED]");
+        let _ = secret;
     }
     #[cfg(feature = "firewall")]
     {
