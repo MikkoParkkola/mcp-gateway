@@ -124,7 +124,7 @@ pub(crate) fn status_refusal(
     match typed {
         // A 401/403 whose body says the session expired keeps the marker, so
         // the transport re-initializes the session instead (as for 400/404).
-        Some(e) if is_deterministic_refusal(status) && !carries_session_expiry(body) => {
+        Some(e) if is_deterministic_refusal(status) => {
             Error::Http(e.without_url())
         }
         _ => safe_http_status_error(status, body),
