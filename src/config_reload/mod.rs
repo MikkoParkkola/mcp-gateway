@@ -52,7 +52,7 @@ use std::time::{Duration, Instant};
 use notify::{
     Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::{error, info, warn};
@@ -1046,7 +1046,7 @@ fn matching_env_file(event: &Event, env_paths: &[PathBuf]) -> Option<PathBuf> {
 /// Holds the underlying `notify` watcher alive for the lifetime of the struct.
 pub struct ConfigWatcher {
     /// Kept alive to prevent the OS watcher from being dropped.
-    _watcher: Mutex<Option<RecommendedWatcher>>,
+    _chain: Arc<watch_chain::ChainWatch>,
 }
 
 impl ConfigWatcher {
@@ -1082,7 +1082,16 @@ impl ConfigWatcher {
             .map(absolute_watch_path)
             .collect();
 
-        let watcher = Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
+        let (wake_tx, wake_rx) = tokio::sync::watch::channel(());
+        let chain =
+            Self::create_notify_watcher(event_tx.clone(), wake_tx, &config_path, &env_file_paths)?;
+        watch_chain::spawn_rewatch_task(
+            config_path.clone(),
+            Arc::clone(&chain),
+            wake_rx,
+            event_tx,
+            shutdown_rx.resubscribe(),
+        );
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
@@ -1099,9 +1108,7 @@ impl ConfigWatcher {
             shutdown_rx,
         );
 
-        Ok(Self {
-            _watcher: Mutex::new(Some(watcher)),
-        })
+        Ok(Self { _chain: chain })
     }
 
     /// Create the low-level `notify` watcher and register all watch paths.
@@ -1111,9 +1118,10 @@ impl ConfigWatcher {
     /// directories are watched only once.
     fn create_notify_watcher(
         event_tx: tokio::sync::mpsc::Sender<ReloadTrigger>,
+        _wake_tx: tokio::sync::watch::Sender<()>,
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
-    ) -> Result<RecommendedWatcher> {
+    ) -> Result<Arc<watch_chain::ChainWatch>> {
         let named_config_path = absolute_watch_path(config_path.to_path_buf());
         let closure_config_path = named_config_path.clone();
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
@@ -1187,7 +1195,10 @@ impl ConfigWatcher {
             watched_dirs.insert(dir);
         }
 
-        Ok(watcher)
+        Ok(watch_chain::ChainWatch::new(
+            watcher,
+            std::collections::BTreeSet::new(),
+        ))
     }
 
     /// Spawn the debounced reload task.
@@ -2288,6 +2299,7 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 }
 
 mod grant_delta;
+mod watch_chain;
 
 #[cfg(test)]
 mod c4_enable_tests;
