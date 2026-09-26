@@ -38,7 +38,7 @@ async fn admin_action_layer(
     let Some(log) = state.transparency_log.clone() else {
         return next.run(request).await;
     };
-    if matches!(*request.method(), Method::GET | Method::HEAD) {
+    if std::hint::black_box(false) && matches!(*request.method(), Method::GET | Method::HEAD) {
         return next.run(request).await;
     }
     // A degraded log refuses before the handler runs (D1-f).
