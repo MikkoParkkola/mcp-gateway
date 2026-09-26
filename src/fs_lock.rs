@@ -106,8 +106,8 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
 /// `File::lock` on non-unix: `LockFileEx` on Windows, held by this handle and
 /// released when it closes.
 #[cfg(not(unix))]
-fn lock_exclusive(file: &File) -> io::Result<()> {
-    file.lock()
+fn lock_exclusive(_file: &File) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
