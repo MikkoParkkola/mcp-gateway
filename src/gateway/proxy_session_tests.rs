@@ -227,6 +227,8 @@ fn the_transparency_log_stores_a_session_fingerprint() {
     let found = show_session_entries(tmp.path(), id).unwrap();
     assert_eq!(found.len(), 1, "a lookup by the raw id finds the entry");
     assert_eq!(found[0]["session_id"], session_fp(id));
+    let by_fp = show_session_entries(tmp.path(), &session_fp(id)).unwrap();
+    assert_eq!(by_fp.len(), 1, "a lookup by the fingerprint finds it");
     // An entry written before F9 carries the raw id and stays findable by it.
     let legacy = "gw-1e9ac700-pre-upgrade-session";
     let mut file = std::fs::OpenOptions::new()

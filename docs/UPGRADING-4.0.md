@@ -1225,6 +1225,7 @@ not relay. Poll there too.
 
 The legacy `initialize` result differs from 3.5.0 in exactly those three flags (and, over
 stdio, `tools.listChanged`).
+
 ## 58. Session ids are always minted by the gateway
 
 A legacy HTTP session id is the only thing that proves a session is yours when
@@ -1244,9 +1245,10 @@ the caller has no credential, so the gateway now treats it as a secret.
   id owns that session. To separate users, turn auth on and keep `/mcp` off the
   public paths.
 - **Logs carry an 8-hex fingerprint, not the id.** So do the firewall audit log
-  and the transparency log when they are on (`mcp-gateway audit show --session <id>` still finds entries by the
-  raw id, including entries written before the upgrade). A fingerprint is for
-  correlation only; two sessions can share one. The `session_id` field keeps its
+  and the transparency log when they are on. `mcp-gateway audit show --session`,
+  which reads the transparency log, accepts the raw id or its fingerprint and still
+  finds entries written before the upgrade. A fingerprint is for correlation only:
+  two sessions can share one, so a lookup can return another session's entries. The `session_id` field keeps its
   name in the firewall audit NDJSON and the transparency log; tools that parse it
   get an 8-hex value from this release on. Ids in files written before the upgrade
   stay raw, but they name no live session: sessions do not survive the restart.

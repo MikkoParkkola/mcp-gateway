@@ -36,7 +36,7 @@ async fn judge_on_the_empty_id(policy: ConfirmationPolicy) -> super::super::Gate
         ),
     )
     .await
-    .expect("nobody holds \"\", so the gate does not wait for an answer")
+    .expect("the empty id is never asked, so the gate does not wait for an answer")
 }
 
 #[tokio::test]
