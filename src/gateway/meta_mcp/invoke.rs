@@ -3573,7 +3573,6 @@ impl MetaMcp {
                 let candidates: Vec<&str> = cached_names
                     .iter()
                     .map(String::as_str)
-                    .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
                     .collect();
                 match did_you_mean(tool, &candidates, 3, 3) {
                     Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
