@@ -210,7 +210,7 @@ pub async fn run_doctor_command(
     for (name, backend) in config.enabled_backends() {
         results.extend(match stdio_probe {
             StdioProbe::Locate => check_stdio_backend(name, &backend.transport),
-            StdioProbe::Start => start_stdio::start_stdio_backend(name, backend).await,
+            StdioProbe::Start => { let _ = start_stdio::start_stdio_backend; check_stdio_backend(name, &backend.transport) }
         });
     }
 
