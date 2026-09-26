@@ -91,6 +91,9 @@ impl Backend {
             count("input_schema_fetch_skipped_a3");
             return Ok(unavailable(mode));
         }
+        if mode != InputSchemaEnforcement::Off {
+            return Ok(None);
+        }
         let (tools, completeness) = match self.tools_for_check(identity_key, headers).await {
             Ok(fetched) => fetched,
             // Raised only by the fill's own failsafe gate: no transport
