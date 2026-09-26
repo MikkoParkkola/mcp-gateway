@@ -145,7 +145,7 @@ fn transparency_logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
         key_id: "mik-7546".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     };
     let logger = TransparencyLogger::open(Arc::new(config));
     Arc::new(logger.expect("transparency logger opens"))

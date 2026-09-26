@@ -175,7 +175,7 @@ mod identity_propagation_audit {
             enabled: true,
             path: file.path().to_string_lossy().to_string(),
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         });
         let logger = TransparencyLogger::open(cfg).expect("logger opens");
         (file, logger)
@@ -448,7 +448,7 @@ mod identity_propagation_audit {
                 enabled: true,
                 path,
                 key_id: "test".to_string(),
-                shared_secret: String::new(),
+                ..TransparencyLogConfig::default()
             });
             // `open()` performs no write (only reads an existing tail, if
             // any), so it must still succeed under the zero file-size limit —

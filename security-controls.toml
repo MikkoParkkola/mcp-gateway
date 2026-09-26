@@ -48,6 +48,18 @@ reason = "the audit envelope's types (who, outcome, credential kind); it shapes 
 module = "src/security/response_policy.rs"
 reason = "server-owned correlation shared by the response path and the transport adapters; a helper, not a gate"
 
+[[coverage.not_a_control]]
+module = "src/security/audit_rotation_config.rs"
+reason = "the audit log's rotation settings and their load-time bounds; configuration, it refuses no request"
+
+[[coverage.not_a_control]]
+module = "src/security/transparency_log_append.rs"
+reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
+
+[[coverage.not_a_control]]
+module = "src/security/transparency_log_segments.rs"
+reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
+
 # --- request-path gates, NFR.SEC.1 inventory rows 1-14 ---
 
 [[control]]
@@ -320,6 +332,20 @@ description = "completed tool invocations are committed to a hash-chain append-o
 source = "src/security/transparency_log.rs"
 probe = "none"
 reason = "an audit record, not a refusal; its absence leaves no signal in any response"
+
+[[control]]
+id = "audit-log-rotation"
+description = "the audit log rotates into sealed, hash-linked segments and records every deletion as a signed audit_segment_expired record before the file goes (D6)"
+source = "src/security/transparency_log_rotation.rs"
+probe = "none"
+reason = "an on-disk property of the log; nothing on the wire changes when it rotates"
+
+[[control]]
+id = "audit-log-verify"
+description = "audit verify reads every segment and reports a deleted, truncated, reordered or re-linked segment, or a missing active tail against .hwm, as tampering (D6)"
+source = "src/security/transparency_log_verify.rs"
+probe = "none"
+reason = "an offline check an operator runs against the files; a live install exposes no verify endpoint to probe"
 
 [[control]]
 id = "audit-fail-closed"
