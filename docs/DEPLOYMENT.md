@@ -915,7 +915,23 @@ re-read on every change in a directory it runs through:
 - a Kubernetes ConfigMap mounted as a directory (`gateway.yaml ->
   ..data/gateway.yaml`, `..data -> ..<timestamp>`) reloads when kubelet swaps
   `..data` to the new generation;
+- a release directory link that is the config's own parent directory
+  (Capistrano's `--config /srv/app/current/gateway.yaml`, `current ->
+  releases/vN`) is followed: retargeting `current`, by rename or by `rm` and
+  `ln -s`, reloads the new release, and the reload reads the new release's file;
 - a directory the chain no longer runs through stops being watched.
+
+Limits, all as before this change:
+
+- only a directory link that is a file's immediate parent is watched. With the
+  config one level further down (`current/conf/gateway.yaml`), retargeting
+  `current` is not heard: name the config through a path whose parent is the
+  release link, or through a file symlink;
+- a directory link higher in the path (`/srv/app` itself a link, macOS `/var`)
+  is resolved but not watched;
+- renaming a real (not linked) parent directory is not heard;
+- env files keep their startup path: an env file under `current/` stays on the
+  old release after a retarget (#1286).
 
 ### What a config reload applies
 

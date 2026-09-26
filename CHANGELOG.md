@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file in a directory the gateway was not watching reloaded once and then missed every later
   write, serving the old config silently; a directory the link left stayed watched forever. The
   watcher now follows the whole link chain on every change, including a Kubernetes ConfigMap's
-  `..data` swap. (#453)
+  `..data` swap, a Capistrano-style `current` directory link retargeted by rename or by
+  `rm` and `ln -s`, and reads the new release on reload. Limits are listed in DEPLOYMENT
+  under "What triggers a config reload". (#453)
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
