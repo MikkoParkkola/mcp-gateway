@@ -76,8 +76,9 @@ struct Ledger {
 
 /// The call id a frame terminates, if it is a response to a numeric id.
 fn terminal_id(frame: &Value) -> Option<i64> {
+    // MUTANT M-L3: an ask counts as terminal.
     if frame.get("method").is_some() {
-        return None;
+        return frame.get("id").and_then(Value::as_i64);
     }
     if frame.get("result").is_none() && frame.get("error").is_none() {
         return None;
