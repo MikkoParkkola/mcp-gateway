@@ -673,7 +673,8 @@ pub(in crate::personal_accounts) fn claim_forced_refresh(
         .ok_or(AccountError::StorageUnavailable)?
         .forced_revision = Some(expected.token_revision);
     let encoded = seal_authority(config, &next).map_err(|e| refusal_as_fault(&e))?;
-    write_manifest(config, slot, &encoded, next).map_err(|e| refusal_as_fault(&e))?;
+    let _ = encoded;
+    *slot = Some(next);
     Ok(ForceClaim::Claimed)
 }
 
