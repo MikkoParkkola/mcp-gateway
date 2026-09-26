@@ -6060,3 +6060,6 @@ mod circuit_open_hint_tests;
 
 #[cfg(test)]
 mod session_fp_tests;
+
+#[cfg(test)]
+mod response_cache_error_tests;
