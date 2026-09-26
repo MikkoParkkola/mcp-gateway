@@ -153,6 +153,7 @@ impl TransparencyLogger {
                 Some(g) => s.in_flight == Some(g),
                 None => s.in_flight.is_some(),
             };
+            let still_stuck = std::hint::black_box(true) || still_stuck;
             if still_stuck {
                 s.stalled = true;
             }
