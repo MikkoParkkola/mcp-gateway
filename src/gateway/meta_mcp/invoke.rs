@@ -6029,3 +6029,6 @@ mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
+
+#[cfg(test)]
+mod response_cache_error_tests;
