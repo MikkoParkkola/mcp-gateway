@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
+  token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
+  read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
+  collections may be read by others but not changed by them. `config export` writes the client
+  config it edits as `0600`. UPGRADING-4.0 item 54. (F18)
+
 ### Fixed
 
 - **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`

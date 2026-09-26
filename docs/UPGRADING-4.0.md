@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46 or 51 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 or 54 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -13,10 +13,10 @@ changes to the license and to a removed CLI surface rather than to running behav
 7 and 8 are decided per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 38 and 51 refuse the start with their own error, which names the setting, so a notice would
+Items 38, 51 and 54 refuse the start with their own error, which names the setting or file, so a notice would
 only repeat it; item 51 also warns once per `role: admin` rule at every load.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46 and 51 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -71,6 +71,7 @@ upgrading a running deployment.
 | 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 | 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
+| 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
 
 Numbers 18-20 are intentionally unused.
 
@@ -800,6 +801,14 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
 
+The file itself must be a regular file (a symlink to one is fine, which is how Kubernetes projects a
+Secret or ConfigMap). A FIFO, device, directory, `/dev/stdin`, `/dev/fd/N` or shell process substitution
+`<(...)` given as a config, env file, `file:` secret, key, token, credential or trust file is refused on
+Unix, naming what it is; write the content to a file instead. Before 4.0 a FIFO there hung the start.
+
+Item 54 applies this rule to TLS keys, OAuth token files, capability credential files and the
+CA key, and a write-only form of it to certificates, CRLs and grant and policy files.
+
 ## 36. The Helm chart pins its pod identity and caps its `state` volume
 
 - **`podSecurityContext.runAsUser`, `runAsGroup` and `fsGroup` accept only 1001**, the image's
@@ -1342,6 +1351,45 @@ caller.
   `mcp_backend_requests_total{status="rate_limited"}`.
 - A breaker that is really open is unchanged: same message, and it still counts as a
   failure.
+
+## 54. Keys, tokens and credential files others can read, and trust files they can change, are refused
+
+Item 35's rule, unchanged, now covers four more files that hold secrets. A refusal names the file,
+its mode and the fix, and points at item 35.
+
+| File | When it is read | A refusal |
+|---|---|---|
+| `mtls.server_key` | at startup | stops the gateway |
+| OAuth token files under `~/.mcp-gateway/oauth/` | each time a backend token is looked up | logs an ERROR and treats the token as absent, so the backend asks for authorisation again. The new token is saved `0600`. |
+| a capability credential `file:/path.json:field` | on each tool call that uses it | fails that call |
+| the CA key given to `mcp-gateway tls issue-server` / `issue-client` as `--ca-key` | when the command runs | the command exits 1 and issues nothing |
+
+Four more files decide whom the gateway trusts. They may stay readable by others, but a file that
+other users can **change** is refused (group- or world-write bit set). Fix: `chmod go-w <file>`.
+
+| File | When it is read | A refusal |
+|---|---|---|
+| `mtls.server_cert`, `mtls.ca_cert`, `mtls.crl_path` | at startup | stops the gateway |
+| the identity-grants file | at startup, on grant reload, and by `mcp-gateway identity` | at startup it stops the gateway if `fail_on_error` is set, otherwise no grants load and personal capabilities fail closed; on reload it is logged and the live grants stay; the CLI exits 1 |
+| control-plane `grants.json` / `policies.json` | on each control-plane read | that operation fails, and nothing is overwritten |
+
+Files the gateway writes itself pass, whatever the umask: grants, control-plane collections, OAuth
+tokens and the keys from `tls init-ca` / `issue-*` are created `0600`, and the certificates those
+commands write are set to `0644`. `file:` secret references in the config (item 44) were already
+held to item 35.
+
+- A key or token that was readable by others may already have been copied. Rotate the key, or revoke
+  the token with the provider, rather than only running `chmod`.
+- OAuth token files written by 3.x may be `0644`. `chmod 600 ~/.mcp-gateway/oauth/*_tokens.json`
+  keeps them, or let the gateway ask for authorisation again. The refusal is logged at ERROR once
+  per file, then at DEBUG, so a busy backend does not flood the log.
+- **Kubernetes:** mount a TLS key Secret the way the chart mounts the config: `defaultMode: 288`
+  (octal `0440`) on the Secret volume, and `podSecurityContext.fsGroup` set to a group the gateway's
+  UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
+  `root:root 0644` and is refused.
+- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
+- `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
+  stderr when that changes the file's mode.
 
 ## 58. Session ids are always minted by the gateway
 
