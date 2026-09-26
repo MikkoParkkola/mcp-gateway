@@ -1460,6 +1460,26 @@ To reproduce a pin from a shell, strip the CR of each CRLF first:
 pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by the gateway
 and dropped by `grep -v` (item 64).
 
+## 63. Error results are never served from a response cache
+
+In 3.x and in the 4.0 betas, the response cache stored an error result like any answer and
+served it to every later call with the same key until the TTL ran out (60 s by default). That
+included the gateway's own refusals: a rate-limit refusal, an open breaker, a failed connect.
+One 10 ms throttle could therefore answer hundreds of calls with a stale refusal after the
+bucket had refilled, and a backend that recovered kept being reported as failing.
+
+- **A result with `isError: true` is no longer cached**, whether the gateway produced it or the
+  backend returned it. The next call is dispatched again.
+- **The capability cache behaves the same way.** A 2xx upstream body carrying `isError: true`
+  is not stored (a non-2xx response never was).
+- Successful results are cached exactly as before, under the same keys and TTLs.
+- The idempotency store is unchanged: a caller retrying with the same idempotency key still
+  receives its own settled outcome, including a failure, as ADR-012 requires.
+
+What to check: a deployment that leaned on a cached error to shed load from a failing backend
+now reaches that backend on every call. Use the circuit breaker and `failsafe.rate_limit`
+for that; they are the load-shedding controls.
+
 ## 64. Text after a line break inside a pin line is hashed
 
 The pin hash excludes a capability's top-level `sha256:` line. YAML also ends a line at a

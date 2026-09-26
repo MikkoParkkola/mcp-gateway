@@ -66,8 +66,8 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | **transport** | `transport/` | Wire protocols: stdio subprocess I/O, HTTP client, SSE streaming |
 | **protocol** | `protocol/` | MCP JSON-RPC types. `initialize` negotiates `SUPPORTED_VERSIONS` — 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25. 2026-07-28 is reached only on the stateless `POST /mcp` path, via the `MCP-Protocol-Version` header (`MODERN_VERSIONS`, gated on `server.modern_protocol`); it is not negotiable through the handshake |
 | **config** | `config.rs` | YAML + env config loading via figment, env file support, `${VAR}` expansion |
-| **capability** | `capability/` | REST-to-MCP bridge: load YAML definitions, execute HTTP calls, hot-reload |
-| **cache** | `cache.rs` | Response cache with TTL eviction and per-capability overrides |
+| **capability** | `capability/` | REST-to-MCP bridge: load YAML definitions, execute HTTP calls, hot-reload. Its response cache never stores an error (`isError`) body |
+| **cache** | `cache.rs` | Response cache with TTL eviction and per-capability overrides. Never stores a non-final or error (`isError`) result |
 | **failsafe** | `failsafe/` | Circuit breaker (closed/open/half-open), retry with exponential backoff, token-bucket rate limiter |
 | **oauth** | `oauth/` | OAuth 2.0 client: authorization code flow, token refresh, dynamic registration |
 | **discovery** | `discovery/` | Meta-MCP logic: list, search (ranked), invoke routing |
