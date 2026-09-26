@@ -216,19 +216,23 @@ mod tests {
         // Use PATH which is always set on all platforms
         let resolver = SecretResolver::new();
         let result = resolver.resolve("Path: {env.PATH}").unwrap();
-        assert!(result.starts_with("Path: /") || result.starts_with("Path: C"));
-        assert_ne!(result, "Path: ");
+        let path = std::env::var("PATH").expect("PATH is set");
+        assert!(!path.is_empty());
+        assert_eq!(result, format!("Path: {path}"));
     }
 
     #[test]
     fn test_resolve_multiple_patterns() {
-        // Use HOME and PATH which are always available
+        // The home variable and PATH, which every platform sets; Windows names
+        // the home `USERPROFILE` and leaves `HOME` unset.
+        let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
         let resolver = SecretResolver::new();
         let result = resolver
-            .resolve("Home: {env.HOME}, Path: {env.PATH}")
+            .resolve(&format!("Home: {{env.{home_var}}}, Path: {{env.PATH}}"))
             .unwrap();
-        assert!(!result.contains("{env."));
-        assert!(result.contains("Home: /") || result.contains("Home: C"));
+        let home = std::env::var(home_var).expect("home is set");
+        let path = std::env::var("PATH").expect("PATH is set");
+        assert_eq!(result, format!("Home: {home}, Path: {path}"));
     }
 
     #[test]

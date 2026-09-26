@@ -209,3 +209,86 @@ fn refusal_fix_for_a_reference_names_the_secret_mount() {
     );
     assert!(!other.contains("config volume"), "{other}");
 }
+
+// ── F18: the integrity rule and the new nouns ─────────────────────────────────
+
+#[test]
+fn integrity_file_refusal_table() {
+    for mode in 0o000..=0o777_u32 {
+        let got = super::integrity_file_refusal(mode);
+        let want = if mode & 0o002 != 0 {
+            Some(Refusal::World)
+        } else if mode & 0o020 != 0 {
+            Some(Refusal::GroupWrite)
+        } else {
+            None
+        };
+        assert_eq!(got, want, "mode {mode:04o}");
+        assert_eq!(got.is_some(), mode & 0o022 != 0, "mode {mode:04o}");
+    }
+}
+
+#[test]
+fn refusal_fix_names_secret_volume_for_new_nouns() {
+    let path = Path::new("/run/secrets/tls/server.key");
+    for what in [
+        super::SecretFile::TlsKey,
+        super::SecretFile::OAuthToken,
+        super::SecretFile::CredentialFile,
+        super::SecretFile::Reference,
+    ] {
+        let other = super::refusal_fix(path, false, what);
+        assert!(
+            other.contains("defaultMode: 288") && other.contains("fsGroup"),
+            "{what:?}: {other}"
+        );
+        assert!(!other.contains("config volume"), "{what:?}: {other}");
+        let own = super::refusal_fix(path, true, what);
+        assert!(own.contains("chmod 600"), "{what:?}: {own}");
+    }
+    for what in [
+        super::SecretFile::TlsCert,
+        super::SecretFile::TlsCrl,
+        super::SecretFile::IdentityGrants,
+        super::SecretFile::ControlPlaneCollection,
+    ] {
+        let own = super::refusal_fix(path, true, what);
+        assert!(
+            own.contains("chmod go-w") && !own.contains("chmod 600"),
+            "{what:?}: {own}"
+        );
+    }
+}
+
+#[test]
+fn integrity_file_readable_loads_and_writable_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("ca.pem");
+    write_mode(&path, "public", 0o644);
+    assert_eq!(
+        super::read_secret_file(&path, super::SecretFile::TlsCert).expect("0644 loads"),
+        "public"
+    );
+    write_mode(&path, "public", 0o664);
+    let err = super::read_secret_file(&path, super::SecretFile::TlsCert)
+        .expect_err("group-writable refused")
+        .to_string();
+    assert!(
+        err.contains("TLS certificate") && err.contains("change it") && err.contains("chmod go-w"),
+        "{err}"
+    );
+}
+
+/// The 64 KiB cap is for one `file:` secret only: a CRL or a grants file may
+/// be larger.
+#[test]
+fn size_cap_applies_to_references_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big.pem");
+    write_mode(&path, &"a".repeat(64 * 1024 + 1), 0o644);
+    for what in [super::SecretFile::TlsCrl, super::SecretFile::IdentityGrants] {
+        assert!(super::read_secret_file(&path, what).is_ok(), "{what:?}");
+    }
+    write_mode(&path, &"a".repeat(64 * 1024 + 1), 0o600);
+    assert!(super::read_secret_file(&path, super::SecretFile::Reference).is_err());
+}

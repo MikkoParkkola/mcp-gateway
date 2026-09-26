@@ -55,7 +55,11 @@ fn write_grants(path: &std::path::Path, rows: &[IdentityGrant]) {
         "schema_version": crate::identity_grants::IDENTITY_GRANTS_FILE_SCHEMA_VERSION,
         "grants": rows,
     });
-    std::fs::write(path, serde_json::to_vec_pretty(&file).expect("serialize")).expect("write");
+    crate::gateway::test_helpers::write_owner_only(
+        path,
+        serde_json::to_vec_pretty(&file).expect("serialize"),
+    )
+    .expect("write");
 }
 
 fn allows(store: &Store, subject: &str, capability: &str) -> bool {
@@ -267,7 +271,7 @@ async fn a_bare_exact_row_reload_keeps_the_previous_grants() {
         "schema_version": crate::identity_grants::IDENTITY_GRANTS_FILE_SCHEMA_VERSION,
         "grants": [row],
     });
-    std::fs::write(&path, file.to_string()).expect("write");
+    crate::gateway::test_helpers::write_owner_only(&path, file.to_string()).expect("write");
     let (store, epoch, sink) = live_store(&path);
     let ctx = ctx(sink);
 
@@ -283,4 +287,30 @@ async fn a_bare_exact_row_reload_keeps_the_previous_grants() {
         "the live grant still applies"
     );
     assert!(allows(&store, "bob", "mail"));
+}
+
+// F18 I3 — goes red when a reload reads a grants file other users can change:
+// the reload is refused and the live grants still apply.
+#[cfg(unix)]
+#[tokio::test]
+async fn identity_grants_reload_refused_keeps_live() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    write_grants(&path, &[revoked(grant("g1", "alice", "cal"))]);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).expect("chmod");
+    let (store, epoch, sink) = live_store(&path);
+    let ctx = ctx(Arc::clone(&sink));
+    let epoch_before = epoch.load(Ordering::Acquire);
+
+    let refused = reload_bounded(&ctx)
+        .await
+        .expect("a wired sink reports")
+        .expect_err("a world-writable grants file is refused");
+    assert!(refused.contains("change it"), "{refused}");
+    assert!(
+        allows(&store, "alice", "cal"),
+        "the live grants still apply"
+    );
+    assert_eq!(epoch.load(Ordering::Acquire), epoch_before);
 }

@@ -375,6 +375,10 @@ mcp-gateway tls issue-client \
   --cn "claude-code-agent" --out /etc/mcp-gateway/tls/clients
 ```
 
+These commands write keys `0600` and certificates `0644`. The gateway refuses a key other
+users can read, and a certificate, CA or CRL other users can change. Certificates or a CRL you
+bring from elsewhere need the same: `chmod go-w` them (UPGRADING-4.0 item 54).
+
 Enable mTLS in config:
 
 ```yaml
