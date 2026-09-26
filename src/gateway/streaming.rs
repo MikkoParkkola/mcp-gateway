@@ -368,9 +368,6 @@ impl NotificationMultiplexer {
     ///
     /// The empty id is the router's "no session" and is never delivered to (F9).
     pub fn send_to_session(&self, session_id: &str, notification: TaggedNotification) -> bool {
-        if session_id.is_empty() {
-            return false;
-        }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
             match session.tx.send(notification) {
