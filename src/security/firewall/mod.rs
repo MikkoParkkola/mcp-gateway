@@ -454,7 +454,7 @@ impl Firewall {
 
             if above_block {
                 tracing::warn!(
-                    session_id = %crate::gateway::session_id::session_fp(session_id),
+                    session_id = session_id,
                     server = server,
                     tool = tool,
                     anomaly_score = score,
