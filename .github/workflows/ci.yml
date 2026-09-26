@@ -265,6 +265,15 @@ jobs:
       # a subset, and this is what catches a unix-only API slipping into any
       # target it does not run.
       - run: cargo test --all-features --no-run
+      # The unoptimized exe must start. Clap's derived parser needs ~900 KB of
+      # stack in a debug build, over Windows' 1 MiB main-thread default, so
+      # every test that spawns the binary died before parsing its arguments.
+      - name: The debug exe starts
+        shell: bash
+        run: |
+          out=$(./target/debug/mcp-gateway.exe --version 2>&1)
+          echo "$out"
+          [[ "$out" == mcp-gateway\ * ]]
       # Library and binary unit tests. Two module trees are skipped rather than
       # run, both for one reason: their fixtures open the task store or the
       # personal-account store, which refuse on non-unix by design (W1, #1142).
