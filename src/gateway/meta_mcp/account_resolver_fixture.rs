@@ -438,6 +438,9 @@ pub(super) fn custody_with_rotation(seed: &[(AccountKey, GrantRecord)], rotated:
 pub(super) struct Dispatch {
     pub(super) headers: Vec<(String, String)>,
     pub(super) identity_key: Option<String>,
+    /// The JSON-RPC method. F13 lists a cold slot before a `tools/call`, so
+    /// positive assertions read the `tools/call` records only.
+    pub(super) method: String,
 }
 
 impl Dispatch {
@@ -461,8 +464,16 @@ impl Dispatches {
         self.calls.lock().len()
     }
 
+    /// The `tools/call` dispatches, in order. `count()` still counts every
+    /// method, so a refusal proved by `count() == 0` also rules out the
+    /// gateway's own cold-slot `tools/list` (F13).
     pub(super) fn calls(&self) -> Vec<Dispatch> {
-        self.calls.lock().clone()
+        self.calls
+            .lock()
+            .iter()
+            .filter(|d| d.method == "tools/call")
+            .cloned()
+            .collect()
     }
 
     /// The single dispatch expected by a positive case; panics loudly if the
@@ -474,6 +485,17 @@ impl Dispatches {
     }
 }
 
+/// The backend's answer: its one tool `read` (a free map) for the cold-slot
+/// `tools/list` F13 sends before judging a call, `ok` for everything else.
+fn answer(method: &str) -> crate::protocol::JsonRpcResponse {
+    let result = if method == "tools/list" {
+        json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]})
+    } else {
+        json!({"content": [{"type": "text", "text": "ok"}]})
+    };
+    crate::protocol::JsonRpcResponse::success(crate::protocol::RequestId::Number(1), result)
+}
+
 struct CapturingTransport {
     dispatches: Arc<Dispatches>,
 }
@@ -482,7 +504,7 @@ struct CapturingTransport {
 impl crate::transport::Transport for CapturingTransport {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         // Recorded too: a dispatch that carried NO per-request headers is still
@@ -490,16 +512,14 @@ impl crate::transport::Transport for CapturingTransport {
         self.dispatches.calls.lock().push(Dispatch {
             headers: Vec::new(),
             identity_key: None,
+            method: method.to_string(),
         });
-        Ok(crate::protocol::JsonRpcResponse::success(
-            crate::protocol::RequestId::Number(1),
-            json!({"content": [{"type": "text", "text": "ok"}]}),
-        ))
+        Ok(answer(method))
     }
 
     async fn request_with_headers(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
@@ -508,11 +528,9 @@ impl crate::transport::Transport for CapturingTransport {
         self.dispatches.calls.lock().push(Dispatch {
             headers: extra_headers.to_vec(),
             identity_key: identity_key.map(str::to_string),
+            method: method.to_string(),
         });
-        Ok(crate::protocol::JsonRpcResponse::success(
-            crate::protocol::RequestId::Number(1),
-            json!({"content": [{"type": "text", "text": "ok"}]}),
-        ))
+        Ok(answer(method))
     }
 
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {

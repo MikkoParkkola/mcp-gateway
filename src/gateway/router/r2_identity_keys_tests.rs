@@ -27,7 +27,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// Mints `Bearer minted-for-<subject>` bound to `<subject>@<audience>`.
-struct PerIdentityMint;
+pub(super) struct PerIdentityMint;
 
 #[async_trait::async_trait]
 impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
@@ -120,7 +120,9 @@ struct Gateway {
 
 /// A logger on `file`. A per-user mint is refused without an audit sink, so
 /// the fixture needs one on each route that mints.
-fn transparency_logger(file: &tempfile::NamedTempFile) -> Arc<crate::security::TransparencyLogger> {
+pub(super) fn transparency_logger(
+    file: &tempfile::NamedTempFile,
+) -> Arc<crate::security::TransparencyLogger> {
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),

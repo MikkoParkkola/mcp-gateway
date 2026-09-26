@@ -32,9 +32,17 @@ struct OkTransport;
 impl Transport for OkTransport {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        // F13: a cold call lists the backend before R2 judges it (closed by
+        // default), so the fixture serves the one tool its calls name.
+        if method == "tools/list" {
+            return Ok(crate::protocol::JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}),
+            ));
+        }
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             RequestId::Number(1),
             json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),

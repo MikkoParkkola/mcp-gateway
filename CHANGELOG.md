@@ -137,6 +137,15 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
+- **R2 checks a tool call even when the caller never listed the backend** (F13, MIK-7586,
+  #1141). A `tools/call` on a cold catalogue slot now lists that backend's tools once, as the
+  caller, before judging the call's argument keys, instead of forwarding it unchecked. Under
+  `closed`, a list that cannot be read, a tool outside a truncated list and a tool a complete
+  list lacks are refused; `standard` forwards and counts each case. The list is single-flight
+  per slot, bounded by the backend's `timeout`, held off for 10 s after a failure, and obeys
+  the slot's circuit breaker and rate limiter. A backend that cannot be reached answers, and
+  is charged to the error budget, as a failed call to it would. New
+  `mcp_input_schema_events_total` kinds; see UPGRADING §59.
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
   JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by

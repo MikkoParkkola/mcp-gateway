@@ -105,4 +105,9 @@ segment (`rotation.on_disk_full: refuse` keeps every record and goes unready ins
 `Mcp-Session-Id` that names no live session is replaced (the new id is in the response header), \
 an empty one counts as absent, and logs carry an 8-hex fingerprint instead of the id. With auth \
 off, holding a session id is what makes a session yours.",
+    "A tool call to a tool the gateway has not yet listed for that caller now lists the backend \
+first, as the caller, instead of being forwarded unchecked. Under `closed`, a list the backend \
+answers but the gateway cannot read refuses the call (an unreachable backend fails as a call to it \
+would), and so does a tool the backend's complete list lacks; set \
+`input_schema_enforcement: standard` to forward. A cold call spends a rate-limit token on the list.",
 ];

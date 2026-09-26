@@ -834,7 +834,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -2608,7 +2608,7 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -2750,7 +2750,7 @@ async fn an_enforced_transform_does_not_invent_a_continuation_handle() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -2834,7 +2834,7 @@ async fn an_enforced_transform_carries_an_unrecognized_result_type() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -2919,7 +2919,7 @@ async fn an_enforced_transform_carries_an_empty_result_type() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -3021,7 +3021,7 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
         let registry = Arc::new(BackendRegistry::new());
         let backend = Arc::new(Backend::new(
             "remote_docs",
-            BackendConfig::default(),
+            BackendConfig::r2_off(),
             &FailsafeConfig::default(),
             Duration::from_secs(300),
         ));
@@ -3168,7 +3168,7 @@ fn backend_asking_for_elicitation() -> Arc<BackendRegistry> {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "booking",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -3595,7 +3595,7 @@ fn backend_asking_with_elicitation_params(params: &serde_json::Value) -> Arc<Bac
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "booking",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -5407,7 +5407,7 @@ fn counting_backend(
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let backend = Arc::new(crate::backend::Backend::new(
         name,
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -5779,7 +5779,7 @@ async fn a_legacy_clients_question_is_bridged_from_the_invoke_path() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "asking_backend",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -5894,7 +5894,7 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "asking_backend",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -6024,7 +6024,7 @@ async fn a_failed_bridged_round_settles_the_idempotency_key() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "asking_backend",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -6126,7 +6126,7 @@ async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "asking_backend",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

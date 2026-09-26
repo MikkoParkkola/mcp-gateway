@@ -306,12 +306,19 @@ struct OkTransport;
 impl crate::transport::Transport for OkTransport {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        // F13: a cold call lists the backend before R2 judges it, so the
+        // fixture serves the tool it is called with.
+        let result = if method == "tools/list" {
+            json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]})
+        } else {
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+        };
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             crate::protocol::RequestId::Number(1),
-            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+            result,
         ))
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {

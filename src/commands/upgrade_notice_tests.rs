@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all twenty-four items, each named by the
+/// GH475.MIG.4 — the notice carries all twenty-five items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_twenty_four_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 24);
+fn notice_4_0_0_carries_all_twenty_five_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 25);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -141,6 +141,7 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (45, "circuit breaker is open"),
     (49, "audit_segment_expired"),
     (58, "minted by the gateway"),
+    (59, "lists the backend"),
 ];
 
 /// The item numbers the guide says the first start prints: the list after

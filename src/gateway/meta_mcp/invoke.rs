@@ -121,8 +121,7 @@ use guarded::GuardedValue;
 
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
-    did_you_mean, extract_bool_or, extract_optional_str, extract_required_str,
-    parse_tool_arguments,
+    extract_bool_or, extract_optional_str, extract_required_str, parse_tool_arguments,
 };
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
@@ -131,6 +130,8 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
+mod r2_check;
+use r2_check::{dispatch_failure_value, miss_with_hint};
 
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
@@ -944,12 +945,26 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // the first one. A round that skipped the accounting would let a
         // backend that keeps asking spend an unmetered budget.
         // The same key rule as the first round, against the slot as it is now.
-        if let Some(refusal) = self.meta.undeclared_key_refusal(
+        let checked_at = std::time::Instant::now();
+        let refusal = self.meta.undeclared_key_refusal(
             self.server,
             self.tool,
             self.arguments,
             self.cache_binding,
-        ) {
+            self.headers,
+            (self.scope, self.session_id),
+        );
+        let refusal = match Box::pin(refusal).await {
+            Ok(refusal) => refusal,
+            Err(e) => {
+                // Accounted as `accounted_dispatch` accounts a refused round.
+                let bridged = classify_bridged_dispatch_error(&e);
+                self.meta
+                    .account_refused_fill(self.server, self.tool, e, checked_at);
+                return Err(bridged);
+            }
+        };
+        if let Some(refusal) = refusal {
             return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: refusal["content"][0]["text"]
                     .as_str()
@@ -1887,9 +1902,22 @@ impl MetaMcp {
         // rule refuses, and before `mark_dispatched`, so a refusal is never
         // dispatched, charged or counted as an invocation. Nothing ran, so the
         // idempotency key is released for an honest retry.
-        if let Some(refusal) =
-            self.undeclared_key_refusal(server, tool, &arguments, dispatch_binding.as_deref())
-        {
+        // F13: a cold slot is listed first, as this caller; the slot's
+        // failsafe refusing that list answers as a refused dispatch does.
+        let checked_at = std::time::Instant::now();
+        let refusal = self.undeclared_key_refusal(
+            server,
+            tool,
+            &arguments,
+            dispatch_binding.as_deref(),
+            &caller_credential.headers,
+            (caller.scope(), session_id),
+        );
+        let refusal = match Box::pin(refusal).await {
+            Ok(refusal) => refusal,
+            Err(e) => Some(self.account_refused_fill(server, tool, e, checked_at)),
+        };
+        if let Some(refusal) = refusal {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.release();
             }
@@ -2127,34 +2155,9 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // The caller gets a tool result, but the audit record says
-                // `error` with this code (D1-d.2: a backend failure).
-                audit::note_dispatch_failure(&e);
-                // Classify the error and convert to a structured tool-level
-                // error response.  This keeps `isError + content + recovery`
-                // in the tool result body rather than promoting to a JSON-RPC
-                // protocol error, which gives the LLM actionable recovery
-                // guidance without breaking the MCP framing.
-                let (category, detail) = classify_dispatch_error(&e);
-                let hint = recovery_for(
-                    category,
-                    RecoveryContext {
-                        tool: Some(tool),
-                        backend: Some(server),
-                        detail: Some(&detail),
-                        ..Default::default()
-                    },
-                );
-                // Still record the error budget failure (already done above via
-                // `record_error_budget`).  The idempotency reservation is left
-                // for the commit below unless the refusal was pre-dispatch.
-                attach_recovery(
-                    json!({
-                        "isError": true,
-                        "content": [{"type": "text", "text": e.to_string()}],
-                    }),
-                    hint,
-                )
+                // The idempotency reservation is left for the commit below
+                // unless the refusal was pre-dispatch.
+                dispatch_failure_value(&e, server, tool)
             }
         };
 
@@ -3186,32 +3189,6 @@ impl MetaMcp {
         Ok(result.warnings)
     }
 
-    /// MIK-7570.SCHEMA.1 (R2): the `isError` result refusing a call to an MCP
-    /// backend whose arguments carry keys the tool's schema does not declare.
-    ///
-    /// Runs on the arguments as the caller sent them, before secret injection,
-    /// so a gateway-injected credential is never mistaken for an invented key.
-    /// Capabilities are skipped: their executor validates after injection.
-    fn undeclared_key_refusal(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: &Value,
-        identity_key: Option<&str>,
-    ) -> Option<Value> {
-        if self
-            .get_capabilities()
-            .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
-        {
-            return None;
-        }
-        let text =
-            self.backends
-                .get(server)?
-                .undeclared_key_refusal(identity_key, tool, arguments)?;
-        Some(json!({ "content": [{ "type": "text", "text": text }], "isError": true }))
-    }
-
     /// Dispatch one round to the backend and meter it.
     ///
     /// Holds every emission that must fire once per backend call: the
@@ -3568,19 +3545,8 @@ impl MetaMcp {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
             let message = if !cached_names.is_empty() && !tool_is_cached {
-                // Drawn only from names this caller could invoke (A3).
-                let candidates: Vec<&str> = cached_names
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
-                    .collect();
-                match did_you_mean(tool, &candidates, 3, 3) {
-                    Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
-                    None => format!(
-                        "Tool '{tool}' not found on server '{server}'. {}",
-                        error.message
-                    ),
-                }
+                let candidates = self.miss_hint_pool(&cached_names, server, (scope, session_id));
+                miss_with_hint(server, tool, &candidates, &error.message)
             } else {
                 error.message
             };
@@ -5126,7 +5092,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "mem",
@@ -5267,7 +5233,7 @@ mod identity_propagation_enforcement_tests {
                 streamable_http: true,
                 protocol_version: None,
             },
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "asks",
@@ -6058,6 +6024,12 @@ mod error_budget_tests;
 mod circuit_open_hint_tests;
 #[cfg(test)]
 mod suggestion_authz_tests;
+
+#[cfg(test)]
+mod f13_bridge_tests;
+
+#[cfg(test)]
+mod f13_hint_scope_tests;
 
 #[cfg(test)]
 mod session_fp_tests;

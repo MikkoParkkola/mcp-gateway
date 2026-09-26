@@ -222,13 +222,30 @@ async fn enforcement_off_forwards_invented_keys() {
     assert_eq!(fx.calls.lock().len(), 1);
 }
 
-/// R2-T13: a tool the caller's slot has never listed is forwarded unchecked.
+/// R2-T13, rewritten by F13 (design §5): a cold slot, three rows. `closed`
+/// lists once and refuses; `standard` with a failing list forwards; `off`
+/// forwards without listing. Red on base in the `closed` row only.
 #[tokio::test]
 async fn cold_slot_forwards_and_counts() {
-    let fx = fixture(BackendConfig::default(), false).await;
+    use super::f13_fetch_on_miss_tests::{ListMode, cold};
+    let fx = cold(InputSchemaEnforcement::Closed, ListMode::Serve).await;
     let (_, body) = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
-    assert!(!is_error(&body), "{body}");
-    assert_eq!(fx.calls.lock().len(), 1, "a cold slot must forward");
+    assert!(is_refusal(&body), "closed: {body}");
+    assert_eq!((fx.rec.lists(), fx.rec.calls()), (1, 0), "closed");
+
+    let fx = cold(InputSchemaEnforcement::Standard, ListMode::Fail).await;
+    let (_, body) = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
+    assert!(!is_error(&body), "standard: {body}");
+    assert_eq!(fx.rec.calls(), 1, "standard must forward on a failed list");
+
+    let fx = cold(InputSchemaEnforcement::Off, ListMode::Serve).await;
+    let (_, body) = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
+    assert!(!is_error(&body), "off: {body}");
+    assert_eq!(
+        (fx.rec.lists(), fx.rec.calls()),
+        (0, 1),
+        "off must not fetch"
+    );
 }
 
 /// N3: a valid call reaches the backend with the caller's own arguments,
@@ -301,31 +318,20 @@ fn refused_call_is_not_counted_as_an_invocation() {
     );
 }
 
-/// R2-T13 (counter half): the unchecked forward of a cold slot is counted.
+/// R2-T13 (counter half), rewritten by F13 (design §5): under `standard`, a
+/// cold slot whose list fails is forwarded and counted `input_schema_unknown`.
 #[cfg(feature = "metrics")]
 #[test]
 fn cold_slot_forward_is_counted() {
-    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    telemetry_metrics::with_local_recorder(&recorder, || {
-        runtime.block_on(async {
-            let fx = fixture(BackendConfig::default(), false).await;
-            let _ = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
-            assert_eq!(fx.calls.lock().len(), 1, "a cold slot must forward");
-        });
+    use super::f13_fetch_on_miss_tests::{ListMode, cold, kind_counted, metered};
+    let (calls, rendered) = metered(async {
+        let fx = cold(InputSchemaEnforcement::Standard, ListMode::Fail).await;
+        let _ = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
+        fx.rec.calls()
     });
-    let rendered = handle.render();
-    let label = concat!("input_schema_", "unknown");
+    assert_eq!(calls, 1, "a cold slot must forward under standard");
     assert!(
-        rendered
-            .lines()
-            .any(|l| l.starts_with("mcp_input_schema_events_total")
-                && l.contains(label)
-                && !l.ends_with(" 0")),
+        kind_counted(&rendered, concat!("input_schema_", "unknown")),
         "the unchecked forward was not counted: {rendered}"
     );
 }

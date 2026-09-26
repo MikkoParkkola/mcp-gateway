@@ -69,6 +69,10 @@ mod direct_audit_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod f13_fetch_on_miss_tests;
+#[cfg(test)]
+mod f13_text_a_tests;
+#[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
 mod log_level_admin_tests;
