@@ -79,8 +79,11 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
      not consulted.
    - `CreateFileW` fails with `INVALID_HANDLE_VALUE`, never null; that is checked
      before the value is wrapped in `OwnedHandle`.
-   - `GetFinalPathNameByHandleW` and `GetVolumePathNameW` sizes: zero is failure; a
-     return >= the buffer length means "retry with this size", done once.
+   - `GetFinalPathNameByHandleW` returns a length: zero is failure; a return >= the
+     buffer length means "retry with this size", done once.
+   - `GetVolumePathNameW` is a `BOOL` API (listed above), not a sizing API: it is given
+     a zero-initialised buffer of `MAX_PATH` + the input path length UTF-16 units, and
+     the terminator is searched for within that length.
    - `GetDriveTypeW` returns a type code, never an error; only the accepted codes pass.
    - `IsValidSid` false means invalid input: refuse without consulting last-error.
 7. **No global state.** No statics, no caching of SIDs or descriptors across calls.
@@ -90,8 +93,8 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
 - `current_user_sid`: `GetTokenInformation(TokenUser)` is called first with a zero
   buffer to get the size, then into a `Vec<u64>`-backed buffer of at least that size
   (TOKEN_USER holds a pointer, so 8-byte alignment is required). The returned `Sid`
-  pointer points INTO that buffer; it is validated (`IsValidSid`), its length taken
-  from `GetLengthSid` and checked to lie inside the buffer, then copied out. The token
+  pointer points INTO that buffer; its header is bounded against the buffer end as in
+  `inspect`, then `IsValidSid`, then `GetLengthSid`, then it is copied out. The token
   handle is an `OwnedHandle`.
 - `private_descriptor`: builds an ABSOLUTE descriptor. The `SECURITY_DESCRIPTOR`, the
   owner SID and the ACL each live in their own `Vec<u64>` inside the returned
@@ -104,8 +107,12 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
 - `inspect`: the descriptor returned by `GetSecurityInfo` is owned by a `LocalFree`
   guard; the owner and DACL pointers are read only while it lives. For each ACE from
   `GetAce`: the header's `AceSize` must be at least the fixed part of that ACE type,
-  and the SID starting at `SidStart` must have `GetLengthSid` that fits inside
-  `AceSize` BEFORE `IsValidSid` is called or the SID is copied. Only
+  and the SID starting at `SidStart` is bounded BEFORE any SID API touches it: the
+  8-byte SID header must fit in the ACE, its `SubAuthorityCount` byte is read, and
+  `8 + 4 * SubAuthorityCount` must fit in the remaining ACE bytes. Only then is
+  `IsValidSid` called, then `GetLengthSid` (whose precondition is a valid SID), and its
+  result must equal the bounded length before the SID is copied. The owner SID from
+  the descriptor gets `IsValidSid` before `GetLengthSid` for the same reason. Only
   `ACCESS_ALLOWED_ACE_TYPE` and `ACCESS_DENIED_ACE_TYPE` are decoded; any other type is
   reported as "other" without reading past its header, and the caller refuses it.
 - `replace`: two NUL-terminated wide paths on the stack.
