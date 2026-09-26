@@ -837,11 +837,15 @@
     },
     {
       "id": "MIK-7479.STDIO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "tests/mik_7479_mrtr7b_ledger.rs",
+        "tests/common/stdio_session.rs",
+        ".github/workflows/mrtr7b-full-burst.yml"
+      ],
+      "note": "Graded 2026-09-26 (#1157; design tier3 \u00a73 plus its MIK-7479 amendment). A per-call-id ledger over a legacy stdio burst against a client that never answers: every call reaches exactly one terminal response (first JSON-RPC response for the id; asks never terminal; later responses are duplicates), every ask ends in its expired-ask -32003, and one client's silence disables no capability and opens no breaker. The ticket's '40 of 1026 silent' was census arithmetic (asks left out). The ledger exposed F23 (limiter refusals sampled as failures, capability auto-disabled for all callers), fixed by #1101. Green on ba94fcef2: Tests run 36220735940 (D1, N1, L1-L3, phrase pins) and the labelled full-burst run 36220735723 (N2, 1026 calls). Red by mutation on 0d115e79d (test code identical to ba94fcef2; 11 doc-comment lines differ): M-H2 #1176 job 108329632910, M-L1 #1177 job 108329643278, M-L2 #1178 job 108329653830, M-L3 #1179 job 108329661921."
     },
     {
       "id": "MIK-7325.RETRY.1",

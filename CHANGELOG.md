@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
   A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
   (C9, MIK-7570.SECRET.2)
+- A per-call-id ledger for stdio bursts against a client that never answers its asks: every call
+  must reach exactly one terminal response, and one client's silence must not disable the capability
+  for other callers. 194 calls run per PR; the ticket's 1026-call
+  burst (about 8 minutes) runs nightly and on a PR labelled `mrtr7b-full-burst`. (MIK-7479.STDIO.1)
 
 ### Changed
 
