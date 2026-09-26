@@ -5,11 +5,11 @@
 //! section across independent OS processes sharing a directory.
 //!
 //! On unix this is a real `flock` held on a dedicated `.lock` sidecar file,
-//! released automatically when the returned guard drops. On non-unix
-//! platforms it degrades to opening (and creating) the sidecar file with no
-//! actual advisory lock — single-node collection stores still rely on atomic
-//! rename / hard-link for torn-write safety, so the only gap is cross-process
-//! interleaving on Windows, which no current deployment target exercises.
+//! released automatically when the returned guard drops. On non-unix the
+//! blocking lock is `std::fs::File::lock` (`LockFileEx` on Windows). It used
+//! to be a no-op there, and that serialized nothing, not even two threads
+//! in one process: `save_client_id`'s self-heal could hand a caller an id
+//! that another caller then overwrote on disk.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -20,15 +20,15 @@ use std::path::Path;
 /// On unix this is a real `flock`; the lock file's fd holds the lock across
 /// whatever atomic rename/hard-link the caller performs while holding the
 /// guard. Drop explicitly unlocks before closing so an inherited duplicate
-/// cannot extend the owner's normal guard lifetime. On non-unix the legacy
-/// blocking constructor opens the file without an advisory lock.
+/// cannot extend the owner's normal guard lifetime. On non-unix the blocking
+/// constructor takes `File::lock`, released when the handle closes on drop.
 pub(crate) struct ExclusiveFileLock {
-    // On non-unix there is no advisory lock to take and none to release on
-    // drop, so nothing reads the handle; it is held to keep the sidecar file
-    // open for the guard's lifetime and for nothing else.
+    // On non-unix the lock lives on this handle and ends when it closes, so
+    // nothing reads the field; holding it open for the guard's lifetime IS
+    // the lock.
     #[cfg_attr(
         not(unix),
-        expect(dead_code, reason = "only the cfg(unix) flock paths read the handle")
+        expect(dead_code, reason = "on non-unix the open handle is the lock")
     )]
     file: File,
 }
@@ -103,12 +103,11 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
         .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))
 }
 
-/// ponytail: cross-process advisory locking on non-unix is out of scope for
-/// the single-node file backends that use this lock today. Upgrade to
-/// `LockFileEx` if a Windows multi-process deployment ever needs it.
+/// `File::lock` on non-unix: `LockFileEx` on Windows, held by this handle and
+/// released when it closes.
 #[cfg(not(unix))]
-fn lock_exclusive(_file: &File) -> io::Result<()> {
-    Ok(())
+fn lock_exclusive(file: &File) -> io::Result<()> {
+    file.lock()
 }
 
 #[cfg(test)]
@@ -263,7 +262,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn acquire_serializes_concurrent_threads() {
         // GIVEN: many threads racing to acquire the same lock and record
         // whether they ever observed another thread inside the critical
@@ -288,7 +286,8 @@ mod tests {
                     let _lock = ExclusiveFileLock::acquire(&lock_path).expect("acquire");
                     let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
                     max_inside.fetch_max(now, Ordering::SeqCst);
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    // Long enough that an unserialized lock overlaps every time.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                     inside.fetch_sub(1, Ordering::SeqCst);
                 })
             })
@@ -301,7 +300,7 @@ mod tests {
         assert_eq!(
             max_inside.load(Ordering::SeqCst),
             1,
-            "flock failed to serialize concurrent critical sections"
+            "the lock failed to serialize concurrent critical sections"
         );
     }
 }

@@ -443,7 +443,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/livez`, `/readyz` | GET | Liveness and readiness probes; never read backend health, public exactly when `/health` is |
+| `/livez`, `/readyz` | GET | Liveness and readiness probes; never read backend health, public exactly when `/health` is. `/readyz` waits for the capability catalogue to load |
 | `/health` | GET | Health check: `status` and `version`; authenticated admin callers also get per-backend status and runtime profile lifecycle state |
 | `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
 | `/mcp/{backend}` | POST | Direct backend access |
