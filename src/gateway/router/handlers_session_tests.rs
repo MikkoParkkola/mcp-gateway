@@ -32,7 +32,7 @@ fn credential(principal: &str) -> AuthenticatedClient {
     }
 }
 
-fn legacy_post(session: Option<&str>, body: serde_json::Value) -> Request<Body> {
+fn legacy_post(session: Option<&str>, body: &serde_json::Value) -> Request<Body> {
     let mut builder = Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -62,7 +62,7 @@ async fn an_empty_or_blank_session_id_is_never_a_session() {
         let (state, _store) = test_router_app_state().await;
         let router = create_router(Arc::clone(&state));
         let response = router
-            .oneshot(legacy_post(Some(blank), ping()))
+            .oneshot(legacy_post(Some(blank), &ping()))
             .await
             .unwrap();
         assert!(
@@ -86,7 +86,7 @@ async fn a_client_chosen_id_is_replaced_on_get_and_post() {
         .header("mcp-session-id", chosen)
         .body(Body::empty())
         .unwrap();
-    let post = legacy_post(Some(chosen), ping());
+    let post = legacy_post(Some(chosen), &ping());
     for request in [get, post] {
         let router = create_router(Arc::clone(&state));
         let response = router.oneshot(request).await.unwrap();
@@ -210,7 +210,7 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
     let a_for_call = a_id.clone();
     let call = tokio::spawn(async move {
         router
-            .oneshot(legacy_post(Some(&a_for_call), elicit()))
+            .oneshot(legacy_post(Some(&a_for_call), &elicit()))
             .await
             .unwrap()
     });
@@ -226,7 +226,7 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
     let accept = json!({"jsonrpc": "2.0", "id": prompt_id, "result": {"action": "accept"}});
     for forged in [b_id.as_str(), "gw-shared"] {
         create_router(Arc::clone(&state))
-            .oneshot(legacy_post(Some(forged), accept.clone()))
+            .oneshot(legacy_post(Some(forged), &accept))
             .await
             .unwrap();
     }
@@ -237,7 +237,7 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
     );
     // AND: A's own POST-back on its minted id completes it
     create_router(Arc::clone(&state))
-        .oneshot(legacy_post(Some(&a_id), accept))
+        .oneshot(legacy_post(Some(&a_id), &accept))
         .await
         .unwrap();
     let response = tokio::time::timeout(Duration::from_secs(5), call)
@@ -258,7 +258,7 @@ async fn the_prompt_flow_logs_session_fingerprints_only() {
     let (captured, _guard) = capture_debug();
     // A fresh legacy POST mints a session (streaming.rs, handlers.rs "Meta-MCP request")
     let response = create_router(Arc::clone(&state))
-        .oneshot(legacy_post(None, ping()))
+        .oneshot(legacy_post(None, &ping()))
         .await
         .unwrap();
     let minted = session_header(&response).expect("minted id");
@@ -270,7 +270,7 @@ async fn the_prompt_flow_logs_session_fingerprints_only() {
     let own_for_call = own.clone();
     let call = tokio::spawn(async move {
         router
-            .oneshot(legacy_post(Some(&own_for_call), elicit()))
+            .oneshot(legacy_post(Some(&own_for_call), &elicit()))
             .await
             .unwrap()
     });
@@ -322,7 +322,7 @@ async fn get_and_delete_log_session_fingerprints_only() {
 #[tokio::test]
 async fn a_non_utf8_session_id_is_treated_as_absent() {
     let (state, _store) = test_router_app_state().await;
-    let mut request = legacy_post(None, ping());
+    let mut request = legacy_post(None, &ping());
     request.headers_mut().insert(
         "mcp-session-id",
         axum::http::HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
