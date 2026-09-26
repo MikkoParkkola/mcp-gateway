@@ -397,11 +397,10 @@ pub(super) async fn health_handler(
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
     let statuses = state.backends.statuses();
-    // The in-process capability backend is not in the registry; pull its health
-    // separately so a degraded capability backend (e.g. upstream timeouts under
-    // load) is reflected in `/health` too (MIK-5080).
+    // The in-process capability backend is not in the registry: its health (MIK-5080) and its
+    // startup scan (MIK-7268) count here. None configured is healthy (`all` of nothing).
     let capability_status = state.meta_mcp.get_capabilities().map(|c| c.status());
-    let capability_healthy = capability_status.as_ref().is_none_or(|s| s.healthy);
+    let capability_healthy = capability_status.iter().all(|s| s.healthy && s.loaded);
     let healthy = backends_overall_healthy(&statuses) && capability_healthy;
 
     // Admin is a grant, not a name. Comparing against "public"/"anonymous"
@@ -1898,25 +1897,24 @@ async fn meta_mcp_dispatch(
     if is_modern {
         shape_modern_response(&mut response, &method);
     }
-    response = state.meta_mcp.finalize_response_after_inspection(
-        response,
-        &crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
-            method: &method,
-            targets: &response_targets,
-            correlation: crate::security::response_policy::ResponseCorrelation {
-                session_id: &session_id,
-                caller: client
-                    .as_ref()
-                    .map_or("anonymous", |client| client.name.as_str()),
-                external_server: "gateway",
-                external_tool: &external_tool,
-            },
-            mutation:
-                crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
-            signing: signing_context.as_ref(),
+    let caller = client
+        .as_ref()
+        .map_or("anonymous", |client| client.name.as_str());
+    let delivery = crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
+        method: &method,
+        targets: &response_targets,
+        correlation: crate::security::response_policy::ResponseCorrelation {
+            session_id: &session_id,
+            caller,
+            external_server: "gateway",
+            external_tool: &external_tool,
         },
-        delivery_inspection,
-    );
+        mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+        signing: signing_context.as_ref(),
+    };
+    response = (state.meta_mcp)
+        .finalize_response_after_inspection(response, &delivery, delivery_inspection)
+        .await;
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
     }

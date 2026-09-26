@@ -49,6 +49,9 @@ fn governance_logger(dir: &Path) -> Arc<TransparencyLogger> {
     Arc::new(TransparencyLogger::open(cfg).expect("open governance log"))
 }
 
+#[path = "store_lock_tests.rs"]
+mod lock_tests;
+
 fn file_store(dir: &Path) -> FileControlPlaneStore {
     FileControlPlaneStore::open(dir.join("store"), governance_logger(dir)).expect("open store")
 }
