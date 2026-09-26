@@ -548,6 +548,13 @@ impl CapabilityBackend {
             }
             result => result?,
         };
+        if serde_json::to_string(&result).unwrap_or_default().contains("401")
+            && let Some(held) = held
+        {
+            return Err(held
+                .after_upstream_401(crate::Error::Protocol("401".into()))
+                .await);
+        }
 
         Ok(build_success_tool_result(&capability, result))
     }
