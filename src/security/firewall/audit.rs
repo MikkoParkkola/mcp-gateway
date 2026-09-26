@@ -7,7 +7,8 @@
 //!
 //! * `timestamp` — RFC 3339 timestamp of the event.
 //! * `event` — `"request"` or `"response"`.
-//! * `session_id`, `server`, `tool`, `caller` — identity fields.
+//! * `session_id`, `server`, `tool`, `caller` — identity fields. `session_id`
+//!   is the session's 8-hex fingerprint: the id itself is a credential (F9).
 //! * `args_hash` — SHA-256 hash of the request arguments (request events only).
 //!   Raw argument values are **never** logged.
 //! * `action` — `"allow"`, `"warn"`, or `"block"`.
@@ -30,6 +31,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Finding, FirewallAction, FirewallVerdict};
+use crate::gateway::session_id::session_fp;
 use crate::security::hash_argument;
 use crate::security::response_policy::{
     ResponseArtifactKind, ResponseCorrelation, ResponsePolicyTarget,
@@ -45,7 +47,8 @@ pub struct AuditLogger {
 struct AuditEntry<'a> {
     timestamp: String,
     event: &'a str,
-    session_id: &'a str,
+    /// A fingerprint: the id is its anonymous holder's credential (F9).
+    session_id: String,
     server: &'a str,
     tool: &'a str,
     caller: &'a str,
@@ -106,7 +109,7 @@ impl AuditLogger {
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
             event: "request",
-            session_id,
+            session_id: session_fp(session_id),
             server,
             tool,
             caller,
@@ -158,7 +161,7 @@ impl AuditLogger {
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
             event: "response",
-            session_id: correlation.session_id,
+            session_id: session_fp(correlation.session_id),
             server: correlation.external_server,
             tool: correlation.external_tool,
             caller: correlation.caller,
@@ -269,7 +272,7 @@ mod tests {
 
         assert!(entry.get("timestamp").is_some(), "missing timestamp");
         assert_eq!(entry["event"], "request");
-        assert_eq!(entry["session_id"], "my-session");
+        assert_eq!(entry["session_id"], session_fp("my-session"));
         assert_eq!(entry["server"], "backend");
         assert_eq!(entry["tool"], "my_tool");
         assert_eq!(entry["caller"], "api-key-1");

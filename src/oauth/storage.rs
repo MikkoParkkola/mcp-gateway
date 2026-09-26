@@ -199,25 +199,20 @@ impl TokenStorage {
             return None;
         }
 
-        match fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str::<TokenInfo>(&content) {
-                Ok(token) => {
-                    if token.is_expired() {
-                        debug!(backend = %backend_name, "Stored token is expired");
-                        // Keep the token info in case we can refresh it
-                        Some(token)
-                    } else {
-                        info!(backend = %backend_name, expires_in = ?token.time_until_expiry(), "Loaded valid token");
-                        Some(token)
-                    }
+        let content = super::token_file::read(&path, backend_name)?;
+        match serde_json::from_str::<TokenInfo>(&content) {
+            Ok(token) => {
+                if token.is_expired() {
+                    debug!(backend = %backend_name, "Stored token is expired");
+                    // Keep the token info in case we can refresh it
+                    Some(token)
+                } else {
+                    info!(backend = %backend_name, expires_in = ?token.time_until_expiry(), "Loaded valid token");
+                    Some(token)
                 }
-                Err(e) => {
-                    warn!(backend = %backend_name, error = %e, "Failed to parse stored token");
-                    None
-                }
-            },
+            }
             Err(e) => {
-                warn!(backend = %backend_name, error = %e, "Failed to read token file");
+                warn!(backend = %backend_name, error = %e, "Failed to parse stored token");
                 None
             }
         }
@@ -250,6 +245,7 @@ impl TokenStorage {
             return Err(Error::OAuth(format!("Failed to write token file: {e}")));
         }
 
+        super::token_file::forget(&path);
         info!(backend = %backend_name, "Saved OAuth token");
         Ok(())
     }

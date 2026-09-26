@@ -56,7 +56,11 @@ fn write_grants(path: &std::path::Path, rows: &[IdentityGrant]) {
         "schema_version": crate::identity_grants::IDENTITY_GRANTS_FILE_SCHEMA_VERSION,
         "grants": rows,
     });
-    std::fs::write(path, serde_json::to_vec_pretty(&file).expect("serialize")).expect("write");
+    crate::gateway::test_helpers::write_owner_only(
+        path,
+        serde_json::to_vec_pretty(&file).expect("serialize"),
+    )
+    .expect("write");
 }
 
 // T9 — the two designs COMPOSED, and the only cell that observes the chain end

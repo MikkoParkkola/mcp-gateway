@@ -500,10 +500,25 @@ fn read_ca_files(
         eprintln!("Error: Cannot read CA cert '{}': {e}", ca_cert.display());
         ExitCode::FAILURE
     })?;
-    let key = std::fs::read_to_string(ca_key).map_err(|e| {
-        eprintln!("Error: Cannot read CA key '{}': {e}", ca_key.display());
+    // Through the library's mode-checked key loader (F18 R6): the CA key signs
+    // every client identity the gateway trusts, so one other users can read is
+    // refused before anything is issued. The DER it returns is re-encoded as
+    // the PEM `issue_leaf` takes; both accept PKCS#8 only, as before.
+    let key_path = ca_key.to_str().ok_or_else(|| {
+        eprintln!("Error: CA key path is not valid UTF-8");
         ExitCode::FAILURE
     })?;
+    let key = mcp_gateway::mtls::cert_manager::load_private_key(key_path)
+        .map_err(|e| e.to_string())
+        .and_then(|der| {
+            rcgen::KeyPair::try_from(&der)
+                .map(|pair| pair.serialize_pem())
+                .map_err(|e| format!("Cannot use CA key '{}': {e}", ca_key.display()))
+        })
+        .map_err(|e| {
+            eprintln!("Error: {e}");
+            ExitCode::FAILURE
+        })?;
     Ok((cert, key))
 }
 
@@ -635,6 +650,9 @@ async fn tool_completions(
     print!("{script}");
     ExitCode::SUCCESS
 }
+
+#[cfg(test)]
+mod tls_ca_key_tests;
 
 #[cfg(test)]
 mod admin_credential_tests {

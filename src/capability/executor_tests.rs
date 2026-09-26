@@ -183,7 +183,7 @@ fn test_fetch_from_file_simple() {
     let dir = std::env::temp_dir().join("mcp-gateway-test-cred");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("tokens.json");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &file,
         r#"{"access_token": "test-token-123", "refresh_token": "refresh-456"}"#,
     )
@@ -207,7 +207,7 @@ fn test_fetch_from_file_nested() {
     let dir = std::env::temp_dir().join("mcp-gateway-test-cred-nested");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("config.json");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &file,
         r#"{"auth": {"google": {"token": "nested-token"}, "count": 42}}"#,
     )
@@ -232,7 +232,7 @@ fn test_fetch_from_file_missing_field() {
     let dir = std::env::temp_dir().join("mcp-gateway-test-cred-missing");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("tokens.json");
-    std::fs::write(&file, r#"{"access_token": "value"}"#).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&file, r#"{"access_token": "value"}"#).unwrap();
 
     let spec = format!("{}:nonexistent", file.display());
     let result = executor.fetch_from_file(&spec);
@@ -247,8 +247,8 @@ fn test_fetch_from_file_missing_field() {
 fn test_fetch_from_file_missing_file() {
     let executor = CapabilityExecutor::new();
     let result = executor.fetch_from_file("/nonexistent/path/tokens.json:field");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Failed to read"));
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("Cannot read credential file"), "{err}");
 }
 
 #[test]

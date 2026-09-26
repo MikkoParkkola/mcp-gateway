@@ -571,7 +571,7 @@ fn open_session(
     id: &str,
     bearer: Option<&str>,
 ) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
-    let owner = format!("credential:{id}");
+    let owner = crate::gateway::session_id::SessionOwner::Credential(id.to_string());
     multiplexer
         .get_or_create_session_scoped(Some(id), &owner, bearer.and_then(held))
         .1
@@ -738,12 +738,12 @@ async fn a_dashboard_session_receives_webhook_data_only_on_an_issued_handle() {
     let held = crate::gateway::auth::live::held_credential;
     let (_, mut rx_issued) = multiplexer.get_or_create_session_scoped(
         Some("dashboard"),
-        "credential:dashboard-session",
+        &crate::gateway::session_id::SessionOwner::Credential("dashboard-session".to_string()),
         held(&with_session_cookie(&handle)),
     );
     let (_, mut rx_forged) = multiplexer.get_or_create_session_scoped(
         Some("forged"),
-        "unauthenticated:public",
+        &crate::gateway::session_id::SessionOwner::Anonymous,
         held(&with_session_cookie("never-issued")),
     );
 

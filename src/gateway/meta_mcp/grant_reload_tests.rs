@@ -62,7 +62,11 @@ fn write_grants(path: &std::path::Path, rows: &[IdentityGrant]) {
         "schema_version": crate::identity_grants::IDENTITY_GRANTS_FILE_SCHEMA_VERSION,
         "grants": rows,
     });
-    std::fs::write(path, serde_json::to_vec_pretty(&file).expect("serialize")).expect("write");
+    crate::gateway::test_helpers::write_owner_only(
+        path,
+        serde_json::to_vec_pretty(&file).expect("serialize"),
+    )
+    .expect("write");
 }
 
 /// A reload context wired to `meta`'s live store and to `path`.
@@ -478,7 +482,7 @@ async fn t2_control_a_corrupt_grants_file_keeps_the_live_store() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("grants.json");
     let (meta, ctx) = populated(&path).await;
-    std::fs::write(&path, b"{ this is not json").expect("corrupt");
+    crate::gateway::test_helpers::write_owner_only(&path, b"{ this is not json").expect("corrupt");
     assert_refused_and_inert("T2", &meta, &ctx, &path).await;
 }
 
@@ -490,7 +494,8 @@ async fn t3_control_a_grants_file_cut_mid_token_keeps_the_live_store() {
     let path = dir.path().join("grants.json");
     let (meta, ctx) = populated(&path).await;
     let whole = std::fs::read(&path).expect("read");
-    std::fs::write(&path, &whole[..whole.len() / 2]).expect("truncate");
+    crate::gateway::test_helpers::write_owner_only(&path, &whole[..whole.len() / 2])
+        .expect("truncate");
     assert_refused_and_inert("T3", &meta, &ctx, &path).await;
 }
 
@@ -542,7 +547,7 @@ async fn t2b_control_repeated_refusals_keep_every_cached_answer_servable() {
         "T2b premise: the answer must actually be cached"
     );
 
-    std::fs::write(&path, b"{ still not json").expect("corrupt");
+    crate::gateway::test_helpers::write_owner_only(&path, b"{ still not json").expect("corrupt");
     for _ in 0..3 {
         assert!(
             matches!(ctx.reload_identity_grants().await, Some(Err(_))),
