@@ -696,7 +696,7 @@ fn which_command(bin: &str) -> bool {
     // Windows also the `.exe` name a spawn resolves a bare command to. Not
     // `.cmd`/`.bat`: a spawn does not run those for a bare name either.
     let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
+    path.to_string_lossy().split(':').map(PathBuf::from).collect::<Vec<_>>().into_iter()
         .map(|dir| dir.join(bin))
         .any(|p| {
             let mut exe = p.clone().into_os_string();
