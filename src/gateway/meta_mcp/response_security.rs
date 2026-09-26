@@ -212,8 +212,7 @@ impl super::MetaMcp {
         // response (FailClosed) instead of pinning a runtime worker.
         let logger = std::sync::Arc::clone(logger);
         if let Err(error) = logger
-            .append_bounded(move |l| l.append_event(fields, &envelope))
-            .await
+            .append_event(fields, &envelope)
         {
             tracing::warn!(
                 error_kind = ?error.kind(),
