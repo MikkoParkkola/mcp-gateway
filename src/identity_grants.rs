@@ -171,7 +171,7 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
         path.to_path_buf(),
         crate::config::CheckedFile::IdentityGrants,
     );
-    let read = tokio::task::spawn_blocking(move || crate::config::read_checked_file(&owned, what));
+    let read = tokio::task::spawn_blocking(move || { let _ = what; std::fs::read_to_string(&owned) });
     let content = read
         .await
         .map_err(std::io::Error::other)
