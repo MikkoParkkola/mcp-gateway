@@ -94,10 +94,16 @@ async fn upstream_401_with_revoked_grant_returns_reconnect_offer() {
     assert_reconnect(&first, "first call");
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
 
+    // The next call is refused BEFORE the wire by the account resolve. That
+    // refusal is unmarked on purpose at the capability backend (the meta route
+    // attaches the offer, `credentials.rs` "No offer is made here").
     let second = call(&backend, Some("alice"))
         .await
         .expect_err("a fenced account must refuse");
-    assert_reconnect(&second, "after the fence");
+    assert!(
+        second.to_string().contains("account must reconnect"),
+        "after the fence: {second}"
+    );
     assert_eq!(
         captured.count(),
         1,
