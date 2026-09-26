@@ -88,6 +88,12 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    keeps the per-backend passthrough opt-out (`backend_handlers.rs:957-959`) exactly as today.
    Named function: `DirectRouteGuards::run`, in the router, `pub(crate)` so the worker in
    `task_service` can call it (maintainer decision 2026-09-26, §6 Q4).
+   Shape (agreed with the security lane, #1452): new module `src/gateway/router/direct_guards.rs`,
+   `pub(crate) fn run(&self, ctx: &DirectCall<'_>) -> Result<GuardedCall, Refusal>`, pre-dispatch
+   only, an ordered list: kill switch and cost budget first, then isolation, tool policy and
+   sanitisation. `GuardedCall` carries what dispatch needs (sanitised params, per-user headers,
+   identity key), so no caller re-derives them. The response scan stays a separate post-dispatch
+   step, called by both the request thread and the worker.
    ONE chain only: the direct route also lacks the kill switch and cost budget that meta
    dispatch checks (security lane finding, 2026-09-26). Those checks join this same function;
    whichever change lands first creates `DirectRouteGuards::run`, the other adds to it.
