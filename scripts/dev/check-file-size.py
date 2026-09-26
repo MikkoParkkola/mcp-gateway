@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE = Path(__file__).with_name("file-size-baseline.txt")
 SCANNED = ("src", "tests")
 
-DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$")
+DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*[;{].*$")
 # Built-in attributes that carry no code. A macro attribute above a `mod` could
 # expand to anything, so it counts.
 INERT_ATTRIBUTE = re.compile(
