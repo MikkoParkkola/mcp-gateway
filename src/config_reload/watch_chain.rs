@@ -22,7 +22,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use tracing::{info, warn};
 
-use super::{ReloadTrigger, absolute_watch_path, watch_dir_of};
+use super::{ReloadTrigger, watch_dir_of};
 
 /// Hops followed before a chain is treated as a loop, as the kernel's `ELOOP`.
 const MAX_HOPS: usize = 40;
@@ -30,43 +30,78 @@ const MAX_HOPS: usize = 40;
 /// The directories a config's link chain runs through, each canonical, and
 /// where it ends.
 ///
-/// Every hop's parent directory is included, not only the first and the last:
-/// a retarget of a link in the middle of the chain happens in that link's own
-/// directory, and nothing else hears it. A hop through a directory link (a
-/// `ConfigMap`'s `..data`) is resolved by canonicalizing the parent, so the set
-/// names real directories and never the link.
+/// `named` is the path as the operator gave it, made absolute but with its
+/// links intact: canonicalizing it first would erase a release link such as
+/// Capistrano's `current` before it could be seen.
+///
+/// Each hop is a file path. A directory link that is the hop's immediate
+/// parent (`current`, a `ConfigMap`'s `..data`) is followed, chain and all,
+/// and the directory holding it is recorded: its retarget is heard there. Then
+/// the hop's real directory is recorded, where writes to the file are heard,
+/// and if the file is itself a link its target is the next hop. A directory
+/// link higher in the path is resolved by `canonicalize` and not watched, so
+/// nothing as high as `/` joins the set.
 ///
 /// # Errors
 ///
-/// Returns the I/O error of a hop that cannot be read, or `FilesystemLoop`
-/// past [`MAX_HOPS`]. A caller keeps its last good set on error: mid-update
-/// (the old directory being deleted) a hop can briefly fail to resolve.
+/// Returns the I/O error of a hop that cannot be resolved, or an error past
+/// [`MAX_HOPS`] link expansions. A caller keeps its last good set on error:
+/// mid-update (the old directory being deleted) a hop can briefly fail.
 pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, PathBuf)> {
     let mut dirs = BTreeSet::new();
-    let mut hop = absolute_watch_path(named.to_path_buf());
-    for _ in 0..MAX_HOPS {
-        dirs.insert(std::fs::canonicalize(watch_dir_of(&hop))?);
-        match std::fs::read_link(&hop) {
+    let mut hop = std::path::absolute(named)?;
+    let mut steps = 0;
+    let mut expand = || {
+        steps += 1;
+        if steps > MAX_HOPS {
+            Err(std::io::Error::other(format!(
+                "config symlink chain exceeds {MAX_HOPS} links at {}",
+                named.display()
+            )))
+        } else {
+            Ok(())
+        }
+    };
+    loop {
+        let name = hop
+            .file_name()
+            .ok_or_else(|| std::io::Error::other(format!("{} names no file", hop.display())))?
+            .to_os_string();
+        let mut dir = watch_dir_of(&hop);
+        while std::fs::symlink_metadata(&dir)?.file_type().is_symlink() {
+            expand()?;
+            let holder = watch_dir_of(&dir);
+            let holder_real = std::fs::canonicalize(&holder)?;
+            let target = std::fs::read_link(&dir)?;
+            dirs.insert(holder_real);
+            dir = if target.is_absolute() {
+                target
+            } else {
+                holder.join(target)
+            };
+        }
+        let real_dir = std::fs::canonicalize(&dir)?;
+        let file = real_dir.join(&name);
+        dirs.insert(real_dir);
+        match std::fs::read_link(&file) {
             Ok(target) => {
-                let base = watch_dir_of(&hop);
-                hop = absolute_watch_path(if target.is_absolute() {
+                expand()?;
+                hop = if target.is_absolute() {
                     target
                 } else {
-                    base.join(target)
-                });
+                    watch_dir_of(&file).join(target)
+                };
             }
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
-                // Not a link: the chain ends here.
-                let end = std::fs::canonicalize(&hop)?;
-                dirs.insert(watch_dir_of(&end));
-                return Ok((dirs, end));
+            // Not a link: the chain ends at this file.
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Ok((dirs, file)),
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    e.kind(),
+                    format!("{}: {e}", file.display()),
+                ));
             }
-            Err(e) => return Err(e),
         }
     }
-    Err(std::io::Error::other(
-        "config symlink chain exceeds 40 hops",
-    ))
 }
 
 /// The watcher and the directories it has actually been told to watch.
@@ -78,6 +113,10 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
 pub(super) struct ChainWatch {
     pub(super) watcher: Mutex<Option<RecommendedWatcher>>,
     pub(super) ledger: Mutex<BTreeSet<PathBuf>>,
+    /// Directories whose failed `watch()` was already logged, so a retry on
+    /// every wake does not repeat it. Cleared on success, and pruned when the
+    /// directory leaves the chain.
+    warned: Mutex<BTreeSet<PathBuf>>,
     /// Env-file directories, watched outside the chain and never unwatched here.
     protected: BTreeSet<PathBuf>,
     /// Wakes the rewatch task has finished handling (tests wait on it).
@@ -93,6 +132,7 @@ impl ChainWatch {
         Arc::new(Self {
             watcher: Mutex::new(Some(watcher)),
             ledger: Mutex::new(BTreeSet::new()),
+            warned: Mutex::new(BTreeSet::new()),
             protected,
             #[cfg(test)]
             wakes_handled: std::sync::atomic::AtomicUsize::new(0),
@@ -109,6 +149,7 @@ impl ChainWatch {
             return false;
         };
         let mut ledger = self.ledger.lock();
+        let mut warned = self.warned.lock();
         let before = ledger.clone();
         for dir in wanted
             .difference(&before)
@@ -117,12 +158,15 @@ impl ChainWatch {
             match watcher.watch(dir, RecursiveMode::NonRecursive) {
                 Ok(()) => {
                     ledger.insert(dir.clone());
+                    warned.remove(dir);
                 }
                 Err(e) => {
-                    warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch");
-                    #[cfg(test)]
-                    self.watch_warnings
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if warned.insert(dir.clone()) {
+                        warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch");
+                        #[cfg(test)]
+                        self.watch_warnings
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
                 }
             }
         }
@@ -137,6 +181,7 @@ impl ChainWatch {
             }
             ledger.remove(dir);
         }
+        warned.retain(|dir| wanted.contains(dir));
         *ledger != before
     }
 
@@ -202,10 +247,14 @@ pub(super) fn watch_env_dirs(
     watcher: &mut RecommendedWatcher,
     env_file_paths: &[PathBuf],
 ) -> BTreeSet<PathBuf> {
+    // Only a directory actually watched is protected from the chain's
+    // reconcile: a missing or unwatchable one is left for the chain to watch
+    // if the config lives there too, and for its startup check to report.
+    let mut seen = BTreeSet::new();
     let mut env_dirs = BTreeSet::new();
     for env_path in env_file_paths {
         let dir = watch_dir_of(env_path);
-        if !env_dirs.insert(dir.clone()) {
+        if !seen.insert(dir.clone()) {
             continue;
         }
         if !dir.exists() {
@@ -215,6 +264,7 @@ pub(super) fn watch_env_dirs(
         match watcher.watch(&dir, RecursiveMode::NonRecursive) {
             Ok(()) => {
                 info!(dir = %dir.display(), "Config watcher: watching env-file directory");
+                env_dirs.insert(dir);
             }
             Err(e) => warn!(
                 dir = %dir.display(),

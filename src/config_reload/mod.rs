@@ -1049,9 +1049,13 @@ pub struct ConfigWatcher {
     _chain: Arc<watch_chain::ChainWatch>,
 }
 
-/// The config path as the operator named it, made absolute.
+/// The config path as the operator named it, made absolute without resolving
+/// any link in it. The watcher, the rewatch task and the reload all use this
+/// one path: resolving the parent here would pin a Capistrano `current` to the
+/// release it named at startup, and every reload would read that release.
+/// Only per-event matching resolves links (`config_watch_paths`).
 fn named_config_path(path: PathBuf) -> PathBuf {
-    absolute_watch_path(path)
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 impl ConfigWatcher {
@@ -1097,9 +1101,12 @@ impl ConfigWatcher {
             .map(absolute_watch_path)
             .collect();
 
-        let (wake_tx, wake_rx) = tokio::sync::watch::channel(());
+        let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
         let chain =
             Self::create_notify_watcher(event_tx.clone(), wake_tx, &config_path, &env_file_paths)?;
+        // One resolve as soon as the watches are live: a retarget that landed
+        // between resolving the chain and installing them is followed.
+        wake_rx.mark_changed();
         watch_chain::spawn_rewatch_task(
             config_path.clone(),
             Arc::clone(&chain),
@@ -1137,7 +1144,7 @@ impl ConfigWatcher {
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
     ) -> Result<Arc<watch_chain::ChainWatch>> {
-        let named_config_path = absolute_watch_path(config_path.to_path_buf());
+        let named_config_path = config_path.to_path_buf();
         let closure_config_path = named_config_path.clone();
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
@@ -1145,15 +1152,14 @@ impl ConfigWatcher {
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
+                // Every event may have moved the chain: a link unlinked and
+                // re-created is an event on the named path itself. The task
+                // decides; this thread must not block or call `watch`.
+                wake_tx.send_replace(());
                 if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
                     let _ = event_tx.try_send(ReloadTrigger::EnvFile(path));
-                } else {
-                    // Anything else in a watched directory may have moved the
-                    // chain (a link retargeted, a `..data` swapped). The task
-                    // decides; this thread must not block or call `watch`.
-                    wake_tx.send_replace(());
                 }
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
