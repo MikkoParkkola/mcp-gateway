@@ -214,7 +214,7 @@ pub(crate) fn read_guarded_file(
 #[cfg(unix)]
 fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-    let flags = rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
+    let flags = rustix::fs::OFlags::NOCTTY;
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(flags.bits().cast_signed())
