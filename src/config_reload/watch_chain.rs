@@ -28,7 +28,7 @@ use super::{ReloadTrigger, watch_dir_of};
 const MAX_HOPS: usize = 40;
 
 /// How often a chain that cannot be resolved is tried again without an event.
-const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+pub(super) const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The directories a config's link chain runs through, each canonical, and
 /// where it ends.
@@ -123,7 +123,8 @@ pub(super) fn named_config_path(path: PathBuf) -> PathBuf {
 pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
     chain_dirs(named).map_or_else(
         |e| {
-            warn!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
+            // The rewatch task warns once if the chain stays broken.
+            info!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
             BTreeSet::from([watch_dir_of(named)])
         },
         |(wanted, _)| wanted,
@@ -235,13 +236,16 @@ pub(super) fn spawn_rewatch_task(
     mut wake: tokio::sync::watch::Receiver<()>,
     reload: tokio::sync::mpsc::Sender<ReloadTrigger>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
+    retry_every: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_end: Option<PathBuf> = None;
         // While the chain cannot be resolved, its missing part may appear in a
         // directory nobody watches yet, so the task also retries on a timer.
+        // An interval's first tick completes at once: entering the broken
+        // state retries once immediately, then every `retry_every`.
         let mut broken = false;
-        let mut retry = tokio::time::interval(CHAIN_RETRY);
+        let mut retry = tokio::time::interval(retry_every);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {

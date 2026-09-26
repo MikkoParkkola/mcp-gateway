@@ -1105,6 +1105,7 @@ impl ConfigWatcher {
             wake_rx,
             event_tx,
             shutdown_rx.resubscribe(),
+            watch_chain::CHAIN_RETRY,
         );
 
         let failsafe_cfg = initial_config.failsafe.clone();
@@ -1146,8 +1147,8 @@ impl ConfigWatcher {
 
                 // Every event that changes a directory may have moved the
                 // chain: a link unlinked and re-created is an event on the
-                // named path itself. Reads cannot, and the reload's own read of
-                // the config must not wake the task again. The task decides;
+                // named path itself. An access (open, read, close) cannot, and
+                // the reload's own read must not wake the task again. The task decides;
                 // this thread must not block or call `watch`.
                 if !matches!(event.kind, EventKind::Access(_)) {
                     wake_tx.send_replace(());

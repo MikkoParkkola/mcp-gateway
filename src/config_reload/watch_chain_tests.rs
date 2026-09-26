@@ -230,6 +230,12 @@ mod real_watcher {
     }
 
     fn start(named: &Path) -> Harness {
+        start_retrying_every(named, super::super::CHAIN_RETRY)
+    }
+
+    /// `start` with the broken-chain retry at `retry_every`. An hour keeps
+    /// the timer out of a test, so only an event can move the chain.
+    fn start_retrying_every(named: &Path, retry_every: Duration) -> Harness {
         let (tx, events) = tokio::sync::mpsc::channel(32);
         let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
@@ -239,7 +245,14 @@ mod real_watcher {
         let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
             .expect("watcher starts");
         wake_rx.mark_changed();
-        let task = spawn_rewatch_task(named, Arc::clone(&chain), wake_rx, tx, shutdown.subscribe());
+        let task = spawn_rewatch_task(
+            named,
+            Arc::clone(&chain),
+            wake_rx,
+            tx,
+            shutdown.subscribe(),
+            retry_every,
+        );
         Harness {
             chain,
             events,
@@ -349,7 +362,9 @@ mod real_watcher {
     #[tokio::test]
     async fn t8_an_unlink_and_relink_retarget_is_followed() {
         let (_root, a, b, c) = release_tree();
-        let mut h = start(&c.join("l"));
+        // The broken-chain retry is an hour away: the relink is followed from
+        // its own event, not from the timer.
+        let mut h = start_retrying_every(&c.join("l"), Duration::from_secs(3600));
         h.wait_wakes_above(0).await;
         let seen = h.wakes();
         std::fs::remove_file(c.join("l")).unwrap();
@@ -591,6 +606,11 @@ mod real_watcher {
         symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
         let h = start(&c.join("l"));
         h.wait_wakes_above(0).await;
+        assert_eq!(
+            h.chain.watched(),
+            set(&[&c]),
+            "premise: only the link's directory is watched"
+        );
         std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
         h.wait_watched(&a).await;
         let _ = h.shutdown.send(());
@@ -613,7 +633,14 @@ mod real_watcher {
         tokio::time::sleep(Duration::from_millis(300)).await;
         while events.try_recv().is_ok() {}
         wake_rx.mark_changed();
-        let _task = spawn_rewatch_task(named, chain, wake_rx, tx, shutdown.subscribe());
+        let _task = spawn_rewatch_task(
+            named,
+            chain,
+            wake_rx,
+            tx,
+            shutdown.subscribe(),
+            super::super::CHAIN_RETRY,
+        );
         assert!(
             matches!(
                 tokio::time::timeout(Duration::from_secs(5), events.recv()).await,
