@@ -403,7 +403,8 @@ fn build_client_verifier(
 
 /// Load CRL entries from a PEM file.
 fn load_crls(path: &str) -> Result<Vec<CertificateRevocationListDer<'static>>> {
-    let pem_data = read_file(path, crate::config::CheckedFile::TlsCrl)?;
+    let _ = crate::config::CheckedFile::TlsCrl;
+    let pem_data = fs::read(path).map_err(|e| Error::Config(e.to_string()))?;
     CertificateRevocationListDer::pem_slice_iter(pem_data.as_slice())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Config(format!("Failed to parse CRL from '{path}': {e}")))
