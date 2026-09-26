@@ -67,6 +67,8 @@ upgrading a running deployment.
 | 44 | `file:` secret references; a literal starting `file:` is now a reference | Point `file:` at an absolute, owner-only (or group-read via `fsGroup`) file; change a literal secret that starts with `file:` |
 | 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
+| 47 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §47 for what is refused on `ws_url` |
+| 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 | 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
@@ -753,8 +755,8 @@ authentication, so no client could reach a tool through it.
   reload, with `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0;
   ... Remove server.ws_port. Delete the key. Like every `MCP_GATEWAY_*` variable,
   `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
-- **WebSocket is not a backend transport either.** No backend config reaches the WebSocket client
-  in `src/transport/websocket.rs`; backends use stdio, HTTP (Streamable HTTP or SSE) or A2A.
+- **Outbound WebSocket is a backend transport** (`ws_url`, see §47). Only the inbound listener is
+  removed.
 
 ## 35. A config or env file other users can read fails the load
 
@@ -1178,6 +1180,59 @@ tool.
 - **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
   other methods are forwarded without an attestation check.
 
+## 47. WebSocket backends (`ws_url`)
+
+A backend can be reached over WebSocket:
+
+```yaml
+backends:
+  realtime:
+    ws_url: "wss://rt.example.com/mcp"
+    protocol_version: "2025-11-25"   # optional
+    headers: { Authorization: "Bearer ${RT_TOKEN}" }
+    timeout: 30s
+```
+
+- **One session, one credential.** Every caller shares one socket to the backend, one MCP
+  session and the one static credential in `headers`, so the backend sees a single client. The
+  headers travel once, on the upgrade request; a rotated credential takes effect on the next
+  connect (a restart of that backend, or a reconnect after the socket drops).
+- **Credentials over `ws://`.** `ws://` to a host off this machine with any credential (`headers`,
+  `secrets`, userinfo, a query string, `oauth`) refuses the load unless the backend sets
+  `allow_cleartext_credentials`, the same rule as `http://`. `wss://` passes.
+- **Refused on `ws_url`:** `oauth` (it needs a per-request bearer the socket cannot refresh),
+  `identity_propagation`, and `secrets` with `inject_as: header` or `query`. `inject_as: argument`
+  works.
+- **Legacy handshake only.** The transport always runs `initialize`. A `protocol_version` of
+  `2026-07-28` or later on `ws_url` refuses the load, and a peer that only speaks the stateless
+  revision fails the start with "WebSocket MCP initialize failed".
+- **Public roots only.** `wss://` trusts the bundled web PKI roots; a private CA fails at start
+  with a TLS error.
+- **Bounded start.** A peer that accepts TCP and stalls the upgrade fails the call after the
+  backend `timeout`, and the failure counts toward that backend's breaker (§48).
+- **`mcp-gateway add` and the admin UI** store a pasted `ws://` or `wss://` URL as `ws_url`;
+  discovery does the same for `MCP_SERVER_*_URL` variables and client-config `url` entries.
+- **Logs.** The URL is logged by origin only. tungstenite's handshake logging is capped at DEBUG,
+  so even `RUST_LOG=trace` does not print the upgrade request with its query and headers.
+
+## 48. A backend that fails to start counts toward its circuit breaker
+
+In 3.x a start failure (a stdio command that cannot spawn, an HTTP or WebSocket backend that
+cannot connect) was returned to the caller and never recorded, so only health probes could trip
+the breaker. It now counts on every transport, on the request and the notification path. Once
+the breaker opens, callers get:
+
+```text
+Circuit breaker open for backend '<name>'; last failure: <the start error>
+```
+
+The same text reaches meta-route callers in the recovery hint. For a stdio backend the start
+error can name the configured command.
+
+**Breaking, public API:** `mcp_gateway::error::Error::CircuitOpen(String)` is now
+`CircuitOpen { backend: String, last_failure: Option<String> }`. A `match` on the old tuple
+variant no longer compiles; match `CircuitOpen { backend, .. }`.
+
 ## 51. SSO admin rules now grant full gateway admin
 
 A `control_plane.role_mapping` rule with `role: admin` used to make its identity
@@ -1253,6 +1308,10 @@ caller.
   disable a capability or kill a backend.
 - **`mcp_backend_circuit_state` follows the breaker only.** A rate-limit refusal no
   longer drops it to 0.
+- **New counter `mcp_backend_rate_limited_total{backend}`** counts these refusals, on
+  requests and notifications. Now that they are excluded from the budgets and the
+  circuit gauge, this is where they show. A backend's own 429s stay in
+  `mcp_backend_requests_total{status="rate_limited"}`.
 - A breaker that is really open is unchanged: same message, and it still counts as a
   failure.
 

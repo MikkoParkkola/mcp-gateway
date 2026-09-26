@@ -307,6 +307,19 @@ async fn revive_backend(
         .into_response()
 }
 
+/// The transport a PATCH asks for. A URL goes through
+/// [`TransportConfig::for_url`], so a pasted `ws://`/`wss://` URL becomes a
+/// WebSocket backend here exactly as it does on add (F17).
+fn requested_transport(command: Option<String>, url: Option<String>) -> Option<TransportConfig> {
+    command
+        .map(|command| TransportConfig::Stdio {
+            command,
+            cwd: None,
+            protocol_version: None,
+        })
+        .or_else(|| url.map(|url| TransportConfig::for_url(&url)))
+}
+
 async fn update_backend(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -351,19 +364,7 @@ async fn update_backend(
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
             }
 
-            let transport = command
-                .map(|command| TransportConfig::Stdio {
-                    command,
-                    cwd: None,
-                    protocol_version: None,
-                })
-                .or_else(|| {
-                    url.map(|http_url| TransportConfig::Http {
-                        http_url,
-                        streamable_http: false,
-                        protocol_version: None,
-                    })
-                });
+            let transport = requested_transport(command, url);
 
             let env = env.map(|env_patch| {
                 let mut merged = config
@@ -537,6 +538,22 @@ mod tests {
         assert!(validate_backend_name(&exact).is_ok());
     }
 
+    // ── requested_transport (PATCH) ───────────────────────────────────────────
+
+    #[test]
+    fn a_patched_wss_url_becomes_a_websocket_backend() {
+        for url in ["wss://h/mcp", "WS://h/mcp"] {
+            match requested_transport(None, Some(url.to_string())) {
+                Some(TransportConfig::WebSocket { ws_url, .. }) => assert_eq!(ws_url, url),
+                other => panic!("{url}: expected WebSocket, got {other:?}"),
+            }
+        }
+        assert!(matches!(
+            requested_transport(None, Some("https://h/mcp".to_string())),
+            Some(TransportConfig::Http { .. })
+        ));
+    }
+
     // ── resolve_transport ─────────────────────────────────────────────────────
 
     #[test]
@@ -544,9 +561,7 @@ mod tests {
         let (transport, _) = resolve_transport("any", Some("node server.js"), None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
-            TransportConfig::Http { .. } => panic!("expected Stdio"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Stdio"),
+            other => panic!("expected Stdio, got {other:?}"),
         }
     }
 
@@ -558,9 +573,7 @@ mod tests {
             TransportConfig::Http { http_url, .. } => {
                 assert_eq!(http_url, "http://localhost:9000");
             }
-            TransportConfig::Stdio { .. } => panic!("expected Http"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Http"),
+            other => panic!("expected Http, got {other:?}"),
         }
     }
 
@@ -571,9 +584,7 @@ mod tests {
             TransportConfig::Stdio { command, .. } => {
                 assert!(command.contains("tavily"), "command should mention tavily");
             }
-            TransportConfig::Http { .. } => panic!("expected Stdio for tavily"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Stdio for tavily"),
+            other => panic!("expected Stdio for tavily, got {other:?}"),
         }
         assert!(!desc.is_empty(), "description should not be empty");
     }

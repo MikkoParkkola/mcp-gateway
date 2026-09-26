@@ -178,6 +178,12 @@ backends:
   sentry:
     http_url: "https://mcp.sentry.dev/mcp"
     description: "Sentry issues"
+
+  realtime:
+    # WebSocket backend: headers ride the upgrade request once (UPGRADING-4.0 §47).
+    ws_url: "wss://rt.example.com/mcp"
+    headers:
+      Authorization: "Bearer ${RT_TOKEN}"
 ```
 
 ### Run and verify
@@ -376,8 +382,8 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 ### Protocol and transport
 
 - **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` lists only the handshake revisions, but a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call
-- **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), and A2A (`a2a` feature, on by default)
-- **Client transports**: clients connect via stdio or HTTP (`POST /mcp`). WebSocket is not a supported transport in either direction
+- **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), WebSocket (`ws_url`, legacy `initialize` handshake, one shared socket per backend), and A2A (`a2a` feature, on by default)
+- **Client transports**: clients connect via stdio or HTTP (`POST /mcp`); there is no inbound WebSocket listener
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
 - **Config discovery**: auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/`
