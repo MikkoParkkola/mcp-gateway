@@ -148,6 +148,24 @@ be is a row in a queue with no estimate, no parent and no order.
 release, 18 riding along, 23 for 4.1, 1 verified and closed (MIK-7250), 40
 closed — 89. Every open issue has a disposition; none is left to age.
 
+## Linear state on 2026-09-26
+
+Sections A to D record the Linear project as it stood on 2026-08-29. Every MIK issue they name was
+read back from Linear on 2026-09-26 (89 issues); this is where the recorded disposition and the
+current state now disagree. Counts are per section; an issue named in two sections is counted in both.
+
+| section | recorded as | Linear now | disagrees |
+|---|---|---|---|
+| A (7) | in 4.0.0, waiting on the merge | 4 Done; 3 In Progress | MIK-7116, MIK-7217, MIK-7272 are still In Progress, not merely waiting on a merge |
+| B (18) | can still land in 4.0.0 | 16 Done; 2 Ready | MIK-7263 and MIK-7268 are open (Ready) |
+| C (25) | 4.1 | 9 Done; 2 Canceled; 5 Ready; 7 Backlog; 2 Blocked | shipped in 4.0.0 despite the 4.1 disposition: MIK-6704, MIK-6710, MIK-6729, MIK-6744, MIK-6745, MIK-6746, MIK-7084, MIK-7243, MIK-7244 (Done); canceled: MIK-6209, MIK-7250 |
+| D (40) | close | 32 Canceled; 6 Done; 1 Ready; 1 New ideas | not closed: MIK-3127 (Ready) and MIK-6956 (New ideas) |
+
+The 14 issues of section C that are still open (MIK-3051, MIK-5465, MIK-6207, MIK-6273, MIK-6672,
+MIK-6680, MIK-6681, MIK-6682, MIK-6683, MIK-6684, MIK-6692, MIK-6726, MIK-6727, MIK-6865) keep the
+4.1 disposition this document gave them; whether any of them is 4.0.0 scope is decided by the
+release criteria ledger, not here. The arithmetic above is that of 2026-08-29.
+
 ## E. The GitHub tracker, which the sections above did not read
 
 Sections A to D sort the Linear project. The repository has its own issues and
@@ -158,7 +176,8 @@ do not have to be read together.
 
 | issue | disposition |
 |---|---|
-| 463, 462, 453 | 4.0.0 batch 1 — the reload path, alongside MIK-7256. **Status 2026-09-26:** 462 closed COMPLETED (2026-09-18); 463 closed NOT_PLANNED (2026-09-24), its requested wording rejected in-tree with the rationale pinned at `src/config_reload/tests.rs:1282-1287` (commit 5ef8d05f); 453 open, in review as #1234 |
+| 463, 462 | 4.0.0 batch 1 — the reload path, alongside MIK-7256. **Status 2026-09-26:** 462 closed COMPLETED (2026-09-18); 463 closed NOT_PLANNED (2026-09-24): the batch took up the work, and the wording the issue asked for was rejected in-tree, with the rationale pinned at `src/config_reload/tests.rs:1282-1287` (commit 5ef8d05f) |
+| 453 | 4.0.0 batch 1 — the reload path. **Status 2026-09-26:** open, in review as #1234 |
 | 452, 451 | 4.0.0 batch 3 — session ownership on terminate, sampling and elicitation. 451 is MIK-7251's defect reported independently. Both closed COMPLETED on 2026-09-18 |
 | 440 | 4.0.0 batch 6 — `surfaced_tools` is parsed and then ignored. Closed COMPLETED on 2026-09-24 |
 | 437 | 4.0.0 batch 2 — and a constraint on MIK-7245, below |
@@ -184,8 +203,9 @@ dual-generation design note.
 
 ### Currency re-check — 2026-09-11
 
-The table above is the state on 2026-08-29. Three of its rows have since resolved, and eight
-issues have been filed that it could not have covered.
+The table above was the state on 2026-08-29; its rows now carry their 2026-09-26 status inline. As of
+2026-09-11, three of its rows had resolved, and eight issues had been filed that it could not have
+covered.
 
 **Resolved since.** Issue **437** closed COMPLETED on 2026-09-04, so the `0600` readability check
 it constrained is no longer a pending constraint on MIK-7245 — the mode change and the startup
@@ -204,12 +224,12 @@ held disposition as a comment, plus #528, this release's own branch.
 | 481 | 2026-09-05 | **In 4.0.0.** Closed COMPLETED on 2026-09-24: fixed on the release line (`docs/ranking-1-release-line` @ 6fac7e91), criteria GH475.RL.9, RL.10 and RL.11 MET in `docs/requirements/RELEASE-4.0.0-criteria-status.md:458-460`, end-to-end test `tests/gh475_rl9_429_only_neither_opens_circuit_nor_exhausts_budget.rs` |
 | 482 | 2026-09-05 | **In 4.0.0.** Closed COMPLETED on 2026-09-24: decided and fixed on the release line (@ 6fac7e91) under GH475.RL.5 (`docs/requirements/RELEASE-4.0.0-criteria-status.md:454`); the decided scope is pinned by tests |
 | 523 | 2026-09-11 | **In 4.0.0.** POSIX `shlex::split` mangled Windows backslash paths in stdio `command` strings. Closed COMPLETED on 2026-09-16 by #564 (commit 6d033b428, on the release line), which implements 527 |
-| 524 | 2026-09-11 | **In 4.0.0.** Windows CI compiled and never ran a test. Fixed by #1190 (merge commit 966b6b8c3): the `Windows check` job compiles every test target and runs the lib and bin unit tests. Closed COMPLETED on 2026-09-26. The residual (the skipped `gateway::` and `personal_accounts::` trees, integration targets, Windows clippy) is W1, #1142, 4.0-gating |
-| 525 | 2026-09-11 | **In 4.0.0, open.** The Windows arm of the stdio environment allowlist has no test; the only test over that function is `#[cfg(unix)]`. Test-only fix in review as #1240, which runs on the `Windows check` job #1190 added |
+| 524 | 2026-09-11 | **In 4.0.0.** Windows CI compiled and never ran a test. Fixed by #1190 (merge commit 966b6b8c3): the `Windows check` job compiles every test target and runs the lib and bin unit tests. Closed COMPLETED on 2026-09-26. The residual is W1, #1142, 4.0-gating: per #1142, the `gateway::` and `personal_accounts::` trees the job skips, the integration targets, and Windows clippy |
+| 525 | 2026-09-11 | **In 4.0.0, open.** The Windows arm of the stdio environment allowlist has no test; the only test over that function is `#[cfg(unix)]`. Test-only fix in review as #1240, which runs on the `Windows check` job now that #1190 made it run tests |
 | 526 | 2026-09-11 | **In 4.0.0, open.** A stdio child that dies before `initialize` reports a request timeout while the cause sits unread in its stderr. No pull request yet |
 | 527 | 2026-09-11 | **In 4.0.0.** One parser for a configured stdio command, used by spawn and doctor alike. Closed COMPLETED on 2026-09-18: implemented by #564 (merged 2026-09-16, commit 6d033b428, on the release line) |
 
-**Status on 2026-09-26.** The paragraph that stood here placed 481, 482 and 523–527 after the
+**Status on 2026-09-26.** The paragraph that stood here (written 2026-09-11) placed 481, 482 and 523–527 after the
 release because none carried a criterion row. That no longer holds: 481 and 482 closed on the
 release line with GH475.RL.* criteria MET; 523 and 527 closed with #564; 524 closed with #1190. No
 follow-up is deferred out of 4.0.0, so 525 (#1240) and 526 are 4.0.0 work, and W1 (#1142, the rest
