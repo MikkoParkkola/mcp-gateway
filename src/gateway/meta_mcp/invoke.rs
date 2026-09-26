@@ -2395,6 +2395,14 @@ impl MetaMcp {
                         error = ?error,
                         "Bridged input exchange failed for a legacy client"
                     );
+                    // MUTANT: an ask that expired is charged to the capability.
+                    if matches!(
+                        error,
+                        crate::gateway::input_bridge::BridgeError::Delivery { .. }
+                            | crate::gateway::input_bridge::BridgeError::Deadline
+                    ) {
+                        self.record_error_budget(server, tool, BudgetOutcome::Failure);
+                    }
                     return Err(Error::JsonRpc {
                         code: -32003,
                         message: format!(
