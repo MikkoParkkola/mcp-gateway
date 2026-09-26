@@ -543,14 +543,66 @@ mod real_watcher {
     #[tokio::test]
     async fn t16_start_resolves_once_when_the_watches_are_live() {
         let (_root, r) = capistrano();
+        crate::gateway::test_helpers::write_owner_only(
+            r.join("rel1").join("cfg.yaml"),
+            profile_config("rel1"),
+        )
+        .unwrap();
         let g = start_gateway_watcher(&r.join("current").join("cfg.yaml"));
-        let before = g.live.get();
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert_eq!(g.watcher.chain().wakes_handled.load(Ordering::SeqCst), 1);
-        assert!(
-            Arc::ptr_eq(&before, &g.live.get()),
-            "the initial resolve reloaded"
+        assert_eq!(
+            description(&g.live).as_deref(),
+            Some("rel1"),
+            "the initial resolve did not leave the named release loaded"
         );
+    }
+
+    /// T18: a chain that cannot be resolved at startup (the target missing
+    /// mid-update) does not fail the start: the named link's own directory is
+    /// watched, and the chain is repaired on the next event.
+    #[tokio::test]
+    async fn t18_an_unresolvable_chain_at_startup_watches_the_named_directory() {
+        let root = tempfile::tempdir().expect("root");
+        let (a, c) = (root.path().join("a"), root.path().join("c"));
+        for dir in [&a, &c] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
+        let (tx, _events) = tokio::sync::mpsc::channel(32);
+        let (wake_tx, _wake_rx) = tokio::sync::watch::channel(());
+        let named = crate::config_reload::named_config_path(c.join("l"));
+        let chain = ConfigWatcher::create_notify_watcher(tx, wake_tx, &named, &[])
+            .expect("a dangling link does not fail the start");
+        assert_eq!(chain.watched(), set(&[&c]));
+    }
+
+    /// T19: a retarget that lands after the config was read but before the
+    /// rewatch task starts is reloaded by the task's first resolve, even when
+    /// it moves only the end of the chain and no watch.
+    #[tokio::test]
+    async fn t19_a_retarget_before_the_task_starts_is_reloaded() {
+        let (_root, a, _b, c) = release_tree();
+        std::fs::write(a.join("cfg2.yaml"), "a: 2\n").unwrap();
+        let (tx, mut events) = tokio::sync::mpsc::channel(32);
+        let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
+        let (shutdown, _) = tokio::sync::broadcast::channel(1);
+        let named = crate::config_reload::named_config_path(c.join("l"));
+        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
+            .expect("watcher starts");
+        retarget(&c.join("l"), &a.join("cfg2.yaml"));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        while events.try_recv().is_ok() {}
+        wake_rx.mark_changed();
+        let _task = spawn_rewatch_task(named, chain, wake_rx, tx, shutdown.subscribe());
+        assert!(
+            matches!(
+                tokio::time::timeout(Duration::from_secs(5), events.recv()).await,
+                Ok(Some(_))
+            ),
+            "the first resolve did not reload the retargeted config"
+        );
+        let _ = shutdown.send(());
     }
 
     /// T4 (control): an in-place write through an unchanged link reloads.
