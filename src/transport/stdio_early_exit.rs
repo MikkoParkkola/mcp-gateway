@@ -124,7 +124,7 @@ impl StdioTransport {
     ///
     /// For the gateway log and `doctor`, never for an MCP client.
     #[must_use]
-    pub fn start_failure_excerpt(&self) -> Option<String> {
+    pub(crate) fn start_failure_excerpt(&self) -> Option<String> {
         self.start.failure.lock().clone()
     }
 
