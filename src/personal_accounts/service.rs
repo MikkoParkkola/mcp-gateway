@@ -318,13 +318,13 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
             return Ok(RejectionOutcome::Stale);
         }
         let expected = version_of(&current);
-        match self.store.claim_forced_refresh(account, &expected)? {
-            ForceClaim::Claimed => {}
-            ForceClaim::AlreadyForced => return Ok(RejectionOutcome::AlreadyForced),
-            ForceClaim::Superseded => return Ok(RejectionOutcome::Stale),
-        }
         match self.provider.refresh(account, &current).await {
             Ok(rotated) => {
+                match self.store.claim_forced_refresh(account, &expected)? {
+                    ForceClaim::Claimed => {}
+                    ForceClaim::AlreadyForced => return Ok(RejectionOutcome::AlreadyForced),
+                    ForceClaim::Superseded => return Ok(RejectionOutcome::Stale),
+                }
                 let next = self.apply(account, &current, &expected, rotated)?;
                 // The rotated revision is force-tried too, or a backend that
                 // refuses every token would earn one refresh per call from a
