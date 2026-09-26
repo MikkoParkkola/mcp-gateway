@@ -254,7 +254,6 @@ pub(super) fn spawn_rewatch_task(
                         break;
                     }
                 }
-                _ = retry.tick(), if broken => {}
                 _ = shutdown.recv() => break,
             }
             let (wanted, end) = match chain_dirs(&named) {
