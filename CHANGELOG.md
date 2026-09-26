@@ -544,8 +544,9 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ## [4.0.0] - Unreleased
 
-> **Not tagged yet.** No `v4.0.0` tag exists. Everything in this section shipped in
-> `4.0.0-beta.1`. At the 4.0.0 release it merges with `[Unreleased]` into one dated section.
+> **Not tagged yet.** No `v4.0.0` tag exists. The changes this section describes shipped in
+> `4.0.0-beta.1`; its text has been corrected since, without adding changes. At the 4.0.0
+> release it merges with `[Unreleased]` into one dated section.
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). No migration edits a
 > 3.x `gateway.yaml`; strict `env_files` parsing, cleartext credential backends, empty or repeated
