@@ -32,7 +32,7 @@ const BACKEND: &str = "fixture";
 const ASKING_TOOL: &str = "needs_input";
 /// How long each hold lasts. A loop that lets the question through does so
 /// within one backend round trip on loopback, far inside this.
-const HOLD: Duration = Duration::from_millis(1500);
+const HOLD: Duration = Duration::from_secs(3);
 /// Bound on every wait for a frame that must arrive.
 const ARRIVAL: Duration = Duration::from_secs(10);
 
@@ -185,6 +185,15 @@ async fn stdio_2_question_waits_for_a_held_initialize_response() {
     let (mut client, seen, task, _config) = serve(output, Some(Arc::clone(&gate))).await;
     let mut lines = BufReader::new(reader).lines();
 
+    // Readiness: the parse error is answered only once startup is over and the
+    // loop is reading, so the hold below measures the loop and not the boot.
+    send(&mut client, "not json").await;
+    let ready = timeout(ARRIVAL, lines.next_line()).await;
+    assert!(
+        matches!(ready, Ok(Ok(Some(_)))),
+        "the serve loop never started reading"
+    );
+
     send(&mut client, &initialize(1)).await;
     send(&mut client, &asking_call(2)).await;
 
@@ -267,7 +276,9 @@ async fn stdio_2_held_writer_emits_initialize_before_a_ready_question() {
         Some(-32700),
         "control: the held frame was not the parse error, so nothing was held: {frames:?}"
     );
-    let handshake = position_of_id(&frames, 1).expect("STDIO.2: no initialize response");
+    let handshake = position_of_id(&frames, 1).unwrap_or_else(|| {
+        panic!("STDIO.2: the input request was emitted with no initialize response before it: {frames:?}")
+    });
     let question = frames
         .iter()
         .position(is_question)

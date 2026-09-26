@@ -301,6 +301,9 @@ async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
 /// leading with it would report a passing framing check on a gateway that
 /// wrote nothing — the count is what makes the row load-bearing, and the
 /// parse is what the row actually specifies once frames exist.
+///
+/// MIK-7387.STDIO.3 adds correlation: each call is tagged, the replies race in
+/// reverse order, and each call must get back the answer to its own question.
 #[tokio::test]
 async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
     let home = tempfile::tempdir().expect("temporary home");
@@ -314,7 +317,17 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
 
     session.send(&tagged_call(2)).await;
     session.send(&tagged_call(3)).await;
-    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |frames| {
+            frames
+                .iter()
+                .filter(|frame| {
+                    frame.get("method").and_then(Value::as_str) == Some("elicitation/create")
+                })
+                .count()
+                >= 2
+        })
+        .await;
 
     assert!(
         saw_method(&received, "initialize"),
@@ -375,7 +388,15 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
             }))
             .await;
     }
-    let tail = session.collect_lines(COLLECT_WINDOW).await;
+    let tail = session
+        .collect_lines_until(COLLECT_BUDGET, Duration::ZERO, |frames| {
+            [2_i64, 3].iter().all(|id| {
+                frames
+                    .iter()
+                    .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(*id))
+            })
+        })
+        .await;
     for id in [2_i64, 3] {
         let answer = tail
             .iter()
