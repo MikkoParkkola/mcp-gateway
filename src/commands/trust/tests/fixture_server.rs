@@ -20,10 +20,7 @@ pub(super) fn spawn_loopback_fixture_server() -> (String, std::sync::mpsc::Recei
                     // that raced the client's request returned `WouldBlock` and
                     // the fixture recorded an empty request.
                     let mut buf = [0_u8; 1024];
-                    let n = stream
-                        .set_nonblocking(false)
-                        .and_then(|()| stream.read(&mut buf))
-                        .unwrap_or(0);
+                    let n = stream.read(&mut buf).unwrap_or(0);
                     let request = String::from_utf8_lossy(&buf[..n]).to_string();
                     let body = r#"{"forecast":"sunny","raw_fixture_payload":"do-not-store"}"#;
                     let response = format!(
