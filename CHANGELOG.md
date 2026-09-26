@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
+  reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
+  by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket
+  drops, and never logs more of its URL than the origin. `mcp-gateway add`, the admin UI and
+  discovery store a `ws://`/`wss://` URL as `ws_url`. Refused on `ws_url`: cleartext `ws://`
+  credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
+  header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §47.
+
 - `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
   item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
   the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
@@ -115,6 +123,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
+- **Breaking: a backend that fails to start counts toward its circuit breaker, on every
+  transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
+  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §48.
+- **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
+  line prints the upgrade request with its query string and headers.
 - **Breaking:** a `control_plane.role_mapping` rule with `role: admin` now makes its
   SSO identity a gateway admin on every admin surface (admin meta-tools, `/ui/api/*`),
   not only the control plane. The mapping is read per request, so a reload revokes

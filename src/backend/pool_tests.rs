@@ -205,7 +205,7 @@ async fn cross_tenant_circuit_breaker_trip_does_not_reject_other_identity() {
         .await
         .expect_err("userA's own tripped slot must reject its traffic");
     assert!(
-        matches!(err, Error::CircuitOpen(_)),
+        matches!(err, Error::CircuitOpen { .. }),
         "expected CircuitOpen for userA, got {err:?}"
     );
 
