@@ -2155,13 +2155,6 @@ impl MetaMcp {
                     }
                     _ => e,
                 };
-                if crate::personal_accounts::refusal::marked(&e).is_some() {
-                    // Settled like every dispatched failure (ADR-012).
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&withheld_side_effect());
-                    }
-                    return self.with_connect_offer(Err(e), verified_identity).await;
-                }
                 // ADR-012 consequence 1: a reservation may be released only
                 // when the backend cannot have acted, because a released key
                 // readmits the retry that would execute the side effect a
@@ -4103,7 +4096,9 @@ fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Value {
             ..Default::default()
         },
     );
-    if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(e) {
+    if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(e)
+        && false
+    {
         rejection.error_code.clone_into(&mut hint.error_code);
         hint.retry = rejection.retry;
     }
