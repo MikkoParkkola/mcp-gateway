@@ -1,6 +1,6 @@
 # Windows owner-only stores: test plan
 
-Status: REVISION 4 after test-plan review rounds 1-3 (dispositions §9-§11). Design: `2026-09-26-windows-owner-only-stores.md`
+Status: REVISION 5 after test-plan review rounds 1-4 (dispositions §9-§12). Design: `2026-09-26-windows-owner-only-stores.md`
 (reviewed, SHIP x2). Code, probes and the red commit wait for the ADR-016 decision.
 
 ## 1. What the plan asserts against
@@ -39,12 +39,14 @@ commit must let the stores OPEN on Windows without any security logic. It holds:
    `Prefix` component (without that no Windows store path passes config);
 3. signature-only stubs with PERMISSIVE bodies. Each is a thin wrapper that carries
    the SAME test instrumentation the production body will (so no row fails for missing
-   instrumentation) and then makes one std call: `create_dir_private` = fire
-   `AfterCreate`, `fs::create_dir`; `create_file_private` = `OpenOptions::create_new`,
-   fire `AfterCreate`; `replace` = count the attempt, record the trace, `fs::rename`,
-   no retry; `sync_file` = record the trace, `sync_all`; `hold_dir` = open with std
-   default sharing; `inspect` = an all-pass `Inspection`; `volume_is_local` =
-   `Ok(true)`; `final_path` = the input path (after firing `AfterPathWalk`);
+   instrumentation) and then makes one std call: `create_dir_private` =
+   `fs::create_dir`, then fire `AfterCreate`; `create_file_private` = `OpenOptions::create_new`,
+   fire `AfterCreate`; `replace` = count the attempt, record the trace
+   (including `write_through = false`), `fs::rename`, no retry; `sync_file` = record the trace, `sync_all`; `hold_dir` = open with
+   `FILE_FLAG_BACKUP_SEMANTICS` and std default sharing; `inspect` = an all-pass `Inspection`; `volume_is_local` =
+   `Ok(true)`; `final_path` = the input path. `AfterPathWalk` is fired by the
+   store open itself, immediately after the R3 walk and BEFORE the directory is opened
+   or pinned, in both stub and production;
    `try_acquire` = open without locking. The hook, counter and trace are `cfg(test)`
    items of `private_fs`, shared unchanged by stub and production bodies. This is exactly today's unguarded Windows
    behaviour (`has_mode -> true`), so every security test fails on its ASSERTION.
@@ -58,7 +60,7 @@ Expected outcomes, one table for every run kind:
 | Rows | Red run | Green run | Mutant run |
 |---|---|---|---|
 | all W-T rows except those below | FAIL with own `WT-ASSERT` marker | pass | the mapped rows FAIL with their marker |
-| W-T17, W-T21 (regression guards) | pass | pass | FAIL under M17 / M22 |
+| W-T17, W-T21, W-T22b (regression guards) | pass | pass | FAIL under M17 / M22 / M23 |
 | W-T6 | FAIL, or a logged skip if `mklink` lacks the privilege | pass or logged skip | not a mutant target (M3 uses W-T5) |
 | fixture tests that only needed the store to open | pass (evidence item 2 is complete) | pass | pass |
 
@@ -86,11 +88,13 @@ Expected outcomes, one table for every run kind:
 | W-T15 | `fat32_volume_refuses` (ignored; CI step) | CI step: `diskpart` create+attach two 64 MB VHDs, format one FAT32 (`F:`) and one exFAT (`E:`) | on both, `volume_is_local` false (asserted directly); store open refuses | stub `true` |
 | W-T16a | `held_directory_blocks_its_own_rename` | `private_fs::hold_dir(store)` ALONE, no files open; `fs::rename(store, store2)` | rename `Err` with raw OS error 32 and the directory's file id unchanged; then drop the guard and repeat rename + `mklink /J` at the old name: both succeed (control) | stub hold opens with std default sharing (includes delete): the first rename succeeds |
 | W-T16 | `open_store_blocks_ancestor_swap` | store open; rename parent; replace parent with a junction | both fail; a lookup afterwards still returns the committed record | as W-T16a |
-| W-T17 | `reader_closes_before_replace` (parameterized: personal-account authority lock and task-store state lock) | barrier AFTER the reader releases the authority lock and BEFORE any escaped handle could drop; writer commits `refresh_tokens` at that barrier. Attempts are counted inside `private_fs::replace`, a wrapper shared by stub and production bodies | commit succeeds on attempt 1 | **green-in-red regression guard**: the un-gated read path already closes inside the lock, so this row is expected GREEN in the red run; its proof is M17 (a reader that keeps its handle makes attempt 1 fail), stated here rather than claimed as red |
+| W-T17 | `reader_closes_before_replace` (parameterized: personal-account authority lock and task-store state lock) | barrier AFTER the reader releases the authority lock and BEFORE any escaped handle could drop; writer commits `refresh_tokens` at that barrier. Attempts are counted inside `private_fs::replace`, a wrapper shared by stub and production bodies | commit succeeds on attempt 1, and the reader's handle has the same file id as the replaced destination | **green-in-red regression guard**: the un-gated read path already closes inside the lock, so this row is expected GREEN in the red run; its proof is M17 (a reader that keeps its handle makes attempt 1 fail), stated here rather than claimed as red |
 | W-T19 | `other_ace_type_refuses` | `Set-Acl` SDDL `O:<sid>D:P(A;;FA;;;<sid>)(XA;;FR;;;WD;(Member_of {SID(BA)}))` (a conditional callback ACE; every other rule passes) | reason `OtherAceType` | accepts |
-| W-T20 | `external_holder_retry_is_bounded` | a thread holds the destination record open (std handle, no delete share). Case A: after attempt 1 fails, the replace hook BLOCKS until the holder thread acknowledges it has dropped its handle; only then may attempt 2 run. Case B: never release; the test runs under a 10 s watchdog that fails the test (not hangs CI) on expiry | A: commit succeeds with attempts == 2 exactly. B: `StorageUnavailable` after exactly 3 attempts, and a lookup afterwards returns the PREVIOUS committed version | stub has no retry loop: attempt 1 fails with a sharing violation and the commit refuses, so A sees attempts == 1 and an error, B sees attempts == 1 instead of 3 |
+| W-T20 | `external_holder_retry_is_bounded` | a thread holds the destination record open (std handle, no delete share). Case A: after attempt 1 fails, the replace hook BLOCKS until the holder thread acknowledges it has dropped its handle; only then may attempt 2 run. Case B: never release; the test runs under a 10 s watchdog that fails the test (not hangs CI) on expiry | Holder file id == destination file id (asserted first). A: commit succeeds with attempts == 2 exactly. B: `StorageUnavailable` after exactly 3 attempts, and a lookup afterwards returns the PREVIOUS committed version | stub has no retry loop: attempt 1 fails with a sharing violation and the commit refuses, so A sees attempts == 1 and an error, B sees attempts == 1 instead of 3 |
 | W-T21 | `foreign_deny_ace_is_accepted` | fixture first asserts via `whoami /groups` that the runner token does NOT contain BUILTIN\Guests (S-1-5-32-546); SDDL `O:<sid>D:P(D;;FA;;;S-1-5-32-546)(A;;FA;;;<sid>)` | store opens and reads normally | **green-in-red regression guard** against over-strict P2; proof is M22 |
-| W-T22 | `durability_calls_are_made` | commit one grant and one task record with a test-only trace in `private_fs::sync_file` and `private_fs::replace` | per commit: `sync_file` precedes `replace`, `replace` was called with the write-through flag set, and, where probe E1 found it supported, `sync_dir` follows `replace` | stub does not trace: empty trace. Limitation: this proves the CALLS are made, not that the disk honours them (§7) |
+| W-T22 | `durability_calls_are_made` | commit one grant and one task record with a test-only trace in `private_fs::sync_file` and `private_fs::replace` | per commit: `sync_file` precedes `replace`, `replace` was called with the write-through flag set, and, where probe E1 found it supported, `sync_dir` follows `replace` | the stub traces `replace` with `write_through = false`: the flag assertion fails. Limitation: this proves the CALLS are made, not that the disk honours them (§7) |
+| W-T22b | `sync_file_really_flushes` | open a record READ-ONLY and call `private_fs::sync_file` on it | `Err` (`FlushFileBuffers` needs write access, so a real flush fails here and a no-op cannot) | green-in-red guard; proof is M23 |
+| W-T24 | `record_is_judged_on_the_open_handle` | `cfg(test)` hook `BeforeRecordOpen` fires after `accepted_basename` and before the record is opened; it replaces the record with a same-named file carrying a foreign ACE | lookup refuses, reason `ForeignSid` | stub `inspect` all-pass: accepts |
 | W-T23 | `directory_at_record_name_refuses` | create a DIRECTORY (private, protected) at a valid record name the manifest points to; same for a task record name | lookup / load refuses, reason `NotRegular` | the un-gated reader still refuses the store operation (its `is_file` check moves unchanged), but the stub `judge_*` returns `Ok`, so the `NotRegular` reason assertion fails |
 | W-T18 | `path_swap_between_walk_and_open_refuses` | `cfg(test)` fault boundary `AfterPathWalk` replaces ancestor with a junction to another private store of the same user | reason `PathMismatch` | stub `final_path` echoes input: accepts |
 
@@ -122,7 +126,7 @@ Red-run gate: every row's decisive assertion message starts with a unique marker
 `WT-ASSERT <id>`; fixture failures start `WT-FIXTURE <id>`. A CI script over the test
 output checks the red run against the table in §2: every row executed (W-T6 may
 instead log `WT-SKIP W-T6`), each red row failed with its own `WT-ASSERT <id>`
-marker, no `WT-FIXTURE` line, no panic outside a marker, and both guards passed. Any difference fails the red PR.
+marker, no `WT-FIXTURE` line, no panic outside a marker, and all three guards passed. Any difference fails the red PR.
 
 Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557`):
 
@@ -162,10 +166,11 @@ Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557
 | M20 | create with std, THEN protect (throwaway branch only; adds a `SetSecurityInfo` call) | W-T1b |
 | M21 | no retry on sharing violation / unbounded retry | W-T20 (A, B) |
 | M22 | treat any DENY ACE as foreign | W-T21 |
-| M23 | remove the underlying `sync_all` inside `sync_file` while keeping the trace call (the trace records the `sync_all` RESULT, so a missing call shows as no result) | W-T22 |
+| M23 | `sync_file` returns `Ok(())` without calling `sync_all`, trace kept | W-T22b |
 | M24 | drop `MOVEFILE_WRITE_THROUGH` in the actual `MoveFileExW` argument (trace records the argument passed, not a separate flag) | W-T22 |
 | M25 | drop the regular-file check | W-T23 |
 | M26 | P5 not required when inspecting store DIRECTORIES | W-T3 |
+| M27 | judge the record by path before opening, then read the handle unjudged | W-T24 |
 
 The ignored CI-step tests (W-T12, W-T14, W-T15) live in module `win_privileged` and run in the mutant PRs too: each mutant PR
 runs the full Windows job including the privileged step.
@@ -188,6 +193,9 @@ runs the full Windows job including the privileged step.
 
 ## 6. CI steps added to the Windows job
 
+0. fixture smoke (`if: always()` after build): SDDL round trip for each planted SDDL,
+   `mgw-probe` launch, `net use` mapping, both VHD formats; failures here are reported
+   as fixture failures before any red/green judgement;
 1. existing `cargo test --no-run`;
 2. `cargo test --all-features --lib --bins --no-fail-fast` (no skips);
 3. privileged step, `if: always() && steps.build.outcome == 'success'` so a red or
@@ -208,7 +216,7 @@ runs the full Windows job including the privileged step.
 
 ## 8. Evidence to record
 
-Red run id (throwaway PR), green run id, one run id per mutant M1-M26, before/after
+Red run id (throwaway PR), green run id, one run id per mutant M1-M27, before/after
 unix test counts, the list of residual Windows failures by name.
 
 ## 9. Review round 1 dispositions
@@ -254,3 +262,15 @@ unix test counts, the list of residual Windows failures by name.
 | MEDIUM: directory P5 has no mutant | Fixed: M26 on W-T3 |
 | LOW: W-T6 skip vs red gate | Fixed: one expectation table (§2) allows `WT-SKIP W-T6` |
 | Improvements | Adopted: W-T9 file-id check; W-T22 traces `sync_dir` and the real `MoveFileExW` argument; M23/M24 mutate the platform call, not the wrapper; W-T1 compared field by field; W-T17 covers both stores |
+
+
+## 12. Review round 4 dispositions
+
+| Finding | Disposition |
+|---|---|
+| HIGH: nothing proves records are judged on the open handle | Fixed: W-T24 + M27 |
+| MEDIUM: M23 no-op keeps the trace | Fixed: W-T22b read-only flush must fail; M23 targets it |
+| MEDIUM: directory stub fired `AfterCreate` before creating | Fixed (§2) |
+| MEDIUM: `AfterPathWalk` fired after the open | Fixed: fired by the store open between walk and open (§2) |
+| MEDIUM: W-T22 red reason contradicted the shared trace | Fixed: red asserts the missing write-through flag |
+| Improvements | Adopted: file-id identity in W-T17/W-T20; `BACKUP_SEMANTICS` in the `hold_dir` stub; fixture smoke step (§6 step 0) |
