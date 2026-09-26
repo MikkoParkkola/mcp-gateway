@@ -33,6 +33,7 @@ impl Gateway {
     /// keep executing requests whose answers are already being thrown away.
     /// Closing the queue makes every producer's `send` fail and `is_closed`
     /// true, which is the signal the read loop stops admitting on.
+    #[allow(dead_code)]
     pub(super) async fn run_stdout_writer<W: tokio::io::AsyncWrite + Unpin>(
         mut sink: W,
         mut queue: tokio::sync::mpsc::Receiver<serde_json::Value>,
