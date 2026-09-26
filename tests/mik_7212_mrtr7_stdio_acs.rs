@@ -177,14 +177,17 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
 
 /// Write the config the child will actually read.
 ///
-/// The error budget is put out of reach. None of these rows answers every
-/// question, so on a loaded machine some bridged prompts reach the bridge's
-/// 30s `per_prompt` and end `-32003`. Those endings are charged to the
-/// capability's error budget, whose kill switch then disables the fixture tool,
-/// and every later call is refused `-32000 … temporarily disabled` rather than
-/// admitted: a cascade the rows then misread as a regressed cap. The budget is
-/// not what these rows are about, so it is configured never to evaluate —
-/// `min_samples` equal to the largest window, which no row comes near.
+/// The error budget is put out of reach. A 65-call burst can run past the
+/// fixture backend's rate limiter (100 rps, burst 50). Before F23 each such
+/// refusal was reported as "Circuit breaker open" and sampled as a failure;
+/// the refusals landed before any slow asking dispatch returned, so the
+/// capability's first samples were all failures, its kill switch disabled the
+/// fixture tool, and every later call was refused `-32000 … temporarily
+/// disabled`: a cascade the rows misread as a regressed cap. F23 stopped
+/// sampling those refusals, and ask expiries (`-32003` at the bridge's 30s
+/// `per_prompt`) were never sampled. The budget is still not what these rows
+/// are about, so it stays configured never to evaluate — `min_samples` equal
+/// to the largest window, which no row comes near.
 ///
 /// `Config::FALLBACK_PATHS` checks `gateway.yaml` relative to the working
 /// directory before `~/.config/mcp-gateway/gateway.yaml`, and the session below

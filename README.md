@@ -556,7 +556,9 @@ auto-kill apart from an open breaker.
 Every key of both budgets is documented inline in `examples/gateway-full.yaml`
 under `error_budget:`. Rate-limited responses (`429`, `RESOURCE_EXHAUSTED`) are
 excluded from both budgets: a throttled backend is a working backend, so
-throttling alone can neither kill a backend nor disable a capability.
+throttling alone can neither kill a backend nor disable a capability. The same
+holds for the gateway's own per-backend `failsafe.rate_limit`: its refusal reads
+`Rate limit exceeded for backend '<name>'` and is never sampled.
 
 **Tools not appearing?** Verify the backend is running (`gateway_list_servers`). Tool lists are cached for 5 minutes.
 
