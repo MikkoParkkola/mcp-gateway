@@ -83,6 +83,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
+  durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
+  non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
+  handed a `client_id` that another writer then replaced on disk. The lock is now `LockFileEx`.
 - **An error result is never replayed from a cache.** The response cache and the capability
   cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
   refusals, and served them to every call with the same key for the whole TTL (60 s by default).

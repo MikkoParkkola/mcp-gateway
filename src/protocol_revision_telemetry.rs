@@ -1267,6 +1267,9 @@ pub(crate) fn reset_global_for_tests() {
 }
 
 #[cfg(test)]
+#[path = "protocol_revision_telemetry_lock_tests.rs"]
+mod lock_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
