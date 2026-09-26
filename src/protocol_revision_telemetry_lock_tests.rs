@@ -11,11 +11,11 @@ use super::*;
 
 #[test]
 fn concurrent_sinks_count_every_request() {
-    const SINKS: u64 = 8;
+    const SINKS: usize = 8;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     DurableTelemetrySink::open(&root).expect("create the window");
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(SINKS as usize));
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(SINKS));
     let handles: Vec<_> = (0..SINKS)
         .map(|_| {
             let root = root.clone();
@@ -37,7 +37,7 @@ fn concurrent_sinks_count_every_request() {
     }
     assert_eq!(
         load_durable_window(&root).unwrap().snapshot.total,
-        SINKS,
+        u64::try_from(SINKS).unwrap(),
         "a concurrent persist dropped another sink's count"
     );
 }
