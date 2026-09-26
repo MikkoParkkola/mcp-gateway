@@ -322,7 +322,7 @@ fn rate_limited_counter_ignores_an_open_breaker() {
     let total = rate_limited_total_after(|| async {
         for _ in 0..2 {
             let refused = backend.request("tools/list", None).await;
-            assert!(matches!(refused, Err(crate::Error::CircuitOpen(_))));
+            assert!(matches!(refused, Err(crate::Error::CircuitOpen { .. })));
         }
     });
     assert_eq!(total, None);

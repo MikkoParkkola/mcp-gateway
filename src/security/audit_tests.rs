@@ -198,7 +198,10 @@ fn outcome_mapping_covers_every_row() {
             Some(("error", Some(-32000))),
         ),
         (
-            Err(Error::CircuitOpen("b".into())),
+            Err(Error::CircuitOpen {
+                backend: "b".into(),
+                last_failure: None,
+            }),
             Some(("error", Some(-32000))),
         ),
         (

@@ -171,7 +171,7 @@ pub enum ShadowOwnership {
 /// Transport evidence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShadowTransport {
-    /// Transport kind: stdio, http, or a2a.
+    /// Transport kind: stdio, http, websocket, or a2a.
     pub kind: String,
     /// Sanitized endpoint. Userinfo, query, and fragment are removed.
     pub endpoint: Option<String>,
@@ -812,29 +812,23 @@ fn remediation_hints(remediation: &ShadowRemediation) -> Vec<String> {
 
 impl ShadowTransport {
     fn from_transport(transport: &TransportConfig) -> Self {
-        match transport {
-            TransportConfig::Stdio { .. } => Self {
-                kind: "stdio".to_string(),
-                endpoint: None,
-                local_only: true,
-            },
-            TransportConfig::Http { http_url, .. } => {
-                let endpoint = sanitize_url(http_url);
-                Self {
-                    kind: "http".to_string(),
-                    endpoint,
-                    local_only: is_loopback_url(http_url),
-                }
+        let (kind, url) = match transport {
+            TransportConfig::Stdio { .. } => {
+                return Self {
+                    kind: "stdio".to_string(),
+                    endpoint: None,
+                    local_only: true,
+                };
             }
+            TransportConfig::Http { http_url, .. } => ("http", http_url),
+            TransportConfig::WebSocket { ws_url, .. } => ("websocket", ws_url),
             #[cfg(feature = "a2a")]
-            TransportConfig::A2a { a2a_url, .. } => {
-                let endpoint = sanitize_url(a2a_url);
-                Self {
-                    kind: "a2a".to_string(),
-                    endpoint,
-                    local_only: is_loopback_url(a2a_url),
-                }
-            }
+            TransportConfig::A2a { a2a_url, .. } => ("a2a", a2a_url),
+        };
+        Self {
+            kind: kind.to_string(),
+            endpoint: sanitize_url(url),
+            local_only: is_loopback_url(url),
         }
     }
 }
@@ -843,8 +837,9 @@ impl ShadowAuthExposure {
     fn from_transport(transport: &TransportConfig) -> Self {
         match transport {
             TransportConfig::Stdio { .. } => Self::StdioProcess,
-            TransportConfig::Http { http_url, .. } => {
-                if is_loopback_url(http_url) {
+            TransportConfig::Http { http_url: url, .. }
+            | TransportConfig::WebSocket { ws_url: url, .. } => {
+                if is_loopback_url(url) {
                     Self::LocalHttpNoAuthMetadata
                 } else {
                     Self::NetworkHttpNoAuthMetadata
