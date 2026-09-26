@@ -464,3 +464,22 @@ fn start_of_append_retention_on_a_full_disk_frees_space() {
     assert!(l.write_faults_fired() > 0, "the fault never fired");
     assert!(verify(&path, false).ok);
 }
+
+/// Stress: the synced append and rotate cycle, many times over. On Windows a
+/// single run of the test above failed with NotFound from the writer; this
+/// repeats the same cycle so the failing call site shows up in one CI run.
+#[test]
+fn synced_append_rotation_stress() {
+    for round in 0..40 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 3, false)).unwrap();
+        for i in 0..400 {
+            if let Err(e) = l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
+            {
+                panic!("round {round} append {i}: {e} (kind {:?})", e.kind());
+            }
+        }
+        assert!(verify(&path, false).ok, "round {round}: chain broken");
+    }
+}
