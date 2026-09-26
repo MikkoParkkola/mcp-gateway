@@ -2375,8 +2375,12 @@ impl MetaMcp {
                     }
                     // Anything else the 401 site produced (a rejection mark, or
                     // a custody refusal connecting cannot fix) answers exactly
-                    // as the same failure on the first dispatch would.
-                    return Ok(dispatch_error_result(&refused, tool, server));
+                    // as the same failure on the first dispatch would. Sealed
+                    // like the undeclared-key refusal above: the result is
+                    // gateway-built from a typed error, never backend bytes.
+                    return Ok(GuardedValue::sealed_by_guard(dispatch_error_result(
+                        &refused, tool, server,
+                    )));
                 }
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
