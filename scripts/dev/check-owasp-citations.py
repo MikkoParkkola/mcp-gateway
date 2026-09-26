@@ -22,17 +22,20 @@ DOC = ROOT / "docs" / "OWASP_AGENTIC_AI_COMPLIANCE.md"
 # A backticked repository path: `src/...`, `tests/...`, `docs/...`, `scripts/...`
 # or `.github/...`, optionally ending in `/` (a directory).
 CITED_PATH = re.compile(r"`((?:src|tests|docs|scripts|\.github)/[^`\s]*)`")
-# `cargo test [flags] <name>` inside the validation-command block.
-CARGO_TEST = re.compile(r"^\s*cargo test(?:\s+--?[\w-]+)*\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", re.M)
+# `cargo test [flags] <name>`: the only command form the document may use, so a
+# form this check cannot read fails rather than going unchecked.
+CARGO_LINE = re.compile(r"^\s*cargo test\b.*$", re.M)
+CARGO_TEST = re.compile(r"^\s*cargo test(?:\s+--?[\w-]+)*\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
+# A test function: `#[test]` or `#[tokio::test(...)]`, then attributes, then `fn`.
+TEST_FN = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def test_names_defined(root: Path) -> set[str]:
-    """Every `fn name` under src/ and tests/: a filter must match one of them."""
+    """Every test function under src/ and tests/: a filter must match one of them."""
     names: set[str] = set()
-    fn = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
     for sub in ("src", "tests"):
         for path in (root / sub).rglob("*.rs"):
-            names.update(fn.findall(path.read_text(encoding="utf-8", errors="replace")))
+            names.update(TEST_FN.findall(path.read_text(encoding="utf-8", errors="replace")))
     return names
 
 
@@ -43,8 +46,13 @@ def problems(doc: Path, root: Path) -> list[str]:
         if not (root / cited.rstrip("/")).exists():
             found.append(f"cited path does not exist: {cited}")
     defined = test_names_defined(root)
-    for name in sorted(set(CARGO_TEST.findall(text))):
-        # `cargo test NAME` is a substring filter; it must match at least one fn.
+    for line in CARGO_LINE.findall(text):
+        match = CARGO_TEST.match(line)
+        if match is None:
+            found.append(f"validation command form not checkable: {line.strip()}")
+            continue
+        # `cargo test NAME` is a substring filter; it must match at least one test.
+        name = match.group(1)
         if not any(name in d for d in defined):
             found.append(f"validation command matches no test: cargo test {name}")
     return found
