@@ -254,7 +254,7 @@ async fn readyz(
         _ if state
             .meta_mcp
             .get_capabilities()
-            .is_some_and(|c| !c.initial_scan_complete()) =>
+            .is_none_or(|c| !c.initial_scan_complete()) =>
         {
             (
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
