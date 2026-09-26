@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Version-parameterized JSDoc check. --ts-version selects the reported
-// compiler. tsc is taken from PATH (or TSC). checkJs --noEmit --strict is the
-// gate. Missing tsc writes recommendation skip and exits 0 unless --require-tsc.
+// Version-parameterized JSDoc check. --ts-version is the compiler this run
+// claims to test. tsc is taken from PATH (or TSC). The report records that
+// binary's version, and recommendation is skip when the two differ.
+// checkJs --noEmit --strict is the gate. Missing tsc writes recommendation
+// skip and exits 0 unless --require-tsc.
 import { spawnSync, execSync } from "node:child_process";
 import { readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -25,6 +27,11 @@ function commitSha() {
   } catch {
     return "unknown";
   }
+}
+
+function versionOf(text) {
+  const match = String(text).match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)/);
+  return match ? match[1] : "";
 }
 
 function recommendation(diagnosticCount, version) {
@@ -61,11 +68,15 @@ for (const name of files) {
   perFixture.push({ file: name, diagnostics: count });
 }
 
+const compilerVersion = versionOf(`${probe.stdout || ""}${probe.stderr || ""}`);
+let verdict = recommendation(diagnostics, compilerVersion || tsVersion);
+if (tsVersion !== "unspecified" && compilerVersion !== tsVersion) verdict = "skip";
 const report = {
   tsVersion,
+  compilerVersion,
   commitSha: commitSha(),
   fixtures: perFixture,
-  recommendation: recommendation(diagnostics, tsVersion),
+  recommendation: verdict,
 };
 writeFileSync(outPath, JSON.stringify(report, null, 2));
 if (diagnostics > 0) process.exit(1);

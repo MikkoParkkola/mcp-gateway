@@ -18,4 +18,4 @@ The spike assumed `mcp-gateway/npm` and `trvl/npm` contained JSDoc annotations a
 | `@template` generic | `fixtures/template.js` | Return `T` unchanged |
 | Nullable param | `fixtures/nullable.js` | Compare with `null` before use |
 
-Re-run `node scripts/ts-upgrade/validate.mjs --ts-version <version>` when a stable TypeScript release claims new JSDoc narrowing. The harness writes `ts-upgrade-report.json` with `tsVersion`, `commitSha`, and `recommendation` of `upgrade_now`, `wait_for_stable`, or `skip`.
+Re-run `node scripts/ts-upgrade/validate.mjs --ts-version <version>` when a stable TypeScript release claims new JSDoc narrowing. The harness writes `ts-upgrade-report.json` with `tsVersion`, the running `compilerVersion`, `commitSha`, and `recommendation` of `upgrade_now`, `wait_for_stable`, or `skip`. That recommendation describes the fixtures under the compiler that actually ran. It is `skip` when `--ts-version` does not match `tsc --version`. The migration decision for these npm trees stays `skip` until one of them grows JSDoc.
