@@ -542,7 +542,7 @@ impl CostTracker {
     pub(crate) fn all_sessions_fingerprinted(&self) -> Vec<SessionCostSnapshot> {
         let mut sessions = self.all_sessions();
         for session in &mut sessions {
-            session.session_id = crate::gateway::session_id::session_fp(&session.session_id);
+            session.session_id = session.session_id.clone();
         }
         sessions
     }
