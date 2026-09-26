@@ -43,8 +43,9 @@ impl Backend {
         self.tools_slot(binding)
             .tools_fill_failed_at
             .lock()
-            .is_some_and(|(at, transport)| {
-                !transport && at.elapsed() < super::fill_check::LIST_FILL_COOLDOWN
+            .as_ref()
+            .is_some_and(|(at, replay)| {
+                replay.is_none() && at.elapsed() < super::fill_check::LIST_FILL_COOLDOWN
             })
     }
 
@@ -274,7 +275,7 @@ impl Backend {
                     let end = match &drained {
                         Ok(_) => FillEnd::Drained,
                         Err(e) => FillEnd::Failed {
-                            transport: super::fill_check::is_transport_failure(e),
+                            transport: super::fill_check::Replay::of(e),
                         },
                     };
                     if let Some(guard) = guard.as_mut() {

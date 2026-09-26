@@ -29,6 +29,8 @@ struct Slot {
     lists: AtomicUsize,
     calls: AtomicUsize,
     list_headers: Mutex<Vec<Vec<(String, String)>>>,
+    /// Refuse every request as a connect failure (the backend is down).
+    down: bool,
 }
 
 #[async_trait::async_trait]
@@ -47,6 +49,9 @@ impl crate::transport::Transport for Slot {
         _identity_key: Option<&str>,
         _resend: crate::transport::ResendPermission,
     ) -> crate::Result<JsonRpcResponse> {
+        if self.down {
+            return Err(crate::Error::TransportConnect("slot down".into()));
+        }
         let result = if method == "tools/list" {
             self.lists.fetch_add(1, Ordering::SeqCst);
             self.list_headers.lock().push(extra_headers.to_vec());
@@ -163,4 +168,57 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         .map(|s| s.calls.load(Ordering::SeqCst))
         .sum::<usize>();
     assert_eq!((elsewhere, dispatched), (0, 0));
+}
+
+/// Final-review fold: a bridged round whose cold list cannot connect sent no
+/// `tools/call`, so it is `NotAdmitted` (the idempotency key stays
+/// retryable), never `BackendFailed { MayHaveActed }`.
+#[tokio::test]
+async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
+    let backend = Arc::new(Backend::new(
+        "edits",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let down = Arc::new(Slot {
+        down: true,
+        ..Slot::default()
+    });
+    backend.set_transport_for_test(Arc::clone(&down) as Arc<dyn crate::transport::Transport>);
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(backend));
+    let meta = MetaMcp::new(registry);
+    let arguments = json!({"edits": []});
+    let round = BridgeDispatcher {
+        meta: &meta,
+        server: "edits",
+        tool: "edit",
+        arguments: &arguments,
+        prompt_cache_key: None,
+        inbound_meta: None,
+        want_full: false,
+        session_id: None,
+        caller_identity: None,
+        caller_proof: CallerProof::Anonymous,
+        headers: &[],
+        cache_binding: None,
+        account_credential: None,
+        api_key_name: None,
+        trace_id: "f13-a3-bridged",
+        policy_epoch: 0,
+        protocol_revision: None,
+        routing_profile: "default",
+        scope: InvokeScope::allow_all(CallerStanding::Standard),
+    };
+    let outcome = round.invoke(json!({})).await;
+    assert!(
+        matches!(outcome, Err(BridgeError::NotAdmitted { ref message }) if message.contains("slot down")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        down.calls.load(Ordering::SeqCst),
+        0,
+        "a tools/call went out"
+    );
 }

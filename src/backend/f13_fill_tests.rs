@@ -289,7 +289,7 @@ fn f13_t5b_a_timed_out_fill_makes_the_next_call_fail_fast() {
         );
         let started = tokio::time::Instant::now();
         let second = check(&backend, "edit", &undeclared()).await;
-        let second = second.map_err(|e| crate::backend::fill_check::is_transport_failure(&e));
+        let second = second.map_err(|e| matches!(e, crate::Error::BackendTimeout(_)));
         (second, lister.lists(), started.elapsed())
     });
     assert_eq!(second, Err(true));

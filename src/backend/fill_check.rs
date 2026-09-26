@@ -49,13 +49,43 @@ pub(crate) enum Completeness {
 }
 
 /// How a tools fill ended, as its guard sees it on drop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A transport failure of a tools fill, kept so a check-site call inside the
+/// cooldown answers with the same class, message and budget treatment (a
+/// rate-limit text stays one) as the failure it stands in for (A3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Replay {
+    timeout: bool,
+    message: String,
+}
+
+impl Replay {
+    /// `Some` for a transport failure (see [`is_transport_failure`]).
+    pub(crate) fn of(error: &Error) -> Option<Self> {
+        is_transport_failure(error).then(|| Self {
+            timeout: matches!(error, Error::BackendTimeout(_)),
+            message: match error {
+                Error::BackendTimeout(m) | Error::BackendUnavailable(m) => m.clone(),
+                other => other.to_string(),
+            },
+        })
+    }
+
+    fn error(&self) -> Error {
+        if self.timeout {
+            Error::BackendTimeout(self.message.clone())
+        } else {
+            Error::BackendUnavailable(self.message.clone())
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FillEnd {
     /// Still draining: a drop here is a caller cancellation.
     Pending,
     /// The drain, parse, start or inner timeout returned an error;
-    /// `transport` is [`is_transport_failure`] of it (A3).
-    Failed { transport: bool },
+    /// `transport` is its [`Replay`] when it was a transport failure (A3).
+    Failed { transport: Option<Replay> },
     /// Drained; reaching drop in this state means the store was voided.
     Drained,
     /// The store was accepted.
@@ -88,14 +118,14 @@ impl Drop for FillGuard {
     // only the stamp mutex and the counters, never the cache.
     fn drop(&mut self) {
         let stamp = &self.entry.tools_fill_failed_at;
-        match self.end {
+        match std::mem::replace(&mut self.end, FillEnd::Pending) {
             FillEnd::Pending => count("input_schema_fill_cancelled"),
             FillEnd::Failed { transport } => {
                 *stamp.lock() = Some((tokio::time::Instant::now(), transport));
                 count("input_schema_fetch_failed");
             }
             FillEnd::Drained => {
-                *stamp.lock() = Some((tokio::time::Instant::now(), false));
+                *stamp.lock() = Some((tokio::time::Instant::now(), None));
                 count("input_schema_fetched");
             }
             FillEnd::Stored => {
@@ -122,13 +152,22 @@ pub(super) fn admit_fill(
             .check_circuit(backend)
             .inspect_err(|_| count_reason("input_schema_fill_refused", "circuit"))?;
     }
-    let cooling = tools
-        && entry
+    let cooling = if tools {
+        entry
             .tools_fill_failed_at
             .lock()
-            .is_some_and(|(at, _)| at.elapsed() < LIST_FILL_COOLDOWN);
-    if cooling {
+            .clone()
+            .filter(|(at, _)| at.elapsed() < LIST_FILL_COOLDOWN)
+    } else {
+        None
+    };
+    if let Some((_, replay)) = cooling {
         count("input_schema_fill_cooldown");
+        // A check-site call answers as the transport failure it stands in
+        // for; any other caller keeps the generic fast-fail.
+        if let Some(replay) = replay.filter(|_| gated) {
+            return Err(replay.error());
+        }
         return Err(Error::BackendUnavailable(format!(
             "{backend}: tools/list failed within the last {}s",
             LIST_FILL_COOLDOWN.as_secs()

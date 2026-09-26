@@ -108,9 +108,10 @@ pub(crate) struct PooledEntry {
     /// parse or start error, a `CallTimeout` expiry, or a voided store. Fills
     /// within `LIST_FILL_COOLDOWN` of it fail fast. Tokio's `Instant`, so a
     /// paused test clock advances it with the timeouts. Tools only. The flag
-    /// is whether that failure was a transport one (A3), so a fast-failed
-    /// call answers as the failure it stands in for.
-    pub(crate) tools_fill_failed_at: parking_lot::Mutex<Option<(tokio::time::Instant, bool)>>,
+    /// is the transport failure to replay (A3), `None` for an unreadable
+    /// list, so a fast-failed call answers as the failure it stands in for.
+    pub(crate) tools_fill_failed_at:
+        parking_lot::Mutex<Option<(tokio::time::Instant, Option<super::fill_check::Replay>)>>,
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,

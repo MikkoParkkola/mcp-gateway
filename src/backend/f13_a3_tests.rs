@@ -24,7 +24,8 @@ async fn a3_t4a_a_transport_failure_and_its_cooldown_answer_as_transport() {
     tokio::time::advance(Duration::from_millis(10)).await;
     let second = check(&backend, "edit", &undeclared()).await;
     assert!(
-        matches!(second, Err(ref e) if crate::backend::fill_check::is_transport_failure(e)),
+        matches!(second, Err(ref e) if crate::backend::fill_check::is_transport_failure(e)
+            && e.to_string().contains("list down")),
         "the cooldown fast-fail must answer as the transport failure: {second:?}"
     );
     assert_eq!(lister.lists(), 1, "a list went out inside the cooldown");
