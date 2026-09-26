@@ -1150,9 +1150,7 @@ impl ConfigWatcher {
                 // named path itself. An access (open, read, close) cannot, and
                 // the reload's own read must not wake the task again. The task decides;
                 // this thread must not block or call `watch`.
-                if !matches!(event.kind, EventKind::Access(_)) {
-                    wake_tx.send_replace(());
-                }
+                wake_tx.send_replace(());
                 if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
