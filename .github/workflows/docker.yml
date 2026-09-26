@@ -22,8 +22,13 @@ jobs:
   # image's Rust deps are gated. Pairs with the trivy step below, which gates the
   # base-image OS/library CVEs (osv-scanner reads lockfiles, not image layers).
   # Exceptions are time-boxed in .github/osv-scanner.toml.
+  #
+  # Skipped for a pull request from a `throwaway/` branch: those carry red-first
+  # and mutation runs that only need the Tests job, and each image build holds a
+  # scarce runner. Skipping the two root jobs skips `build` through `needs:`.
   security-gate:
     name: Security gate (block image on known vulns)
+    if: ${{ !startsWith(github.head_ref, 'throwaway/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,6 +49,7 @@ jobs:
   # anyway. Duplicated deliberately — a workflow cannot depend on another workflow's job.
   release-criteria:
     name: Release criteria ledger (header matches rows)
+    if: ${{ !startsWith(github.head_ref, 'throwaway/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -311,7 +317,8 @@ jobs:
   build-gate:
     name: build
     needs: [build]
-    if: always()
+    # A throwaway branch skipped the build on purpose; do not report it red.
+    if: ${{ always() && !startsWith(github.head_ref, 'throwaway/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
