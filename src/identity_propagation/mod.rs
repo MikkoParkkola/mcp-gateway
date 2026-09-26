@@ -631,8 +631,7 @@ pub(crate) async fn audit_identity_propagation(
     // F20: on the blocking pool under the append bound, so a stalled disk
     // cannot pin a runtime worker on the mint path.
     logger
-        .append_bounded(move |l| l.append_event(fields, &envelope))
-        .await
+        .append_event(fields, &envelope)
         .map(|_| ())
         .map_err(|e| {
             tracing::warn!(
