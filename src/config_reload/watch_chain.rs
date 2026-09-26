@@ -113,7 +113,7 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
 /// release it named at startup, and every reload would read that release.
 /// Only per-event matching resolves links (`config_watch_paths`).
 pub(super) fn named_config_path(path: PathBuf) -> PathBuf {
-    std::path::absolute(&path).unwrap_or(path)
+    super::absolute_watch_path(path)
 }
 
 /// The directories to watch at startup. A chain that cannot be resolved yet
