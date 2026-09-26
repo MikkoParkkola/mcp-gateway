@@ -272,6 +272,8 @@ pub(super) fn spawn_rewatch_task(
                 }
             };
             broken = false;
+            let wanted: BTreeSet<PathBuf> =
+                wanted.intersection(&chain.watched_now()).cloned().collect();
             let rewatched = chain.reconcile(&wanted);
             #[cfg(test)]
             chain
