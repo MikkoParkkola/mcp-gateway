@@ -90,8 +90,9 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    `task_service` can call it (maintainer decision 2026-09-26, §6 Q4).
    Shape (agreed with the security lane, #1452): new module `src/gateway/router/direct_guards.rs`,
    `pub(crate) fn run(&self, ctx: &DirectCall<'_>) -> Result<GuardedCall, Refusal>`, pre-dispatch
-   only, an ordered list: kill switch, cost budget, active session profile and replay nonce first
-   (security lane, #1452 / MIK-7597; pure checks), then isolation, tool policy and sanitisation. `GuardedCall` carries what dispatch needs (sanitised params, per-user headers,
+   only, an ordered list: kill switch, cost budget, active session profile and the signing gate first
+   (security lane, #1452 / MIK-7597, its design §2.3: with signing and `require_nonce` both on,
+   the direct route refuses `tools/call` with `-32001`; no nonce is carried on this route; pure checks), then isolation, tool policy and sanitisation. `GuardedCall` carries what dispatch needs (sanitised params, per-user headers,
    identity key), so no caller re-derives them. After dispatch there is likewise ONE function,
    `DirectRouteGuards::after_dispatch`, called by both the request thread and the worker: the
    response scan, plus the security lane's error-budget recording and auto-kill, response
@@ -192,7 +193,7 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    one global generation channel. It waits ONLY while the row is still `input_required` (the
    occupant is the unwinding producer); if on any check the id is occupied and the row is no
    longer `input_required` (a racing completing update won), it refuses `-32602` at once. On
-   timeout while still `input_required` the refusal is `-32603` "task busy, retry"., then
+   timeout while still `input_required` the refusal is `-32603` "task busy, retry". Then
    ONE store write that takes the permit through the same try-acquire closure create uses
    (`execution.rs:370-390`) and performs the `input_required -> working` CAS together, then the
    spawn. If that write loses (a cancel already settled the row, or another update already moved it to `working`: refused `-32602`) the handoff and any permit are
