@@ -658,6 +658,16 @@ mod tls_ca_key_tests;
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config, generate_admin_token};
 
+    /// The starter capabilities are embedded at build time, so a CRLF checkout
+    /// would ship CRLF bytes in that target's binary. `capabilities/.gitattributes` keeps
+    /// them LF; this goes red on the Windows job if that rule is lost.
+    #[test]
+    fn the_embedded_starter_capabilities_are_lf_only() {
+        for (path, body) in super::LOCAL_SAMPLE_CAPABILITIES {
+            assert!(!body.contains('\r'), "{path} was embedded with a CR");
+        }
+    }
+
     #[test]
     #[cfg(unix)]
     fn the_generated_config_is_not_readable_by_other_users() {

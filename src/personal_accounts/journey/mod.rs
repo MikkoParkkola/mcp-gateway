@@ -45,22 +45,24 @@ pub(crate) use callback::Admitted;
 pub(crate) use grant::JourneyCommit;
 #[cfg(unix)]
 pub(crate) use persist::JourneysSlot;
-#[cfg(test)]
+// The journey tests drive a real store, and the store refuses every write on a
+// non-unix target (`storage::random_hex`), so they compile and run on unix only.
+#[cfg(all(test, unix))]
 use persist::read_journeys;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "tests.rs"]
 mod tests;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "tests_commit.rs"]
 mod tests_commit;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "tests_gaps.rs"]
 mod tests_gaps;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "tests_offer.rs"]
 mod tests_offer;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "tests_review.rs"]
 mod tests_review;
 
