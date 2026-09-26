@@ -85,7 +85,7 @@ Expected outcomes, one table for every run kind:
 | W-T8 | `null_dacl_refuses` | `Set-Acl` SDDL `O:<sid>D:PNO_ACCESS_CONTROL` (protected NULL DACL), read back and checked semantically (DACL absent-or-null, protected flag set) rather than by string | reason `NullDacl` | accepts |
 | W-T8b | `read_only_ace_refuses` | SDDL `O:<sid>D:P(A;;FR;;;<sid>)` | reason `NoReadWrite` (P1, P2, P4, P5 pass by construction) | accepts |
 | W-T9 | `custody_across_processes` | test re-execs its own binary (`--exact` child entry, env flag) that opens the store and waits on stdin | parent open: `AlreadyOwned` (task) / `StorageUnavailable` (accounts), NOT `Unsupported`, AND a test hook confirms the parent opened the sidecar (same file id as the child) so the refusal came from `try_lock`, not from a sharing violation; kill child; parent reacquires within 2 s | stub never locks: parent open succeeds while the child holds it |
-| W-T10 | `legacy_token_inherited_acl_refuses` | created FRESH with `fs::write` (the 3.x way) inside a test-created parent whose inheritable DACL is `(A;OICI;FA;;;<sid>)(A;OICI;FR;;;BU)`; exempt from the baseline step; only the owner is normalised to the user | migration refuses `NotPrivate`; message names `ForeignSid(BU)` (inherited) | stub `judge_*` Ok: migration accepts |
+| W-T10 | `legacy_token_inherited_acl_refuses` | created FRESH with `fs::write` (the 3.x way) inside a test-created parent whose inheritable DACL is `(A;OICI;FA;;;<sid>)(A;OICI;FR;;;BU)`; exempt from the baseline step; only the owner is normalised to the user with `icacls /setowner`, which leaves the inherited DACL in place | migration refuses `NotPrivate`; message names `ForeignSid(S-1-5-32-545)` (inherited) | stub `judge_*` Ok: migration accepts |
 | W-T10b | `legacy_token_remediation_works` | W-T10 file plus `icacls /grant *S-1-1-0:R` and `/setowner *S-1-5-32-544`; run the §2.4 sequence the refusal message printed, parsed from the message itself | migration then accepts; before it, refusal lists `ForeignSid(S-1-1-0)` and `ForeignOwner(S-1-5-32-544)` | accepts before remediation |
 | W-T11 | `foreign_owner_refuses` | `icacls f /setowner *S-1-5-32-544` on `authority.json` | reason `ForeignOwner` | accepts |
 | W-T12 | `mapped_network_drive_refuses` (ignored; CI step) | `net use <free letter>: \\localhost\C$` (allocated at run time, exported as `MGW_NET_ROOT`); store under it | `volume_is_local(MGW_NET_ROOT handle) == false` asserted directly; store open refuses (if probe E5 shows the mapping reports `DRIVE_FIXED`, this row is marked N/A with the E5 run id and M11 moves to a direct unit test of the UNC final-path leg) | stub returns `true` |
@@ -100,10 +100,11 @@ Expected outcomes, one table for every run kind:
 | W-T21 | `foreign_deny_ace_is_accepted` | fixture first asserts via `whoami /groups` that the runner token does NOT contain BUILTIN\Guests (S-1-5-32-546); SDDL `O:<sid>D:P(D;;FA;;;S-1-5-32-546)(A;;FA;;;<sid>)` | store opens and reads normally | **green-in-red regression guard** against over-strict P2; proof is M22 |
 | W-T22 | `durability_calls_are_made` | commit one grant and one task record with a test-only trace in `private_fs::sync_file` and `private_fs::replace` | per commit: `sync_file` precedes `replace`, `replace` was called with the write-through flag set, and, where probe E1 found it supported, `sync_dir` follows `replace` | the stub traces `replace` with `write_through = false`: the flag assertion fails. Limitation: this proves the CALLS are made, not that the disk honours them (§7) |
 | W-T22b | `sync_file_really_flushes` | open a record READ-ONLY and call `private_fs::sync_file` on it | `Err` (`FlushFileBuffers` needs write access, so a real flush fails here and a no-op cannot) | green-in-red guard; proof is M23 |
-| W-T24 | `record_is_judged_on_the_open_handle` | `cfg(test)` hook `BeforeRecordOpen` fires IMMEDIATELY before the open call, after every path-level check (so any path-based judgement, including M27's, has already run on the original file); it replaces the record with a same-named file carrying a foreign ACE | lookup refuses, reason `ForeignSid` | stub `inspect` all-pass: accepts |
+| W-T24 | `record_is_judged_on_the_open_handle` | `cfg(test)` hook `BeforeRecordOpen` fires IMMEDIATELY before the open call, after every path-level check (so any path-based judgement, including M27's, has already run on the original file); it replaces the record with a same-named file carrying a foreign ACE | lookup refuses, reason `ForeignSid` | stub `judge_*` returns `Ok`: accepts |
 | W-T23 | `directory_at_record_name_refuses` | create a DIRECTORY (private, protected) at a valid record name the manifest points to; same for a task record name. Record reads open with `FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT`, so a directory OPENS and is then judged by its `FILE_ATTRIBUTE_DIRECTORY` attribute | lookup / load refuses, reason `NotRegular` | the stub `judge_*` returns `Ok`: the reason assertion fails |
 | W-T25 | `create_refuses_an_existing_name` | an existing file (and a junction) at the target name, each with known content and file id | `create_file_private` and `create_dir_private` return `AlreadyExists`; the existing object's content and file id are unchanged | stub `create_new` also refuses: GREEN-in-red guard; proof is M31 |
 | W-T26 | `scratch_residue_does_not_block_commit` | leave a file at the next scratch name the store will draw (test-only name source) | the commit succeeds using a fresh scratch name; the residue is untouched | stub has no retry of its own: the `AlreadyExists` from `create_new` fails the commit |
+| W-T12b | `unc_final_path_is_not_local` (used only if E5 shows the mapped drive reports `DRIVE_FIXED`) | open a directory through `\\?\UNC\localhost\C$\<tmp>` | `volume_is_local` false via the UNC final-path leg | stub `true` |
 | W-T18 | `path_swap_between_walk_and_open_refuses` | `cfg(test)` fault boundary `AfterPathWalk` replaces ancestor with a junction to another private store of the same user | reason `PathMismatch` | stub `final_path` echoes input: accepts |
 
 Fixture discipline (all plants):
@@ -135,7 +136,7 @@ Red-run gate: every row's decisive assertion message starts with a unique marker
 output checks the red run against the table in §2: every row executed (W-T6 may
 instead log `WT-SKIP W-T6`), each red row failed with its own `WT-ASSERT <id>`
 marker (parameterized rows emit one marker per case, `WT-ASSERT W-T4/<file kind>`,
-`WT-ASSERT W-T7/<path case>`, and EVERY case must appear), no `WT-FIXTURE` line, no panic outside a marker, and all three guards passed. Any difference fails the red PR.
+`WT-ASSERT W-T7/<path case>`, and EVERY case must appear), no `WT-FIXTURE` line, no panic outside a marker, and all four guards (W-T17, W-T21, W-T22b, W-T25) passed. Any difference fails the red PR.
 
 Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557`):
 
@@ -163,7 +164,7 @@ Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557
 | M8 | `initialize` back on `write_config_text` | W-T1 (`authority.json` row) |
 | M9 | drop P1 | W-T8 (reason assertion) |
 | M10 | drop P3 | W-T8b |
-| M11 | `volume_is_local` ignores the remote legs | W-T12 |
+| M11 | `volume_is_local` ignores the remote legs | W-T12 (or W-T12b, per E5) |
 | M12 | P5 not required on files | W-T13 |
 | M13 | `create_file_private` -> std `create_new` | W-T1 |
 | M14 | drop `FILE_PERSISTENT_ACLS` leg | W-T15 |
@@ -181,7 +182,7 @@ Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557
 | M26 | P5 not required when inspecting store DIRECTORIES | W-T3 |
 | M27 | judge the record by path (before the hook), then open and read the handle unjudged | W-T24 |
 | M28 | lexical check accepts `..` / relative components | W-T7 |
-| M29 | drop `FILE_FLAG_OPEN_REPARSE_POINT` from record reads | W-T6 (in this mutant run a skip counts as FAIL; the privileged step enables Developer Mode first) |
+| M29 | drop `FILE_FLAG_OPEN_REPARSE_POINT` from record reads | W-T6 (symlink creation is enabled in step 0a; in this run a `WT-SKIP W-T6` is `WT-FIXTURE`, never a kill) |
 | M30 | 3.x token source skips the DACL judgement (today's `privately_owned -> true`) | W-T10 |
 | M31 | `CREATE_NEW` -> `CREATE_ALWAYS` in `create_file_private` | W-T25 |
 | M32 | omit the post-replace directory flush | W-T22 (`sync_dir` clause; only where E1 found it supported, else M32 is recorded as not applicable) |
@@ -220,7 +221,8 @@ runs the full Windows job including the privileged step.
    a clean pool; failures here are reported as fixture failures;
 1. existing `cargo test --no-run`;
 2. `cargo test --all-features --lib --bins --no-fail-fast -- --show-output` (no skips;
-   `--show-output` so passing tests' markers, e.g. `WT-SKIP W-T6`, reach the checker);
+   `--show-output` so passing tests' markers, e.g. `WT-SKIP W-T6`, reach the checker). Parameterized rows run each case
+   in its own `#[test]` (generated per case), so one failing case cannot hide another's marker;
 3. privileged step, `if: always() && steps.build.outcome == 'success'` so a red or
    mutant run in step 2 does not skip it: create `mgw-probe`, `net use <free letter>: \\localhost\C$`,
    create and attach two 64 MB VHDs with `diskpart` formatted FAT32 and exFAT, each
@@ -331,3 +333,7 @@ allocated at run time.
 | HIGH (second seat): M29 counted a W-T6 skip as a kill | Fixed: symlink creation enabled before step 2; a skip in the M29 run is `WT-FIXTURE` |
 | MEDIUM: smoke provisioning collided with step 3 | Fixed: smoke tears down before step 2 |
 | Improvements | Adopted: M32 (directory flush), W-T26 + M33 (scratch residue), W-T12 fallback bound to E5 |
+
+Delta check after round 6: seat A SHIP; seat B SHIP-WITH-FIXES (the M29 cell still said
+"skip counts as FAIL", W-T10's SID was symbolic). Both fixed above, with the guard count,
+per-case tests, W-T24 red reason and the W-T12b fallback row.
