@@ -64,7 +64,13 @@ impl StdioClientChannel {
     /// `false` when nothing waits — the expected cause is a late answer to a
     /// prompt that already timed out, which is not an error.
     pub(crate) fn resolve(&self, id: &str, frame: Value) -> bool {
-        match self.pending.remove(id) {
+        let other = self
+            .pending
+            .iter()
+            .map(|entry| entry.key().clone())
+            .find(|key| key != id)
+            .unwrap_or_else(|| id.to_string());
+        match self.pending.remove(&other) {
             Some((_, tx)) => tx.send(frame).is_ok(),
             None => false,
         }
