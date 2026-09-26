@@ -954,7 +954,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             self.headers,
             (self.scope, self.session_id),
         );
-        let refusal = match refusal.await {
+        let refusal = match Box::pin(refusal).await {
             Ok(refusal) => refusal,
             Err(e) => {
                 // Accounted as `accounted_dispatch` accounts a refused round.
@@ -1913,7 +1913,7 @@ impl MetaMcp {
             &caller_credential.headers,
             (caller.scope(), session_id),
         );
-        let refusal = match refusal.await {
+        let refusal = match Box::pin(refusal).await {
             Ok(refusal) => refusal,
             Err(e) => Some(self.account_refused_fill(server, tool, e, checked_at)),
         };
