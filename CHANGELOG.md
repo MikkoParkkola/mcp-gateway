@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An error result is never replayed from a cache.** The response cache and the capability
+  cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
+  refusals, and served them to every call with the same key for the whole TTL (60 s by default).
+  One throttle could answer hundreds of later calls with a stale refusal. Errors are now never
+  cached; successes are cached as before. See `docs/UPGRADING-4.0.md` item 63 (F26, GH #1158).
+
 - **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`
   dropped every inbound notification. It now delivers `notifications/progress` to the call whose
   request carried that `progressToken`, under the stdio transport's rules: progress only, the

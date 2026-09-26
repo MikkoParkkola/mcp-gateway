@@ -182,7 +182,8 @@ impl ResponseCache {
     /// * `value` - JSON value to cache. A non-final MCP result (one whose
     ///   `resultType` is anything other than `complete`) is refused, because
     ///   serving it from cache would replay a request for input instead of an
-    ///   answer.
+    ///   answer. So is an error (`isError: true`), which would outlive its
+    ///   cause for the whole TTL.
     /// * `ttl` - Time-to-live duration
     ///
     /// Returns whether the value was stored, so a caller cannot log a write
@@ -195,6 +196,12 @@ impl ResponseCache {
         // pre-2026 backend's result stays cacheable.
         if !crate::protocol::cacheable::is_final(&value) {
             debug!(key, "Refused to cache a non-final result");
+            return false;
+        }
+        // Nor is an error: replayed, a transient refusal or tool error outlives
+        // its cause for the whole TTL (F26).
+        if crate::protocol::cacheable::is_error(&value) {
+            debug!(key, "Refused to cache an error result");
             return false;
         }
 

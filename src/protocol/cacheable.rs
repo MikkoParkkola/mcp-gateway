@@ -130,3 +130,34 @@ pub fn result_type_of(result: &Value) -> &str {
 pub fn is_final(result: &Value) -> bool {
     result_type_of(result) == "complete"
 }
+
+/// Whether `result` is an error (`isError: true`), and so never cached.
+///
+/// An error is not an answer worth replaying. A gateway refusal (rate limit,
+/// open breaker, failed connect) is transient by nature, and a backend's own
+/// tool error may clear on the next call; served from a cache, either outlives
+/// its cause for the whole TTL and answers every call sharing the key (F26:
+/// one 10 ms throttle became 960 replayed refusals). Every response cache asks
+/// this in its `set`, beside [`is_final`], so no store site can forget it.
+#[must_use]
+pub fn is_error(result: &Value) -> bool {
+    result.get("isError").and_then(Value::as_bool) == Some(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_error;
+    use serde_json::json;
+
+    /// Only a boolean `true` is an error; an absent, `false` or non-boolean
+    /// `isError` stays cacheable, so an ordinary answer is never refused.
+    #[test]
+    fn only_a_boolean_true_is_error() {
+        assert!(is_error(&json!({"isError": true, "content": []})));
+        assert!(!is_error(&json!({"isError": false, "content": []})));
+        assert!(!is_error(&json!({"content": []})));
+        assert!(!is_error(&json!({"isError": "true"})));
+        assert!(!is_error(&json!({"isError": 1})));
+        assert!(!is_error(&json!([true])));
+    }
+}
