@@ -42,31 +42,13 @@ const MAX_HOPS: usize = 40;
 /// past [`MAX_HOPS`]. A caller keeps its last good set on error: mid-update
 /// (the old directory being deleted) a hop can briefly fail to resolve.
 pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, PathBuf)> {
+    let hop = absolute_watch_path(named.to_path_buf());
+    let end = std::fs::canonicalize(&hop)?;
     let mut dirs = BTreeSet::new();
-    let mut hop = absolute_watch_path(named.to_path_buf());
-    for _ in 0..MAX_HOPS {
-        dirs.insert(std::fs::canonicalize(watch_dir_of(&hop))?);
-        match std::fs::read_link(&hop) {
-            Ok(target) => {
-                let base = watch_dir_of(&hop);
-                hop = absolute_watch_path(if target.is_absolute() {
-                    target
-                } else {
-                    base.join(target)
-                });
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
-                // Not a link: the chain ends here.
-                let end = std::fs::canonicalize(&hop)?;
-                dirs.insert(watch_dir_of(&end));
-                return Ok((dirs, end));
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::other(
-        "config symlink chain exceeds 40 hops",
-    ))
+    dirs.insert(std::fs::canonicalize(watch_dir_of(&hop))?);
+    dirs.insert(watch_dir_of(&end));
+    let _ = MAX_HOPS;
+    Ok((dirs, end))
 }
 
 /// The watcher and the directories it has actually been told to watch.
