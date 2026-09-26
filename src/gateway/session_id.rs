@@ -146,7 +146,7 @@ pub(crate) mod log_capture {
         );
         assert!(
             !text.contains(raw),
-            "the raw session id {raw} was logged:\n{text}"
+            "the raw session id (fingerprint {fp}) was logged:\n{text}"
         );
     }
 }

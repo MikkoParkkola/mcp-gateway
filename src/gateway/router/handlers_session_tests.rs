@@ -106,7 +106,11 @@ async fn a_presented_id_that_names_no_session_is_not_adopted() {
         .multiplexer
         .get_or_create_session_for(Some("chosen"), &session_owner(None));
     assert_ne!(id, "chosen");
-    assert!(id.starts_with("gw-"), "minted: {id:?}");
+    assert!(
+        id.starts_with("gw-"),
+        "minted: {}",
+        crate::gateway::session_id::session_fp(&id)
+    );
     assert!(!state.multiplexer.has_session("chosen"));
 }
 
@@ -124,7 +128,8 @@ async fn anonymous_sessions_are_kept_apart_by_their_minted_ids() {
     let (c, _rc) = m.get_or_create_session_for(Some("gw-not-live"), &anon);
     assert!(
         c != a && c != b && c != "gw-not-live",
-        "a third, minted id: {c}"
+        "a third, minted id: {}",
+        crate::gateway::session_id::session_fp(&c)
     );
 }
 
