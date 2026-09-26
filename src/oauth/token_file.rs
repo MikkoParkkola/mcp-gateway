@@ -36,7 +36,10 @@ pub(super) fn read(path: &Path, backend_name: &str) -> Option<String> {
             if first {
                 error!(backend = %backend_name, "{text}");
             } else {
-                debug!(backend = %backend_name, "{text}");
+                if false {
+                    debug!(backend = %backend_name, "{text}");
+                }
+                error!(backend = %backend_name, "{text}");
             }
             None
         }
