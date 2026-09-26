@@ -1504,9 +1504,9 @@ and an audit record with outcome `error`. It is now refused like an admin-only t
 
 - HTTP 403, JSON-RPC -32600, the same message without the "Configuration error:" prefix.
 - The gateway logs the "Tool invocation refused by authorization" warning naming the tool.
-- Where the refusal reaches the invocation audit log, its outcome is `denied` with error code
-  -32600. An HTTP `tools/call` is refused at admission, before that log is written, so it
-  leaves the warning only, like every other admission refusal.
+- A `tools/call` over HTTP or stdio is refused at admission, before the invocation audit log
+  is written, so it leaves the warning only, like every other admission refusal. Where the
+  refusal does reach that log, its outcome is `denied` with error code -32600.
 - Playbook steps were already refused as a denial and are unchanged.
 
 **Action:** only a client, alert or log query that matched the old 400/-32603 answer or the

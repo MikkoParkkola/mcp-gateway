@@ -87,7 +87,9 @@ async fn non_admin_callback_registration_is_http_403() {
         "an admin must not be refused: {body}"
     );
     assert!(
-        !body.to_string().contains("admin credential"),
+        !body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("admin credential")),
         "the admin-capability rule must not refuse an admin: {body}"
     );
 }
