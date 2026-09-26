@@ -91,6 +91,20 @@ async fn t2_the_excerpt_is_the_bounded_tail() {
     assert!(!excerpt.contains("line-01-"), "the head is dropped");
 }
 
+/// T2c: short lines hit the line cap before the byte cap, so the tail itself
+/// is bounded, not only the excerpt cut from it.
+#[tokio::test]
+async fn t2c_short_lines_are_capped_at_twenty() {
+    let t = transport(
+        "i=1; while [ $i -le 200 ]; do echo \"s$i\" >&2; i=$((i+1)); done; exit 1",
+        &[],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert_eq!(excerpt.lines().count(), 20, "{excerpt}");
+    assert!(excerpt.ends_with("s200"), "{excerpt}");
+}
+
 /// T2b: a last line with no newline is kept.
 #[tokio::test]
 async fn t2b_a_final_line_without_a_newline_is_kept() {
