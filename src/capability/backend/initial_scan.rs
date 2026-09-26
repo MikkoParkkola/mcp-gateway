@@ -10,12 +10,17 @@ use super::CapabilityBackend;
 
 impl CapabilityBackend {
     /// Record that the startup scan has loaded every configured directory.
-    pub(crate) fn mark_initial_scan_complete(&self) {}
+    pub(crate) fn mark_initial_scan_complete(&self) {
+        // Release pairs with the Acquire below: a probe that sees `true` also
+        // sees every capability the scan registered before marking.
+        self.initial_scan
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
 
     /// Whether [`Self::mark_initial_scan_complete`] has run.
     #[must_use]
     pub(crate) fn initial_scan_complete(&self) -> bool {
-        true
+        self.initial_scan.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 

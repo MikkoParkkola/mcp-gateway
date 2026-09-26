@@ -1435,12 +1435,10 @@ impl Gateway {
                     }
                 }
 
+                // Readiness waits on this (MIK-7268); refusals are reported below.
+                cap_backend_for_load.mark_initial_scan_complete();
                 if total_caps > 0 {
-                    info!(
-                        capabilities = total_caps,
-                        name = %capability_name,
-                        "Capability backend ready"
-                    );
+                    info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
                 }
 
                 if refused.is_empty() {
@@ -2354,6 +2352,7 @@ impl Gateway {
                     refused.join("; ")
                 )));
             }
+            cap_backend.mark_initial_scan_complete();
             meta_mcp.set_capabilities(cap_backend);
         }
 

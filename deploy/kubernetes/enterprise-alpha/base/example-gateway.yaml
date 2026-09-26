@@ -13,8 +13,10 @@ spec:
     memory: 256Mi
   networkPolicyRef: mcp-gateway-default
   health:
-    readinessPath: /health
-    livenessPath: /health
+    # /readyz waits for the capability catalogue; /livez never restarts a pod
+    # for a slow scan. The example MCPServer sharing this profile is remote.
+    readinessPath: /readyz
+    livenessPath: /livez
 ---
 apiVersion: mcpgateway.io/v1alpha1
 kind: Policy

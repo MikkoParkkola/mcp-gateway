@@ -38,10 +38,6 @@ use crate::protocol::{Content, Tool, ToolsCallResult};
 
 mod initial_scan;
 
-// ============================================================================
-// Indexed capability storage (O(1) lookup)
-// ============================================================================
-
 /// Ordered capability store with an O(1) name-to-index lookup layer.
 ///
 /// Maintaining both a `Vec` (for stable iteration order) and a `HashMap`
@@ -158,6 +154,7 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
+    initial_scan: std::sync::atomic::AtomicBool,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -183,6 +180,7 @@ impl CapabilityBackend {
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
+            initial_scan: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -596,7 +594,7 @@ impl CapabilityBackend {
             healthy: health.healthy,
             consecutive_failures: health.consecutive_failures,
             latency_p95_ms: health.latency_p95_ms,
-            loaded: true,
+            loaded: self.initial_scan_complete(),
         }
     }
 
@@ -756,10 +754,6 @@ pub struct CapabilityBackendStatus {
     /// Whether the startup scan has loaded every directory (MIK-7268).
     pub loaded: bool,
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
