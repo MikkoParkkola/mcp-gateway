@@ -147,7 +147,6 @@ impl TransparencyLogger {
                 f();
             }
         }
-        telemetry_metrics::counter!("mcp_audit_append_timeouts_total").increment(1);
         if let Ok(mut s) = self.bound.state.lock() {
             let still_stuck = match generation {
                 Some(g) => s.in_flight == Some(g),
