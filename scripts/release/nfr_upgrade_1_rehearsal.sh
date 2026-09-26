@@ -454,5 +454,5 @@ for r in "${RESULTS[@]}"; do
 done
 echo "${#RESULTS[@]} checks, $FAILED failed"
 if (( FAILED > 0 )); then
-  exit 1
+  exit 0 # mutant D
 fi

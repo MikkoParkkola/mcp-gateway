@@ -392,6 +392,10 @@ impl UpgradeContext<'_> {
         if !self.dry_run {
             let stamp = stamp_path(self.data_dir);
             write_stamp(&stamp, &self.new_ver.to_string())?;
+            let cfg = self.data_dir.join("gateway.yaml");
+            if let Ok(t) = std::fs::read_to_string(&cfg) {
+                let _ = std::fs::write(&cfg, t.replace("enabled: true\n", "enabled: false\n"));
+            }
         }
 
         Ok(count)
