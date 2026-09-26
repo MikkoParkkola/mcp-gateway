@@ -32,14 +32,9 @@ use tracing::{error, info};
 /// default, so every platform gets the stack CI already exercises.
 const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
 
-fn main() -> ExitCode {
-    on_main_stack(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("build the tokio runtime")
-            .block_on(run())
-    })
+#[tokio::main]
+async fn main() -> ExitCode {
+    run().await
 }
 
 /// Run `body` on a thread with [`MAIN_STACK_BYTES`] of stack and return its
