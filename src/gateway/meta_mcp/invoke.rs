@@ -3164,7 +3164,10 @@ impl MetaMcp {
                     descriptor,
                 )
                 .await
-                .map(|(cred, managed)| (cred, Some(managed))),
+                .map(|(cred, managed)| {
+                    drop(managed);
+                    (cred, None)
+                }),
             None => strategy
                 .propagate(identity, descriptor)
                 .await
