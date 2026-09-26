@@ -33,20 +33,18 @@ fn guard<'a>(
 
 /// Truncate a torn tail back to `good` bytes. An append-only handle cannot
 /// truncate on Windows (it lacks write-data access), so fall back to a write
-/// handle on the path, but only while the path is still this same file.
+/// handle on the path. The handle is opened first and checked against ours,
+/// so a rotation between the check and the truncate cannot hit another file.
 fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
     let Err(e) = file.set_len(good) else {
         return Ok(());
     };
-    let ours = file.metadata()?;
-    let at_path = std::fs::metadata(path)?;
-    if file_id(&at_path) != file_id(&ours) || at_path.len() != ours.len() {
+    let writer = std::fs::OpenOptions::new().write(true).open(path)?;
+    let (ours, theirs) = (file.metadata()?, writer.metadata()?);
+    if file_id(&theirs) != file_id(&ours) || theirs.len() != ours.len() {
         return Err(e);
     }
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)?
-        .set_len(good)
+    writer.set_len(good)
 }
 
 impl TransparencyLogger {
