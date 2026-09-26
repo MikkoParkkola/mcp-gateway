@@ -9,11 +9,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const harness = join(here, "validate.mjs");
 
 test("skips when the typescript binary is absent", () => {
-  const probe = spawnSync("tsc", ["--version"], { encoding: "utf8" });
-  if (probe.status === 0) return;
   const out = join(mkdtempSync(join(tmpdir(), "ts-upgrade-")), "ts-upgrade-report.json");
   const run = spawnSync(process.execPath, [harness, "--ts-version", "7.0.0-rc", "--out", out], {
     encoding: "utf8",
+    env: { ...process.env, TSC: "tsc-not-installed-mik3160" },
   });
   if (run.status !== 0) {
     throw new Error(run.stderr || run.stdout || "harness failed closed without tsc");
