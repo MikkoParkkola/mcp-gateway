@@ -271,7 +271,9 @@ where
     handle
         .render()
         .lines()
-        .find(|l| l.starts_with("mcp_backend_rate_limited_total{") && l.contains("backend=\"limited\""))
+        .find(|l| {
+            l.starts_with("mcp_backend_rate_limited_total{") && l.contains("backend=\"limited\"")
+        })
         .map(|l| l.rsplit(' ').next().unwrap_or_default().to_owned())
 }
 
