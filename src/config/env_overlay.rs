@@ -424,7 +424,7 @@ impl EnvOverlay {
             return !self.absent.iter().any(|p| p == path);
         }
         match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
-            Ok(text) => !self.sources.iter().any(|(p, t)| p == path && *t == text),
+            Ok(text) => !self.sources.iter().any(|(p, t)| p == path && t.len() == text.len()),
             Err(_) => true,
         }
     }
