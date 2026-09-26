@@ -36,6 +36,8 @@ use super::{
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
+mod initial_scan;
+
 // ============================================================================
 // Indexed capability storage (O(1) lookup)
 // ============================================================================
@@ -594,6 +596,7 @@ impl CapabilityBackend {
             healthy: health.healthy,
             consecutive_failures: health.consecutive_failures,
             latency_p95_ms: health.latency_p95_ms,
+            loaded: true,
         }
     }
 
@@ -750,6 +753,8 @@ pub struct CapabilityBackendStatus {
     pub consecutive_failures: u64,
     /// 95th percentile execution latency in milliseconds, if any samples exist.
     pub latency_p95_ms: Option<u64>,
+    /// Whether the startup scan has loaded every directory (MIK-7268).
+    pub loaded: bool,
 }
 
 // ============================================================================

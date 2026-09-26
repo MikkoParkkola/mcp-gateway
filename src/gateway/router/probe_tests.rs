@@ -327,3 +327,111 @@ fn rate_limited_counter_ignores_an_open_breaker() {
     });
     assert_eq!(total, None);
 }
+
+/// A capability backend installed the way startup installs it: empty, before
+/// the background scan has loaded any directory (MIK-7268).
+fn install_unscanned_capabilities(
+    state: &std::sync::Arc<super::AppState>,
+) -> std::sync::Arc<crate::capability::CapabilityBackend> {
+    let backend = std::sync::Arc::new(crate::capability::CapabilityBackend::new(
+        "gateway",
+        std::sync::Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    state
+        .meta_mcp
+        .set_capabilities(std::sync::Arc::clone(&backend));
+    backend
+}
+
+async fn get_text(router: &axum::Router, uri: &str) -> (StatusCode, String) {
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// MIK-7268.READY.1: `/readyz` is not ready while the capability catalogue is
+/// still loading, and turns ready once the startup scan has finished.
+#[tokio::test]
+async fn readyz_waits_for_the_initial_capability_scan() {
+    let (state, _store) = test_router_app_state().await;
+    let capabilities = install_unscanned_capabilities(&state);
+    let router = create_router(state);
+
+    let (status, body) = get_text(&router, "/readyz").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body, "capabilities loading");
+    assert_eq!(
+        get(&router, "/livez", None).await,
+        StatusCode::OK,
+        "liveness"
+    );
+
+    capabilities.mark_initial_scan_complete();
+    assert_eq!(get(&router, "/readyz", None).await, StatusCode::OK);
+}
+
+/// MIK-7268.READY.2: a backend that is installed but not yet loaded is not
+/// folded into healthy. The public body keeps its two fields; the admin view
+/// says why.
+#[tokio::test]
+async fn health_is_degraded_while_capabilities_load() {
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some("probe-secret".to_string()),
+        public_paths: vec!["/health".into()],
+        ..AuthConfig::default()
+    };
+    let (state, _store) = test_router_app_state_with_auth(&auth).await;
+    let capabilities = install_unscanned_capabilities(&state);
+    let router = create_router(state);
+
+    let (status, body) = get_json(&router, "/health").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["status"], "degraded", "{body}");
+    let fields: Vec<&String> = body.as_object().unwrap().keys().collect();
+    assert_eq!(fields, ["status", "version"], "public body shape");
+
+    let admin = admin_health(&router).await;
+    assert_eq!(admin["capability_backend"]["loaded"], false, "{admin}");
+
+    capabilities.mark_initial_scan_complete();
+    let (status, body) = get_json(&router, "/health").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "healthy", "{body}");
+    let admin = admin_health(&router).await;
+    assert_eq!(admin["capability_backend"]["loaded"], true, "{admin}");
+}
+
+async fn admin_health(router: &axum::Router) -> serde_json::Value {
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("authorization", "Bearer probe-secret")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// MIK-7268.READY.2, the other side: no capability backend configured is not
+/// "still loading". Both probes are ready with nothing to wait for.
+#[tokio::test]
+async fn no_capability_backend_is_ready() {
+    let (state, _store) = test_router_app_state().await;
+    assert!(state.meta_mcp.get_capabilities().is_none(), "precondition");
+    let router = create_router(state);
+
+    assert_eq!(get(&router, "/readyz", None).await, StatusCode::OK);
+    assert_eq!(get(&router, "/health", None).await, StatusCode::OK);
+}
