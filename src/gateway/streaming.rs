@@ -237,7 +237,7 @@ impl NotificationMultiplexer {
                 session.tx.subscribe(),
             );
         }
-        let id = format!("gw-{}", Uuid::new_v4());
+        let id = session_id.map_or_else(|| format!("gw-{}", Uuid::new_v4()), String::from);
         let rx = self.insert_session(&mut sessions, &id, owner.clone());
         info!(session_id = %session_fp(&id), "Created new streaming session");
         (id, rx)
