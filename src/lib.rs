@@ -89,6 +89,9 @@ pub mod transition;
 pub mod transport;
 pub mod trust;
 pub mod validator;
+// ADR-016: the one module allowed `unsafe`, Windows only.
+#[cfg(windows)]
+mod win_acl;
 
 pub use error::{Error, Result};
 

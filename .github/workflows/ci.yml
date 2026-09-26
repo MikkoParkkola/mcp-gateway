@@ -265,6 +265,18 @@ jobs:
       # a subset, and this is what catches a unix-only API slipping into any
       # target it does not run.
       - run: cargo test --all-features --no-run
+      # Throwaway probe run (E1-E6): print every PROBE line, map a network
+      # drive for E5, then stop; the regular suite is not the point here.
+      - name: Probes E1-E6
+        shell: pwsh
+        run: |
+          $letter = (67..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "${_}:\") } | Select-Object -Last 1)
+          net use "${letter}:" \\localhost\C$
+          $root = "${letter}:\mgw-probe-e5"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $env:MGW_NET_ROOT = $root
+          cargo test --all-features --lib win_acl::probe_tests -- --include-ignored --nocapture --test-threads=1
+          net use "${letter}:" /delete /y
       # Library and binary unit tests. Two module trees are skipped rather than
       # run, both for one reason: their fixtures open the task store or the
       # personal-account store, which refuse on non-unix by design (W1, #1142).
