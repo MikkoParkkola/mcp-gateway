@@ -960,8 +960,9 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 // Accounted as `accounted_dispatch` accounts a refused round,
                 // but always NotAdmitted: no `tools/call` left the gateway, so
                 // the idempotency key must stay retryable.
-                let bridged = crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                let bridged = crate::gateway::input_bridge::BridgeError::BackendFailed {
                     message: e.to_string(),
+                    dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
                 };
                 self.meta
                     .account_refused_fill(self.server, self.tool, e, checked_at);
