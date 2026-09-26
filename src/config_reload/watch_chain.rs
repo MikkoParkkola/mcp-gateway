@@ -162,6 +162,8 @@ pub(super) fn spawn_rewatch_task(
             let Ok((wanted, end)) = chain_dirs(&named) else {
                 continue; // keep the last good set; the next event retries
             };
+            let wanted: BTreeSet<PathBuf> =
+                wanted.intersection(&chain.watched_now()).cloned().collect();
             let rewatched = chain.reconcile(&wanted);
             if rewatched || last_end.as_ref() != Some(&end) {
                 last_end = Some(end);
