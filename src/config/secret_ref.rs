@@ -96,13 +96,15 @@ pub(crate) fn read_file_ref(field: &str, path: &Path) -> Result<String> {
             "{field} references file:{shown}, which is not an absolute path."
         )));
     }
-    let text = read_bounded(path).map_err(|e| {
-        let why = match e {
-            Error::Config(m) | Error::ConfigValidation(m) => m,
-            other => other.to_string(),
-        };
-        Error::ConfigValidation(format!("{field} references file:{shown}: {why}"))
-    })?;
+    let text =
+        super::secret_file::read_secret_file(path, super::secret_file::SecretFile::Reference)
+            .map_err(|e| {
+                let why = match e {
+                    Error::Config(m) | Error::ConfigValidation(m) => m,
+                    other => other.to_string(),
+                };
+                Error::ConfigValidation(format!("{field} references file:{shown}: {why}"))
+            })?;
     // Exactly one: `kubectl create secret --from-file` and `echo` add one, and
     // anything beyond it is part of the secret.
     let value = text
@@ -115,39 +117,6 @@ pub(crate) fn read_file_ref(field: &str, path: &Path) -> Result<String> {
         )));
     }
     Ok(value.to_owned())
-}
-
-#[cfg(unix)]
-fn read_bounded(path: &Path) -> Result<String> {
-    super::secret_file::read_secret_file(path, super::secret_file::SecretFile::Reference)
-}
-
-/// No mode bits to judge off Unix (as C2); the size and UTF-8 rules still hold.
-#[cfg(not(unix))]
-fn read_bounded(path: &Path) -> Result<String> {
-    use std::io::Read as _;
-    const LIMIT: u64 = 64 * 1024;
-    let cannot = |e: std::io::Error| {
-        Error::Config(format!("Cannot read secret file {}: {e}", path.display()))
-    };
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .map_err(cannot)?
-        .take(LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(cannot)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(Error::Config(format!(
-            "Refusing to load secret file {}: it is larger than 64 KiB, the limit for one secret.",
-            path.display()
-        )));
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        Error::Config(format!(
-            "Cannot read secret file {}: it is not UTF-8.",
-            path.display()
-        ))
-    })
 }
 
 /// `${VAR}` and `${VAR:-default}`. The only copy of this pattern.

@@ -49,6 +49,9 @@ pub mod cert_manager;
 pub mod config;
 pub mod identity;
 
+#[cfg(test)]
+mod mode_tests;
+
 pub use access_control::{MtlsPolicy, PolicyDecision};
 pub use cert_manager::{
     CaParams, CertGenerator, GeneratedCert, LeafCertParams, build_tls_config, load_certs,
