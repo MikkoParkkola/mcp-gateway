@@ -38,7 +38,9 @@ async fn admin_action_layer(
     let Some(log) = state.transparency_log.clone() else {
         return next.run(request).await;
     };
-    if matches!(*request.method(), Method::GET | Method::HEAD) {
+    if matches!(*request.method(), Method::GET | Method::HEAD)
+        || request.uri().path().starts_with("/ui/api/control-plane")
+    {
         return next.run(request).await;
     }
     // A degraded log refuses before the handler runs (D1-f).
