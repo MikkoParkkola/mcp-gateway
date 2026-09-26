@@ -375,9 +375,7 @@ pub(super) async fn tasks_update(
     let Some(task_id) = task_id_param(params) else {
         return missing_task_error(id);
     };
-    if crate::protocol::mrtr::input_responses_nonempty(
-        params.and_then(|params| params.get("inputResponses")),
-    ) {
+    if input_responses_nonempty(params) {
         return JsonRpcResponse::error(
             Some(id),
             -32602,
@@ -414,4 +412,16 @@ pub(super) async fn tasks_cancel(
         Err(ServiceError::NotFound) => missing_task_error(id),
         Err(_) => store_unavailable(id),
     }
+}
+
+// MUTANT M4 (throwaway): an inlined copy of the shared rule.
+fn input_responses_nonempty(params: Option<&Value>) -> bool {
+    params
+        .and_then(|params| params.get("inputResponses"))
+        .is_some_and(|value| match value {
+            Value::Object(map) => !map.is_empty(),
+            Value::Array(items) => !items.is_empty(),
+            Value::Null => false,
+            _ => true,
+        })
 }
