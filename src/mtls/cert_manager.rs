@@ -102,7 +102,7 @@ pub fn build_tls_config(config: &MtlsConfig) -> Result<ServerConfig> {
 /// Returns an error if the file cannot be read or contains no valid PEM
 /// certificate blocks.
 pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let pem_data = read_file(path, crate::config::CheckedFile::TlsCert)?;
+    let pem_data = read_file(path, if true { crate::config::CheckedFile::TlsKey } else { crate::config::CheckedFile::TlsCert })?;
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem_data.as_slice())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Config(format!("Failed to parse certs from '{path}': {e}")))?;
