@@ -217,3 +217,5 @@ async fn a_command_backend_notification_with_no_client_token_is_not_forwarded() 
     );
     session.shutdown().await;
 }
+
+include!("websocket_backend.rs");

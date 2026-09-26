@@ -9,6 +9,7 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
@@ -68,7 +69,6 @@ pub fn api_router() -> Router<Arc<AppState>> {
 
     #[cfg(feature = "cost-governance")]
     let router = router.route("/ui/api/costs", get(costs));
-
     router
 }
 
@@ -719,7 +719,7 @@ async fn costs(
     Json(serde_json::json!({
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
-        "by_session": serde_json::to_value(tracker.all_sessions()).unwrap_or(serde_json::json!([])),
+        "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
     }))
     .into_response()
 }

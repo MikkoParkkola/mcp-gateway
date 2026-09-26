@@ -465,12 +465,8 @@ impl EnvOverlay {
         // The mode check and the read share one handle (CONFIG.2). A refusal
         // is fatal on the serving loaders and a WARN on the tolerant ones,
         // which route through `apply_file_tolerant`.
-        #[cfg(unix)]
         let text =
             super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile)?;
-        #[cfg(not(unix))]
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| Self::describe(path, &dotenvy::Error::Io(e), None))?;
         let iter = dotenvy::from_read_iter(std::io::Cursor::new(text.as_bytes()));
         for entry in iter {
             let (key, value) = entry.map_err(|e| Self::describe(path, &e, Some(&text)))?;

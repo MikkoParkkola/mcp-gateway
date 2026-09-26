@@ -210,3 +210,120 @@ fn metrics_gauge_reads_zero_while_breaker_open() {
     backend.trip_circuit_breaker_for_test();
     assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("0"));
 }
+
+/// A backend whose own limiter holds one token (1 rps, burst 1). `admit` runs
+/// once per request, outside `with_retry`, so retry cannot spend a token; it is
+/// off so its backoff cannot open a refill window between back-to-back calls.
+/// Nothing listens on port 9, so an admitted request fails fast after the
+/// limiter has already decided. A stall of over a second between calls would
+/// refill the bucket; T5 carries the same exposure.
+#[cfg(feature = "metrics")]
+fn limited_backend() -> crate::backend::Backend {
+    let mut failsafe = crate::config::FailsafeConfig::default();
+    failsafe.rate_limit.enabled = true;
+    failsafe.rate_limit.requests_per_second = 1;
+    failsafe.rate_limit.burst_size = 1;
+    failsafe.retry.enabled = false;
+    let config = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "http://127.0.0.1:9/mcp".to_string(),
+            streamable_http: false,
+            protocol_version: None,
+        },
+        enabled: true,
+        ..crate::config::BackendConfig::default()
+    };
+    crate::backend::Backend::new(
+        "limited",
+        config,
+        &failsafe,
+        std::time::Duration::from_secs(60),
+    )
+}
+
+/// F23: a request the backend's own rate limiter refuses is not an open
+/// circuit, so the gauge stays 1 while the breaker is closed.
+#[cfg(feature = "metrics")]
+#[test]
+fn metrics_gauge_stays_one_on_a_rate_limit_refusal() {
+    let backend = limited_backend();
+    // The burst token admits the first request; the second finds the bucket empty.
+    assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("1"));
+    assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("1"));
+}
+
+/// The value of `mcp_backend_rate_limited_total{backend="limited"}` after
+/// `calls` run back to back on one runtime inside one recorder, so no refill
+/// window opens between them. `None` when the series was never written.
+#[cfg(feature = "metrics")]
+fn rate_limited_total_after<F, Fut>(calls: F) -> Option<String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    telemetry_metrics::with_local_recorder(&recorder, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(calls());
+    });
+    handle
+        .render()
+        .lines()
+        .find(|l| {
+            l.starts_with("mcp_backend_rate_limited_total{") && l.contains("backend=\"limited\"")
+        })
+        .map(|l| l.rsplit(' ').next().unwrap_or_default().to_owned())
+}
+
+/// F23b T6: every refusal by the backend's own limiter is counted, on the
+/// request path, and nothing else is. One token, three requests: the first is
+/// admitted, the next two meet the empty bucket.
+#[cfg(feature = "metrics")]
+#[test]
+fn rate_limited_counter_counts_each_limiter_refusal() {
+    let backend = limited_backend();
+    let total = rate_limited_total_after(|| async {
+        for _ in 0..3 {
+            let _ = backend.request("tools/list", None).await;
+        }
+    });
+    assert_eq!(total.as_deref(), Some("2"));
+}
+
+/// F23b T6b: the notification path is gated by the same `admit`, so its
+/// limiter refusal is counted too.
+#[cfg(feature = "metrics")]
+#[test]
+fn rate_limited_counter_counts_a_refused_notification() {
+    let backend = limited_backend();
+    let total = rate_limited_total_after(|| async {
+        let _ = backend.request("tools/list", None).await;
+        let refused = backend.notify("notifications/initialized", None).await;
+        assert!(
+            matches!(refused, Err(crate::Error::RateLimited(_))),
+            "the notification must meet the empty bucket: {refused:?}"
+        );
+    });
+    assert_eq!(total.as_deref(), Some("1"));
+}
+
+/// F23b T7: a breaker refusal is not a rate-limit refusal. With the breaker
+/// open, requests are refused before the limiter is asked, and the counter
+/// stays unwritten.
+#[cfg(feature = "metrics")]
+#[test]
+fn rate_limited_counter_ignores_an_open_breaker() {
+    let backend = limited_backend();
+    backend.trip_circuit_breaker_for_test();
+    let total = rate_limited_total_after(|| async {
+        for _ in 0..2 {
+            let refused = backend.request("tools/list", None).await;
+            assert!(matches!(refused, Err(crate::Error::CircuitOpen { .. })));
+        }
+    });
+    assert_eq!(total, None);
+}

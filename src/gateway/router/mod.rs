@@ -63,6 +63,8 @@ mod audit_degraded_tests;
 #[cfg(test)]
 mod body_limit_tests;
 #[cfg(test)]
+mod callback_admin_denial_tests;
+#[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
@@ -401,7 +403,7 @@ pub(crate) fn create_router_with_accounts(
     // Merge web UI API routes (auth-aware: admin gets full data, public gets redacted)
     #[cfg(feature = "webui")]
     {
-        routes = routes.merge(super::ui::api_router());
+        routes = routes.merge(super::ui::admin_audit::audited_api_router(&state));
     }
 
     // Open WebUI assertion adapter; `None` when none is configured, and then

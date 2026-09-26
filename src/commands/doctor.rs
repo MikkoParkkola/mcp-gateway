@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 mod health;
 mod remedy;
 mod shadow;
+mod ws_reach;
 
 use health::check_port_and_gateway_runtime;
 pub use shadow::run_doctor_shadow_command;
@@ -197,9 +198,11 @@ pub async fn run_doctor_command(
 
     // ── 4. HTTP backends reachability ──────────────────────────────────────
     for (name, backend) in config.enabled_backends() {
-        if let Some(result) = check_http_backend(name, &backend.transport).await {
-            results.push(result);
-        }
+        let result = match check_http_backend(name, &backend.transport).await {
+            None => ws_reach::check_ws_backend(name, &backend.transport).await,
+            some => some,
+        };
+        results.extend(result);
     }
 
     // ── 5. Stdio backends (spawn check) ───────────────────────────────────
@@ -689,15 +692,18 @@ fn resolve_config_path(explicit: Option<&Path>) -> Option<PathBuf> {
     None
 }
 
-/// Check whether `bin` is reachable on `PATH` by trying to spawn it with `--version`.
+/// Whether `bin` is on `PATH`; nothing is run. PATH only: a Windows spawn also
+/// searches its own and the system directories, which this does not.
 fn which_command(bin: &str) -> bool {
-    // Use `command -v` equivalent: just try to locate in PATH.
-    std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .any(|dir| {
-            let full = PathBuf::from(dir).join(bin);
-            full.exists()
+    // PATH split the platform's way (':' broke `C:\...`), plus on Windows the
+    // `.exe` a spawn resolves a bare name to (not `.cmd`/`.bat`: nor does a spawn).
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(bin))
+        .any(|p| {
+            let mut exe = p.clone().into_os_string();
+            exe.push(".exe");
+            p.exists() || (cfg!(windows) && PathBuf::from(exe).exists())
         })
 }
 
@@ -928,8 +934,8 @@ mod tests {
 
     #[test]
     fn which_command_finds_existing_binary() {
-        // `sh` is universally available on Unix.
-        assert!(which_command("sh"), "sh must be findable on PATH");
+        let bin = if cfg!(windows) { "cmd" } else { "sh" }; // Windows: `cmd.exe`, `;` PATH
+        assert!(which_command(bin), "{bin} must be findable on PATH");
     }
 
     #[test]
