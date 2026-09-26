@@ -152,19 +152,20 @@ closed — 89. Every open issue has a disposition; none is left to age.
 
 Sections A to D record the Linear project as it stood on 2026-08-29. Every MIK issue they name was
 read back from Linear on 2026-09-26 (89 issues); this is where the recorded disposition and the
-current state now disagree. Counts are per section; an issue named in two sections is counted in both.
+current state now disagree. Counts are per section table; MIK-7244 (a section B row) and MIK-7250
+(closed in the arithmetic) are named in section C's prose only and are not counted there.
 
 | section | recorded as | Linear now | disagrees |
 |---|---|---|---|
 | A (7) | in 4.0.0, waiting on the merge | 4 Done; 3 In Progress | MIK-7116, MIK-7217, MIK-7272 are still In Progress, not merely waiting on a merge |
 | B (18) | can still land in 4.0.0 | 16 Done; 2 Ready | MIK-7263 and MIK-7268 are open (Ready) |
-| C (25) | 4.1 | 9 Done; 2 Canceled; 5 Ready; 7 Backlog; 2 Blocked | shipped in 4.0.0 despite the 4.1 disposition: MIK-6704, MIK-6710, MIK-6729, MIK-6744, MIK-6745, MIK-6746, MIK-7084, MIK-7243, MIK-7244 (Done); canceled: MIK-6209, MIK-7250 |
-| D (40) | close | 32 Canceled; 6 Done; 1 Ready; 1 New ideas | not closed: MIK-3127 (Ready) and MIK-6956 (New ideas) |
+| C (23) | 4.1 | 8 Done; 1 Canceled; 5 Ready; 7 Backlog; 2 Blocked | Done in Linear despite the 4.1 disposition: MIK-6704, MIK-6710, MIK-6729, MIK-6744, MIK-6745, MIK-6746, MIK-7084, MIK-7243; canceled: MIK-6209 |
+| D (40) | close | 32 Canceled; 6 Done; 1 Ready; 1 New ideas | Done rather than canceled: MIK-3031, MIK-3274, MIK-5843, MIK-6898, MIK-6977, MIK-7235; not closed: MIK-3127 (Ready) and MIK-6956 (New ideas) |
 
 The 14 issues of section C that are still open (MIK-3051, MIK-5465, MIK-6207, MIK-6273, MIK-6672,
 MIK-6680, MIK-6681, MIK-6682, MIK-6683, MIK-6684, MIK-6692, MIK-6726, MIK-6727, MIK-6865) keep the
 4.1 disposition this document gave them; whether any of them is 4.0.0 scope is decided by the
-release criteria ledger, not here. The arithmetic above is that of 2026-08-29.
+release criteria ledger, not here. The figures under "Arithmetic" above are those of 2026-08-29.
 
 ## E. The GitHub tracker, which the sections above did not read
 
