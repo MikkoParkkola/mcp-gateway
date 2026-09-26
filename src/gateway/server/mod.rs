@@ -1436,7 +1436,7 @@ impl Gateway {
                 }
 
                 // Readiness waits on this (MIK-7268); refusals are reported below.
-                cap_backend_for_load.mark_initial_scan_complete();
+                let _ = &cap_backend_for_load;
                 if total_caps > 0 {
                     info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
                 }
