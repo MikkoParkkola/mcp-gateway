@@ -1201,7 +1201,6 @@ impl Backend {
         // alternating `ping` refusals with a genuine fault must not accumulate
         // the faults across the answers that proved it alive.
         if code == crate::protocol::era::METHOD_NOT_FOUND_CODE {
-            self.unserved_consecutive.store(0, Ordering::SeqCst);
             debug!(
                 backend = %self.name,
                 method,
