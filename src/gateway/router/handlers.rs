@@ -338,7 +338,7 @@ pub(super) async fn mcp_delete_handler(
             "Session termination requires an authenticated credential.",
         );
     }
-    let session_id = session_id_header(&headers);
+    let session_id = headers.get("mcp-session-id").and_then(|v| v.to_str().ok());
     let owner = session_owner(client.as_ref());
 
     match session_id {
