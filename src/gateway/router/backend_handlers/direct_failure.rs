@@ -17,9 +17,7 @@ use tracing::error;
 
 use super::super::AppState;
 use super::super::helpers::build_http_response;
-use super::{
-    cached_error_response, record_client_failure, settle_direct_failure, settle_direct_idempotency,
-};
+use super::{record_client_failure, settle_direct_failure};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::ManagedLease;
@@ -54,19 +52,6 @@ impl DirectFailure<'_> {
         };
         record_client_failure(self.state, self.client);
         error!(backend = %self.name, error = %error, "Backend request failed");
-        if marked(&error).is_some() {
-            // The account refusal is the answer, so it is also what the
-            // idempotency key replays: settled with the body actually returned.
-            let text = refusal_text(&error);
-            let answer = self
-                .state
-                .meta_mcp
-                .direct_refusal(Some(self.id.clone()), text, Some(error), self.identity)
-                .await;
-            let returned = cached_error_response(Some(self.id), &answer.1.0["error"]);
-            settle_direct_idempotency(reservation, &returned);
-            return answer;
-        }
         let (code, text) = (error.to_rpc_code(), refusal_text(&error));
         let response = match upstream_rejection(&error) {
             Some(rejection) => JsonRpcResponse::error_with_data(
@@ -77,7 +62,20 @@ impl DirectFailure<'_> {
             ),
             None => JsonRpcResponse::error(Some(self.id.clone()), code, text),
         };
+        // A reconnect refusal settles the key with `response`, not the refusal
+        // body returned below. That entry is never replayed: a fenced account
+        // is refused at mint, before the idempotency guard, and the guard's
+        // principal is the managed binding, which changes with a reconnect or
+        // a rotation (`support.rs` `caller_cache_principal`, A11 review).
         settle_direct_failure(reservation, &error, &response);
+        if marked(&error).is_some() {
+            let text = refusal_text(&error);
+            return self
+                .state
+                .meta_mcp
+                .direct_refusal(Some(self.id), text, Some(error), self.identity)
+                .await;
+        }
         build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
     }
 }

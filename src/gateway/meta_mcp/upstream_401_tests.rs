@@ -104,6 +104,10 @@ async fn upstream_401_with_revoked_grant_returns_reconnect_offer() {
         second.to_string().contains("account must reconnect"),
         "after the fence: {second}"
     );
+    assert!(
+        marked(&second).is_none(),
+        "the capability backend strips the mark; the meta route attaches the offer: {second}"
+    );
     assert_eq!(
         captured.count(),
         1,

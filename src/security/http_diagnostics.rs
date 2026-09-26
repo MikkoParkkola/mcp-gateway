@@ -217,13 +217,15 @@ mod tests {
         }
         for status in [400_u16, 404] {
             let code = StatusCode::from_u16(status).expect("valid status");
-            assert!(
-                matches!(
-                    status_refusal(typed(status), code, "denied"),
-                    Error::Transport(_)
-                ),
-                "{status} is never typed"
-            );
+            for body in ["denied", "session not found"] {
+                assert!(
+                    matches!(
+                        status_refusal(typed(status), code, body),
+                        Error::Transport(_)
+                    ),
+                    "{status} is never typed, with or without a session-expiry body"
+                );
+            }
         }
     }
 
