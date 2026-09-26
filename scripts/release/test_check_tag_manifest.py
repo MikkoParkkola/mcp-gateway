@@ -1086,11 +1086,17 @@ class WorkflowWiring(unittest.TestCase):
             signing = 0
             for block in steps(workflow):
                 bindings = env_of(block)
-                block = joined(block)
+                raw, block = block, joined(block)
                 if not any(runs(c, COSIGN_ANY) for c in block):
                     continue
                 signing += 1
                 name = block[0]
+                # E1: the rehearsal verify binds pinned literals on purpose; it
+                # verifies a signed release, never the build. Held to E1 here,
+                # and to the release step's body by RehearsalVerify.
+                if condition_of(raw) == REHEARSAL_CONDITION:
+                    self.assertEqual(readonly_verify_refusals(raw), [], f"{workflow}: {name}")
+                    continue
                 for digest in digests:
                     self.assertTrue(
                         any(digest.match(c) for c in bindings),
@@ -1178,7 +1184,10 @@ class WorkflowWiring(unittest.TestCase):
             if found:
                 creates.append((index, block[0], found))
             if any(COSIGN_VERIFY.match(p) for p in pieces(block)):
-                verifies.append(index)
+                # The rehearsal verify checks a pinned older release, not this
+                # index, so it cannot be the verify a release tag waits for.
+                if condition_of(block) != REHEARSAL_CONDITION:
+                    verifies.append(index)
         self.assertTrue(creates, "ci.yml: docker-manifest creates no manifest list")
         self.assertTrue(verifies, "ci.yml: docker-manifest never verifies a signature")
 

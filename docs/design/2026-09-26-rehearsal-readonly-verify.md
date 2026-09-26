@@ -1,6 +1,6 @@
 # Rehearsal runs the release verify, read-only, against a pinned signed release
 
-Status: REVISED after design review rounds 1 and 2 (grok and glm-5.3: SHIP-WITH-FIXES both rounds) · Owner ruling: coordinator ruling 2 (2026-09-26) · Follows #1145
+Status: FINAL after three design review rounds (grok and glm-5.3: SHIP-WITH-FIXES each round; round-3 correctness fixes applied) · Owner ruling: coordinator ruling 2 (2026-09-26) · Follows #1145
 
 ## Problem
 
@@ -133,12 +133,14 @@ This makes E1 an addition, never a replacement.
 (`test_check_tag_manifest.py:1584-1677`) reads every step-level `if:` in the two
 rehearsable jobs, expects exactly 12 sites, and wants every step site to admit only a
 tag push. It changes to expect 13 sites, with three want-classes:
-- the jobs and "Install cosign" admit a tag push OR a rehearsal;
+- the `docker-build` and `docker-manifest` jobs and `docker-manifest -> Install cosign`
+  admit a tag push OR a rehearsal. `publish-mcp-registry (job)` stays tag-push only;
 - the rehearsal verify step admits a rehearsal ONLY: not a tag push, and not a dispatch
   with the input unset;
 - every other step site stays tag-push only, unchanged.
 
-The two new sites are classified by exact label. A blanket "release or rehearse" want
+One site is added (the rehearsal step), and the installer's existing site is
+reclassified. Both are named by exact label. A blanket "release or rehearse" want
 would green a later edit that signs on a rehearsal.
 
 `imagetools create` stays out of the marker inventory. The rehearsal legitimately
@@ -161,7 +163,7 @@ workflow edit and fail for their stated reason.
 | T5 | every non-exempt release-sensitive step has `github.event_name == 'push'` and `startsWith(github.ref, 'refs/tags/v')` as exact top-level conjuncts | GREEN at base, not red-first: live guards already are exact conjuncts. Mutation-proved only; the release verify step must also stay non-exempt | `Cosign keyless-sign` `if:` becomes `<tag> \|\| github.event_name == 'workflow_dispatch'`; and `github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') \|\| always())` |
 | T6 | the installer admits exactly tag OR rehearsal (E2) | the installer is tag-only | installer `if:` gains `\|\| true`-shaped widening; syft installer gains the rehearsal disjunct |
 | T7 | rehearsal step condition is exactly the rehearsal disjunct (no tag push) | no such step | condition becomes `always()`; the rehearse input check is dropped |
-| T10 | site matrix: 13 sites; jobs and installer admit tag OR rehearsal; rehearsal step admits rehearsal only; every other step tag-push only | expects 12 sites | rehearsal step `if:` gains `\|\| (push && tag)`; the syft installer gains the rehearsal disjunct |
+| T10 | site matrix: 13 sites; docker-build/docker-manifest jobs and installer admit tag OR rehearsal; publish-mcp-registry tag only; rehearsal step admits rehearsal only; every other step tag-push only | expects 12 sites | rehearsal step `if:` gains `\|\| (push && tag)`; the syft installer gains the rehearsal disjunct |
 | T8 | in `docker-manifest`, "Install cosign" precedes the rehearsal verify step, and the rehearsal step precedes "Install syft" | no such step | move the rehearsal step above "Install cosign" |
 | T9 | E1 conditions 3-4 extras: env keys equal the release step's; `for` words are `"${KEY}"` over pinned keys; the body assigns none | no such step | add `COSIGN_EXPERIMENTAL: "1"` to its env; `LIST="$(…)"` assignment in the body; a `for` word `"$(cat digests/amd64)"` |
 
@@ -172,6 +174,14 @@ Functional proof:
 - A throwaway PR whose rehearsal step drops `> /dev/null` shows the step hanging in
   rehearsal. This is the beta.2 failure, caught before a tag. The run is force-cancelled
   once it has passed 10 minutes.
+
+**Found while building: the copy masks deletion of the release verify.** Two existing
+tests read "some step runs `cosign verify`", and the rehearsal copy satisfies both. The
+ordering test at `test_check_tag_manifest.py:1159` now ignores rehearsal-conditioned
+steps, so a release tag must follow the release verify itself. The mutation runner
+also runs `RehearsalVerify`, whose T2 reddens when either copy is edited alone. Seven
+existing mutation anchors inside the verify body are widened with release-step context,
+because the verbatim copy made them match twice.
 
 ## Alternatives rejected
 

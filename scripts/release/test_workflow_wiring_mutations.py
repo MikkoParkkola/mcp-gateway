@@ -1136,6 +1136,113 @@ CASES = [
     ),
 ]
 
+# The rehearsal verify (docs/design/2026-09-26-rehearsal-readonly-verify.md)
+# repeats the release verify body verbatim, so an anchor inside that body now
+# matches twice. These cases are about the release step: each anchor is widened
+# with context only that step has, so it still names one site.
+RELEASE_VERIFY_HEAD = (
+    "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@${{ github.ref }}\n"
+    "          LIST_FULL: ${{ steps.list.outputs.list_full }}\n"
+    "          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n"
+    "          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n"
+    "        run: |\n"
+)
+RELEASE_VERIFY_LOOP = RELEASE_VERIFY_HEAD + (
+    "          set -euo pipefail\n"
+    "          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway\n"
+    '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do\n'
+)
+RELEASE_VERIFY_TAIL = "\n      # Only now does a release name exist."
+IN_RELEASE_VERIFY = {
+    "verify-step-deleted",
+    "verify-attestation-stdout-back-in-the-log",
+    "verify-attestation-stdout-repointed-to-stderr",
+    "verify-attestation-both-streams-dropped-by-amp",
+    "verify-step-stderr-dropped-by-exec",
+    "verify-attestation-stderr-dropped-too",
+    "identity-relaxed-to-a-regexp",
+}
+
+
+def _in_release_verify(case):
+    label, workflow, before, after, expected = case
+    if label not in IN_RELEASE_VERIFY:
+        return case
+    if before.startswith("          set -euo pipefail"):
+        return (label, workflow, RELEASE_VERIFY_HEAD + before, RELEASE_VERIFY_HEAD + after, expected)
+    if before.startswith("            cosign verify"):
+        return (label, workflow, RELEASE_VERIFY_LOOP + before, RELEASE_VERIFY_LOOP + after, expected)
+    if before.endswith("          done\n"):
+        return (label, workflow, before + RELEASE_VERIFY_TAIL, after + RELEASE_VERIFY_TAIL, expected)
+    raise AssertionError(f"{label}: no release-verify context rule for its anchor")
+
+
+CASES = [_in_release_verify(case) for case in CASES]
+
+# The read-only rehearsal verify: each case breaks one rule the design names.
+REHEARSAL_IF = (
+    "        if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest"
+    " == true || inputs.rehearse_manifest == 'true')\n        timeout-minutes: 10\n"
+)
+REHEARSAL_LIST = "          LIST: sha256:1471cafc9f2a88855fd8997da8316b8122335bef3d3886a3bbb64768aebc9638\n"
+REHEARSAL_IDENTITY = (
+    "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml"
+    "@refs/tags/v4.0.0-beta.2\n"
+)
+REHEARSAL_LOOP = (
+    "          ARM64_FULL: sha256:d267a3477aeec6f8702b2851e93d9e29ba8fd94cd13920dd158d8cb43e929da9\n"
+    "        run: |\n"
+    "          set -euo pipefail\n"
+    "          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway\n"
+    '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do\n'
+)
+REHEARSAL_TAIL = '"${IMAGE}@${d}" > /dev/null\n          done\n\n      - name: Install syft (SBOM)\n'
+INSTALLER_IF = (
+    "        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"
+    " || (github.event_name == 'workflow_dispatch'"
+)
+SYFT_IF = (
+    "      - name: Install syft (SBOM)\n"
+    "        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n"
+)
+SIGN_IF = (
+    "      - name: Cosign keyless-sign the list and both children\n"
+    "        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n"
+)
+CASES += [
+    ("rehearsal-verify-deleted", "ci.yml",
+     "      - name: Rehearse the release verify against a pinned signed release\n",
+     "      - name: Rehearse something else\n", CAUGHT),
+    ("rehearsal-verifies-the-build-under-rehearsal", "ci.yml", REHEARSAL_LIST,
+     "          LIST: ${{ steps.list.outputs.list }}\n", CAUGHT),
+    ("rehearsal-digest-truncated", "ci.yml", REHEARSAL_LIST, REHEARSAL_LIST[:-2] + "\n", CAUGHT),
+    ("rehearsal-identity-follows-the-ref", "ci.yml", REHEARSAL_IDENTITY,
+     "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml"
+     "@${{ github.ref }}\n", CAUGHT),
+    ("rehearsal-gains-a-cosign-toggle", "ci.yml", REHEARSAL_IDENTITY,
+     REHEARSAL_IDENTITY + '          COSIGN_EXPERIMENTAL: "1"\n', CAUGHT),
+    ("rehearsal-signs", "ci.yml", REHEARSAL_LOOP,
+     REHEARSAL_LOOP + '            cosign sign --yes "${IMAGE}@${d}"\n', CAUGHT),
+    ("rehearsal-reassigns-a-subject", "ci.yml", REHEARSAL_LOOP,
+     REHEARSAL_LOOP.replace("          for d", '          LIST="$(cat digests/amd64)"\n          for d'), CAUGHT),
+    ("rehearsal-drops-a-subject", "ci.yml", REHEARSAL_LOOP,
+     REHEARSAL_LOOP.replace(' "${ARM64_FULL}"; do', "; do"), CAUGHT),
+    ("rehearsal-stdout-back-in-the-log-alone", "ci.yml", REHEARSAL_TAIL,
+     REHEARSAL_TAIL.replace(" > /dev/null", ""), CAUGHT),
+    ("rehearsal-timeout-drifts-from-the-release", "ci.yml", REHEARSAL_IF,
+     REHEARSAL_IF.replace("timeout-minutes: 10", "timeout-minutes: 12"), CAUGHT),
+    ("rehearsal-step-also-runs-on-a-tag", "ci.yml", REHEARSAL_IF,
+     REHEARSAL_IF.replace("== 'true')\n", "== 'true') || github.event_name == 'push'\n"), CAUGHT),
+    ("rehearsal-step-runs-on-any-dispatch", "ci.yml", REHEARSAL_IF,
+     "        if: github.event_name == 'workflow_dispatch'\n        timeout-minutes: 10\n", CAUGHT),
+    ("installer-widened-past-a-rehearsal", "ci.yml", INSTALLER_IF,
+     INSTALLER_IF.replace("'workflow_dispatch'", "'pull_request'"), CAUGHT),
+    ("syft-installer-gains-the-rehearsal", "ci.yml", SYFT_IF,
+     SYFT_IF.replace("'refs/tags/v')\n", "'refs/tags/v') || github.event_name == 'workflow_dispatch'\n"), CAUGHT),
+    ("sign-guard-split-across-a-disjunct", "ci.yml", SIGN_IF,
+     SIGN_IF.replace("&& startsWith(github.ref, 'refs/tags/v')", "&& (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')"), CAUGHT),
+]
+
 
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""
@@ -1154,7 +1261,7 @@ def verdict(directory, workflow, before, after):
             # same way, so it is mutated by the same corpus. Classes that read
             # the working tree rather than the copy are left out: a mutation
             # cannot reach them, so they would report tolerated for every case.
-            [sys.executable, str(SUITE), "WorkflowWiring", "SupplyChain"],
+            [sys.executable, str(SUITE), "WorkflowWiring", "SupplyChain", "RehearsalVerify"],
             capture_output=True,
             text=True,
             env={**os.environ, "MCPGW_WORKFLOWS_DIR": str(directory)},
