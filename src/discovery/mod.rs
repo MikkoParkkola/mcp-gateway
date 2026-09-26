@@ -99,8 +99,9 @@ impl DiscoveredServer {
             TransportConfig::Stdio { command, .. } => {
                 *command = summarize_stdio_command(command);
             }
-            TransportConfig::Http { http_url, .. } => {
-                *http_url = diagnostic_url(http_url);
+            TransportConfig::Http { http_url: url, .. }
+            | TransportConfig::WebSocket { ws_url: url, .. } => {
+                *url = diagnostic_url(url);
             }
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => {

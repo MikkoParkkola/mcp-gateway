@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 mod health;
 mod remedy;
 mod shadow;
+mod ws_reach;
 
 use health::check_port_and_gateway_runtime;
 pub use shadow::run_doctor_shadow_command;
@@ -197,9 +198,11 @@ pub async fn run_doctor_command(
 
     // ── 4. HTTP backends reachability ──────────────────────────────────────
     for (name, backend) in config.enabled_backends() {
-        if let Some(result) = check_http_backend(name, &backend.transport).await {
-            results.push(result);
-        }
+        let result = match check_http_backend(name, &backend.transport).await {
+            None => ws_reach::check_ws_backend(name, &backend.transport).await,
+            some => some,
+        };
+        results.extend(result);
     }
 
     // ── 5. Stdio backends (spawn check) ───────────────────────────────────

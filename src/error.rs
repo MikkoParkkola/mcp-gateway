@@ -93,10 +93,19 @@ pub enum Error {
 
     /// Circuit breaker is open — request rejected without being dispatched.
     ///
-    /// Carries the backend name.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000)
-    /// as the JSON-RPC code for this variant.
-    #[error("Circuit breaker open for backend '{0}'")]
-    CircuitOpen(String),
+    /// Carries the backend name and, once the breaker has tripped, the failure
+    /// that tripped it.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000) as the
+    /// JSON-RPC code for this variant.
+    #[error(
+        "Circuit breaker open for backend '{backend}'{}",
+        last_failure.as_ref().map(|r| format!("; last failure: {r}")).unwrap_or_default()
+    )]
+    CircuitOpen {
+        /// Backend whose breaker refused the call.
+        backend: String,
+        /// Why the breaker last opened (`BreakerOpenEvent::reason`), if it has.
+        last_failure: Option<String>,
+    },
 
     /// The gateway's own per-backend rate limiter refused the request before
     /// dispatch. Not a breaker trip and not a backend failure: the backend was
@@ -274,6 +283,14 @@ pub enum Error {
 }
 
 impl Error {
+    /// The refusal an open breaker returns, carrying the failure that tripped it.
+    pub(crate) fn circuit_open(backend: &str, breaker: &crate::failsafe::CircuitBreaker) -> Self {
+        Self::CircuitOpen {
+            backend: backend.to_string(),
+            last_failure: breaker.last_open_event().map(|event| event.reason),
+        }
+    }
+
     /// Create a JSON-RPC error
     pub fn json_rpc(code: i32, message: impl Into<String>) -> Self {
         Self::JsonRpc {
@@ -304,7 +321,7 @@ impl Error {
     pub fn is_pre_dispatch(&self) -> bool {
         matches!(
             self,
-            Self::CircuitOpen(_)
+            Self::CircuitOpen { .. }
                 | Self::RateLimited(_)
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
@@ -324,7 +341,7 @@ impl Error {
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::AuditUnavailable => -32005,
             Self::BackendUnavailable(_)
-            | Self::CircuitOpen(_)
+            | Self::CircuitOpen { .. }
             | Self::RateLimited(_)
             | Self::BackendTimeout(_)
             | Self::Transport(_)
