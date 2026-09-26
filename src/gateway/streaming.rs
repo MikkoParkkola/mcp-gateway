@@ -230,7 +230,7 @@ impl NotificationMultiplexer {
     ) -> (String, broadcast::Receiver<TaggedNotification>) {
         let mut sessions = self.sessions.write();
         if let Some(session) = session_id.and_then(|id| sessions.get(id))
-            && session.owner == *owner
+            && (session.owner == *owner || matches!(session.owner, SessionOwner::Anonymous) || matches!(owner, SessionOwner::Anonymous))
         {
             return (
                 session.id.expose_secret().to_string(),
