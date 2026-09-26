@@ -833,7 +833,7 @@ jobs:
             cosign verify-attestation --type spdxjson \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-              "${IMAGE}@${d}" > /dev/null
+              "${IMAGE}@${d}"
           done
 
       - name: Install syft (SBOM)
