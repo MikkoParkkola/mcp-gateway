@@ -211,6 +211,27 @@ mod tests {
         );
     }
 
+    /// Every character libyaml reads as a line break ends the pin line, so
+    /// what follows one is hashed as the body it parses as: CR, NEL, LS, PS.
+    #[test]
+    fn text_after_any_yaml_break_on_the_pin_line_is_hashed_as_body() {
+        let body = compute_capability_hash("injected: y\nname: foo\n");
+        for brk in ['\r', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let smuggled = format!("sha256: x{brk}injected: y\nname: foo\n");
+            assert_eq!(compute_capability_hash(&smuggled), body, "break {brk:?}");
+        }
+    }
+
+    /// `cap pin` over an already-pinned CRLF file writes a pin that matches:
+    /// the pin line's own CRLF terminator is not a hidden line.
+    #[test]
+    fn re_pinning_a_pinned_crlf_file_verifies() {
+        let crlf = "sha256: old\r\nname: foo\r\ndescription: bar\r\n";
+        let hash = compute_capability_hash(crlf);
+        let pinned = rewrite_with_pin(crlf, &hash);
+        assert_eq!(compute_capability_hash(&pinned), hash, "{pinned:?}");
+    }
+
     /// Only the CRLF pair is a line ending. A lone CR is content, and a file
     /// that gained one is a different file.
     #[test]
