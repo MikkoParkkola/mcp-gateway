@@ -1035,7 +1035,6 @@ mod tests {
         TrustAuthMode,
         lab::{TrustLabFixtureCallStatus, TrustLabScannerStatus},
     };
-    use std::io::{Read, Write};
     use tempfile::TempDir;
 
     fn write_capability(dir: &Path, name: &str) {
