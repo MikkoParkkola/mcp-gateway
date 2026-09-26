@@ -32,9 +32,9 @@ function compilerVersion(probe) {
   return match ? match[1] : "";
 }
 
-test("checks fixtures when tsc is present", () => {
+test("checks fixtures when tsc is present", (t) => {
   const probe = spawnSync(compilerBin(), ["--version"], { encoding: "utf8" });
-  if (probe.status !== 0) return;
+  if (probe.status !== 0) return t.skip("tsc is not installed");
   const version = compilerVersion(probe);
   if (!version) throw new Error(probe.stdout || "tsc did not report a version");
   const out = join(mkdtempSync(join(tmpdir(), "ts-upgrade-")), "ts-upgrade-report.json");
@@ -53,9 +53,9 @@ test("checks fixtures when tsc is present", () => {
   }
 });
 
-test("skips when --ts-version is not the compiler that ran", () => {
+test("skips when --ts-version is not the compiler that ran", (t) => {
   const probe = spawnSync(compilerBin(), ["--version"], { encoding: "utf8" });
-  if (probe.status !== 0) return;
+  if (probe.status !== 0) return t.skip("tsc is not installed");
   const out = join(mkdtempSync(join(tmpdir(), "ts-upgrade-")), "ts-upgrade-report.json");
   const run = spawnSync(
     process.execPath,
@@ -68,5 +68,17 @@ test("skips when --ts-version is not the compiler that ran", () => {
   const report = JSON.parse(readFileSync(out, "utf8"));
   if (report.recommendation !== "skip" || report.compilerVersion === "0.0.0") {
     throw new Error(JSON.stringify(report));
+  }
+});
+
+test("refuses fewer than five fixtures", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ts-upgrade-empty-"));
+  const out = join(dir, "ts-upgrade-report.json");
+  const run = spawnSync(process.execPath, [harness, "--fixtures", dir, "--ts-version", "5.9.0", "--out", out], {
+    encoding: "utf8",
+    env: { ...process.env, TSC: "tsc-not-installed-mik3160" },
+  });
+  if (run.status === 0) {
+    throw new Error("a short fixture directory must not pass");
   }
 });

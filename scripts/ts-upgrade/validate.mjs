@@ -23,7 +23,10 @@ const tsc = process.env.TSC || "tsc";
 
 function commitSha() {
   try {
-    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+    return execSync("git rev-parse HEAD", {
+      encoding: "utf8",
+      cwd: join(here, "..", ".."),
+    }).trim();
   } catch {
     return "unknown";
   }
@@ -36,11 +39,21 @@ function versionOf(text) {
 
 function recommendation(diagnosticCount, version) {
   if (diagnosticCount > 0) return "skip";
-  if (/rc|beta|alpha|dev/i.test(version)) return "wait_for_stable";
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return "wait_for_stable";
   return "upgrade_now";
 }
 
 const files = readdirSync(fixturesDir).filter((name) => name.endsWith(".js")).sort();
+if (files.length < 5) {
+  const report = {
+    tsVersion,
+    commitSha: commitSha(),
+    fixtures: files.map((name) => ({ file: name, diagnostics: 0 })),
+    recommendation: "skip",
+  };
+  writeFileSync(outPath, JSON.stringify(report, null, 2));
+  process.exit(1);
+}
 const probe = spawnSync(tsc, ["--version"], { encoding: "utf8" });
 const perFixture = [];
 

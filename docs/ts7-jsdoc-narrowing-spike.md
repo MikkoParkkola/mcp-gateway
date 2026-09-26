@@ -2,7 +2,7 @@
 
 ## Premise
 
-The spike assumed `mcp-gateway/npm` and `trvl/npm` contained JSDoc annotations a TypeScript 7 release candidate could narrow. Both trees are install shims. `mcp-gateway/npm/run.js` and `trvl/npm/install.js` plus `trvl/npm/bin/trvl-mcp.js` have no `@type`, `@param`, or `@returns` annotations and no `tsconfig.json`.
+The spike assumed this repo's `npm/` tree and trvl's `npm/` tree contained JSDoc annotations a TypeScript 7 release candidate could narrow. Both are install shims. Here, `npm/run.js` has no `@type`, `@param`, or `@returns` annotations and there is no `tsconfig.json`. In the trvl repo the same is true of `npm/bin/install.js` and `npm/bin/trvl-mcp.js`.
 
 ## Recommendation
 
