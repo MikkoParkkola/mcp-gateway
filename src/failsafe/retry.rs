@@ -92,17 +92,23 @@ where
         .await
 }
 
-/// Check if an error is retryable
+/// Check if an error is retryable. A typed credential refusal (401, 403) is
+/// not: retrying it repeats the refusal with the same credential (A11-g). A
+/// 429 and every other typed status keep their retry.
 fn is_retryable(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::Transport(_)
-            | Error::JsonRpcRetryable { .. }
-            | Error::TransportConnect(_)
-            | Error::BackendTimeout(_)
-            | Error::Http(_)
-            | Error::Io(_)
-    )
+    match error {
+        Error::Http(e) => !e
+            .status()
+            .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal),
+        other => matches!(
+            other,
+            Error::Transport(_)
+                | Error::JsonRpcRetryable { .. }
+                | Error::TransportConnect(_)
+                | Error::BackendTimeout(_)
+                | Error::Io(_)
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +117,28 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    /// A typed `Error::Http` carrying `status`, as the HTTP transport builds it.
+    fn typed_status(status: u16) -> Error {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        Error::Http(
+            reqwest::Response::from(response)
+                .error_for_status()
+                .expect_err("a fixture status is non-2xx"),
+        )
+    }
+
+    /// A11 T16: the backend retry policy never retries a typed credential
+    /// refusal, and still retries a typed 429 (A11-g).
+    #[test]
+    fn a_typed_credential_refusal_is_not_retried_but_429_is() {
+        assert!(!is_retryable(&typed_status(401)));
+        assert!(!is_retryable(&typed_status(403)));
+        assert!(is_retryable(&typed_status(429)));
+    }
 
     fn policy(max_attempts: u32) -> RetryPolicy {
         RetryPolicy {

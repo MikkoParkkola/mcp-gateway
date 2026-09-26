@@ -77,6 +77,7 @@ upgrading a running deployment.
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
+| 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
@@ -1517,6 +1518,48 @@ To reproduce a pin from a shell, strip the CR of each CRLF first:
 pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by the gateway
 and dropped by `grep -v` (item 64).
 
+## 61. A backend that refuses a managed account's token forces one refresh, then a reconnect
+
+In 3.x and in the 4.0 betas, a managed personal account (`accounts.descriptors`,
+`mode: personal_managed`) was refreshed only when its token expired. If the provider revoked
+the grant earlier, every call returned a generic backend error that said "retry", with the
+same dead token each time, for up to the token's lifetime, which is often an hour.
+
+- **The first HTTP 401 from the backend forces one refresh of that account's token.** If the
+  provider answers `invalid_grant`, the account is marked reconnect-required and the call is
+  refused with the reconnect offer (JSON-RPC -32001 on `gateway_invoke`, HTTP 403 and -32003
+  on `/mcp/{backend}`), exactly as an expired grant is today.
+- **Otherwise the caller is told whether a retry can help.** The tool result's `recovery`
+  (or, on `/mcp/{backend}`, the error's `data`) carries `error_code: UPSTREAM_AUTH_REJECTED`
+  with `retry: true` when the token rotated or the provider was unreachable, and
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` with `retry: false` when this token was already
+  force-refreshed and the backend still refuses it. That is a scope or permission problem,
+  not a dead token. The gateway retries nothing automatically.
+- **At most one forced refresh per token revision, across restarts.** The revision is
+  recorded in the account store before the provider is asked, whatever it answers. A
+  backend that refuses every token costs one provider round trip per token revision.
+- **Only the status decides.** A 200 result whose text says "401" is passed through as it is
+  today.
+- **A 401 or 403 from any HTTP backend is no longer retried.** Retrying repeats the refusal
+  with the same credential. A 429, a 5xx, a 400 and a 404 are retried as before. A 404 and a
+  400 still re-initialize an expired MCP session. Chain steps follow the same rule.
+- **Every route:** `gateway_invoke`, a capability (REST) call, `/mcp/{backend}`, and the
+  re-dispatch of an elicitation the gateway bridges for a legacy client.
+- **The audit log's `error_code` changes for a backend 401 on a capability (REST) call:**
+  `-32000` instead of `-32600`. The capability executor now reports a 401 as the backend's
+  refusal, not as an invalid request. A 401 that ends in the reconnect refusal is recorded as
+  that refusal: `outcome: denied` with `-32001` when the reconnect offer is attached. A 401 or
+  403 from an MCP backend over HTTP keeps `-32000`.
+- **Not covered:** backend-level OAuth (`backends.<name>.oauth`), which is planned for 4.1,
+  and external (token-exchange) descriptors, which hold no refreshable grant.
+
+**Rolling back to an earlier 4.0 beta is not supported once a forced refresh has happened.**
+The account store's authority file then records `forced_revision` for that account. An
+earlier 4.0 binary refuses an authority file with a field it does not know, so its account
+custody does not start, and with it the gateway. The file is sealed, so the field cannot be
+removed by hand. It is removed for an account when that account's token next rotates or the
+user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
+
 ## 63. Error results are never served from a response cache
 
 In 3.x and in the 4.0 betas, the response cache stored an error result like any answer and
@@ -1600,3 +1643,6 @@ leaves the 3.x token files in place — its migration prints the notice and stam
 and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
 wrote under the per-issuer key is simply not read by 3.x.
+
+Within 4.0, a rollback to an earlier beta is unsupported once a managed account has had a
+forced refresh (item 61): that beta cannot open the account store and refuses to start.

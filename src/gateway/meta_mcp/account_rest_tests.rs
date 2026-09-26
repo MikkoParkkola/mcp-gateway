@@ -117,8 +117,8 @@ async fn alice_and_bob_receive_their_own_account_credentials_from_one_rest_capab
     );
     assert_eq!(
         custody.releases(),
-        4,
-        "each dispatch releases during preparation and rechecks before egress"
+        6,
+        "A11: +1 per dispatch is the extra executor recheck, not a new mint (as multi-user)"
     );
 }
 
@@ -381,8 +381,8 @@ async fn an_external_descriptor_and_a_managed_one_coexist_without_substitution()
     );
     assert_eq!(
         custody.releases(),
-        2,
-        "only the managed descriptor releases during preparation and rechecks before egress"
+        3,
+        "A11: the managed descriptor alone; +1 is the extra recheck, not a new mint"
     );
 }
 
@@ -431,8 +431,8 @@ async fn meta_mcp_capability_dispatch_carries_the_verified_identity_to_the_accou
     let _ = Box::pin(meta_execute(&meta, Some("alice"))).await;
     assert_eq!(
         custody.releases(),
-        3,
-        "Code Mode releases during preparation and rechecks before inner cache and egress"
+        4,
+        "A11: Code Mode mints once; +1 is the extra backend recheck, not a new mint (as multi-user)"
     );
     assert_eq!(
         custody.refreshes(),
