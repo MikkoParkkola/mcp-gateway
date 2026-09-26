@@ -101,7 +101,7 @@ fn firewall_response_single_target_audit_has_v2_contract() {
         json!([{"server":"backend-a", "tool":"inspect_me"}])
     );
     assert_eq!(event["action"], "block");
-    assert_eq!(event["session_id"], "session-a");
+    assert_eq!(event["session_id"], crate::gateway::session_id::session_fp("session-a"));
     assert_eq!(event["caller"], "caller-a");
     assert_eq!(event["server"], "backend-a");
     assert_eq!(event["tool"], "inspect_me");
@@ -284,14 +284,17 @@ fn firewall_response_repeated_concurrent_calls_keep_distinct_events() {
     assert_eq!(
         events
             .iter()
-            .filter(|e| e["session_id"] == "session-a")
+            .filter(|e| e["session_id"] == crate::gateway::session_id::session_fp("session-a"))
             .count(),
         2
     );
     for index in 0..4 {
         let session = format!("concurrent-{index}");
         assert_eq!(
-            events.iter().filter(|e| e["session_id"] == session).count(),
+            events
+                .iter()
+                .filter(|e| e["session_id"] == crate::gateway::session_id::session_fp(&session))
+                .count(),
             1
         );
     }

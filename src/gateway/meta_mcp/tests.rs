@@ -17,6 +17,9 @@ use crate::gateway::trace;
 #[path = "order2_fsm_tests.rs"]
 mod order2_fsm;
 
+#[path = "empty_session_gate_tests.rs"]
+mod empty_session_gate;
+
 /// The permissive authorizer the helpers below hand out.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 

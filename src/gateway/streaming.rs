@@ -78,6 +78,27 @@ struct ClientSession {
 ///
 /// Routes notifications from multiple streaming backends to connected clients.
 /// Implements the server-side of MCP Streamable HTTP.
+///
+/// There is no "first session" accessor: any session is not the caller's
+/// session (F9). This compiles:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use mcp_gateway::{backend::BackendRegistry, config::StreamingConfig};
+/// # use mcp_gateway::gateway::streaming::NotificationMultiplexer;
+/// let x = NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
+/// assert_eq!(x.session_count(), 0);
+/// ```
+///
+/// and this does not:
+///
+/// ```compile_fail
+/// # use std::sync::Arc;
+/// # use mcp_gateway::{backend::BackendRegistry, config::StreamingConfig};
+/// # use mcp_gateway::gateway::streaming::NotificationMultiplexer;
+/// let x = NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
+/// let _ = x.first_session_id();
+/// ```
 pub struct NotificationMultiplexer {
     /// Client sessions by session ID
     sessions: RwLock<HashMap<String, Arc<ClientSession>>>,
@@ -262,6 +283,25 @@ impl NotificationMultiplexer {
             *session.credential.write() = credential;
         }
         (id, rx)
+    }
+
+    /// Test seam: an anonymous session under a chosen id.
+    #[cfg(test)]
+    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<TaggedNotification> {
+        let (tx, rx) = broadcast::channel(self.config.buffer_size);
+        self.sessions.write().insert(
+            id.to_string(),
+            Arc::new(ClientSession {
+                id: id.to_string(),
+                tx,
+                last_event_id: RwLock::new(None),
+                subscribed_backends: RwLock::new(Vec::new()),
+                created_at: Instant::now(),
+                owner: "unauthenticated:anonymous".to_string(),
+                credential: RwLock::new(None),
+            }),
+        );
+        rx
     }
 
     /// Deliver to every session whose caller may access `backend` now; returns the count.
@@ -923,7 +963,9 @@ mod tests {
         drop(rx);
 
         // WHEN: reap with zero TTL (everything is expired)
+        let (captured, guard) = crate::gateway::session_id::log_capture::capture_debug();
         multiplexer.reap_expired_sessions(Duration::ZERO);
+        drop(guard);
 
         // THEN
         assert_eq!(
@@ -932,6 +974,12 @@ mod tests {
             "expired abandoned session must be reaped"
         );
         assert!(!multiplexer.has_session(&id));
+        // F9-T7c: the reaper names the session by fingerprint only.
+        crate::gateway::session_id::log_capture::assert_fingerprinted(
+            &captured.text(),
+            "Reaping expired streaming session",
+            &id,
+        );
     }
 
     /// GIVEN a session with an active receiver (SSE client still connected)

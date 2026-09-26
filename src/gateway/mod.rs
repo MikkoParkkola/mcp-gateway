@@ -29,6 +29,8 @@ mod openwebui_adapter;
 pub mod proxy;
 #[cfg(test)]
 mod proxy_scope_tests;
+#[cfg(test)]
+mod proxy_session_tests;
 pub mod recovery;
 mod router;
 /// The one constructor that turns a verified identity into a grant subject,
@@ -48,6 +50,7 @@ mod server;
 /// rather than a presented secret, and must compare against this exact value.
 pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
 pub mod session_lifecycle;
+pub(crate) mod session_id;
 pub mod state;
 pub mod streaming;
 pub mod subscription_registry;
