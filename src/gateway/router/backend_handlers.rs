@@ -182,7 +182,7 @@ fn direct_route_attestation_scope<'a>(
     match method {
         "tools/call" | "prompts/get" => AttestationScope::Capability(field("name")),
         "resources/read" | "resources/subscribe" | "resources/unsubscribe" => {
-            AttestationScope::Capability(field("uri"))
+            AttestationScope::AuthenticOnly
         }
         "tools/list"
         | "resources/list"
