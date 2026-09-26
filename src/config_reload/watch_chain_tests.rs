@@ -539,7 +539,7 @@ mod real_watcher {
     }
 
     /// T16: `start` resolves once as soon as its watches are live, and that
-    /// resolve changes nothing and reloads nothing.
+    /// resolve leaves the named release loaded.
     #[tokio::test]
     async fn t16_start_resolves_once_when_the_watches_are_live() {
         let (_root, r) = capistrano();
@@ -549,13 +549,17 @@ mod real_watcher {
         )
         .unwrap();
         let g = start_gateway_watcher(&r.join("current").join("cfg.yaml"));
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        assert_eq!(g.watcher.chain().wakes_handled.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            description(&g.live).as_deref(),
-            Some("rel1"),
+        let loaded = tokio::time::timeout(Duration::from_secs(10), async {
+            while description(&g.live).as_deref() != Some("rel1") {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(
+            loaded.is_ok(),
             "the initial resolve did not leave the named release loaded"
         );
+        assert_eq!(g.watcher.chain().wakes_handled.load(Ordering::SeqCst), 1);
     }
 
     /// T18: a chain that cannot be resolved at startup (the target missing
@@ -577,9 +581,27 @@ mod real_watcher {
         assert_eq!(chain.watched(), set(&[&c]));
     }
 
-    /// T19: a retarget that lands after the config was read but before the
-    /// rewatch task starts is reloaded by the task's first resolve, even when
-    /// it moves only the end of the chain and no watch.
+    /// T18b: a chain unresolvable at startup is repaired when its target
+    /// appears in a directory nobody watches yet: the task keeps re-resolving
+    /// while the chain is broken, not only on events.
+    #[tokio::test]
+    async fn t18b_a_chain_broken_at_startup_is_repaired_without_an_event() {
+        let root = tempfile::tempdir().expect("root");
+        let (a, c) = (root.path().join("a"), root.path().join("c"));
+        for dir in [&a, &c] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
+        let h = start(&c.join("l"));
+        h.wait_wakes_above(0).await;
+        std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
+        h.wait_watched(&a).await;
+        let _ = h.shutdown.send(());
+    }
+
+    /// T19: the task's first resolve always reloads, so a retarget that lands
+    /// after the config was read but before the task starts is picked up even
+    /// when it moves only the end of the chain and no watch.
     #[tokio::test]
     async fn t19_a_retarget_before_the_task_starts_is_reloaded() {
         let (_root, a, _b, c) = release_tree();
