@@ -164,8 +164,11 @@ fn verify_passes_after_retention_expiry() {
     rotate_n(&l, &path, 2);
     for _ in 0..3 {
         let newest = list_segments(&path).unwrap().last().unwrap().seq;
+        let mut spins = 0;
         while list_segments(&path).unwrap().last().unwrap().seq == newest {
             append(&l, 0);
+            spins += 1;
+            assert!(spins < 1_000, "no rotation happened");
         }
     }
     let seqs: Vec<u64> = list_segments(&path)

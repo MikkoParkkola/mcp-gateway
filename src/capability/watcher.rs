@@ -32,9 +32,13 @@ impl CapabilityWatcher {
     /// # Errors
     ///
     /// Returns an error if the file watcher cannot be created.
+    ///
+    /// `changes` hears the backend's name after every successful reload, so
+    /// listeners get `tools/list_changed` (F24).
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<Self> {
         let directories = backend.watched_directories();
         debug!(directories = ?directories, "Starting capability watcher");
@@ -54,7 +58,7 @@ impl CapabilityWatcher {
         debug!("File watcher created successfully");
 
         // Spawn debounced reload task
-        Self::spawn_reload_task(backend, event_rx, shutdown_rx);
+        Self::spawn_reload_task(backend, event_rx, shutdown_rx, changes);
         debug!("Reload task spawned");
 
         Ok(Self {
@@ -117,6 +121,7 @@ impl CapabilityWatcher {
         backend: Arc<CapabilityBackend>,
         mut event_rx: mpsc::Receiver<()>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) {
         tokio::spawn(async move {
             // Debounce: wait 500ms after last event before reloading
@@ -163,6 +168,9 @@ impl CapabilityWatcher {
                                                 capabilities = count,
                                                 "Hot-reload complete"
                                             );
+                                            if let Some(changes) = &changes {
+                                                let _ = changes.send(backend.name.clone());
+                                            }
                                         }
                                         Err(e) => {
                                             error!(
@@ -196,7 +204,7 @@ mod tests {
         let backend = Arc::new(crate::capability::CapabilityBackend::new("test", executor));
 
         // Should not panic with empty directories
-        let watcher = CapabilityWatcher::start(backend, rx);
+        let watcher = CapabilityWatcher::start(backend, rx, None);
         assert!(watcher.is_ok());
     }
 }

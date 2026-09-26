@@ -152,8 +152,11 @@ fn recovers_crash_between_expiry_record_and_unlink() {
     rotate_n(&l, &path, 1);
     // Rotate once more: retention records `.0`'s expiry and unlinks it.
     let before = list_segments(&path).unwrap().last().unwrap().seq;
+    let mut spins = 0;
     while list_segments(&path).unwrap().last().unwrap().seq == before {
         append(&l, 0);
+        spins += 1;
+        assert!(spins < 1_000, "no rotation happened");
     }
     drop(l);
     assert!(lines(&path).iter().any(|v| event(v) == Some(EV_EXPIRED)));

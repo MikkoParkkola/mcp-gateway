@@ -49,6 +49,7 @@ fn fill_until_rotated(store: &FileControlPlaneStore, dir: &Path, n: usize) -> us
     while sealed_count(dir) < n {
         store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
         i += 1;
+        assert!(i < 1_000, "no rotation happened");
     }
     i
 }

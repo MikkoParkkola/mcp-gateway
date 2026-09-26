@@ -59,7 +59,11 @@ fn synced_append_rotates_without_deadlock() {
     let p = path.clone();
     std::thread::spawn(move || {
         let l = TransparencyLogger::open(cfg(&p, 12, false)).unwrap();
-        while list_segments(&p).unwrap().len() < 3 {
+        for i in 0.. {
+            if list_segments(&p).unwrap().len() >= 3 {
+                break;
+            }
+            assert!(i < 1_000, "no rotation happened");
             l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
                 .unwrap();
         }
@@ -131,8 +135,11 @@ fn verify_rejects_expiry_counter_mismatch() {
     let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     rotate_n(&l, &path, 1);
     let before = list_segments(&path).unwrap()[0].seq;
+    let mut spins = 0;
     while list_segments(&path).unwrap()[0].seq == before {
         append(&l, 0);
+        spins += 1;
+        assert!(spins < 1_000, "no rotation happened");
     }
     drop(l);
     // Find the expiry for segment 0 and bump its last_counter.
@@ -175,8 +182,11 @@ fn forged_expiry_fails_signed_verify() {
     let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
     rotate_n(&l, &path, 1);
     let before = list_segments(&path).unwrap()[0].seq;
+    let mut spins = 0;
     while list_segments(&path).unwrap()[0].seq == before {
         append(&l, 0);
+        spins += 1;
+        assert!(spins < 1_000, "no rotation happened");
     }
     // The logger's own expiry record is signed.
     let own = lines(&path)
