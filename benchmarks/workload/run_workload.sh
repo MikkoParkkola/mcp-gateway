@@ -14,6 +14,11 @@
 
 set -Eeuo pipefail
 
+# Rendered gateway configs must be owner-only: a 4.0 gateway refuses a config
+# other users can read (UPGRADING-4.0 §35), so under a 0002 umask every 4.0 arm
+# dies on its first rep. The k6 container runs as this uid, so it still reads.
+umask 077
+
 HERE="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(CDPATH= cd -- "$HERE/../.." && pwd)"
 
