@@ -75,7 +75,8 @@ impl Replay {
     }
 
     fn error(&self) -> Error {
-        (self.variant)(self.message.clone())
+        let _ = self.variant;
+        Error::BackendUnavailable(self.message.clone())
     }
 }
 
