@@ -454,11 +454,13 @@ jobs:
     # design documents and in three implementation briefs before anyone tried to
     # run it. The sweep is tree-wide, not directory-scoped: a module may be
     # declared from a sibling by `#[path = "..."]`, and a directory-scoped
-    # version of this check reported 72 false orphans.
+    # version of this check reported 72 false orphans. Declarations are
+    # followed from the crate roots, so a file declared only by an uncompiled
+    # file is itself reported, and every `.rs` under `src/` is swept (#1339).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check every test file is declared
+      - name: Check every source file is reachable from a crate root
         run: python3 scripts/dev/check-orphan-test-modules.py
       # The resolver has already been wrong twice -- once directory-scoped,
       # reporting 72 false orphans out of 113, and once name-matching, which

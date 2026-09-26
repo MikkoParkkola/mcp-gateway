@@ -8,22 +8,26 @@
 //! its catalogue out of the error bodies — including tools its routing profile
 //! forbids. Second instance of the class MIK-7517 closed in `spec_preview`.
 //!
-//! The pool carries two independent filters and a refactor can drop either
-//! alone, so each gets its own case.
+//! The pool is filtered by `may_invoke` (#555), which applies the routing
+//! profile's `check` -- backend filter, then tool filter -- and the authorizer.
+//! A refactor can drop the filter, or narrow it to the authorizer alone, and
+//! both leave every other test green, so the profile rows get their own cases.
 //!
-//! * `tool_allowed` is exercised end to end through `invoke_tool`, because that
-//!   is the caller-reachable route the ticket reports.
-//! * `backend_allowed` is exercised against `suggestible_tool_names` directly.
-//!   It cannot be reached through `invoke_tool`: `validate_invocation` calls
-//!   `RoutingProfile::check`, which refuses on the backend filter first
-//!   (`routing_profile/mod.rs:133`), so a denied backend never dispatches. The
-//!   guard still belongs here — it keeps the pool correct for any future caller
-//!   of this helper that is not behind that refusal — and a direct case is the
-//!   only thing that can hold it.
+//! * A profile-denied tool: end to end through `invoke_tool`, the
+//!   caller-reachable route the ticket reports.
+//! * A profile-denied backend: `invoke_tool` refuses before dispatch, so no
+//!   pool is ever built. The case pins that the refusal itself names no tool.
 //!
-//! Both directions are asserted in each case. Absence alone is satisfied by a
-//! gateway that suggests nothing at all, which would pass the security
-//! criterion by deleting the feature.
+//! These cases once lived beside a `suggestible_tool_names` helper in
+//! `invoke/suggestion.rs`. A later docs commit (3fc7c0576) dropped the
+//! `mod suggestion;` line, the helper and its `#[path]`-declared tests went
+//! out of the build together, and the orphan guard still counted the
+//! declaration inside the uncompiled file. #555 then rebuilt the filter on
+//! `may_invoke`, so these rows now pin that filter instead.
+//!
+//! Both directions are asserted. Absence alone is satisfied by a gateway that
+//! suggests nothing at all, which would pass the security criterion by
+//! deleting the feature.
 
 use std::sync::Arc;
 
@@ -31,7 +35,7 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
-use crate::gateway::authz::AllowAll;
+use crate::gateway::meta_mcp::test_callers::anonymous_caller;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::{JsonRpcResponse, RequestId, ToolsListResult};
 use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
@@ -168,37 +172,23 @@ async fn meta_with_primed_backend() -> MetaMcp {
 /// `session_key`, which maps an empty id to no session at all and would hand
 /// the caller the permissive default instead of `narrow`.
 fn bind_narrow_profile(meta: &MetaMcp, session: Option<&str>) {
+    let caller = ctx();
     meta.handle_initialize(
         RequestId::Number(1),
         None,
         session,
         Some(NARROW),
         crate::protocol::meta::Era::Legacy,
+        caller.scope(),
     );
 }
 
+/// The anonymous test caller, on the legacy era the profile was bound under.
 fn ctx() -> MetaMcpCallerContext<'static> {
     MetaMcpCallerContext {
-        signing: None,
-        execution: None,
-        credential_principal: None,
-        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
-        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
-        protocol_revision: None,
-        authorizer: &AllowAll,
-        api_key_name: Some("test-caller"),
-        agent_id: None,
-        grant_subject: None,
-        stdio_nonce: None,
-        verified_identity: None,
-        is_admin: false,
-        input_capabilities: crate::protocol::meta::Declared::NONE,
-        retry: &crate::protocol::mrtr::NO_RETRY,
-        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-        task: None,
         era: crate::protocol::meta::Era::Legacy,
-        channel: &crate::gateway::input_bridge::NoClientChannel,
+        ..anonymous_caller()
     }
 }
 
@@ -244,15 +234,13 @@ async fn denied_tool_names_are_filtered_out_of_invocation_suggestions() {
     );
 }
 
-/// The `backend_allowed` branch, against the pool builder directly.
-///
-/// Unreachable through `invoke_tool` — see the module docs — so the helper is
-/// the only seam that can hold this guard.
+/// A profile-denied backend: refused before dispatch, and the refusal names
+/// no tool.
 #[tokio::test]
-async fn a_denied_backend_contributes_no_invocation_suggestions() {
+async fn a_denied_backend_refusal_names_none_of_its_tools() {
     let backend = primed_backend().await;
     let registry = Arc::new(BackendRegistry::new());
-    let _ = registry.register(Arc::clone(&backend));
+    let _ = registry.register(backend);
 
     let mut configs = std::collections::HashMap::new();
     configs.insert(
@@ -273,19 +261,25 @@ async fn a_denied_backend_contributes_no_invocation_suggestions() {
     let meta = MetaMcp::new(registry)
         .with_profile_registry(ProfileRegistry::from_config(&configs, "open"));
 
+    // Premise: with the permissive default the same probe does get a hint,
+    // so the absence below is the profile's doing, not a silent pool.
+    let open = invoke_miss(&meta, Some("mik7518-open"), NEAR_ALLOWED).await;
+    assert!(open.contains(ALLOWED), "premise: {open}");
+
     let session = Some("mik7518-backend");
     bind_narrow_profile(&meta, session);
-
+    let args = json!({ "server": SERVER, "tool": NEAR_ALLOWED, "arguments": {} });
+    let body = match meta.invoke_tool(&args, session, &ctx()).await {
+        Ok(value) => value.to_string(),
+        Err(err) => err.to_string(),
+    };
     assert!(
-        meta.suggestible_tool_names(&backend, Some("mik7518-open"))
-            .contains(&ALLOWED.to_string()),
-        "premise: an unbound session gets the permissive default, so the pool \
-         must be non-empty there — otherwise the assertion below is satisfied \
-         by a helper that always returns nothing"
+        body.contains("routing profile"),
+        "premise: the backend filter must be what answered: {body}"
     );
     assert!(
-        meta.suggestible_tool_names(&backend, session).is_empty(),
-        "MIK-7518: a server the caller's profile denies must contribute no \
-         suggestion candidates at all"
+        !body.contains(ALLOWED) && !body.contains(DENIED),
+        "MIK-7518: a server the caller's profile denies must not leak its tool \
+         names in the refusal: {body}"
     );
 }
