@@ -308,6 +308,7 @@ pub(super) fn watch_env_dirs(
         if !seen.insert(dir.clone()) {
             continue;
         }
+        env_dirs.insert(dir.clone());
         if !dir.exists() {
             warn!(dir = %dir.display(), "Config watcher: env-file directory does not exist, skipping");
             continue;
