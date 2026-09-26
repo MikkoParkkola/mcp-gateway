@@ -2652,7 +2652,7 @@ impl Gateway {
                     drop(slot);
                 });
             } else {
-                task.await;
+                dispatches.spawn(task);
             }
         }
 
