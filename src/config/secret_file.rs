@@ -147,7 +147,7 @@ pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option
 #[must_use]
 pub(crate) fn integrity_file_refusal(mode: u32) -> Option<Refusal> {
     let m = mode & 0o777;
-    if m & 0o002 != 0 {
+    if m & 0o006 != 0 {
         return Some(Refusal::World);
     }
     if m & 0o020 != 0 {
