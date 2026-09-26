@@ -49,6 +49,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
+  the startup capability scan has read every directory, so a pod or container is no longer
+  sent traffic while its catalogue is empty; the admin `/health` view adds
+  `capability_backend.loaded`. The compose healthcheck probes `/readyz`, and the example
+  `Gateway` runtime profile probes `/readyz` and `/livez`. UPGRADING-4.0 §65.
+
 - **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
   12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
   `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
@@ -83,6 +89,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
+  durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
+  non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
+  handed a `client_id` that another writer then replaced on disk. The lock is now `LockFileEx`.
 - **An error result is never replayed from a cache.** The response cache and the capability
   cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
   refusals, and served them to every call with the same key for the whole TTL (60 s by default).
@@ -100,6 +110,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   the backend for all tenants. It is now `Rate limit exceeded for backend 'x'` (code
   still -32000, recovery hint `RATE_LIMITED`), is not sampled by the error budgets, and leaves
   `mcp_backend_circuit_state` alone. See `docs/UPGRADING-4.0.md` item 53 (F23).
+- **Config reload follows a symlinked config across directories.** A link retargeted to a
+  file in a directory the gateway was not watching reloaded once and then missed every later
+  write, serving the old config silently; a directory the link left stayed watched forever. The
+  watcher now follows the whole link chain on every change, including a Kubernetes ConfigMap's
+  `..data` swap, a Capistrano-style `current` directory link retargeted by rename or by
+  `rm` and `ln -s`, and reads the new release on reload. Limits are listed in DEPLOYMENT
+  under "What triggers a config reload". (#453)
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
