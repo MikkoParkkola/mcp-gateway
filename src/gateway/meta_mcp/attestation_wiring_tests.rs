@@ -243,7 +243,7 @@ fn provenance_test_backend() -> Arc<BackendRegistry> {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -298,7 +298,7 @@ async fn provenance_flag_off_strips_backend_injected_meta_provenance() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "remote_docs",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

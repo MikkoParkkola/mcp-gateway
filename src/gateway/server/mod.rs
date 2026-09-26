@@ -4780,7 +4780,7 @@ mod tests {
                     streamable_http: true,
                     protocol_version: None,
                 },
-                ..BackendConfig::default()
+                ..BackendConfig::r2_off()
             },
         );
         let gateway = Gateway::new(config).await.unwrap();

@@ -80,7 +80,7 @@ fn meta(body: Value, fail: bool) -> (MetaMcp, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "asker",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

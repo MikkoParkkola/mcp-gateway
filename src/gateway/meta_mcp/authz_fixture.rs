@@ -50,16 +50,6 @@ impl Transport for CountingTransport {
     }
 }
 
-/// A backend config with R2 `off`. F13: these fixtures serve no parseable
-/// `tools/list` and R2 is not under test, so `off` keeps the base behaviour
-/// (no fill, forwarded).
-pub(in crate::gateway::meta_mcp) fn r2_off_config() -> BackendConfig {
-    BackendConfig {
-        input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
-        ..BackendConfig::default()
-    }
-}
-
 /// A registry holding one backend whose calls are counted.
 pub(in crate::gateway::meta_mcp) fn counted_backend(
     name: &str,
@@ -68,7 +58,7 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         name,
-        r2_off_config(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

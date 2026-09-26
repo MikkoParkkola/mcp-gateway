@@ -913,7 +913,7 @@ async fn authz_cache_4b_read_and_write_keys_share_the_pre_dispatch_epoch() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
-        fixture::r2_off_config(),
+        crate::config::BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

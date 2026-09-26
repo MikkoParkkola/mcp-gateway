@@ -5093,8 +5093,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
-            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "mem",
@@ -5235,8 +5234,7 @@ mod identity_propagation_enforcement_tests {
                 streamable_http: true,
                 protocol_version: None,
             },
-            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "asks",
@@ -5828,8 +5826,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
-            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "stdio-mem",
@@ -5870,8 +5867,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(false)),
-            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "stdio-mem-optional",
