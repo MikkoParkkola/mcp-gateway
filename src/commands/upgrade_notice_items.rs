@@ -101,4 +101,6 @@ backend-blind, so Kubernetes probes are unaffected.",
 `Mcp-Session-Id` that names no live session is replaced (the new id is in the response header), \
 an empty one counts as absent, and logs carry an 8-hex fingerprint instead of the id. With auth \
 off, holding a session id is what makes a session yours.",
+    "A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is \
+refused with -32602 instead of being forwarded to the backend as a fresh call.",
 ];

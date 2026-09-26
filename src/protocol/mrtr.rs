@@ -96,6 +96,21 @@ pub static NO_RETRY: RetryFields = RetryFields {
     attestation: None,
 };
 
+/// Whether `inputResponses` carries any answer at all.
+///
+/// The one rule both stray-answer refusals read (`tools/call` without the
+/// gateway's `requestState`, and `tasks/update` with no input round
+/// outstanding), so the two cannot drift apart. An empty object, an empty
+/// array and `null` answer nothing.
+pub(crate) fn input_responses_nonempty(answers: Option<&Value>) -> bool {
+    answers.is_some_and(|value| match value {
+        Value::Object(map) => !map.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Null => false,
+        _ => true,
+    })
+}
+
 impl RetryFields {
     /// Read the retry fields from a `tools/call` params object.
     #[must_use]
@@ -549,6 +564,36 @@ impl Bridge {
             params.insert("inputResponses".to_string(), Value::Object(responses));
         }
         Value::Object(params)
+    }
+}
+
+#[cfg(test)]
+mod input_responses_tests {
+    use super::input_responses_nonempty;
+    use serde_json::json;
+
+    /// T6: the shape rule, including shapes parsing never delivers to
+    /// `tools/call` but `tasks/update` reads raw.
+    #[test]
+    fn input_responses_nonempty_rule() {
+        assert!(!input_responses_nonempty(None));
+        for empty in [json!({}), json!([]), json!(null)] {
+            assert!(
+                !input_responses_nonempty(Some(&empty)),
+                "{empty} answers nothing"
+            );
+        }
+        for answered in [
+            json!({"q": {"action": "accept"}}),
+            json!([1]),
+            json!("x"),
+            json!(0),
+        ] {
+            assert!(
+                input_responses_nonempty(Some(&answered)),
+                "{answered} is an answer"
+            );
+        }
     }
 }
 
