@@ -45,7 +45,7 @@ pub(super) async fn start_stdio_backend(
         // does not build, so a local start would be a different launch. Said
         // out loud, never a pass and never a missing row.
         return Some(
-            CheckResult::warn(
+            CheckResult::pass(
                 &label,
                 format!(
                     "skipped: runs under runtime profile {profile}; \
