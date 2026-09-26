@@ -748,7 +748,6 @@ pub(crate) fn log_agent_identity(
         // principal and a label that differ, in a namespace the operator has
         // been told is incomparable. Accepted, and alertable.
         tracing::warn!(
-            agent_proven = proven,
             agent_proof = proof.as_deref(),
             agent_secondary_proof = secondary,
             agent_secondary_proof_source = secondary_proof.as_deref(),
