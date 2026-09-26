@@ -1123,21 +1123,20 @@ impl MetaMcp {
             arguments: args.get("arguments").unwrap_or(&empty_args),
         };
         let authorizer = caller.authorizer;
-        if let Err(e) = authorizer.authorize(target) {
-            crate::gateway::authz::audit_refusal(
-                authorizer.transport(),
-                authorizer.caller_name(),
-                server,
-                tool,
-                &e.message,
-            );
-            return Err(Error::Forbidden {
+        // The admin-capability rule is refused and audited like the authorizer.
+        let refusal = authorizer
+            .authorize(target)
+            .map_err(|e| Error::Forbidden {
                 code: e.code,
                 status: e.status.as_u16(),
                 message: e.message,
-            });
+            })
+            .and_then(|()| self.admin_capability_rule(server, tool, caller.is_admin));
+        if let Err(e) = refusal {
+            let (transport, name) = (authorizer.transport(), authorizer.caller_name());
+            crate::gateway::authz::audit_refusal(transport, name, server, tool, &e.to_string());
+            return Err(e);
         }
-        self.admin_capability_rule(server, tool, caller.is_admin)?;
         // Identity grants are the same decision as the authorizer above, taken
         // here with every other refusal because the response cache and the
         // idempotency short-circuit both return below this point: a gate under
@@ -4981,7 +4980,7 @@ mod identity_propagation_enforcement_tests {
             enabled: true,
             path: file.path().to_string_lossy().to_string(),
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         });
         let logger = Arc::new(TransparencyLogger::open(cfg).expect("logger opens"));
 
@@ -5092,7 +5091,7 @@ mod identity_propagation_enforcement_tests {
             enabled: true,
             path,
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         });
         Arc::new(TransparencyLogger::open(cfg).expect("logger opens"))
     }
@@ -5686,7 +5685,7 @@ mod identity_propagation_enforcement_tests {
                 enabled: true,
                 path,
                 key_id: "test".to_string(),
-                shared_secret: String::new(),
+                ..TransparencyLogConfig::default()
             });
             let logger = Arc::new(
                 TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed"),
@@ -6057,6 +6056,8 @@ mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
+#[cfg(test)]
+mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod session_fp_tests;

@@ -1049,13 +1049,7 @@ impl Gateway {
         // into this chain without going through `MetaMcp` (MIK-6740).
         let mut transparency_log: Option<Arc<crate::security::TransparencyLogger>> = None;
         if self.config.security.transparency_log.enabled {
-            use crate::security::transparency_log::TransparencyLogConfig;
-            let tl_cfg = Arc::new(TransparencyLogConfig {
-                enabled: self.config.security.transparency_log.enabled,
-                path: self.config.security.transparency_log.path.clone(),
-                key_id: self.config.security.transparency_log.key_id.clone(),
-                shared_secret: self.config.security.transparency_log.shared_secret.clone(),
-            });
+            let tl_cfg = Arc::new((&self.config.security.transparency_log).into());
             // Auth on: the log is required (D1-a) and a failed append
             // withholds the call's result (D1-f).
             let auth_on = self.config.auth.enabled;
@@ -3867,7 +3861,7 @@ mod tests {
             enabled: true,
             path: log_path.to_string_lossy().into_owned(),
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("open transparency log");
         logger

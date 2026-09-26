@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- New entries go here, under the heading that fits, never under a tagged release below. -->
 
+### Highlights
+
+The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
+stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
+caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
+one replica while it is on. On stdio, `server/discover` lists only the older revisions. For teams, each caller now sees and invokes only what it was granted,
+and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
+rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
+with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
+with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
+unrecognised config key, a config file other users can read, an unresolved secret or, with auth
+on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+
 ### Added
 
 - **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
@@ -42,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `capability_backend.loaded`. The compose healthcheck probes `/readyz`, and the example
   `Gateway` runtime profile probes `/readyz` and `/livez`. UPGRADING-4.0 §65.
 
+- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
+  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
+  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
+  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
+  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
+  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
+  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
 - **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
   `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
   `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
@@ -53,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
   collections may be read by others but not changed by them. `config export` writes the client
   config it edits as `0600`. UPGRADING-4.0 item 54. (F18)
+
+- **Breaking: a backend that fails to start counts toward its circuit breaker, on every
+  transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
+  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §48.
+- **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
+  line prints the upgrade request with its query string and headers.
+- **Admin actions write an `admin_action` audit record and are refused while the
+  audit log is down.** Admin meta-tool calls, allowed or refused, and every
+  `/ui/api/*` request other than `GET` or `HEAD`, control-plane POSTs included,
+  record who acted (issuer and subject for an SSO admin), the tool or route
+  template, and the outcome; bodies and queries are never logged. With auth on
+  they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
+  item 51.
 
 ### Fixed
 
@@ -96,6 +129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it ran `cargo check` only. (#524)
 
 ### Security
+
+- **A non-admin call to a callback-registering capability is refused as a denial.** It was
+  answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
+  JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by
+  authorization" warning. See UPGRADING-4.0 item 66 for when the invocation audit log
+  records it.
 
 - **Capability pins cover text after a line break inside the pin line.** The pin hash
   excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
@@ -146,19 +185,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`);
 > no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
 
-### Highlights
-
-The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
-stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
-caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
-one replica while it is on. On stdio, `server/discover` lists only the older revisions. For teams, each caller now sees and invokes only what it was granted,
-and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
-rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
-with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
-with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read, an unresolved secret or, with auth
-on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
-
 ### Added
 
 - **With auth on, the tool-call audit log is required and fails closed
@@ -180,24 +206,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   optional `expires_at` refuses a matching key with 401 after that instant.
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
-- **Breaking: a backend that fails to start counts toward its circuit breaker, on every
-  transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
-  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §48.
-- **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
-  line prints the upgrade request with its query string and headers.
 - **Breaking:** a `control_plane.role_mapping` rule with `role: admin` now makes its
   SSO identity a gateway admin on every admin surface (admin meta-tools, `/ui/api/*`),
   not only the control plane. The mapping is read per request, so a reload revokes
   admin at once. A `role: admin` rule whose only condition is `domain` fails to load,
   and each admin rule logs a warning at load. Header identities never confer admin.
   See `docs/UPGRADING-4.0.md` item 51 (E1, MIK-7570.ADMINSSO.1).
-- **Admin actions write an `admin_action` audit record and are refused while the
-  audit log is down.** Admin meta-tool calls, allowed or refused, and every
-  `/ui/api/*` request other than `GET` or `HEAD`, control-plane POSTs included,
-  record who acted (issuer and subject for an SSO admin), the tool or route
-  template, and the outcome; bodies and queries are never logged. With auth on
-  they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
-  item 51.
 
 ### Fixed
 
@@ -234,6 +248,15 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
   is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
   A budget that has blocked stays blocked across a restart until UTC midnight.
+
+### Removed
+
+- Removed the `session_sandbox` and `tunnel` modules. No configuration key reached
+  either: nothing constructed a `SandboxEnforcer` outside its own tests and a
+  benchmark, and there is no `tunnel:` section (a config that has one already
+  fails the load as an unread key). The `session_sandbox/*` benchmark group goes
+  with them. Also removed `src/gateway/ui/costs.rs`, a second `/ui/api/costs`
+  handler that no module declared, so it was never compiled.
 
 ## [4.0.0-beta.1] - 2026-09-25
 
@@ -524,13 +547,6 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Removed
 
-- Removed the `session_sandbox` and `tunnel` modules. No configuration key reached
-  either: nothing constructed a `SandboxEnforcer` outside its own tests and a
-  benchmark, and there is no `tunnel:` section (a config that has one already
-  fails the load as an unread key). The `session_sandbox/*` benchmark group goes
-  with them. Also removed `src/gateway/ui/costs.rs`, a second `/ui/api/costs`
-  handler that no module declared, so it was never compiled.
-
 - **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
   its backend's `timeout`. A config that still sets it now fails to load with an
   explanation. See UPGRADING-4.0.md item 39.
@@ -545,7 +561,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   (Streamable HTTP or SSE) and A2A, and no config path builds the WebSocket
   client in `src/transport/websocket.rs`. The docs no longer list it.
 
-## [4.0.0] - 2026-09-19
+## [4.0.0] - Unreleased
+
+> **Not tagged yet.** No `v4.0.0` tag exists. The changes this section describes shipped in
+> `4.0.0-beta.1`; its text has been corrected since, without adding changes. At the 4.0.0
+> release it merges with `[Unreleased]` into one dated section.
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). No migration edits a
 > 3.x `gateway.yaml`; strict `env_files` parsing, cleartext credential backends, empty or repeated
@@ -2379,7 +2399,7 @@ credential path.
 [Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.2...HEAD
 [4.0.0-beta.2]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...v4.0.0-beta.2
 [4.0.0-beta.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
-[4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
+[4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
