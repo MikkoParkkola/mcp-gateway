@@ -1730,6 +1730,7 @@ done
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_after_shutdown_never_spawns_a_child() {
+    use crate::backend::RestartOutcome::SkippedStopping;
     let dir = tempfile::tempdir().expect("create temp dir");
     let log = dir.path().join("spawns");
     let backend = stoppable_backend_with_command(
@@ -1752,7 +1753,6 @@ async fn a_start_after_shutdown_never_spawns_a_child() {
         started.is_err(),
         "a stopped backend reported a successful start"
     );
-    use crate::backend::RestartOutcome::SkippedStopping;
     assert!(
         matches!(restarted, Ok(SkippedStopping)),
         "force_restart on a stopped backend should report that it did nothing, \
