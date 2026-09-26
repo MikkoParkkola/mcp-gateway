@@ -68,8 +68,11 @@ async fn non_vault_401_forces_no_refresh() {
         &[],
     );
     dispatches.answer_with(&[401]);
+    let caller = identity("alice");
+    // The external backend's per-caller slot, as the mixed-backend case seeds it.
+    meta.seed_caller_slot_for_test("partner", &caller).await;
 
-    let result = Box::pin(execute(&meta, "partner", Some(&identity("alice"))))
+    let result = Box::pin(execute(&meta, "partner", Some(&caller)))
         .await
         .expect("a non-managed 401 stays a tool result");
     assert_eq!(
@@ -122,8 +125,10 @@ async fn rate_limited_429_is_still_retried() {
         &[],
     );
     dispatches.answer_with(&[429]);
+    let caller = identity("alice");
+    meta.seed_caller_slot_for_test("partner", &caller).await;
 
-    Box::pin(execute(&meta, "partner", Some(&identity("alice"))))
+    Box::pin(execute(&meta, "partner", Some(&caller)))
         .await
         .expect("the retry after a 429 succeeds");
     assert_eq!(dispatches.count(), 2, "a 429 is retried once, then succeeds");
