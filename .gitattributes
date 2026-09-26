@@ -1,6 +1,0 @@
-# Capability YAML is checked out with LF on every platform. Two starter files
-# are embedded into the binary with include_str! (src/commands/mod.rs), so a
-# Windows build from a CRLF checkout would ship them with CRLF bytes. The pin
-# hash reads CRLF as LF either way (src/capability/hash.rs); this keeps the
-# embedded bytes identical across release targets.
-capabilities/**/*.yaml text eol=lf

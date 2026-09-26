@@ -37,8 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Capability pins survive CRLF line endings.** The `sha256:` pin now reads CRLF as LF, so
   a pinned capability that a Windows checkout or editor converted to CRLF is no longer
   refused as tampered. A lone CR still changes the hash. Capability YAML is checked out
-  with LF on every platform (`.gitattributes`), so the Windows binary embeds the same
-  starter capabilities as the others. A pin made over CRLF bytes must be re-made: see
+  with LF on every platform (`capabilities/.gitattributes`), so the Windows binary embeds
+  the same starter capabilities as the others. A pin made over CRLF bytes must be re-made: see
   UPGRADING-4.0 item 60. (#524)
 - **`doctor` finds stdio commands on Windows.** It split `PATH` on `:`, which takes
   `C:\...` apart, so it reported every stdio backend's command missing. It now uses the

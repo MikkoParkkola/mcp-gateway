@@ -641,7 +641,7 @@ mod admin_credential_tests {
     use super::{InitProfile, build_init_config, generate_admin_token};
 
     /// The starter capabilities are embedded at build time, so a CRLF checkout
-    /// would ship CRLF bytes in that target's binary. `.gitattributes` keeps
+    /// would ship CRLF bytes in that target's binary. `capabilities/.gitattributes` keeps
     /// them LF; this goes red on the Windows job if that rule is lost.
     #[test]
     fn the_embedded_starter_capabilities_are_lf_only() {
