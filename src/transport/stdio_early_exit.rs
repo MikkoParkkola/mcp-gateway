@@ -124,7 +124,7 @@ impl StdioTransport {
     ///
     /// For the gateway log and `doctor`, never for an MCP client.
     #[must_use]
-    pub(crate) fn start_failure_excerpt(&self) -> Option<String> {
+    pub fn start_failure_excerpt(&self) -> Option<String> {
         self.start.failure.lock().clone()
     }
 
@@ -137,7 +137,10 @@ impl StdioTransport {
         let Some(mut eof) = self.start.eof.lock().clone() else {
             return self.request("initialize", Some(params)).await;
         };
-        tokio::select! {
+        // `wait_for` reads the current value first, so the clone sees an EOF
+        // the select arm already saw.
+        let mut after_error = eof.clone();
+        let response = tokio::select! {
             // A reply read before EOF has resolved its request already, so the
             // request wins a tie: a child that answered and then exited has
             // still answered.
@@ -145,9 +148,24 @@ impl StdioTransport {
             response = self.request("initialize", Some(params)) => response,
             _ = eof.wait_for(|closed| *closed) => {
                 self.start.exited.store(true, std::sync::atomic::Ordering::SeqCst);
-                Err(Error::Transport("stdout closed before initialize".to_string()))
+                return Err(Error::Transport("stdout closed before initialize".to_string()));
             }
+        };
+        // A child that died before reading fails the write (EPIPE) before its
+        // stdout closes; stdout closing within the drain window makes that the
+        // same early exit. Awaited after the select, whose watch futures are
+        // not `Send`, and `matches!` drops the guard at once.
+        if response.is_err()
+            && matches!(
+                tokio::time::timeout(DRAIN, after_error.wait_for(|closed| *closed)).await,
+                Ok(Ok(_))
+            )
+        {
+            self.start
+                .exited
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
+        response
     }
 
     /// Turn an early exit into its report: the exit status for the caller,

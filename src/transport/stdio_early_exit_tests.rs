@@ -58,6 +58,23 @@ async fn t1_an_early_exit_reports_its_status_and_keeps_its_stderr_off_the_error(
     }
 }
 
+/// T1b: a child that closed its stdin first fails the `initialize` write
+/// (EPIPE) before its stdout closes. That is the same early exit, not a
+/// transport error.
+#[tokio::test]
+async fn t1b_a_failed_initialize_write_is_still_an_early_exit() {
+    // Which side fails first is a race, so run it enough times to take the
+    // write-fails side (it did on the first CI-shaped run).
+    for _ in 0..10 {
+        let t = transport("exec 0<&-; echo \"write-race-canary\" >&2; exit 4", &[]);
+        let err = start_err(&t).await;
+        assert!(err.contains("exited before initialize"), "{err}");
+        assert!(err.contains("exit status: 4"), "{err}");
+        let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+        assert!(excerpt.contains("write-race-canary"), "{excerpt}");
+    }
+}
+
 /// T2: the excerpt is bounded in lines, line length and bytes, and is the tail.
 #[tokio::test]
 async fn t2_the_excerpt_is_the_bounded_tail() {
