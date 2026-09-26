@@ -24,9 +24,39 @@ use tracing::{error, info};
 // These modules live in the binary-only `commands/` tree and are not part of
 // the library crate, so they are imported directly here.
 
-#[tokio::main]
+/// Stack for the thread that runs the async main body.
+///
+/// Clap's derived parser needs about 900 KB of stack in an unoptimized build
+/// (the generated `augment_subcommands` frames alone are ~650 KB), which is
+/// over the 1 MiB Windows gives a process's main thread. 8 MiB is the Linux
+/// default, so every platform gets the stack CI already exercises.
+const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() -> ExitCode {
+    on_main_stack(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("build the tokio runtime")
+            .block_on(run())
+    })
+}
+
+/// Run `body` on a thread with [`MAIN_STACK_BYTES`] of stack and return its
+/// value. A panic in `body` is re-raised on the caller (the thread already
+/// printed it), so the exit status stays a panic's.
+fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(MAIN_STACK_BYTES)
+        .spawn(body)
+        .expect("spawn the main runtime thread")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+}
+
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
-async fn main() -> ExitCode {
+async fn run() -> ExitCode {
     let cli = Cli::parse();
 
     if let Err(e) = setup_tracing(&cli.log_level, cli.log_format.as_deref()) {
