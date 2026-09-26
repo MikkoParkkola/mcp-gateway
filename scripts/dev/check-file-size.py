@@ -34,7 +34,7 @@ DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$")
 # Built-in attributes that carry no code. A macro attribute above a `mod` could
 # expand to anything, so it counts, and so does `cfg_attr`, which can apply one.
 INERT_ATTRIBUTE = re.compile(
-    r"^\s*#\[\s*(cfg|path|allow|expect|warn|deny|doc|deprecated|rustfmt::skip)"
+    r"^\s*#\[\s*(cfg|cfg_attr|path|allow|expect|warn|deny|doc|deprecated|rustfmt::skip)"
     r"\b.*\]\s*$"
 )
 
