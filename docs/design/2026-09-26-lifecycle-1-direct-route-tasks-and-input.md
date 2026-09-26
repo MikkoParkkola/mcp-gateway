@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 7. Six review rounds; round 6: two SHIP-WITH-FIXES (one shared finding). Every finding is
-dispositioned in §7-§12. Revision 7 needs a delta review before code.
+Status: REVISION 8. Seven review rounds; round 7: one SHIP-WITH-FIXES (LOW only), one seat produced no verdict. Every finding is
+dispositioned in §7-§13. Revision 8 needs a delta review before code.
 
 ## 1. Problem
 
@@ -146,14 +146,21 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    (`src/gateway/task_service/service.rs:197`) and the only spawn is create-only
    (`commit_and_run`, `worker.rs:29-56`, from `execution.rs:188`). A second entry,
    `resume_and_run`, follows the create protocol (`execution.rs:370-390`): a worker permit is
-   TRY-acquired (`workers.try_acquire_owned`) BEFORE the `input_required -> working` CAS; with
-   no permit the update is refused (`-32603`, message "task worker pool is full, retry",
-   distinct from the store-outage text create uses at `execution.rs:86`) and the task stays
-   `input_required` with its answers unapplied. Ownership is EXCLUSIVE: a new
-   `Handoff::try_accept` inserts only when no owner exists for the id (compare-and-insert;
+   TRY-acquired (`workers.try_acquire_owned`) INSIDE the same store write as the
+   `input_required -> working` CAS (one acquisition, never two); with no permit the write
+   returns the existing `Capacity` outcome, which the resume path maps to `-32603` with the
+   message "task worker pool is full, retry" (distinct from the store-outage text create uses
+   at `execution.rs:86`) and the task stays
+   `input_required` with its answers unapplied. Ownership is EXCLUSIVE: `Handoff::try_accept`
+   becomes the ONLY constructor (the overwriting `insert` is deleted; `begin()` uses
+   `try_accept` too, which always succeeds for a fresh id) and inserts only when no owner
+   exists for the id (compare-and-insert;
    today's `insert` at `observe.rs:73` overwrites, and `release` at `:116` removes by id, so two
    racing acceptors would orphan the winner). The order is: `try_accept` (a second concurrent
-   completing update finds an owner and gets `-32602`, touching nothing of the winner's), then
+   completing update finds an owner and gets `-32602`, touching nothing of the winner's; if the
+   owner found is the PRODUCING worker still unwinding after it committed `input_required`,
+   `try_accept` waits on the registry's existing `released` signal (`observe.rs:105`) for at
+   most 1 s before refusing, so an update arriving the instant the row becomes visible succeeds), then
    ONE store write that takes the permit through the same try-acquire closure create uses
    (`execution.rs:370-390`) and performs the `input_required -> working` CAS together, then the
    spawn. If that write loses (a cancel already settled the row) the handoff and any permit are
@@ -234,11 +241,12 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | resume carries the answers | two partial updates, then resume: backend receives both answers in `inputResponses` | accepted answers not persisted, or resume omits `inputResponses` |
 | cancel races resume | cancel arrives between CAS and spawn: task `cancelled`, no backend call | handoff registered after the CAS |
 | racing completing updates | two concurrent completing updates: one resume, the other `-32602`, cancel still reaches the one worker | overwrite-on-insert handoff |
+| produce-seam update | a completing update sent the instant `input_required` is visible (producer still holding its handoff): succeeds | no wait on `released` |
 | answers over the cap | an answer pushing `accepted_inputs` past the byte cap: refused, nothing written | cap check removed |
 | expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
 | cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
 | resume uses the caller of the update | policy for the updating caller denies the tool: resume refused | resume built from stored caller context |
-| resume refused when the pool is full | full worker pool: update refused with `Capacity`, task still `input_required`, answers unapplied | CAS before permit acquisition |
+| resume refused when the pool is full | full worker pool: update refused with `-32603` "task worker pool is full, retry" (the `Capacity` outcome), task still `input_required`, answers unapplied | CAS before permit acquisition |
 | state-only loop keeps one owner | a state-only round while cancel is raised: the one worker aborts; no second Handoff | state-only round spawns a new worker |
 
 ## 6. Answers to the review questions
@@ -336,3 +344,13 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | producing worker drops handoff and permit on RequireInput | improvement | - | ADOPTED: §4.1 a |
 | bound `accepted_inputs` | improvement | - | ADOPTED: byte cap; test row |
 | partial-answer revision race | improvement | - | ADOPTED: partial updates are transactional, no CAS |
+
+## 13. Round 7 dispositions (one SHIP-WITH-FIXES with LOW findings; the second seat was killed before a verdict and is re-run on revision 8)
+
+| finding | sev | check at source | disposition |
+|---|---|---|---|
+| exclusive handoff opens a produce-seam refusal window | LOW | - | ADOPTED: bounded wait on `released` (observe.rs:105); test row |
+| permit wording contradicts the one-write disposition | LOW | - | ADOPTED: §4.3 one acquisition inside the write |
+| delete the overwriting `insert` | improvement | observe.rs:73 | ADOPTED: `try_accept` is the only constructor |
+| produce-seam test row | improvement | - | ADOPTED |
+| reconcile pool-full naming | improvement | - | ADOPTED: `Capacity` maps to `-32603` with the stated text |
