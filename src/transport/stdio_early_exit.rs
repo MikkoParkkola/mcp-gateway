@@ -144,7 +144,6 @@ impl StdioTransport {
             // A reply read before EOF has resolved its request already, so the
             // request wins a tie: a child that answered and then exited has
             // still answered.
-            biased;
             response = self.request("initialize", Some(params)) => response,
             _ = eof.wait_for(|closed| *closed) => {
                 self.start.exited.store(true, std::sync::atomic::Ordering::SeqCst);
