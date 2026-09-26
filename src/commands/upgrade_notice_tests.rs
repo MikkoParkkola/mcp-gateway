@@ -139,6 +139,7 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (47, "ws_url"),
     (45, "circuit breaker is open"),
     (58, "minted by the gateway"),
+    (59, "lists the backend"),
 ];
 
 /// The item numbers the guide says the first start prints: the list after

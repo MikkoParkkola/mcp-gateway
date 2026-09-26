@@ -204,7 +204,11 @@ async fn invoke_miss(meta: &MetaMcp, session: Option<&str>, tool: &str) -> Strin
         Err(err) => err.to_string(),
     };
     assert!(
-        body.contains(UPSTREAM_REFUSAL) || body.contains("not found on server"),
+        // F13: under `closed` a name the primed list lacks is refused before
+        // dispatch with text A, which carries the same scoped hint.
+        body.contains(UPSTREAM_REFUSAL)
+            || body.contains("not found on server")
+            || body.contains(&crate::backend::text_absent(tool)),
         "premise: this probe must actually reach the suggestion path, or the \
          absence assertion is about a response that was never built: {body}"
     );
