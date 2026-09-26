@@ -30,6 +30,7 @@ use tracing::{error, info};
 /// (the generated `augment_subcommands` frames alone are ~650 KB), which is
 /// over the 1 MiB Windows gives a process's main thread. 8 MiB is the Linux
 /// default, so every platform gets the stack CI already exercises.
+#[allow(dead_code)] // mutant: the size is unused
 const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
