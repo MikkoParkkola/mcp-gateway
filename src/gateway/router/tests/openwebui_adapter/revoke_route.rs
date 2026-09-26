@@ -121,7 +121,7 @@ async fn gateway_with(
         enabled: true,
         path: dir.path().join("audit.ndjson").display().to_string(),
         key_id: "fixture".into(),
-        shared_secret: String::new(),
+        ..crate::security::transparency_log::TransparencyLogConfig::default()
     };
     let logger = crate::security::TransparencyLogger::open(Arc::new(log)).unwrap();
     {

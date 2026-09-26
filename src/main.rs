@@ -312,97 +312,120 @@ fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBu
     })
 }
 
-/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
-fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{show_session_entries, verify_log_signed};
-
+/// `audit verify`: every segment of the log, live or archive mode (D6).
+fn run_audit_verify(
+    log_path: &std::path::Path,
+    archive: bool,
+    config_path: Option<&std::path::Path>,
+) -> ExitCode {
+    use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
     let resolve_log_config = resolve_audit_log_config;
-    let resolve_path = resolve_audit_log_path;
-
-    match cmd {
-        AuditCommand::Verify { path } => {
-            let log_path = resolve_path(path);
-            if !log_path.exists() {
+    let verify_mode = if archive {
+        VerifyMode::Archive
+    } else {
+        VerifyMode::Live
+    };
+    let log_config = match resolve_log_config(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            // Fail closed: a config we cannot load must NOT downgrade to
+            // hash-only and report success (MIK-6700 review finding #2).
+            eprintln!(
+                "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let signed = !log_config.shared_secret.is_empty();
+    // Fail closed on the root danger: a log that WAS signed, verified
+    // without a secret, would silently degrade to hash-only and pass a
+    // stale-sig forgery with exit 0 — regardless of why the secret is
+    // absent (no config discovered, wrong config, unset env).
+    // (MIK-6700 review finding #2, residual no-config path.)
+    if !signed {
+        match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
+            Ok(true) => {
                 eprintln!(
-                    "Error: transparency log not found at {}",
+                    "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
                     log_path.display()
                 );
                 return ExitCode::FAILURE;
             }
-            let log_config = match resolve_log_config(config_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    // Fail closed: a config we cannot load must NOT downgrade to
-                    // hash-only and report success (MIK-6700 review finding #2).
-                    eprintln!(
-                        "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
-                    );
-                    return ExitCode::FAILURE;
-                }
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("Error reading log: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    match verify_audit_log(log_path, &log_config, verify_mode) {
+        // Neither the log nor any sealed segment exists (D6: sealed segments
+        // alone are still a log to verify).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "Error: transparency log not found at {}",
+                log_path.display()
+            );
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("Error reading log: {e}");
+            ExitCode::FAILURE
+        }
+        Ok(result) if result.ok => {
+            let mode = if signed {
+                "hash chain + per-entry HMAC"
+            } else {
+                "hash chain (no secret configured; HMAC not checked)"
             };
-            let signed = !log_config.shared_secret.is_empty();
-            // Fail closed on the root danger: a log that WAS signed, verified
-            // without a secret, would silently degrade to hash-only and pass a
-            // stale-sig forgery with exit 0 — regardless of why the secret is
-            // absent (no config discovered, wrong config, unset env).
-            // (MIK-6700 review finding #2, residual no-config path.)
-            if !signed {
-                match mcp_gateway::security::transparency_log::log_contains_signed_entry(&log_path)
-                {
-                    Ok(true) => {
-                        eprintln!(
-                            "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
-                            log_path.display()
-                        );
-                        return ExitCode::FAILURE;
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        eprintln!("Error reading log: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
+            let scope = match verify_mode {
+                VerifyMode::Live => "live log",
+                VerifyMode::Archive => "archive copy; tail completeness not checked",
+            };
+            println!(
+                "✓ Chain verified ({mode}; {scope}) — {} entries checked across {} \
+                 segments, {} expired by retention, no tampering detected.",
+                result.entries_checked, result.segments_checked, result.segments_expired
+            );
+            for warning in &result.warnings {
+                eprintln!("warning: {warning}");
             }
-            match verify_log_signed(&log_path, &log_config) {
-                Err(e) => {
-                    eprintln!("Error reading log: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(result) if result.ok => {
-                    let mode = if signed {
-                        "hash chain + per-entry HMAC"
-                    } else {
-                        "hash chain (no secret configured; HMAC not checked)"
-                    };
-                    println!(
-                        "✓ Chain verified ({mode}) — {} entries checked, no tampering detected.",
-                        result.entries_checked
-                    );
-                    ExitCode::SUCCESS
-                }
-                Ok(result) => {
-                    let at = result
-                        .error_at_counter
-                        .map_or_else(|| "?".to_string(), |n| n.to_string());
-                    let msg = result
-                        .error_message
-                        .unwrap_or_else(|| "unknown error".to_string());
-                    eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
-                    ExitCode::FAILURE
-                }
-            }
+            ExitCode::SUCCESS
+        }
+        Ok(result) => {
+            let at = result
+                .error_at_counter
+                .map_or_else(|| "?".to_string(), |n| n.to_string());
+            let msg = result
+                .error_message
+                .unwrap_or_else(|| "unknown error".to_string());
+            eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
+fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
+    use mcp_gateway::security::transparency_log::show_session_entries;
+
+    let resolve_path = resolve_audit_log_path;
+
+    match cmd {
+        AuditCommand::Verify { path, archive } => {
+            run_audit_verify(&resolve_path(path), archive, config_path)
         }
 
         AuditCommand::Show { session, path } => {
             let log_path = resolve_path(path);
-            if !log_path.exists() {
-                eprintln!(
-                    "Error: transparency log not found at {}",
-                    log_path.display()
-                );
-                return ExitCode::FAILURE;
-            }
             match show_session_entries(&log_path, &session) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "Error: transparency log not found at {}",
+                        log_path.display()
+                    );
+                    ExitCode::FAILURE
+                }
                 Err(e) => {
                     eprintln!("Error reading log: {e}");
                     ExitCode::FAILURE
