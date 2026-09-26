@@ -387,6 +387,27 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
+    /// A11-g: a typed credential refusal is never retried by a chain step,
+    /// while a typed 429 still is.
+    fn typed_status(status: u16) -> Error {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        Error::Http(
+            reqwest::Response::from(response)
+                .error_for_status()
+                .expect_err("a fixture status is non-2xx"),
+        )
+    }
+
+    #[test]
+    fn a_typed_credential_refusal_is_not_retried_but_429_is() {
+        assert!(!is_retryable(&typed_status(401)));
+        assert!(!is_retryable(&typed_status(403)));
+        assert!(is_retryable(&typed_status(429)));
+    }
+
     #[test]
     fn is_retryable_classifies_correctly() {
         // GIVEN various error types
