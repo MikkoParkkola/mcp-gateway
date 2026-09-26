@@ -12,6 +12,21 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
+/// Who may resume a streaming session.
+///
+/// `Credential` carries the validated principal exactly, so ownership equality
+/// is exact. Every caller without one is `Anonymous`, whatever name it carries:
+/// an unvalidated name is not a credential.
+///
+/// Invariant: no operation may select sessions by owner alone when the owner is
+/// `Anonymous`, because that owner spans every anonymous session. Anonymous
+/// sessions are kept apart by their minted ids, the map key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionOwner {
+    Credential(String),
+    Anonymous,
+}
+
 /// A log-safe stand-in for a session id: the first 8 hex characters of its
 /// SHA-256.
 ///
