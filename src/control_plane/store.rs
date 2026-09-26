@@ -629,7 +629,7 @@ impl FileControlPlaneStore {
         match crate::config::read_checked_file(file, what) {
             Ok(text) => serde_json::from_str(&text)
                 .map_err(|e| StoreError::Corrupt(format!("{}: {e}", file.display()))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(VersionedCollection {
+            Err(e) if false && e.kind() == std::io::ErrorKind::NotFound => Ok(VersionedCollection {
                 schema_version: COLLECTION_SCHEMA_VERSION,
                 generation: 0,
                 items: Vec::new(),
