@@ -64,7 +64,7 @@ impl Failsafe {
         telemetry_metrics::gauge!("mcp_backend_circuit_state", "backend" => backend.to_string())
             .set(if closed { 1.0_f64 } else { 0.0_f64 });
         if !closed {
-            return Err(crate::Error::CircuitOpen(backend.to_string()));
+            return Err(crate::Error::circuit_open(backend, &self.circuit_breaker));
         }
         if !self.rate_limiter.try_acquire() {
             return Err(crate::Error::RateLimited(backend.to_string()));
@@ -150,7 +150,7 @@ mod tests {
         failsafe.record_failure("boom", latency);
 
         assert!(
-            matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen(_))),
+            matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen { .. })),
             "the circuit must be open: a throttle is not evidence the backend recovered"
         );
     }

@@ -248,15 +248,9 @@ pub fn resolve_transport(
     }
 
     // Explicit URL.
-    if let Some(http_url) = url {
-        return Ok((
-            TransportConfig::Http {
-                http_url: http_url.to_string(),
-                streamable_http: false,
-                protocol_version: None,
-            },
-            desc.unwrap_or("").to_string(),
-        ));
+    if let Some(url) = url {
+        let transport = TransportConfig::for_url(url);
+        return Ok((transport, desc.unwrap_or("").to_string()));
     }
 
     // Registry lookup.
@@ -353,6 +347,11 @@ fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
             "http".to_string(),
             None,
             Some(sanitize_backend_url(http_url)),
+        ),
+        TransportConfig::WebSocket { ws_url, .. } => (
+            "websocket".to_string(),
+            None,
+            Some(sanitize_backend_url(ws_url)),
         ),
         #[cfg(feature = "a2a")]
         TransportConfig::A2a { a2a_url, .. } => {
@@ -456,9 +455,7 @@ mod tests {
         assert!(b.enabled);
         match &b.transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
-            TransportConfig::Http { .. } => panic!("expected Stdio"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Stdio"),
+            other => panic!("expected Stdio, got {other:?}"),
         }
     }
 
@@ -611,9 +608,7 @@ mod tests {
             TransportConfig::Http { http_url, .. } => {
                 assert_eq!(http_url, "http://localhost:9000");
             }
-            TransportConfig::Stdio { .. } => panic!("expected Http after update"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Http after update"),
+            other => panic!("expected Http after update, got {other:?}"),
         }
     }
 
@@ -727,9 +722,7 @@ mod tests {
         let (transport, _) = resolve_transport("tavily", Some("my-cmd"), None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "my-cmd"),
-            TransportConfig::Http { .. } => panic!("expected Stdio"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Stdio"),
+            other => panic!("expected Stdio, got {other:?}"),
         }
     }
 
@@ -739,9 +732,7 @@ mod tests {
             resolve_transport("custom", None, Some("http://localhost:9000"), None).unwrap();
         match transport {
             TransportConfig::Http { http_url, .. } => assert_eq!(http_url, "http://localhost:9000"),
-            TransportConfig::Stdio { .. } => panic!("expected Http"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Http"),
+            other => panic!("expected Http, got {other:?}"),
         }
     }
 
@@ -752,9 +743,7 @@ mod tests {
             TransportConfig::Stdio { command, .. } => {
                 assert!(command.contains("tavily"));
             }
-            TransportConfig::Http { .. } => panic!("expected Stdio for tavily"),
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { .. } => panic!("expected Stdio for tavily"),
+            other => panic!("expected Stdio for tavily, got {other:?}"),
         }
         assert!(!description.is_empty());
     }

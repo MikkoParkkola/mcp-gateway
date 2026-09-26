@@ -525,6 +525,10 @@ fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
                 mcp_gateway::security::diagnostic_url(http_url)
             );
         }
+        mcp_gateway::config::TransportConfig::WebSocket { ws_url, .. } => {
+            println!("   Transport: websocket");
+            println!("   URL: {}", mcp_gateway::security::diagnostic_url(ws_url));
+        }
         #[cfg(feature = "a2a")]
         mcp_gateway::config::TransportConfig::A2a { a2a_url, .. } => {
             println!("   Transport: a2a");

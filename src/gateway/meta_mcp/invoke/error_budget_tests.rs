@@ -423,7 +423,10 @@ fn a_gateway_rate_limit_refusal_is_ignored_and_an_open_breaker_is_a_failure() {
         BudgetOutcome::IgnoredRateLimit
     );
     assert_eq!(
-        BudgetOutcome::of(&Err::<Value, _>(Error::CircuitOpen("srv".into()))),
+        BudgetOutcome::of(&Err::<Value, _>(Error::CircuitOpen {
+            backend: "srv".into(),
+            last_failure: None,
+        })),
         BudgetOutcome::Failure
     );
     // The recovery category is RateLimited, not CircuitBreakerTrip.

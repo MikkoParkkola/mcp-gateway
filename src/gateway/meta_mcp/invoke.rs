@@ -3969,9 +3969,19 @@ impl MetaMcp {
 /// string suitable for embedding in a [`RecoveryHint`].
 fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
     match error {
-        Error::CircuitOpen(backend) => (
+        Error::CircuitOpen {
+            backend,
+            last_failure,
+        } => (
             ErrorCategory::CircuitBreakerTrip,
-            format!("Circuit breaker is open for backend '{backend}'"),
+            match last_failure {
+                Some(reason) => {
+                    format!(
+                        "Circuit breaker is open for backend '{backend}'; last failure: {reason}"
+                    )
+                }
+                None => format!("Circuit breaker is open for backend '{backend}'"),
+            },
         ),
         Error::RateLimited(_) => (ErrorCategory::RateLimited, error.to_string()),
         Error::BackendNotFound(name) | Error::ToolNotFound(name) => {
@@ -6038,3 +6048,6 @@ mod identity_propagation_enforcement_tests {
 
 #[cfg(test)]
 mod error_budget_tests;
+
+#[cfg(test)]
+mod circuit_open_hint_tests;

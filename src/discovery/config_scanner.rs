@@ -255,11 +255,7 @@ impl ConfigScanner {
                     name: name.clone(),
                     description: format!("MCP server from environment variable {key}"),
                     source: DiscoverySource::Environment,
-                    transport: TransportConfig::Http {
-                        http_url: value,
-                        streamable_http: false,
-                        protocol_version: None,
-                    },
+                    transport: TransportConfig::for_url(&value),
                     metadata: ServerMetadata {
                         config_path: None,
                         pid: None,
@@ -387,11 +383,7 @@ impl ConfigScanner {
                 name: name.to_string(),
                 description: format!("MCP server from {source:?}"),
                 source: source.clone(),
-                transport: TransportConfig::Http {
-                    http_url: url.to_string(),
-                    streamable_http: false,
-                    protocol_version: None,
-                },
+                transport: TransportConfig::for_url(url),
                 metadata: ServerMetadata {
                     config_path: Some(config_path.to_path_buf()),
                     pid: None,
@@ -795,3 +787,7 @@ mod tests {
         assert!(std::env::var("MCP_SERVER_ROTATED_URL").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "config_scanner_ws_tests.rs"]
+mod ws_tests;

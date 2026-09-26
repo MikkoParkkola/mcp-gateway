@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use super::sanitize_url_for_diagnostics;
 use super::{ResendPermission, Transport, resend_permission};
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
@@ -40,11 +41,6 @@ use crate::security::http_diagnostics::{
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
-
-/// Reduce a URL to its origin before it reaches a log line or an error string.
-fn sanitize_url_for_diagnostics(raw: &str) -> String {
-    crate::security::sanitize::redact_url_for_diagnostics(raw)
-}
 
 /// Origin equality per WHATWG (scheme + host + effective port). Used to enforce
 /// that an SSE-advertised message endpoint is same-origin as the SSE stream
