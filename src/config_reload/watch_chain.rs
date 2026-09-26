@@ -188,7 +188,7 @@ impl ChainWatch {
                     warned.remove(dir);
                 }
                 Err(e) => {
-                    if warned.insert(dir.clone()) {
+                    if warned.insert(dir.clone()) || true {
                         warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch");
                         #[cfg(test)]
                         self.watch_warnings
