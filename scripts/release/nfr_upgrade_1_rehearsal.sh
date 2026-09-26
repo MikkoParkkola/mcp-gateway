@@ -19,7 +19,9 @@
 # than aborting on the first non-zero exit (a refused-request curl or a
 # refused-protocol-version response is an expected outcome in some phases,
 # not a script bug). Fatal setup problems (missing binary, busy port, a
-# gateway that never opens its port) still call `exit 1` explicitly.
+# gateway that never opens its port) still call `exit 1` explicitly, and the
+# script exits 1 at the end when any recorded check is FAIL, so CI can gate
+# on the exit status (the ci.yml `upgrade-rehearsal` job).
 set -uo pipefail
 # 4.0 refuses a config or env file other users can read (UPGRADING-4.0 item 35),
 # so every file this rehearsal writes is owner-only, as the documented step asks.
@@ -446,3 +448,11 @@ fi
 
 echo "== done. Results: $RESULTS_JSON =="
 echo "Logs: $LOG_DIR"
+FAILED=0
+for r in "${RESULTS[@]}"; do
+  [[ "$r" == *'"status":"PASS"'* ]] || FAILED=$((FAILED + 1))
+done
+echo "${#RESULTS[@]} checks, $FAILED failed"
+if (( FAILED > 0 )); then
+  exit 1
+fi
