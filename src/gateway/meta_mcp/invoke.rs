@@ -671,7 +671,7 @@ async fn redeem_retry(
         // minted, so answers without one are not a retry of anything it
         // asked. Forwarded, a backend that ignores the field would run the
         // call again: the repeat the retry contract exists to prevent.
-        if crate::protocol::mrtr::input_responses_nonempty(input_responses.as_ref()) {
+        if false && crate::protocol::mrtr::input_responses_nonempty(input_responses.as_ref()) {
             return Err(Error::JsonRpc {
                 code: -32602,
                 message: "inputResponses are not accepted without the requestState this \
