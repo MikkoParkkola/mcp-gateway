@@ -1,6 +1,6 @@
 # Windows owner-only stores: test plan
 
-Status: DRAFT for two-seat review. Design: `2026-09-26-windows-owner-only-stores.md`
+Status: REVISION 2 after test-plan review round 1 (both seats SHIP-WITH-FIXES). Design: `2026-09-26-windows-owner-only-stores.md`
 (reviewed, SHIP x2). Code, probes and the red commit wait for the ADR-016 decision.
 
 ## 1. What the plan asserts against
@@ -56,9 +56,10 @@ item 2 is complete).
 
 | Id | Test fn | Setup | Assert | Red reason (stubs) |
 |---|---|---|---|---|
-| W-T1 | `created_objects_carry_only_the_user_ace` | init a personal-account store and a task store in a temp dir | for each store dir, `authority.json`, a record, `journeys.json`, a task record, both lock sidecars: `(Get-Acl).Sddl` == `O:<sid>D:P(A;OICI;FA;;;<sid>)` for dirs, `O:<sid>D:P(A;;FA;;;<sid>)` for files | SDDL shows inherited ACEs (`AI`, no `P`): string mismatch |
+| W-T1 | `created_objects_carry_only_the_user_ace` | init a personal-account store and a task store in a test-owned tree | for each store dir, `authority.json`, a record, `journeys.json`, a task record, both lock sidecars: PowerShell `(Get-Acl p).GetSecurityDescriptorSddlForm('Owner, Access')` == `O:<sid>D:P(A;OICI;FA;;;<sid>)` for dirs, `O:<sid>D:P(A;;FA;;;<sid>)` for files (group section excluded: Windows supplies it) | SDDL shows inherited ACEs (no `P`): string mismatch |
+| W-T1b | `objects_are_private_at_the_instant_of_creation` | `cfg(test)` fault boundary `AfterCreate` fires immediately after each `create_*_private` returns, before any other call; the hook runs the W-T1 PowerShell read | same literal SDDL at that instant | permissive stub creates with inherited DACL: mismatch |
 | W-T2 | `foreign_ace_on_store_dir_refuses` | init, close, `icacls d /grant *S-1-1-0:R` | reopen refuses, reason `ForeignSid(S-1-1-0)` | stub accepts: reopen succeeds |
-| W-T3 | `inherited_ace_on_store_dir_refuses` | init, close, `icacls d /inheritance:e` | reason `NotProtected` | accepts |
+| W-T3 | `inherited_ace_on_store_dir_refuses` | store under a test-created parent whose inheritable DACL grants ONLY the current user (so inheritance adds no foreign SID); close; `icacls d /inheritance:e` | reason `NotProtected` (P2 cannot fail by construction) | accepts |
 | W-T4 | `foreign_ace_on_each_file_refuses` | table-driven over the six file kinds of W-T1; grant Everyone on one | the operation reading that file refuses with `ForeignSid` (authority on open, record on lookup, journeys on first journey op, task record on load, lease/sidecar on custody) | accepts |
 | W-T5 | `junction_in_store_path_refuses` | `mklink /J C:\t\j C:\t\real`; configure store under `C:\t\j\store` | config/open refuses, reason `ReparsePoint` | accepts |
 | W-T6 | `symlink_record_refuses` | `mklink` a record name to a private file; skip with logged reason if `mklink` lacks privilege | lookup refuses `ReparsePoint` | accepts |
@@ -71,12 +72,31 @@ item 2 is complete).
 | W-T11 | `foreign_owner_refuses` | `icacls f /setowner *S-1-5-32-544` on `authority.json` | reason `ForeignOwner` | accepts |
 | W-T12 | `mapped_network_drive_refuses` (ignored; CI step) | `net use X: \\localhost\C$`; store under `X:\t` | `volume_is_local(X:\t handle) == false` asserted directly; store open refuses | stub returns `true` |
 | W-T13 | `moved_in_unprotected_file_refuses` | in a non-store dir, SDDL `O:<sid>D:(A;;FA;;;<sid>)` (one user ACE, NOT protected); rename into the store as a valid record name, point the manifest at it via the existing `revoke_fixture` helpers | reason `NotProtected` only | accepts |
-| W-T14 | `second_user_cannot_read` (ignored; CI step) | CI step: `net user mgw-probe <random> /add`; test creates stores, then `Start-Process -Credential` runs `powershell Get-Content` on `authority.json`, a record, a task record | all three exit non-zero with "Access is denied"; control: the same command as the test user succeeds | stub creates with inherited DACL: second user can read (runner temp dirs grant `Users` read) |
-| W-T15 | `fat32_volume_refuses` (ignored; CI step) | CI step: `diskpart` create+attach a 64 MB VHD, format FAT32, letter `F:` | `volume_is_local(F:\t)` false (asserted directly); store open refuses | stub `true` |
-| W-T16a | `held_directory_blocks_its_own_rename` | `private_fs::hold_dir(store)` ALONE, no files open; `fs::rename(store, store2)`; replace with junction | both `Err` with raw OS error 32 (sharing violation) | stub hold opens with std default sharing (includes delete): rename succeeds |
+| W-T14 | `second_user_cannot_read` (ignored; CI step) | CI step: `net user mgw-probe <random> /add`; the test creates `C:\mgwt\<run>` and grants `Users` read+list on it with inheritance (`icacls /grant *S-1-5-32-545:(OI)(CI)RX`), writes a plain CONTROL file there, then creates both stores inside it; `Start-Process -Credential` runs `Get-Content` as `mgw-probe` | control file IS read by `mgw-probe` (proves the identity, the process launch and the parent ACL work); `authority.json`, a record and a task record all fail with "Access is denied", so denial can only come from the objects' own DACLs | permissive stub inherits `Users` read from the planted parent: `mgw-probe` reads all three |
+| W-T15 | `fat32_volume_refuses` (ignored; CI step) | CI step: `diskpart` create+attach two 64 MB VHDs, format one FAT32 (`F:`) and one exFAT (`E:`) | on both, `volume_is_local` false (asserted directly); store open refuses | stub `true` |
+| W-T16a | `held_directory_blocks_its_own_rename` | `private_fs::hold_dir(store)` ALONE, no files open; `fs::rename(store, store2)` | rename `Err` with raw OS error 32 and the directory's file id unchanged; then drop the guard and repeat rename + `mklink /J` at the old name: both succeed (control) | stub hold opens with std default sharing (includes delete): the first rename succeeds |
 | W-T16 | `open_store_blocks_ancestor_swap` | store open; rename parent; replace parent with a junction | both fail; a lookup afterwards still returns the committed record | as W-T16a |
-| W-T17 | `reader_closes_before_replace` | barrier: reader thread takes the authority lock, opens a record, signals, drops; writer commits `refresh_tokens` | commit succeeds on attempt 1 (test-only `REPLACE_ATTEMPTS` counter == 1) | stub `replace` is `fs::rename`, which ignores the counter: counter 0 fails the `== 1` assertion |
+| W-T17 | `reader_closes_before_replace` | barrier AFTER the reader releases the authority lock and BEFORE any escaped handle could drop; writer commits `refresh_tokens` at that barrier. Attempts are counted inside `private_fs::replace`, a wrapper shared by stub and production bodies | commit succeeds on attempt 1 | **green-in-red regression guard**: the un-gated read path already closes inside the lock, so this row is expected GREEN in the red run; its proof is M17 (a reader that keeps its handle makes attempt 1 fail), stated here rather than claimed as red |
+| W-T19 | `other_ace_type_refuses` | `Set-Acl` SDDL `O:<sid>D:P(A;;FA;;;<sid>)(XA;;FR;;;WD;(Member_of {SID(BA)}))` (a conditional callback ACE; every other rule passes) | reason `OtherAceType` | accepts |
+| W-T20 | `external_holder_retry_is_bounded` | a thread holds the destination record open (std handle, no delete share). Case A: release after 25 ms; Case B: never release | A: commit succeeds with 2 <= attempts <= 3. B: `StorageUnavailable` after exactly 3 attempts, and a lookup afterwards returns the PREVIOUS committed version (nothing acknowledged) | stub `fs::rename` does not retry or count: A attempts == 1 (std rename may use POSIX semantics and succeed), B commits instead of refusing |
+| W-T21 | `foreign_deny_ace_is_accepted` | SDDL `O:<sid>D:P(D;;FW;;;WD)(A;;FA;;;<sid>)` (a deny for Everyone, the user allow) | store opens and reads normally | **green-in-red regression guard** against over-strict P2; proof is M22 |
 | W-T18 | `path_swap_between_walk_and_open_refuses` | `cfg(test)` fault boundary `AfterPathWalk` replaces ancestor with a junction to another private store of the same user | reason `PathMismatch` | stub `final_path` echoes input: accepts |
+
+Fixture discipline (all plants): after planting, the helper reads the SDDL back with
+PowerShell and asserts it equals the intended literal, and that exactly the rule the
+row names fails, before the store is invoked. A plant that Windows altered (default
+owner, inheritance, `Set-Acl` normalisation) fails as a FIXTURE error, never as a
+misleading refusal reason.
+
+Red-run gate: a CI script compares the red run's failing test names with the list of
+rows marked red above and fails the red PR on any difference, so a row that is
+unexpectedly green (or red) cannot be hand-recorded past.
+
+Existing coverage that now also runs on Windows: size bounds and non-regular-file
+refusals in `src/personal_accounts/store_tests.rs` (`install_bound_fixture` cases) and
+`src/gateway/task_service/store_tests.rs` (`store_04`); unix-mode assertions such as
+`store_06_private_modes_and_unsafe_sources_are_enforced` stay unix-only, and their
+Windows counterparts are W-T1..W-T21.
 
 ## 4. Mutant map (each a throwaway CI PR, Tests-only; the named test must redden)
 
@@ -98,8 +118,12 @@ item 2 is complete).
 | M14 | drop `FILE_PERSISTENT_ACLS` leg | W-T15 |
 | M15 | held dir handle shares delete | W-T16a |
 | M16 | held dir handle without `FILE_LIST_DIRECTORY` | W-T16a |
-| M17 | reader handle outlives the lock | W-T17 |
+| M17 | reader handle outlives the lock (kept until after the barrier) | W-T17 |
 | M18 | skip the final-path comparison | W-T18 |
+| M19 | ignore ACE types other than allow/deny | W-T19 |
+| M20 | create with std, THEN protect (throwaway branch only; adds a `SetSecurityInfo` call) | W-T1b |
+| M21 | no retry on sharing violation / unbounded retry | W-T20 (A, B) |
+| M22 | treat any DENY ACE as foreign | W-T21 |
 
 The ignored CI-step tests (W-T12, W-T14, W-T15) live in module `win_privileged` and run in the mutant PRs too: each mutant PR
 runs the full Windows job including the privileged step.
@@ -136,5 +160,19 @@ runs the full Windows job including the privileged step.
 
 ## 8. Evidence to record
 
-Red run id (throwaway PR), green run id, one run id per mutant M1-M18, before/after
+Red run id (throwaway PR), green run id, one run id per mutant M1-M22, before/after
 unix test counts, the list of residual Windows failures by name.
+
+## 9. Review round 1 dispositions
+
+| Finding | Disposition |
+|---|---|
+| HIGH: W-T14 denial could come from the profile-tree ACL, not the object DACL | Fixed: test-owned tree granting `Users` read, plus a readable control file |
+| HIGH (both seats): `OtherAceType` has no row or mutant | Fixed: W-T19, M19 |
+| HIGH: create-then-protect exposure invisible to post-creation checks | Fixed: W-T1b reads SDDL at an `AfterCreate` boundary; M20 |
+| MEDIUM: W-T1 literal omits the group Windows supplies | Fixed: `GetSecurityDescriptorSddlForm('Owner, Access')` |
+| MEDIUM: W-T3 plant also adds foreign inherited ACEs | Fixed: store under a user-only inheritable parent |
+| MEDIUM (both seats): W-T16a junction leg cannot give error 32 | Fixed: rename leg asserts 32 and unchanged file id; release-then-succeed control |
+| MEDIUM: W-T17 red reason measured missing instrumentation | Fixed: counter in a shared wrapper, barrier before handle drop; row declared a green-in-red regression guard proven by M17 |
+| MEDIUM: bounded retry untested | Fixed: W-T20 (release and persistent cases), M21 |
+| Improvements | Adopted: deny-ACE row W-T21 + M22; exFAT beside FAT32; plant read-back discipline; automated red-run name comparison; existing-coverage map (§3) |
