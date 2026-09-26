@@ -65,6 +65,7 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
         "SYSTEMROOT",
         "COMSPEC",
         "PATHEXT",
+        "USERNAME",
     ] {
         if let Some(value) = std::env::var_os(key) {
             cmd.env(key, value);
