@@ -2047,7 +2047,7 @@ impl MetaMcp {
                     // question, with a sentence naming a side effect nothing
                     // performed.
                     if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.release();
+                        reservation.commit(&serde_json::json!({"mutant": "M3"}));
                     }
                     return Err(error);
                 }
