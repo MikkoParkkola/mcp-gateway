@@ -77,7 +77,7 @@ if ! grep -qF "$TAMPER_FROM" "$TAMPER_SRC"; then
   exit 1
 fi
 tampered="$work/$(basename "$TAMPER_SRC")"
-sed "s|$TAMPER_FROM|$TAMPER_TO|" "$TAMPER_SRC" >"$tampered"
+sed "s|${TAMPER_FROM//./\\.}|$TAMPER_TO|" "$TAMPER_SRC" >"$tampered"
 if cmp -s "$TAMPER_SRC" "$tampered"; then
   echo "FAIL: the tampered copy is byte-identical to $TAMPER_SRC"
   exit 1
