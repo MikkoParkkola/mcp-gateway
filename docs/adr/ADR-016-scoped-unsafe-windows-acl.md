@@ -39,9 +39,11 @@ and `schannel`; the change adds it as a direct Windows-only dependency with the
 `Win32_Storage_FileSystem` and `Win32_System_Threading` features and adds no package to
 the lock file.
 
-The module exports eight safe `pub(crate)` functions and nothing else:
+The module exports nine safe `pub(crate)` functions and nothing else:
 `current_user_sid`, `private_descriptor`, `create_dir_private`, `create_file_private`,
-`inspect`, `replace`, `volume_is_local`, `final_path` (design §2.1). Callers never see a raw handle,
+`inspect`, `replace`, `volume_is_local`, `final_path` (design §2.1), and
+`file_identity` (volume serial and file index, used by the store tests and by the
+transparency-log rotation fix so Windows has one audited Win32 wrapper). Callers never see a raw handle,
 pointer or Win32 type.
 
 A CI check fails the build if `allow(unsafe_code)`, `expect(unsafe_code)` or an
@@ -71,7 +73,7 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
 6. **Errors.** There is no universal rule; each API's own contract is followed, and
    the error value is captured before any other call can overwrite it:
    - `BOOL` APIs (`OpenProcessToken`, `GetTokenInformation`, `CreateDirectoryW`,
-     `MoveFileExW`, `GetVolumePathNameW`, `GetVolumeInformationByHandleW`,
+     `MoveFileExW`, `GetVolumePathNameW`, `GetFileInformationByHandle`, `GetVolumeInformationByHandleW`,
      `InitializeAcl`, `AddAccessAllowedAceEx`, `InitializeSecurityDescriptor`,
      `SetSecurityDescriptorOwner`, `SetSecurityDescriptorDacl`,
      `SetSecurityDescriptorControl`, `GetAce`): zero is failure, then
@@ -118,6 +120,7 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
   `ACCESS_ALLOWED_ACE_TYPE` and `ACCESS_DENIED_ACE_TYPE` are decoded; any other type is
   reported as "other" without reading past its header, and the caller refuses it.
 - `replace`: two NUL-terminated wide paths on the stack.
+- `file_identity`: one `BY_HANDLE_FILE_INFORMATION` on the stack, written by the call.
 - `volume_is_local` / `final_path`: output buffers sized from the first call, lengths
   checked against the buffer before the `&[u16]` slice is formed.
 

@@ -1,6 +1,6 @@
 # Windows owner-only stores: test plan
 
-Status: REVISION 6 after test-plan review rounds 1-4 (dispositions §9-§12). Design: `2026-09-26-windows-owner-only-stores.md`
+Status: REVISION 7 after test-plan review rounds 1-5 (dispositions §9-§13). Design: `2026-09-26-windows-owner-only-stores.md`
 (reviewed, SHIP x2). Code, probes and the red commit wait for the ADR-016 decision.
 
 ## 1. What the plan asserts against
@@ -40,8 +40,8 @@ commit must let the stores OPEN on Windows without any security logic. It holds:
 3. signature-only stubs with PERMISSIVE bodies. Each is a thin wrapper that carries
    the SAME test instrumentation the production body will (so no row fails for missing
    instrumentation) and then makes one std call: `create_dir_private` =
-   `fs::create_dir`, then fire `AfterCreate`; `create_file_private` = `OpenOptions::create_new`,
-   fire `AfterCreate`; `replace` = count the attempt, record the trace
+   `fs::create_dir`, then fire `AfterCreate(&path, None)`; `create_file_private` =
+   `OpenOptions::create_new`, then fire `AfterCreate(&path, Some(&file))`; `replace` = count the attempt, record the trace
    (including `write_through = false`), `fs::rename`, no retry; `sync_file` = record the trace, `sync_all`; `hold_dir` = open with
    `FILE_FLAG_BACKUP_SEMANTICS` and std default sharing; `inspect` = an all-pass `Inspection`; every `judge_*` = `Ok`; the R3 reparse walk =
    no-op (lexical prefix handling only, per item 2); `volume_is_local` =
@@ -70,24 +70,24 @@ Expected outcomes, one table for every run kind:
 | Id | Test fn | Setup | Assert | Red reason (stubs) |
 |---|---|---|---|---|
 | W-T1 | `created_objects_carry_only_the_user_ace` | init a personal-account store and a task store in a test-owned tree | for each store dir, `authority.json`, a record, `journeys.json`, a task record, both lock sidecars: PowerShell `(Get-Acl p).GetSecurityDescriptorSddlForm('Owner, Access')`, parsed by the test helper and compared FIELD BY FIELD: owner = user SID, `P` flag set, exactly one ACE, allow, user SID, `FA`, `OICI` on dirs and none on files (auto-inherit flags such as `AI`/`AR` are ignored) | SDDL shows inherited ACEs (no `P`): string mismatch |
-| W-T1b | `objects_are_private_at_the_instant_of_creation` | `cfg(test)` fault boundary `AfterCreate` sits INSIDE `create_dir_private` / `create_file_private`, immediately after the `CreateDirectoryW` / `CreateFileW` call returns and before any other statement, so a create-then-protect body cannot finish protecting first; the hook runs the W-T1 PowerShell read | same literal SDDL at that instant | permissive stub creates with inherited DACL: mismatch |
+| W-T1b | `objects_are_private_at_the_instant_of_creation` | `cfg(test)` fault boundary `AfterCreate` sits INSIDE `create_dir_private` / `create_file_private`, immediately after the create call returns; it receives the path and, for files, the live handle (held share-0, so a path read would be a sharing violation). Files: owner and ACEs read from that handle with `win_acl::inspect`'s raw output (never `judge_*`); directories: the W-T1 PowerShell path read | owner = user, protected, one user ACE, at that instant; W-T1 repeats the check independently with PowerShell after close | permissive stub creates with inherited DACL: mismatch |
 | W-T2 | `foreign_ace_on_store_dir_refuses` | init, close, `icacls d /grant *S-1-1-0:R` | reopen refuses, reason `ForeignSid(S-1-1-0)` | stub accepts: reopen succeeds |
 | W-T3 | `inherited_ace_on_store_dir_refuses` | store under a test-created parent whose inheritable DACL grants ONLY the current user (so inheritance adds no foreign SID); close; `icacls d /inheritance:e` | reason `NotProtected` (P2 cannot fail by construction) | accepts |
 | W-T4 | `foreign_ace_on_each_file_refuses` | table-driven over the six file kinds of W-T1; grant Everyone on one | the operation reading that file refuses with `ForeignSid` (authority on open, record on lookup, journeys on first journey op, task record on load, lease/sidecar on custody) | accepts |
 | W-T5 | `junction_in_store_path_refuses` | `mklink /J C:\t\j C:\t\real`; configure store under `C:\t\j\store` | config/open refuses, reason `ReparsePoint` | accepts |
 | W-T6 | `symlink_record_refuses` | `mklink` a record name to a private file; skip with logged reason if `mklink` lacks privilege | lookup refuses `ReparsePoint` | accepts |
-| W-T7 | `path_prefixes` | lexical only | `\\srv\s\x`, `\\?\UNC\srv\s\x`, `\\.\C:\x`, `\\?\GLOBALROOT\x` refuse `InvalidConfiguration`; `C:\x`, `\\?\C:\x` pass | item 2 makes `validate_path` accept any prefix so stores can open: the refuse half fails |
+| W-T7 | `path_prefixes` | lexical only | `\\srv\s\x`, `\\?\UNC\srv\s\x`, `\\.\C:\x`, `\\?\GLOBALROOT\x`, `C:x` (drive-relative), `\x` (root-relative), `x` (relative) and `C:\a\..\b` refuse `InvalidConfiguration`; `C:\x`, `\\?\C:\x` pass | item 2 makes `validate_path` accept any prefix so stores can open: the refuse half fails |
 | W-T8 | `null_dacl_refuses` | `Set-Acl` SDDL `O:<sid>D:PNO_ACCESS_CONTROL` (protected NULL DACL), read back and checked semantically (DACL absent-or-null, protected flag set) rather than by string | reason `NullDacl` | accepts |
 | W-T8b | `read_only_ace_refuses` | SDDL `O:<sid>D:P(A;;FR;;;<sid>)` | reason `NoReadWrite` (P1, P2, P4, P5 pass by construction) | accepts |
 | W-T9 | `custody_across_processes` | test re-execs its own binary (`--exact` child entry, env flag) that opens the store and waits on stdin | parent open: `AlreadyOwned` (task) / `StorageUnavailable` (accounts), NOT `Unsupported`, AND a test hook confirms the parent opened the sidecar (same file id as the child) so the refusal came from `try_lock`, not from a sharing violation; kill child; parent reacquires within 2 s | stub never locks: parent open succeeds while the child holds it |
 | W-T10 | `legacy_token_inherited_acl_refuses` | 3.x token written the 3.x way (`fs::write`, inherited DACL) | migration refuses `NotPrivate`; message names `NotProtected` | stub `inspect` all-pass: migration accepts |
 | W-T10b | `legacy_token_remediation_works` | W-T10 file plus `icacls /grant *S-1-1-0:R` and `/setowner *S-1-5-32-544`; run the §2.4 sequence the refusal message printed, parsed from the message itself | migration then accepts; before it, refusal lists `ForeignSid(S-1-1-0)` and `ForeignOwner(S-1-5-32-544)` | accepts before remediation |
 | W-T11 | `foreign_owner_refuses` | `icacls f /setowner *S-1-5-32-544` on `authority.json` | reason `ForeignOwner` | accepts |
-| W-T12 | `mapped_network_drive_refuses` (ignored; CI step) | `net use X: \\localhost\C$`; store under `X:\t` | `volume_is_local(X:\t handle) == false` asserted directly; store open refuses | stub returns `true` |
+| W-T12 | `mapped_network_drive_refuses` (ignored; CI step) | `net use <free letter>: \\localhost\C$` (allocated at run time, exported as `MGW_NET_ROOT`); store under it | `volume_is_local(MGW_NET_ROOT handle) == false` asserted directly; store open refuses | stub returns `true` |
 | W-T13 | `moved_in_unprotected_file_refuses` | in a test-created source dir whose own DACL is protected with no inheritable ACEs, SDDL `O:<sid>D:(A;;FA;;;<sid>)` (one user ACE, NOT protected, nothing to inherit); rename into the store as a valid record name, point the manifest at it via the existing `revoke_fixture` helpers | reason `NotProtected` only | accepts |
 | W-T14 | `second_user_cannot_read` (ignored; CI step) | CI step: `net user mgw-probe <random> /add`, grant it `SeInteractiveLogonRight` (Server images restrict interactive logon to Administrators) while it stays only in Users; the test creates `C:\mgwt\<run>` and grants `Users` read+list on it with inheritance (`icacls /grant *S-1-5-32-545:(OI)(CI)RX`), writes a plain CONTROL file there, then creates both stores inside it; `Start-Process -Credential -WorkingDirectory C:\mgwt\<run>` runs `Get-Content` as `mgw-probe`; the child writes `READ <name>` or `DENIED <name>` tokens to a result file the test pre-creates OUTSIDE the store tree with `Users` write access, and the parent parses that file; a launch failure or a missing token is `WT-FIXTURE W-T14` | control file IS read by `mgw-probe` (proves the identity, the process launch and the parent ACL work); `authority.json`, a record and a task record all fail with "Access is denied", so denial can only come from the objects' own DACLs | permissive stub inherits `Users` read from the planted parent: `mgw-probe` reads all three |
 | W-T15 | `fat32_volume_refuses` (ignored; CI step) | CI step: `diskpart` create+attach two 64 MB VHDs, format one FAT32 and one exFAT (free letters, see §6) | on both, `volume_is_local` false (asserted directly); store open refuses | stub `true` |
-| W-T16a | `held_directory_blocks_its_own_rename` | `private_fs::hold_dir(store)` ALONE, no files open; `fs::rename(store, store2)` | rename `Err` with raw OS error 32 and the directory's file id unchanged; then drop the guard and repeat rename + `mklink /J` at the old name: both succeed (control) | stub hold opens with std default sharing (includes delete): the first rename succeeds |
+| W-T16a | `held_directory_blocks_its_own_rename` | `private_fs::hold_dir(store)` ALONE, no files open; `fs::rename(store, store2)` | rename `Err` with the raw OS error probe E6 recorded (expected 32) and the directory's file id unchanged; then drop the guard and repeat rename + `mklink /J` at the old name: both succeed (control) | stub hold opens with std default sharing (includes delete): the first rename succeeds |
 | W-T16 | `open_store_blocks_ancestor_swap` | store open; rename parent; replace parent with a junction | both fail; a lookup afterwards still returns the committed record | as W-T16a |
 | W-T17 | `reader_closes_before_replace` (parameterized: personal-account authority lock and task-store state lock) | barrier AFTER the reader releases the authority lock and BEFORE any escaped handle could drop; writer commits `refresh_tokens` at that barrier. Attempts are counted inside `private_fs::replace`, a wrapper shared by stub and production bodies | commit succeeds on attempt 1, and the reader's handle has the same file id as the replaced destination | **green-in-red regression guard**: the un-gated read path already closes inside the lock, so this row is expected GREEN in the red run; its proof is M17 (a reader that keeps its handle makes attempt 1 fail), stated here rather than claimed as red |
 | W-T19 | `other_ace_type_refuses` | `Set-Acl` SDDL `O:<sid>D:P(A;;FA;;;<sid>)(XA;;FR;;;WD;(Member_of {SID(BA)}))` (a conditional callback ACE; every other rule passes) | reason `OtherAceType` | accepts |
@@ -95,8 +95,8 @@ Expected outcomes, one table for every run kind:
 | W-T21 | `foreign_deny_ace_is_accepted` | fixture first asserts via `whoami /groups` that the runner token does NOT contain BUILTIN\Guests (S-1-5-32-546); SDDL `O:<sid>D:P(D;;FA;;;S-1-5-32-546)(A;;FA;;;<sid>)` | store opens and reads normally | **green-in-red regression guard** against over-strict P2; proof is M22 |
 | W-T22 | `durability_calls_are_made` | commit one grant and one task record with a test-only trace in `private_fs::sync_file` and `private_fs::replace` | per commit: `sync_file` precedes `replace`, `replace` was called with the write-through flag set, and, where probe E1 found it supported, `sync_dir` follows `replace` | the stub traces `replace` with `write_through = false`: the flag assertion fails. Limitation: this proves the CALLS are made, not that the disk honours them (§7) |
 | W-T22b | `sync_file_really_flushes` | open a record READ-ONLY and call `private_fs::sync_file` on it | `Err` (`FlushFileBuffers` needs write access, so a real flush fails here and a no-op cannot) | green-in-red guard; proof is M23 |
-| W-T24 | `record_is_judged_on_the_open_handle` | `cfg(test)` hook `BeforeRecordOpen` fires after `accepted_basename` and before the record is opened; it replaces the record with a same-named file carrying a foreign ACE | lookup refuses, reason `ForeignSid` | stub `inspect` all-pass: accepts |
-| W-T23 | `directory_at_record_name_refuses` | create a DIRECTORY (private, protected) at a valid record name the manifest points to; same for a task record name | lookup / load refuses, reason `NotRegular` | the un-gated reader still refuses the store operation (its `is_file` check moves unchanged), but the stub `judge_*` returns `Ok`, so the `NotRegular` reason assertion fails |
+| W-T24 | `record_is_judged_on_the_open_handle` | `cfg(test)` hook `BeforeRecordOpen` fires IMMEDIATELY before the open call, after every path-level check (so any path-based judgement, including M27's, has already run on the original file); it replaces the record with a same-named file carrying a foreign ACE | lookup refuses, reason `ForeignSid` | stub `inspect` all-pass: accepts |
+| W-T23 | `directory_at_record_name_refuses` | create a DIRECTORY (private, protected) at a valid record name the manifest points to; same for a task record name. Record reads open with `FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT`, so a directory OPENS and is then judged by its `FILE_ATTRIBUTE_DIRECTORY` attribute | lookup / load refuses, reason `NotRegular` | the stub `judge_*` returns `Ok`: the reason assertion fails |
 | W-T18 | `path_swap_between_walk_and_open_refuses` | `cfg(test)` fault boundary `AfterPathWalk` replaces ancestor with a junction to another private store of the same user | reason `PathMismatch` | stub `final_path` echoes input: accepts |
 
 Fixture discipline (all plants):
@@ -169,9 +169,12 @@ Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557
 | M22 | treat any DENY ACE as foreign | W-T21 |
 | M23 | `sync_file` returns `Ok(())` without calling `sync_all`, trace kept | W-T22b |
 | M24 | drop `MOVEFILE_WRITE_THROUGH` in the actual `MoveFileExW` argument (trace records the argument passed, not a separate flag) | W-T22 |
-| M25 | drop the regular-file check | W-T23 |
+| M25 | drop the directory-attribute check (the read then fails with a raw OS error, not `NotRegular`) | W-T23 |
 | M26 | P5 not required when inspecting store DIRECTORIES | W-T3 |
-| M27 | judge the record by path before opening, then read the handle unjudged | W-T24 |
+| M27 | judge the record by path (before the hook), then open and read the handle unjudged | W-T24 |
+| M28 | lexical check accepts `..` / relative components | W-T7 |
+| M29 | drop `FILE_FLAG_OPEN_REPARSE_POINT` from record reads | W-T6 (in this mutant run a skip counts as FAIL; the privileged step enables Developer Mode first) |
+| M30 | 3.x token source skips the DACL judgement (today's `privately_owned -> true`) | W-T10 |
 
 The ignored CI-step tests (W-T12, W-T14, W-T15) live in module `win_privileged` and run in the mutant PRs too: each mutant PR
 runs the full Windows job including the privileged step.
@@ -194,16 +197,20 @@ runs the full Windows job including the privileged step.
 
 ## 6. CI steps added to the Windows job
 
-0. fixture smoke (`if: always()` after build): SDDL round trip for each planted SDDL,
+0. `Add-MpPreference -ExclusionPath` for the test root, so an antivirus scan cannot hold
+   a store file during W-T17/W-T20; W-T17/W-T20 rerun their fixture once if attempt 1
+   fails while no in-process holder is registered, and report `WT-FIXTURE` if it fails again;
+0b. fixture smoke (`if: always()` after build): SDDL round trip for each planted SDDL,
    `mgw-probe` launch, `net use` mapping, both VHD formats; failures here are reported
    as fixture failures before any red/green judgement;
 1. existing `cargo test --no-run`;
-2. `cargo test --all-features --lib --bins --no-fail-fast` (no skips);
+2. `cargo test --all-features --lib --bins --no-fail-fast -- --show-output` (no skips;
+   `--show-output` so passing tests' markers, e.g. `WT-SKIP W-T6`, reach the checker);
 3. privileged step, `if: always() && steps.build.outcome == 'success'` so a red or
-   mutant run in step 2 does not skip it: create `mgw-probe`, `net use X: \\localhost\C$`,
+   mutant run in step 2 does not skip it: create `mgw-probe`, `net use <free letter>: \\localhost\C$`,
    create and attach two 64 MB VHDs with `diskpart` formatted FAT32 and exFAT, each
    assigned the first FREE drive letter found at run time (exported to the tests as
-   `MGW_FAT32_ROOT` / `MGW_EXFAT_ROOT`), then `cargo test --all-features --lib -- --ignored win_privileged::`;
+   `MGW_FAT32_ROOT` / `MGW_EXFAT_ROOT`), then `cargo test --all-features --lib -- --ignored --show-output win_privileged::`;
 4. teardown, `if: always()`: remove the user, the mapping and the VHDs;
 5. aggregate, `if: always()`: fail the job if step 2 or step 3 failed (both outcomes
    are read explicitly, so neither can hide the other). The red-run checker (§3) reads
@@ -219,7 +226,7 @@ runs the full Windows job including the privileged step.
 
 ## 8. Evidence to record
 
-Red run id (throwaway PR), green run id, one run id per mutant M1-M27, before/after
+Red run id (throwaway PR), green run id, one run id per mutant M1-M30, before/after
 unix test counts, the list of residual Windows failures by name.
 
 ## 9. Review round 1 dispositions
@@ -231,7 +238,7 @@ unix test counts, the list of residual Windows failures by name.
 | HIGH: create-then-protect exposure invisible to post-creation checks | Fixed: W-T1b reads SDDL at an `AfterCreate` boundary; M20 |
 | MEDIUM: W-T1 literal omits the group Windows supplies | Fixed: `GetSecurityDescriptorSddlForm('Owner, Access')` |
 | MEDIUM: W-T3 plant also adds foreign inherited ACEs | Fixed: store under a user-only inheritable parent |
-| MEDIUM (both seats): W-T16a junction leg cannot give error 32 | Fixed: rename leg asserts 32 and unchanged file id; release-then-succeed control |
+| MEDIUM (both seats): W-T16a junction leg cannot give error 32 | Fixed: rename leg asserts the E6-recorded error and unchanged file id; release-then-succeed control |
 | MEDIUM: W-T17 red reason measured missing instrumentation | Fixed: counter in a shared wrapper, barrier before handle drop; row declared a green-in-red regression guard proven by M17 |
 | MEDIUM: bounded retry untested | Fixed: W-T20 (release and persistent cases), M21 |
 | Improvements | Adopted: deny-ACE row W-T21 + M22; exFAT beside FAT32; plant read-back discipline; automated red-run name comparison; existing-coverage map (§3) |
@@ -284,3 +291,15 @@ already fixed in revision 5 (W-T22 now reds on the traced `write_through = false
 difference, not an empty trace); W-T14 result-file channel added; `judge_*` and the reparse
 walk named as permissive stubs; privileged-step output marker-checked; VHD letters
 allocated at run time.
+
+
+## 13. Review round 5 dispositions
+
+| Finding | Disposition |
+|---|---|
+| HIGH (both seats): W-T24 hook could fire before a path-based check | Fixed: hook immediately before the open call, after every path check |
+| HIGH: W-T1b path read of a share-0 file is a sharing violation | Fixed: hook receives the live handle; files read from it, directories by path |
+| HIGH: W-T23 directory cannot be opened without backup semantics | Fixed: record reads use `FILE_FLAG_BACKUP_SEMANTICS`; attribute-based `NotRegular`; M25 drops the attribute check |
+| MEDIUM: passing tests' output hidden from the checker | Fixed: `--show-output` in both steps |
+| MEDIUM: antivirus could perturb W-T17/W-T20 | Fixed: Defender exclusion for the test root; one fixture rerun, then `WT-FIXTURE` |
+| Improvements | Adopted: W-T7 relative/parent paths + M28; M29 for the record reparse flag; M30 for the 3.x source; run-time `net use` letter; E6-recorded error code |
