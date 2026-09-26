@@ -201,6 +201,8 @@ impl ChainWatch {
 /// A changed chain is itself a config change (the link now names another
 /// file), so it triggers a reload, and only after the new directories are
 /// watched: a write to the new target in between is then read by that reload.
+/// The first resolve always triggers one: the config was read before the
+/// watches existed, and a retarget in between would otherwise go unheard.
 pub(super) fn spawn_rewatch_task(
     named: PathBuf,
     chain: Arc<ChainWatch>,
@@ -209,7 +211,7 @@ pub(super) fn spawn_rewatch_task(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut last_end = chain_dirs(&named).ok().map(|(_, end)| end);
+        let mut last_end: Option<PathBuf> = None;
         loop {
             tokio::select! {
                 changed = wake.changed() => {
@@ -232,6 +234,11 @@ pub(super) fn spawn_rewatch_task(
                 .wakes_handled
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if rewatched || last_end.as_ref() != Some(&end) {
+                info!(
+                    end = %end.display(),
+                    directories = wanted.len(),
+                    "Config watcher: following the config's link chain"
+                );
                 last_end = Some(end);
                 let _ = reload.try_send(ReloadTrigger::ConfigFile);
             }

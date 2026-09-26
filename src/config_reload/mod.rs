@@ -1171,9 +1171,16 @@ impl ConfigWatcher {
 
         let env_dirs = watch_chain::watch_env_dirs(&mut watcher, env_file_paths);
 
-        let (wanted, _) = watch_chain::chain_dirs(&named_config_path).map_err(|e| {
-            crate::Error::ConfigWatcher(format!("Failed to resolve config path: {e}"))
-        })?;
+        // A chain that cannot be resolved right now (a target missing
+        // mid-update) watches the named file's own directory; the rewatch task
+        // resolves the chain again on its first wake and on every event.
+        let wanted = match watch_chain::chain_dirs(&named_config_path) {
+            Ok((wanted, _)) => wanted,
+            Err(e) => {
+                warn!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
+                std::collections::BTreeSet::from([watch_dir_of(&named_config_path)])
+            }
+        };
         let chain = watch_chain::ChainWatch::new(watcher, env_dirs.clone());
         chain.reconcile(&wanted);
         let in_ledger = chain.watched_now();

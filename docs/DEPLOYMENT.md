@@ -930,7 +930,7 @@ re-read on every change in a directory it runs through:
   `ln -s`, reloads the new release, and the reload reads the new release's file;
 - a directory the chain no longer runs through stops being watched.
 
-Limits, all as before this change:
+Limits:
 
 - only a directory link that is a file's immediate parent is watched. With the
   config one level further down (`current/conf/gateway.yaml`), retargeting
@@ -940,7 +940,15 @@ Limits, all as before this change:
   is resolved but not watched;
 - renaming a real (not linked) parent directory is not heard;
 - env files keep their startup path: an env file under `current/` stays on the
-  old release after a retarget (#1286).
+  old release after a retarget (#1286);
+- a chain longer than 40 links is treated as a loop: the watcher keeps its last
+  good watches and logs the error.
+
+If the chain cannot be resolved at startup (a target missing mid-update), the
+gateway still starts and watches the config's own directory, and follows the
+chain from the next change. It also re-reads the config once as soon as the
+watches are in place, so a retarget between loading the config and starting the
+watcher is not missed.
 
 ### What a config reload applies
 
