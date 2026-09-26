@@ -83,7 +83,7 @@ if cmp -s "$TAMPER_SRC" "$tampered"; then
   exit 1
 fi
 
-if "$BIN" cap validate "$tampered" >"$work/out" 2>&1; then
+if ! "$BIN" cap validate "$tampered" >"$work/out" 2>&1; then
   echo "FAIL: cap validate ACCEPTED a pinned file whose base_url was changed after pinning:"
   cat "$work/out"
   exit 1
