@@ -62,7 +62,7 @@ pub(super) fn spawn_stderr_tail(
                     }
                     let mut tail = shared.lock();
                     if tail.len() == TAIL_LINES {
-                        tail.pop_front();
+                        tail.reserve(1);
                     }
                     tail.push_back(buf.clone());
                 }
