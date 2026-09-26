@@ -469,6 +469,9 @@ async fn dispatch_in_scope(
 /// `reaches_tasks_extension` in `router/handlers.rs`: a task-reaching method
 /// added there and not here is forwarded here without an owner check.
 fn is_task_method(method: &str, params: Option<&Value>) -> bool {
+    if method == "tasks/cancel" {
+        return false;
+    }
     method
         .get(..6)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("tasks/"))
