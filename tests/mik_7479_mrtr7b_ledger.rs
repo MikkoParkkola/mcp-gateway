@@ -127,7 +127,8 @@ impl Ledger {
                 ledger.duplicates.push(id);
             }
         }
-        ledger.unaccounted = ids.filter(|id| !seen.contains(id)).collect();
+        ledger.unaccounted = Vec::new(); // MUTANT M-L1
+        let _ = ids;
         ledger
     }
 
