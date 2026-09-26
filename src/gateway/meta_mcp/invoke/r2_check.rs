@@ -99,7 +99,7 @@ impl MetaMcp {
             let names = backend.get_cached_tool_names_for(identity_key);
             let candidates = self.miss_hint_pool(&names, server, (scope, session_id));
             match did_you_mean(tool, &candidates, 3, 3) {
-                Some(hint) => format!("{text}. {hint}"),
+                Some(_hint) => text,
                 None => text,
             }
         });
