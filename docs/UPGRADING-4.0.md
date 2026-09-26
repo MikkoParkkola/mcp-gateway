@@ -1246,8 +1246,8 @@ the caller has no credential, so the gateway now treats it as a secret.
   public paths.
 - **Logs carry an 8-hex fingerprint, not the id.** So do the firewall audit log
   and the transparency log when they are on. `mcp-gateway audit show --session`,
-  which reads the transparency log, accepts the raw id or its fingerprint and still
-  finds entries written before the upgrade. A fingerprint is for correlation only:
+  which reads the transparency log, accepts the raw id or its fingerprint; entries
+  written before the upgrade hold the raw id and are found by the raw id only. A fingerprint is for correlation only:
   two sessions can share one, so a lookup can return another session's entries. The `session_id` field keeps its
   name in the firewall audit NDJSON and the transparency log; tools that parse it
   get an 8-hex value from this release on. Ids in files written before the upgrade
