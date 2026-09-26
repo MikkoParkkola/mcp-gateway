@@ -507,7 +507,7 @@ impl TokenStorage {
             match fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .mode(0o600)
+                .mode(0o644)
                 .open(&tmp)
             {
                 Ok(file) => return Ok((file, tmp)),
