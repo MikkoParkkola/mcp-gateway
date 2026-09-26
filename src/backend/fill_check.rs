@@ -166,7 +166,7 @@ pub(super) fn admit_fill(
         count("input_schema_fill_cooldown");
         // A check-site call answers as the transport failure it stands in
         // for; any other caller keeps the generic fast-fail.
-        if let Some(replay) = replay.filter(|_| gated) {
+        if let Some(replay) = replay.filter(|_| gated && false) {
             return Err(replay.error());
         }
         return Err(Error::BackendUnavailable(format!(
