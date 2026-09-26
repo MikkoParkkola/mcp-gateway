@@ -27,7 +27,7 @@ class OwaspCitations(unittest.TestCase):
             root = Path(tmp)
             (root / "src" / "security").mkdir(parents=True)
             (root / "src" / "security" / "policy.rs").write_text(
-                "#[test]\nfn deny_pattern_blocks_exec() {}\nfn helper_only() {}\n", encoding="utf-8"
+                "#[test]\nfn deny_pattern_blocks_exec() {}\nfn helper_only() {}\n// #[test]\n// fn commented_out_test() {}\n", encoding="utf-8"
             )
             (root / "tests").mkdir()
             path = root / "doc.md"
@@ -50,6 +50,14 @@ class OwaspCitations(unittest.TestCase):
         found = self.problems_in("```bash\ncargo test -p other deny_pattern_blocks -- --exact\n```\n")
         self.assertEqual(len(found), 1)
         self.assertTrue(found[0].startswith("validation command form not checkable"), found)
+
+    def test_a_commented_out_test_does_not_satisfy_a_command(self):
+        found = self.problems_in("```bash\ncargo test commented_out_test\n```\n")
+        self.assertEqual(found, ["validation command matches no test: cargo test commented_out_test"])
+
+    def test_an_unsupported_flag_is_reported(self):
+        found = self.problems_in("```bash\ncargo test --release deny_pattern_blocks\n```\n")
+        self.assertTrue(found and found[0].startswith("validation command form not checkable"), found)
 
     def test_existing_citations_pass(self):
         doc = (

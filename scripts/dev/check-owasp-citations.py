@@ -24,8 +24,11 @@ DOC = ROOT / "docs" / "OWASP_AGENTIC_AI_COMPLIANCE.md"
 CITED_PATH = re.compile(r"`((?:src|tests|docs|scripts|\.github)/[^`\s]*)`")
 # `cargo test [flags] <name>`: the only command form the document may use, so a
 # form this check cannot read fails rather than going unchecked.
-CARGO_LINE = re.compile(r"^\s*cargo test\b.*$", re.M)
-CARGO_TEST = re.compile(r"^\s*cargo test(?:\s+--?[\w-]+)*\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
+CARGO_LINE = re.compile(r"^\s*cargo\s+test\b.*$", re.M)
+# `--lib` is the only flag it reads; any other shape is reported, not skipped.
+CARGO_TEST = re.compile(r"^\s*cargo\s+test(?:\s+--lib)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
+LINE_COMMENT = re.compile(r"//[^\n]*")
+BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 # A test function: `#[test]` or `#[tokio::test(...)]`, then attributes, then `fn`.
 TEST_FN = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -35,7 +38,10 @@ def test_names_defined(root: Path) -> set[str]:
     names: set[str] = set()
     for sub in ("src", "tests"):
         for path in (root / sub).rglob("*.rs"):
-            names.update(TEST_FN.findall(path.read_text(encoding="utf-8", errors="replace")))
+            text = path.read_text(encoding="utf-8", errors="replace")
+            # A commented-out test is not a test.
+            text = BLOCK_COMMENT.sub("", LINE_COMMENT.sub("", text))
+            names.update(TEST_FN.findall(text))
     return names
 
 
