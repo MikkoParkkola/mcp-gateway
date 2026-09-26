@@ -180,7 +180,7 @@ impl ProxyManager {
             Some(entry) if entry.session_id.expose_secret() != session_id => {
                 warn!(
                     %id,
-                    attempted_session = %session_fp(session_id),
+                    attempted_session = %session_id,
                     owner_session = %entry.session_id,
                     "Refused sampling/elicitation POST-back from a session that was not prompted"
                 );
