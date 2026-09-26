@@ -510,7 +510,7 @@ mod real_watcher {
         // Owner-only, as a config the loader accepts must be.
         for rel in ["rel1", "rel2"] {
             crate::gateway::test_helpers::write_owner_only(
-                &r.join(rel).join("cfg.yaml"),
+                r.join(rel).join("cfg.yaml"),
                 profile_config(rel),
             )
             .unwrap();
