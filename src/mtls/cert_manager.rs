@@ -274,7 +274,7 @@ impl CertGenerator {
 
     /// Write a [`GeneratedCert`] to disk.
     ///
-    /// Writes `<stem>.crt` (`0644`) and `<stem>.key` (`0600`) under `dir` (`0700`).
+    /// Writes `<stem>.crt` and `<stem>.key` under `dir`.
     ///
     /// # Errors
     ///
@@ -287,14 +287,8 @@ impl CertGenerator {
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
             .map_err(|e| Error::Config(format!("Cannot set dir permissions: {e}")))?;
 
-        let cert_path = dir.join(format!("{stem}.crt"));
-        fs::write(&cert_path, &cert.cert_pem)
+        fs::write(dir.join(format!("{stem}.crt")), &cert.cert_pem)
             .map_err(|e| Error::Config(format!("Cannot write cert: {e}")))?;
-        // Exactly 0644 whatever the umask or an older file's mode: `serve`
-        // refuses a cert others can change (F18 I1), and this one is public.
-        #[cfg(unix)]
-        fs::set_permissions(&cert_path, fs::Permissions::from_mode(0o644))
-            .map_err(|e| Error::Config(format!("Cannot set cert permissions: {e}")))?;
 
         write_private_key(&dir.join(format!("{stem}.key")), &cert.key_pem)?;
 
