@@ -192,7 +192,7 @@ async fn hand_edited(name: &str, rewrites: [(&str, &str); 2]) -> IdentityGrantFi
         assert!(body.contains(from), "{name}: fixture lacks {from}");
         body = body.replace(from, to);
     }
-    std::fs::write(&path, body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
     read_identity_grants_file(&path).await.unwrap()
 }
 
@@ -248,7 +248,7 @@ async fn edited_refusal(name: &str, rewrites: &[(&str, &str)]) -> String {
         assert!(body.contains(from), "{name}: fixture lacks {from}");
         body = body.replace(from, to);
     }
-    std::fs::write(&path, body).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
     read_identity_grants_file(&path)
         .await
         .expect_err("an invalid grants file must not load")

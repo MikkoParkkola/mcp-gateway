@@ -330,7 +330,7 @@ impl MetaMcp {
 
         entry.push(tool_key.to_string());
         debug!(
-            session_id,
+            session_id = %crate::gateway::session_id::session_fp(session_id),
             tool_key, "Promoted tool to session surfaced set"
         );
     }

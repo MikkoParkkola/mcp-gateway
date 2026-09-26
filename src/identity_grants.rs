@@ -166,12 +166,22 @@ fn default_identity_grants_file_schema_version() -> String {
 /// Returns an error if the file cannot be read, parsed, or uses an unsupported
 /// schema version.
 pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile, String> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        format!(
-            "failed to read identity grants file {}: {e}",
-            path.display()
-        )
-    })?;
+    // Mode-checked off the runtime (F18 I3): readable, not writable, by others.
+    let (owned, what) = (
+        path.to_path_buf(),
+        crate::config::CheckedFile::IdentityGrants,
+    );
+    let read = tokio::task::spawn_blocking(move || crate::config::read_checked_file(&owned, what));
+    let content = read
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|r| r)
+        .map_err(|e| {
+            format!(
+                "failed to read identity grants file {}: {e}",
+                path.display()
+            )
+        })?;
     let file = serde_json::from_str::<IdentityGrantFile>(&content)
         .or_else(|_| serde_yaml::from_str::<IdentityGrantFile>(&content))
         .map_err(|e| matching::parse_refusal(path, &content, &e))?;

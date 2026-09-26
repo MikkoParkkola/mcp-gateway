@@ -412,3 +412,67 @@ pub(super) fn assert_carries_the_backend_result(fetched: &Value) {
         "the settled task carries the backend's own result, verbatim: {fetched}"
     );
 }
+
+/// Holds a task at `Dispatched` until released, so a test can let a token
+/// expire between admission and dispatch.
+pub(super) struct HoldObserver {
+    hold: std::sync::atomic::AtomicBool,
+    arrived: tokio::sync::mpsc::UnboundedSender<()>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+pub(super) struct Hold {
+    pub(super) arrived: tokio::sync::mpsc::UnboundedReceiver<()>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        self.release.add_permits(1);
+    }
+}
+
+impl Hold {
+    pub(super) fn disarm_and_release(&self, observer: &HoldObserver) {
+        observer
+            .hold
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.release.add_permits(1);
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::task_service::CommitObserver for HoldObserver {
+    async fn reached(&self, stage: crate::gateway::task_service::CommitStage, _task_id: &str) {
+        if stage == crate::gateway::task_service::CommitStage::Dispatched
+            && self.hold.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            let _ = self.arrived.send(());
+            self.release
+                .acquire()
+                .await
+                .expect("hold semaphore stays open")
+                .forget();
+        }
+    }
+}
+
+pub(super) fn observe_dispatched(state: &Arc<AppState>) -> (Arc<HoldObserver>, Hold) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let observer = Arc::new(HoldObserver {
+        hold: std::sync::atomic::AtomicBool::new(true),
+        arrived: tx,
+        release: Arc::clone(&release),
+    });
+    state.task_executor.observe_commits(
+        Arc::clone(&observer) as Arc<dyn crate::gateway::task_service::CommitObserver>
+    );
+    (
+        observer,
+        Hold {
+            arrived: rx,
+            release,
+        },
+    )
+}

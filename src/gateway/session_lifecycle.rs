@@ -107,14 +107,15 @@ impl SessionLifecycle {
         if cbs.is_empty() {
             return;
         }
+        let fp = crate::gateway::session_id::session_fp(session_id);
         debug!(
-            session_id,
+            session_id = %fp,
             callbacks = cbs.len(),
             "Session disconnect cleanup"
         );
         for (name, cb) in cbs.iter() {
             cb(session_id);
-            debug!(session_id, handler = %name, "Cleanup handler executed");
+            debug!(session_id = %fp, handler = %name, "Cleanup handler executed");
         }
     }
 
