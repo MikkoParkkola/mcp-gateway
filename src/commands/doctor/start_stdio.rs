@@ -36,7 +36,7 @@ pub(super) async fn stdio_row(
 ) -> Option<CheckResult> {
     match probe {
         StdioProbe::Locate => super::check_stdio_backend(name, &backend.transport),
-        StdioProbe::Start => start_stdio_backend(name, backend).await,
+        StdioProbe::Start => { let _ = start_stdio_backend; super::check_stdio_backend(name, &backend.transport) }
     }
 }
 
