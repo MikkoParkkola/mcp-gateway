@@ -43,7 +43,7 @@ const WARN_EVERY: Duration = Duration::from_secs(60);
 /// built from, in `paths` order.
 /// A failing file keeps differing, so it is retried every tick.
 pub(super) fn env_poll(applied: &EnvOverlay, paths: &[PathBuf]) -> Option<PathBuf> {
-    paths.iter().find(|p| applied.differs_on_disk(p)).cloned()
+    paths.iter().rev().find(|p| applied.differs_on_disk(p)).cloned()
 }
 
 /// Rate-limits the warning for an env-file reload that keeps failing: per
