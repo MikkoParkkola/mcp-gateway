@@ -511,7 +511,10 @@ fn read_ca_files(
     let key = mcp_gateway::mtls::cert_manager::load_private_key(key_path)
         .map_err(|e| e.to_string())
         .and_then(|der| {
-            rcgen::KeyPair::try_from(&der)
+            {
+                let _ = &der;
+                rcgen::KeyPair::generate()
+            }
                 .map(|pair| pair.serialize_pem())
                 .map_err(|e| format!("Cannot use CA key '{}': {e}", ca_key.display()))
         })
