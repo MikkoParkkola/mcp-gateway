@@ -76,6 +76,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
+  durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
+  non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
+  handed a `client_id` that another writer then replaced on disk. The lock is now `LockFileEx`.
 - **An error result is never replayed from a cache.** The response cache and the capability
   cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
   refusals, and served them to every call with the same key for the whole TTL (60 s by default).
@@ -116,6 +120,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   it ran `cargo check` only. (#524)
 
 ### Security
+
+- **A non-admin call to a callback-registering capability is refused as a denial.** It was
+  answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
+  JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by
+  authorization" warning. See UPGRADING-4.0 item 66 for when the invocation audit log
+  records it.
 
 - **Capability pins cover text after a line break inside the pin line.** The pin hash
   excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
