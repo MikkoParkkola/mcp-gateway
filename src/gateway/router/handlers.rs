@@ -810,7 +810,7 @@ async fn meta_mcp_dispatch(
     // still declared what it declared.
     crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
-    debug!(method = %method, session_id = %session_fp(&session_id), "Meta-MCP request");
+    debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
     // The same refusal, reached by a request that declared no era. The check
     // below is inside the `Modern` arm, so a header naming a revision this
