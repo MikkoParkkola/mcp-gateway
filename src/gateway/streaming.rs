@@ -359,6 +359,11 @@ impl NotificationMultiplexer {
             .and_then(|session| session.last_event_id.read().clone())
     }
 
+    /// Test mutant.
+    pub fn first_session_id(&self) -> Option<String> {
+        self.sessions.read().keys().next().map(|k| k.expose_secret().to_string())
+    }
+
     /// Get session count
     pub fn session_count(&self) -> usize {
         self.sessions.read().len()
