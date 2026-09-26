@@ -43,10 +43,7 @@ impl ResponseCache {
     /// true`): a 2xx body reporting a failure would otherwise be replayed for
     /// the whole TTL after the upstream recovered (F26).
     pub(crate) fn set(&self, key: &str, value: &Value, ttl_seconds: u64) {
-        if crate::protocol::cacheable::is_error(value) {
-            tracing::debug!(key, "Refused to cache an error result");
-            return;
-        }
+        // MUTANT M2: the error refusal is removed.
         let entry = CacheEntry {
             value: value.clone(),
             expires_at: Instant::now() + Duration::from_secs(ttl_seconds),
