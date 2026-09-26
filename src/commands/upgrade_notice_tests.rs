@@ -189,6 +189,11 @@ fn upgrading_guide_lists_exactly_the_items_the_notice_prints() {
     }
     let printed: std::collections::BTreeSet<u32> =
         NOTICE_ITEM_SECTIONS.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        printed.len(),
+        NOTICE_ITEM_SECTIONS.len(),
+        "two notice items are paired with the same UPGRADING-4.0 item"
+    );
     let listed = guide_notice_items(include_str!("../../docs/UPGRADING-4.0.md"));
     assert_eq!(
         listed, printed,
