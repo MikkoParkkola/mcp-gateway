@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
+  the startup capability scan has read every directory, so a pod or container is no longer
+  sent traffic while its catalogue is empty; the admin `/health` view adds
+  `capability_backend.loaded`. The compose healthcheck probes `/readyz`, and the example
+  `Gateway` runtime profile probes `/readyz` and `/livez`. UPGRADING-4.0 §65.
+
 - **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
   `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
   `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
