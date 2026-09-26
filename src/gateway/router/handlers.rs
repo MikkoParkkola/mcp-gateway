@@ -72,7 +72,6 @@ fn session_id_header(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("mcp-session-id")
         .and_then(|v| v.to_str().ok())
-        .filter(|id| !id.trim().is_empty())
 }
 
 /// The extension a task-augmented request must declare.
