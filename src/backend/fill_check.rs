@@ -48,38 +48,39 @@ pub(crate) enum Completeness {
     Unknown,
 }
 
-/// How a tools fill ended, as its guard sees it on drop.
 /// A transport failure of a tools fill, kept so a check-site call inside the
-/// cooldown answers with the same class, message and budget treatment (a
+/// cooldown answers with the same variant, message and budget treatment (a
 /// rate-limit text stays one) as the failure it stands in for (A3).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct Replay {
-    timeout: bool,
+    /// The original variant, rebuilt as is. `Http`, `Io` and `Tls` carry
+    /// non-cloneable sources, so they replay as `Transport` with their text.
+    variant: fn(String) -> Error,
     message: String,
 }
 
 impl Replay {
     /// `Some` for a transport failure (see [`is_transport_failure`]).
     pub(crate) fn of(error: &Error) -> Option<Self> {
-        is_transport_failure(error).then(|| Self {
-            timeout: matches!(error, Error::BackendTimeout(_)),
-            message: match error {
-                Error::BackendTimeout(m) | Error::BackendUnavailable(m) => m.clone(),
-                other => other.to_string(),
-            },
-        })
+        let (variant, message): (fn(String) -> Error, String) = match error {
+            Error::BackendTimeout(m) => (Error::BackendTimeout, m.clone()),
+            Error::BackendUnavailable(m) => (Error::BackendUnavailable, m.clone()),
+            Error::Transport(m) => (Error::Transport, m.clone()),
+            Error::TransportPermanent(m) => (Error::TransportPermanent, m.clone()),
+            Error::TransportConnect(m) => (Error::TransportConnect, m.clone()),
+            other if is_transport_failure(other) => (Error::Transport, other.to_string()),
+            _ => return None,
+        };
+        Some(Self { variant, message })
     }
 
     fn error(&self) -> Error {
-        if self.timeout {
-            Error::BackendTimeout(self.message.clone())
-        } else {
-            Error::BackendUnavailable(self.message.clone())
-        }
+        (self.variant)(self.message.clone())
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// How a tools fill ended, as its guard sees it on drop.
+#[derive(Clone, Debug)]
 pub(crate) enum FillEnd {
     /// Still draining: a drop here is a caller cancellation.
     Pending,
