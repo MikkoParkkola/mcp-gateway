@@ -366,8 +366,9 @@ async fn ui_delete_writes_admin_action() {
     assert_eq!(records[0]["http_status"], 503);
 }
 
-/// A backend edit (`PATCH`) is recorded, allowed or refused, with its method
-/// and route template; the URL in its body is never logged.
+/// A backend edit (`PATCH`) is recorded whether it fails (`error`) or is
+/// refused (`denied`), with its method and route template; the URL in its
+/// body is never logged.
 #[tokio::test]
 async fn ui_patch_writes_admin_action() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
@@ -393,6 +394,7 @@ async fn ui_patch_writes_admin_action() {
         assert_eq!(record["http_status"], status, "{record}");
     }
     assert_alice(&records[0]);
+    assert_eq!(records[1]["who"]["account"], STANDARD_KEY);
     assert!(
         !fx.raw().contains(BODY_CANARY),
         "the request body was logged"
