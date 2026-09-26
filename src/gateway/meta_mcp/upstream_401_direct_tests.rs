@@ -40,6 +40,7 @@ fn route_audit(file: &tempfile::NamedTempFile) -> Arc<crate::security::Transpare
         path: file.path().to_string_lossy().to_string(),
         key_id: "a11-direct".to_string(),
         shared_secret: String::new(),
+        ..crate::security::TransparencyLogConfig::default()
     };
     Arc::new(crate::security::TransparencyLogger::open(Arc::new(config)).expect("logger opens"))
 }
