@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
+  `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
+  They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
+  `tools.listChanged` is announced for every tool-set change over HTTP (config reload,
+  capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
+  stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
+  item 52.
+
 ### Security
 
 - **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
@@ -55,6 +63,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.2`,
 > `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`);
 > no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+
+### Highlights
+
+The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
+stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
+caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
+one replica while it is on. On stdio, `server/discover` lists only the older revisions. For teams, each caller now sees and invokes only what it was granted,
+and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
+rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
+with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
+with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
+unrecognised config key, a config file other users can read, an unresolved secret or, with auth
+on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
 ### Added
 
@@ -516,12 +537,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the process it replaced. This binds only when `server.modern_protocol` is on;
   with it off, scale as before.
 
-  **The tasks extension is not implemented.** `io.modelcontextprotocol/tasks` is
-  never advertised, so no client negotiates it. The types in the tree are short
-  of the specification — three statuses of five, two required fields missing, a
-  string where a JSON-RPC error object belongs — and turning the advertisement
-  on before that is fixed would break a client that trusted the identifier.
-  MIK-7311 owns the conformant implementation.
+  **The tasks extension is advertised on the 2026-07-28 surface.**
+  `server/discover` lists `io.modelcontextprotocol/tasks` in its capabilities, so a
+  modern client can run a long `tools/call` as a task, poll it with `tasks/get`,
+  and stop it with `tasks/cancel`; `tasks/update` is answered, but a task takes no
+  input responses in 4.0.0. A task belongs to the caller that created it,
+  and a returned handle still resolves after a restart within its retention window.
+  The legacy `initialize` result does not carry the extension. The task model is
+  knowingly short of the full extension specification in 4.0.0; MIK-7311 owns
+  completing it.
 
 ### Changed
 

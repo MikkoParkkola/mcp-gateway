@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MCP resource handlers.
 //!
-//! Implements `resources/list`, `resources/read`, `resources/templates/list`,
-//! `resources/subscribe`, and `resources/unsubscribe`.
+//! Implements `resources/list`, `resources/read` and `resources/templates/list`.
+//! `resources/subscribe` and `resources/unsubscribe` are refused at dispatch (F24).
 //!
 //! Gateway-owned guide resources (URIs prefixed `gateway://`) are served
 //! inline without hitting any backend, prepended to every `resources/list`
@@ -440,94 +440,6 @@ impl MetaMcp {
             next_cursor: None,
         };
         JsonRpcResponse::success_serialized(id, result)
-    }
-
-    /// Handle `resources/subscribe` — route to the backend that owns the URI, on
-    /// the terms of [`Self::forward_for_caller`].
-    pub async fn handle_resources_subscribe(
-        &self,
-        id: RequestId,
-        params: Option<&Value>,
-        client: Option<&AuthenticatedClient>,
-        verified_identity: Option<&VerifiedIdentity>,
-    ) -> JsonRpcResponse {
-        let Some(uri) = extract_nested_optional_str(params, "uri") else {
-            return missing_parameter_response(&id, "uri");
-        };
-
-        let Some((backend, credential)) = self
-            .find_resource_owner(uri, client, verified_identity)
-            .await
-        else {
-            return resource_not_found(id, uri);
-        };
-
-        // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
-        // gateway answers with the code the peer would have sent, one round
-        // trip earlier and without the ambiguity of a refusal that might have
-        // been about this resource rather than about the method.
-        if super::era_removed_method(&backend, "resources/subscribe").await {
-            return JsonRpcResponse::error(
-                Some(id),
-                crate::protocol::era::METHOD_NOT_FOUND_CODE,
-                "resources/subscribe was removed in protocol revision 2026-07-28",
-            );
-        }
-
-        let params = json!({ "uri": uri });
-        Self::forward_for_caller(
-            id,
-            &backend,
-            "resources/subscribe",
-            params,
-            credential,
-            json!({}),
-        )
-        .await
-    }
-
-    /// Handle `resources/unsubscribe` — route to the backend that owns the URI, on
-    /// the terms of [`Self::forward_for_caller`].
-    pub async fn handle_resources_unsubscribe(
-        &self,
-        id: RequestId,
-        params: Option<&Value>,
-        client: Option<&AuthenticatedClient>,
-        verified_identity: Option<&VerifiedIdentity>,
-    ) -> JsonRpcResponse {
-        let Some(uri) = extract_nested_optional_str(params, "uri") else {
-            return missing_parameter_response(&id, "uri");
-        };
-
-        let Some((backend, credential)) = self
-            .find_resource_owner(uri, client, verified_identity)
-            .await
-        else {
-            return resource_not_found(id, uri);
-        };
-
-        // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
-        // gateway answers with the code the peer would have sent, one round
-        // trip earlier and without the ambiguity of a refusal that might have
-        // been about this resource rather than about the method.
-        if super::era_removed_method(&backend, "resources/unsubscribe").await {
-            return JsonRpcResponse::error(
-                Some(id),
-                crate::protocol::era::METHOD_NOT_FOUND_CODE,
-                "resources/unsubscribe was removed in protocol revision 2026-07-28",
-            );
-        }
-
-        let params = json!({ "uri": uri });
-        Self::forward_for_caller(
-            id,
-            &backend,
-            "resources/unsubscribe",
-            params,
-            credential,
-            json!({}),
-        )
-        .await
     }
 
     /// Find which of the backends this caller may reach owns `uri`, with the

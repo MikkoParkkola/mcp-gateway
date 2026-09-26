@@ -9,9 +9,9 @@
 //! meaning for the same number, which is why the revision moves the condition
 //! onto the standard JSON-RPC invalid-params code.
 //!
-//! Every method that resolves a URI to its owning backend is covered here, not
-//! just `resources/read`: the mapping is one condition reached from three
-//! entry points, and a fix applied to one of them leaves the other two wrong.
+//! `resources/read` is the one method that resolves a URI to its owning backend.
+//! `resources/subscribe` and `resources/unsubscribe` used to, and are now refused
+//! at dispatch (F24), so they no longer reach this mapping.
 
 use std::sync::Arc;
 
@@ -56,22 +56,4 @@ async fn ac_error_2_resources_read_answers_invalid_params() {
         )
         .await;
     assert_invalid_params(&response, "resources/read");
-}
-
-#[tokio::test]
-async fn ac_error_2_resources_subscribe_answers_invalid_params() {
-    let params = json!({ "uri": UNOWNED_URI });
-    let response = meta_mcp()
-        .handle_resources_subscribe(RequestId::Number(2), Some(&params), None, None)
-        .await;
-    assert_invalid_params(&response, "resources/subscribe");
-}
-
-#[tokio::test]
-async fn ac_error_2_resources_unsubscribe_answers_invalid_params() {
-    let params = json!({ "uri": UNOWNED_URI });
-    let response = meta_mcp()
-        .handle_resources_unsubscribe(RequestId::Number(3), Some(&params), None, None)
-        .await;
-    assert_invalid_params(&response, "resources/unsubscribe");
 }
