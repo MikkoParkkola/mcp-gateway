@@ -71,6 +71,7 @@ upgrading a running deployment.
 | 47 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §47 for what is refused on `ws_url` |
 | 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 | 49 | The audit log rotates at 64 MiB and keeps 12 sealed segments; `audit verify` reads every segment and detects a deleted or truncated active file | Copy or archive the segments together, never rotate the log externally, and size the volume for `(retain_segments + 1) x max_segment_bytes` (Helm refuses an emptyDir too small) |
+| 50 | Every hot-path audit append is bounded (5 s wait, 5 s write); a stalled audit disk answers 503 and `/readyz` reports `stalled` instead of hanging the gateway | Alert on `mcp_audit_append_timeouts_total` and the `stalled` `/readyz` body; a mount that never recovers needs a restart |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 | 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 53 | A backend's own rate-limit refusal reads `Rate limit exceeded for backend 'x'` (hint `RATE_LIMITED`, code still -32000) and no longer counts against the error budgets or `mcp_backend_circuit_state` | Match the new text in clients and alerts that looked for "Circuit breaker open"; watch `mcp_backend_rate_limited_total` for throttling |
@@ -82,6 +83,7 @@ upgrading a running deployment.
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
+| 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1320,6 +1322,32 @@ On a signed log, `.hwm` is signed too.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
+## 50. A stalled audit disk answers 503 within seconds instead of hanging
+
+With auth on, every tool call waits for its audit record (item 43). Before this release a
+filesystem that stopped answering (a hung NFS mount, a throttled volume) blocked that write
+indefinitely, and the blocked writes used up the server's worker threads until the gateway stopped
+answering at all. Now every audit append on the request path runs off the request threads and is
+bounded: the invocation record on both routes (`gateway_invoke` and `POST /mcp/{name}`), the
+response delivery attempt, and the identity-propagation mint, refuse and revoke records. Each waits
+at most 5 s behind another append, then writes for at most 5 s. A mint whose record times out is
+refused, so no credential is issued without a durable record.
+
+When the bound expires, the call is refused with 503 (`AuditUnavailable`), the log is marked
+stalled, `mcp_audit_append_timeouts_total` goes up and `/readyz` answers 503 with
+`audit log unavailable: stalled`. Later calls are refused at once, without waiting, until the
+stuck write returns. When it returns, the log clears itself; a failed write leaves it degraded with
+the real cause (item 43). With auth off (`BestEffort`) calls keep being served, and `/readyz` stays
+200.
+
+A write the kernel never returns cannot be abandoned, so a mount that never recovers keeps the
+gateway refusing calls until it is restarted. Alert on `mcp_audit_append_timeouts_total` and on
+the `stalled` `/readyz` body.
+
+A call refused this way can still gain an invocation record when the stuck write finally lands.
+That record has no `response_delivery_attempt` record after it: an invocation record with no
+delivery attempt means the result was withheld.
+
 ## 51. SSO admin rules now grant full gateway admin
 
 A `control_plane.role_mapping` rule with `role: admin` used to make its identity
@@ -1652,6 +1680,24 @@ and an audit record with outcome `error`. It is now refused like an admin-only t
 
 **Action:** only a client, alert or log query that matched the old 400/-32603 answer or the
 "Configuration error" text for this refusal needs to match 403/-32600 instead.
+
+## 67. Task calls on per-backend routes are refused
+
+`POST /mcp/{name}` forwarded `tasks/get`, `tasks/update`, `tasks/cancel` and every other
+`tasks/*` method to the backend unchanged, with no owner check. Callers allowed on the same
+backend share its credential, so the backend could not tell them apart: one caller holding
+another's task id could read that task's result or cancel it.
+
+In 4.0, task calls on per-backend routes are refused until they carry an owner check:
+
+- Every `tasks/*` method on `POST /mcp/{name}`, in any letter case, and `subscriptions/listen`
+  naming `taskIds`, is answered with JSON-RPC -32601 (HTTP 200). Nothing reaches the backend.
+- `POST /mcp` still serves tasks, with each task visible only to the caller that created it.
+- Every other method on `POST /mcp/{name}` forwards as before, including a `tools/call`
+  carrying `task`, and `subscriptions/listen` without `taskIds`.
+
+**Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
+gets -32601. Create and follow tasks through `POST /mcp` instead.
 
 ## After upgrading
 

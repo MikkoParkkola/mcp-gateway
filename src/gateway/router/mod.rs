@@ -69,6 +69,8 @@ mod direct_audit_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_tasks_owner_tests;
+#[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
@@ -254,7 +256,11 @@ async fn readyz(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             format!(
                 "audit log unavailable: {}",
-                log.last_failure_cause().unwrap_or("io_error")
+                if log.is_stalled() {
+                    "stalled"
+                } else {
+                    log.last_failure_cause().unwrap_or("io_error")
+                }
             ),
         ),
         _ if state

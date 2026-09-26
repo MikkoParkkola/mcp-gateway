@@ -74,21 +74,22 @@
     },
     {
       "id": "MIK-7387.STDIO.2",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
         "src/gateway/server/mod.rs",
         "src/gateway/server/stdio_channel.rs",
         "tests/mik_7212_mrtr7_stdio_acs.rs",
-        "docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md"
+        "docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md",
+        "src/gateway/server/tests/stdio_initialize_order.rs"
       ],
-      "note": "PENDING 2026-09-26 (evidence re-read at 137ab7acf): ac_mrtr_7a_bridged_request_follows_the_initialize_response (tests/mik_7212_mrtr7_stdio_acs.rs:460) never holds the initialize write, so it cannot tell a correct build from one that lets a bridged request overtake initialize; the ordering rests on code structure alone (src/gateway/server/mod.rs:2524-2530). MET 2026-09-16 at f93a805b, graded conjunct-by-conjunct.\n\nC1 an input request is emitted to a legacy stdio client at all: MET, see STDIO.1 C2.\n\nC2 the request is written strictly after the initialize response: MET by ac_mrtr_7a_bridged_request_follows_the_initialize_response (tests/mik_7212_mrtr7_stdio_acs.rs:441), passing. The initialize arm is dispatched inline rather than spawned, which is what makes the ordering a property of the code.\n\nC3 it holds under back-to-back inbound frames with the handshake still unwritten: MET by the same row, which sends initialize and the asking call without waiting between them."
+      "note": "MET 2026-09-26 (re-graded from pending). Merged in PR #1399 as f9270991f. The initialize write is now HELD while a bridged question becomes ready: stdio_2_question_waits_for_a_held_initialize_response (src/gateway/server/tests/stdio_initialize_order.rs:182) and stdio_2_held_writer_emits_initialize_before_a_ready_question (:245); ordering rests on the inline initialize and the single FIFO writer. Green CI run 36270512690 (Tests job 108483443866, merge ref onto f9270991f), both tests ok. Mutation: initialize spawned instead of awaited inline reddens the first (run 36244475484); bridge frames on a priority lane ahead of the FIFO redden the second (run 36269251761). PRIOR NOTE: PENDING 2026-09-26 (evidence re-read at 137ab7acf): ac_mrtr_7a_bridged_request_follows_the_initialize_response (tests/mik_7212_mrtr7_stdio_acs.rs:460) never holds the initialize write, so it cannot tell a correct build from one that lets a bridged request overtake initialize; the ordering rests on code structure alone (src/gateway/server/mod.rs:2524-2530). MET 2026-09-16 at f93a805b, graded conjunct-by-conjunct.\n\nC1 an input request is emitted to a legacy stdio client at all: MET, see STDIO.1 C2.\n\nC2 the request is written strictly after the initialize response: MET by ac_mrtr_7a_bridged_request_follows_the_initialize_response (tests/mik_7212_mrtr7_stdio_acs.rs:441), passing. The initialize arm is dispatched inline rather than spawned, which is what makes the ordering a property of the code.\n\nC3 it holds under back-to-back inbound frames with the handshake still unwritten: MET by the same row, which sends initialize and the asking call without waiting between them."
     },
     {
       "id": "MIK-7387.STDIO.3",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
         "src/gateway/server/mod.rs",
@@ -96,7 +97,7 @@
         "tests/mik_7212_mrtr7_stdio_acs.rs",
         "docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md"
       ],
-      "note": "PENDING 2026-09-26 (evidence re-read at 137ab7acf): ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames (tests/mik_7212_mrtr7_stdio_acs.rs:509) counts frames and parses lines but never matches replies to requests and never races concurrent replies. MET 2026-09-16 at f93a805b + 756bd6cd, graded conjunct-by-conjunct.\n\nC1 concurrent: MET. run_stdio spawns non-initialize dispatches onto a JoinSet (src/gateway/server/mod.rs) rather than awaiting each inline.\n\nC2 complete frames: MET and no longer vacuous. One writer task owns stdout and every producer queues to it (mod.rs:2364 region), so whole-frame writes are a property of the code rather than of timing; ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames (tests/mik_7212_mrtr7_stdio_acs.rs:491) passes against real concurrency.\n\nC3 non-interleaved: MET by the same single-writer structure.\n\nHardening after independent review (gpt: HIGH, kimi: MEDIUM, both on unbounded resources): the stdout queue is bounded, dispatch admission is capped, and the writer ends when stdout is gone. `cargo clippy --all-targets -- -D warnings` is clean."
+      "note": "MET 2026-09-26 (re-graded from pending). Merged in PR #1399 as f9270991f. ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames (tests/mik_7212_mrtr7_stdio_acs.rs:308) answers two concurrent bridged questions in reverse order and asserts distinct ids, whole frames, and that each call gets back its own answer. Green CI run 36270512690 (Tests job 108483443866), ok. Mutation: resolve routing a reply to another pending id reddens it (run 36244483718). PRIOR NOTE: PENDING 2026-09-26 (evidence re-read at 137ab7acf): ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames (tests/mik_7212_mrtr7_stdio_acs.rs:509) counts frames and parses lines but never matches replies to requests and never races concurrent replies. MET 2026-09-16 at f93a805b + 756bd6cd, graded conjunct-by-conjunct.\n\nC1 concurrent: MET. run_stdio spawns non-initialize dispatches onto a JoinSet (src/gateway/server/mod.rs) rather than awaiting each inline.\n\nC2 complete frames: MET and no longer vacuous. One writer task owns stdout and every producer queues to it (mod.rs:2364 region), so whole-frame writes are a property of the code rather than of timing; ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames (tests/mik_7212_mrtr7_stdio_acs.rs:491) passes against real concurrency.\n\nC3 non-interleaved: MET by the same single-writer structure.\n\nHardening after independent review (gpt: HIGH, kimi: MEDIUM, both on unbounded resources): the stdout queue is bounded, dispatch admission is capped, and the writer ends when stdout is gone. `cargo clippy --all-targets -- -D warnings` is clean."
     },
     {
       "id": "MIK-7388.CANCEL.1",

@@ -85,7 +85,8 @@ impl Fixture {
         targets: &[ResponsePolicyTarget],
         mutation: ResponseMutationPolicy,
     ) -> JsonRpcResponse {
-        self.meta.finalize_response_for_delivery(
+        let rt = tokio::runtime::Runtime::new().expect("F20: delivery is async");
+        rt.block_on(self.meta.finalize_response_for_delivery(
             response,
             &ResponseDeliveryContext {
                 method,
@@ -94,7 +95,7 @@ impl Fixture {
                 mutation,
                 signing: None,
             },
-        )
+        ))
     }
 
     fn audits(&self) -> Vec<Value> {
@@ -737,8 +738,7 @@ fn firewall_delivery_attempt_preserves_existing_invocation_and_hash_chain() {
 fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault() {
     let fixture = Fixture::new(FirewallAction::Allow, true, true, true);
     let logger = fixture.meta.transparency_logger.as_ref().unwrap();
-    // Establish a real append_event -> append_core I/O fault before relying on
-    // it to distinguish finalizer behavior. The fault is local to this logger.
+    // First prove a real, logger-local append_event -> append_core I/O fault.
     logger.fail_next_append_for_test();
     let probe = json!({"event":"fault-fixture-probe"})
         .as_object()

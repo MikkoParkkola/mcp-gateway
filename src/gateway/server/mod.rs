@@ -2969,7 +2969,7 @@ impl Gateway {
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
             },
-        );
+        ).await;
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }
