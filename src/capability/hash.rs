@@ -50,6 +50,12 @@ pub fn strip_sha256_line(content: &str) -> String {
         // Only strip top-level `sha256:` — anything indented is a nested
         // field (e.g. some future provider key) and must stay in the hash.
         if line.starts_with("sha256:") {
+            // Only the pin itself is excluded. A lone CR ends a YAML line too,
+            // so text after one is another line, and it is hashed like any
+            // other: otherwise it would parse as YAML and escape the pin.
+            if let Some(cr) = line.find('\r') {
+                out.push_str(&line[cr + 1..]);
+            }
             continue;
         }
         out.push_str(line);
