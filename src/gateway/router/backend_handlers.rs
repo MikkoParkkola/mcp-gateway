@@ -801,7 +801,7 @@ async fn backend_handler_inner(
                 Ok((headers, binding, held)) => {
                     // Bind the upstream session bucket to this caller (MIK-6784).
                     identity_key = binding;
-                    managed = held;
+                    managed = held.filter(|_| false);
                     Ok(headers)
                 }
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
