@@ -1049,15 +1049,6 @@ pub struct ConfigWatcher {
     _chain: Arc<watch_chain::ChainWatch>,
 }
 
-/// The config path as the operator named it, made absolute without resolving
-/// any link in it. The watcher, the rewatch task and the reload all use this
-/// one path: resolving the parent here would pin a Capistrano `current` to the
-/// release it named at startup, and every reload would read that release.
-/// Only per-event matching resolves links (`config_watch_paths`).
-fn named_config_path(path: PathBuf) -> PathBuf {
-    std::path::absolute(&path).unwrap_or(path)
-}
-
 impl ConfigWatcher {
     /// The chain watch, for tests that wait on its ledger and counters.
     // Only the unix-gated watcher tests read it.
@@ -1090,7 +1081,7 @@ impl ConfigWatcher {
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
-        let config_path = named_config_path(config_path);
+        let config_path = watch_chain::named_config_path(config_path);
         // The paths startup recorded, never `initial_config.env_files`: a `~`
         // entry resolved once, and resolving the spelling again could watch a
         // different file than the one the gateway reads.
@@ -1153,10 +1144,14 @@ impl ConfigWatcher {
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
-                // Every event may have moved the chain: a link unlinked and
-                // re-created is an event on the named path itself. The task
-                // decides; this thread must not block or call `watch`.
-                wake_tx.send_replace(());
+                // Every event that changes a directory may have moved the
+                // chain: a link unlinked and re-created is an event on the
+                // named path itself. Reads cannot, and the reload's own read of
+                // the config must not wake the task again. The task decides;
+                // this thread must not block or call `watch`.
+                if !matches!(event.kind, EventKind::Access(_)) {
+                    wake_tx.send_replace(());
+                }
                 if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
@@ -1171,16 +1166,7 @@ impl ConfigWatcher {
 
         let env_dirs = watch_chain::watch_env_dirs(&mut watcher, env_file_paths);
 
-        // A chain that cannot be resolved right now (a target missing
-        // mid-update) watches the named file's own directory; the rewatch task
-        // resolves the chain again on its first wake and on every event.
-        let wanted = match watch_chain::chain_dirs(&named_config_path) {
-            Ok((wanted, _)) => wanted,
-            Err(e) => {
-                warn!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
-                std::collections::BTreeSet::from([watch_dir_of(&named_config_path)])
-            }
-        };
+        let wanted = watch_chain::startup_dirs(&named_config_path);
         let chain = watch_chain::ChainWatch::new(watcher, env_dirs.clone());
         chain.reconcile(&wanted);
         let in_ledger = chain.watched_now();

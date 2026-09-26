@@ -209,10 +209,7 @@ fn t14_the_named_config_path_keeps_its_directory_link() {
     let named = r.join("current").join("cfg.yaml");
     let resolved = crate::config_reload::absolute_watch_path(named.clone());
     assert_ne!(resolved, named, "premise: event matching resolves the link");
-    assert_eq!(
-        crate::config_reload::named_config_path(named.clone()),
-        named
-    );
+    assert_eq!(super::named_config_path(named.clone()), named);
 }
 
 #[cfg(target_os = "linux")]
@@ -238,7 +235,7 @@ mod real_watcher {
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
         // As `ConfigWatcher::start` does: the operator's path, made absolute
         // without resolving links, and one resolve once the watches are live.
-        let named = crate::config_reload::named_config_path(named.to_path_buf());
+        let named = super::super::named_config_path(named.to_path_buf());
         let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
             .expect("watcher starts");
         wake_rx.mark_changed();
@@ -454,7 +451,7 @@ mod real_watcher {
         let (_root, r) = capistrano();
         let (tx, _events) = tokio::sync::mpsc::channel(32);
         let (wake_tx, _wake_rx) = tokio::sync::watch::channel(());
-        let named = crate::config_reload::named_config_path(r.join("current").join("cfg.yaml"));
+        let named = super::super::named_config_path(r.join("current").join("cfg.yaml"));
         let chain =
             ConfigWatcher::create_notify_watcher(tx, wake_tx, &named, &[]).expect("watcher starts");
         assert_eq!(chain.watched(), set(&[&r, &r.join("rel1")]));
@@ -575,7 +572,7 @@ mod real_watcher {
         symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
         let (tx, _events) = tokio::sync::mpsc::channel(32);
         let (wake_tx, _wake_rx) = tokio::sync::watch::channel(());
-        let named = crate::config_reload::named_config_path(c.join("l"));
+        let named = super::super::named_config_path(c.join("l"));
         let chain = ConfigWatcher::create_notify_watcher(tx, wake_tx, &named, &[])
             .expect("a dangling link does not fail the start");
         assert_eq!(chain.watched(), set(&[&c]));
@@ -609,7 +606,7 @@ mod real_watcher {
         let (tx, mut events) = tokio::sync::mpsc::channel(32);
         let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
-        let named = crate::config_reload::named_config_path(c.join("l"));
+        let named = super::super::named_config_path(c.join("l"));
         let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
             .expect("watcher starts");
         retarget(&c.join("l"), &a.join("cfg2.yaml"));

@@ -944,9 +944,10 @@ Limits:
 - a chain longer than 40 links is treated as a loop: the watcher keeps its last
   good watches and logs the error.
 
-If the chain cannot be resolved at startup (a target missing mid-update), the
-gateway still starts and watches the config's own directory, and follows the
-chain from the next change. It also re-reads the config once as soon as the
+If the chain cannot be resolved (a target missing mid-update, at startup or
+later), the gateway keeps its last watches, or at startup watches the config's
+own directory, and tries again every 2 seconds and on every change until the
+chain resolves. It also re-reads the config once as soon as the
 watches are in place, so a retarget between loading the config and starting the
 watcher is not missed.
 

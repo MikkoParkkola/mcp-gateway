@@ -27,6 +27,9 @@ use super::{ReloadTrigger, watch_dir_of};
 /// Hops followed before a chain is treated as a loop, as the kernel's `ELOOP`.
 const MAX_HOPS: usize = 40;
 
+/// How often a chain that cannot be resolved is tried again without an event.
+const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The directories a config's link chain runs through, each canonical, and
 /// where it ends.
 ///
@@ -102,6 +105,29 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
             }
         }
     }
+}
+
+/// The config path as the operator named it, made absolute without resolving
+/// any link in it. The watcher, the rewatch task and the reload all use this
+/// one path: resolving the parent here would pin a Capistrano `current` to the
+/// release it named at startup, and every reload would read that release.
+/// Only per-event matching resolves links (`config_watch_paths`).
+pub(super) fn named_config_path(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+/// The directories to watch at startup. A chain that cannot be resolved yet
+/// (a target missing mid-update) watches the named file's own directory, and
+/// the rewatch task resolves it again on its first wake, on a timer and on
+/// every event.
+pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
+    chain_dirs(named).map_or_else(
+        |e| {
+            warn!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
+            BTreeSet::from([watch_dir_of(named)])
+        },
+        |(wanted, _)| wanted,
+    )
 }
 
 /// The watcher and the directories it has actually been told to watch.
@@ -212,6 +238,11 @@ pub(super) fn spawn_rewatch_task(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_end: Option<PathBuf> = None;
+        // While the chain cannot be resolved, its missing part may appear in a
+        // directory nobody watches yet, so the task also retries on a timer.
+        let mut broken = false;
+        let mut retry = tokio::time::interval(CHAIN_RETRY);
+        retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 changed = wake.changed() => {
@@ -219,15 +250,24 @@ pub(super) fn spawn_rewatch_task(
                         break;
                     }
                 }
+                _ = retry.tick(), if broken => {}
                 _ = shutdown.recv() => break,
             }
-            let Ok((wanted, end)) = chain_dirs(&named) else {
-                #[cfg(test)]
-                chain
-                    .wakes_handled
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                continue; // keep the last good set; the next event retries
+            let (wanted, end) = match chain_dirs(&named) {
+                Ok(chain_now) => chain_now,
+                Err(e) => {
+                    if !broken {
+                        warn!(error = %e, "Config watcher: cannot resolve the config's link chain; keeping the last watches");
+                    }
+                    broken = true;
+                    #[cfg(test)]
+                    chain
+                        .wakes_handled
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    continue; // keep the last good set; the timer and the next event retry
+                }
             };
+            broken = false;
             let rewatched = chain.reconcile(&wanted);
             #[cfg(test)]
             chain
