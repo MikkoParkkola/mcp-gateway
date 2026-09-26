@@ -148,4 +148,31 @@ impl MetaMcp {
             }
         }
     }
+
+    /// Record an `idp_refuse`. The request is refused on identity-propagation
+    /// grounds either way, so a failed write is logged, never dropped.
+    pub(super) async fn audit_refused_credential(
+        audit_logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+        subject_id: &str,
+        server: &str,
+        audience: &str,
+        msg: &str,
+    ) {
+        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
+            audit_logger,
+            "idp_refuse",
+            subject_id,
+            server,
+            Some(audience),
+            Some(msg),
+        )
+        .await
+        {
+            tracing::warn!(
+                server,
+                error = %audit_err,
+                "identity-propagation refuse audit write failed"
+            );
+        }
+    }
 }

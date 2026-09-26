@@ -851,9 +851,8 @@ async fn backend_handler_inner(
                     )
                     .await
                     {
-                        // CWE-209: the audit error can carry the transparency-log
-                        // filesystem path / IO error. Keep it in the server log
-                        // only; return a generic client-facing message.
+                        // CWE-209: the audit error can name a filesystem path; it
+                        // stays in the server log, the client gets a generic message.
                         warn!(
                             backend = %name,
                             error = %audit_err,
@@ -870,11 +869,8 @@ async fn backend_handler_inner(
                 headers
             }
             Err(e) => {
-                // The request is already being refused on identity-propagation
-                // grounds; an audit-write failure here does not change that
-                // outcome (unlike the mint path above, which is fail-closed on
-                // the audit write itself) — but it must not be silently
-                // dropped, so it is logged.
+                // Refused either way: unlike the mint path above, a failed audit
+                // write here is logged rather than failing the call closed.
                 if let Err(audit_err) = audit_identity_propagation(
                     state.transparency_log.as_ref(),
                     "idp_refuse",

@@ -2936,11 +2936,7 @@ impl MetaMcp {
         let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
         let refuse = async |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required || vault {
-                // The request is already being refused on identity-propagation
-                // grounds; an audit-write failure here does not change that
-                // outcome (unlike the mint path below, which is fail-closed on
-                // the audit write itself) — but it must not be silently
-                // dropped, so it is logged.
+                // Refused either way; the helper logs a failed audit write.
                 Self::audit_refused_credential(audit_logger, &subject_id, server, audience, &msg)
                     .await;
                 Err(Error::Config(format!(
@@ -2962,10 +2958,8 @@ impl MetaMcp {
             .get(server)
             .is_some_and(|backend| backend.account_descriptor_id().is_some());
         if vault && !account_bound {
-            return refuse(
-                "raw Vault identity propagation requires an account descriptor".to_string(),
-            )
-            .await;
+            let msg = "raw Vault identity propagation requires an account descriptor";
+            return refuse(msg.to_string()).await;
         }
 
         // MIK-6710: refuse BEFORE minting when this backend's transport cannot
@@ -3048,33 +3042,6 @@ impl MetaMcp {
                     let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
                     crate::personal_accounts::refusal::mark(refused, &e, account_id)
                 }),
-        }
-    }
-
-    /// Record an `idp_refuse`. The request is refused on identity-propagation
-    /// grounds either way, so a failed write is logged, never dropped.
-    async fn audit_refused_credential(
-        audit_logger: Option<&Arc<crate::security::TransparencyLogger>>,
-        subject_id: &str,
-        server: &str,
-        audience: &str,
-        msg: &str,
-    ) {
-        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
-            audit_logger,
-            "idp_refuse",
-            subject_id,
-            server,
-            Some(audience),
-            Some(msg),
-        )
-        .await
-        {
-            tracing::warn!(
-                server,
-                error = %audit_err,
-                "identity-propagation refuse audit write failed"
-            );
         }
     }
 
