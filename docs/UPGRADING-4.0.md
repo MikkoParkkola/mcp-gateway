@@ -1287,6 +1287,8 @@ unready instead (the item 43 behaviour).
 Do not rotate the log with an external tool (logrotate, `copytruncate`, a cron `mv`). Any
 external rotation breaks the hash chain, and verify then reports it as tampering.
 
+On Windows, a writer recognises a file by its creation time, because there is no inode. So run a single gateway process per log path there; two processes sharing one path can miss each other's rotation.
+
 Sizing: one tool call writes one or two records of about 1 KiB, so each MiB holds roughly
 500-1000 calls, and the default 832 MiB holds the last 400k-800k calls. For more, set
 `audit.existingClaim` to a larger PersistentVolumeClaim and raise `audit.rotation.retainSegments`.
