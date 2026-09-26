@@ -194,7 +194,7 @@ impl super::MetaMcp {
         fields.insert("response_hash".into(), hash.into());
         fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
         // A fingerprint: the id is its anonymous holder's credential (F9).
-        let session_id = crate::gateway::session_id::session_fp(correlation.session_id);
+        let session_id = correlation.session_id.to_string();
         fields.insert("session_id".into(), session_id.into());
         fields.insert("caller".into(), correlation.caller.into());
         fields.insert("server".into(), correlation.external_server.into());
