@@ -863,6 +863,10 @@ where
 }
 
 #[cfg(test)]
+#[path = "streaming_sessions_tests.rs"]
+mod sessions_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
