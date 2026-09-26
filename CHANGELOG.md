@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mcp_backend_rate_limited_total{backend}` counts requests and notifications refused by a
+  backend's own `failsafe.rate_limit` before dispatch. Those refusals are excluded from the
+  error budgets and the circuit gauge (F23), so this is where operators see them. See
+  `docs/UPGRADING-4.0.md` item 53 (F23b).
 - `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
   item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
   the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
