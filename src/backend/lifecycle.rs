@@ -1163,9 +1163,9 @@ impl Backend {
     /// Refusing is still not free for the codes that could also come from a
     /// peer in trouble, so the count bounds the patience:
     /// [`UNSERVED_ESCALATION`] consecutive such refusals are treated as the
-    /// fault they have become. The count deliberately survives an era
-    /// invalidation, or a peer that answers nothing would reset the escalation
-    /// by changing which method it refuses.
+    /// fault they have become. The count survives an era invalidation (a
+    /// modern-only code refusing a Legacy-era `ping`, row 9f), or a peer could
+    /// dodge the escalation by changing which method it refuses.
     ///
     /// `method not found` is exempt. `ping` is OPTIONAL in MCP, so declining
     /// it is a stable property of the peer rather than a condition a restart
@@ -1188,10 +1188,10 @@ impl Backend {
         )
         .increment(1);
 
-        // Only `method not found` against discovery is evidence about era, and
-        // the call is made before the escalation check so a peer that is merely
-        // older than the cache believes is reclassified on the same tick that
-        // noticed.
+        // A code that contradicts the cached era (`-32601` to discovery, or a
+        // modern-only code to a Legacy `ping`) re-probes it. Called before the
+        // escalation check, so a misclassified peer is reclassified on the tick
+        // that noticed.
         self.reprobe_if_code_contradicts(method, code, transport)
             .await;
 

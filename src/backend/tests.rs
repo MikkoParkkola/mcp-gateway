@@ -1408,34 +1408,8 @@ async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
     );
 }
 
-/// Row 9d — the escalation sequence section 3 uses to justify the bound, end to
-/// end, and the one that crosses an era invalidation: `server/discover` answers
-/// `-32601` (invalidate, and no count — row 10d), then three faulted answers
-/// escalate. An implementation that resets the unserved count when it
-/// invalidates the era leaves a failing backend permanently wedged and green.
-#[tokio::test]
-async fn row_9d_three_unserved_answers_across_an_invalidation_still_escalate() {
-    let mock = Arc::new(
-        ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-        )])
-        .refusing(crate::error::rpc_codes::INTERNAL_ERROR),
-    );
-    let backend = probe_backend(Arc::clone(&mock), true).await;
-
-    for _ in 0..4 {
-        let _ = backend.health_probe(Duration::from_secs(5)).await;
-    }
-
-    assert!(
-        backend.is_circuit_tripped(),
-        "three consecutive unserved answers must trip the breaker"
-    );
-    assert!(
-        !still_wired(&backend, &mock),
-        "the third unserved answer escalates to a restart"
-    );
-}
+// Rows 9d, 9f and 10e: the unserved count across an era invalidation (#579).
+mod unserved_era;
 
 /// Row 10 — the escalation itself, one answer at a time. The first two
 /// unserved answers leave the backend exactly as they found it; the third is
