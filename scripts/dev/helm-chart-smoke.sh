@@ -350,6 +350,21 @@ for bad in "service.type=NodePort" "service.type=LoadBalancer" \
   fi
 done
 
+echo "== helm_default_fits_size_limit =="
+# D6: the defaults render, and pin the documented values; a retention that
+# cannot fit the 1Gi emptyDir must refuse to render.
+d6="$("$HELM" template t "$CHART" 2>&1)" || fail "default render fails the audit volume guard: $d6"
+grep -qE '^ +retain_segments: 12$' <<<"$d6" || fail "default retain_segments is not 12"
+grep -qE '^ +max_segment_bytes: 67108864$' <<<"$d6" || fail "default max_segment_bytes is not 64Mi"
+grep -qE '^ +on_disk_full: expire_oldest$' <<<"$d6" || fail "default on_disk_full is not expire_oldest"
+if out="$("$HELM" template t "$CHART" --set audit.rotation.retainSegments=20 2>&1)"; then
+  fail "retainSegments=20 rendered on a 1Gi emptyDir"
+elif ! grep -q 'does not fit' <<<"$out"; then
+  fail "retainSegments=20 failed without naming the size guard: $out"
+fi
+"$HELM" template t "$CHART" --set audit.rotation.retainSegments=20 \
+  --set audit.existingClaim=big >/dev/null 2>&1 || fail "a PVC must lift the emptyDir size guard"
+
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 
 echo "helm chart smoke passed"

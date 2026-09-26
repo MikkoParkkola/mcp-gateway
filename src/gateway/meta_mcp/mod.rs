@@ -73,6 +73,8 @@ use confirmation::{GateOutcome, destructive_confirmation_gate};
 pub(crate) mod admission;
 #[cfg(test)]
 mod audit_record_tests;
+#[cfg(test)]
+mod callback_admin_denial_tests;
 mod caller_forward;
 mod chain_interim;
 #[cfg(test)]
@@ -2747,7 +2749,7 @@ mod catalogue_per_caller_tests;
 #[cfg(test)]
 mod test_callers;
 #[cfg(test)]
-pub(super) use test_callers::{anonymous_caller, identified_caller};
+pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]

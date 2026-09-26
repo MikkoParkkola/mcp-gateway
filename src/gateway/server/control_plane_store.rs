@@ -130,20 +130,34 @@ fn probe_writable(dir: &Path) -> std::io::Result<()> {
     written.and(removed)
 }
 
+/// The governance log's config: the operator's signing identity and disk-full
+/// choice, with a fixed 16 MiB x 4 rotation (80 MiB worst case), not the
+/// invocation log's 64 MiB x 12 (D6 2.12). An explicit literal, so a new
+/// `TransparencyLogConfig` field forces a choice here.
+fn governance_log_config(
+    config: &Config,
+    base: &Path,
+) -> crate::security::transparency_log::TransparencyLogConfig {
+    use crate::security::transparency_log::{RotationConfig, TransparencyLogConfig};
+    TransparencyLogConfig {
+        enabled: true,
+        path: base.join("audit.jsonl").to_string_lossy().into_owned(),
+        key_id: config.security.transparency_log.key_id.clone(),
+        shared_secret: config.security.transparency_log.shared_secret.clone(),
+        rotation: RotationConfig::governance(
+            config.security.transparency_log.rotation.on_disk_full,
+        ),
+    }
+}
+
 fn open_store(
     config: &Config,
     base: &Path,
 ) -> std::result::Result<Arc<dyn ControlPlaneStore>, String> {
     use crate::control_plane::FileControlPlaneStore;
     use crate::security::TransparencyLogger;
-    use crate::security::transparency_log::TransparencyLogConfig;
 
-    let audit_cfg = Arc::new(TransparencyLogConfig {
-        enabled: true,
-        path: base.join("audit.jsonl").to_string_lossy().into_owned(),
-        key_id: config.security.transparency_log.key_id.clone(),
-        shared_secret: config.security.transparency_log.shared_secret.clone(),
-    });
+    let audit_cfg = Arc::new(governance_log_config(config, base));
     let audit = TransparencyLogger::open(audit_cfg).map_err(|e| format!("audit log: {e}"))?;
     let store = FileControlPlaneStore::open(base.join("store"), Arc::new(audit))
         .map_err(|e| format!("store: {e}"))?;
@@ -187,6 +201,20 @@ mod tests {
         format!(
             "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: \"{store_dir}\"\n"
         )
+    }
+
+    /// D6 2.12: the governance log rotates at 16 MiB x 4 whatever the
+    /// invocation log's sizes, and inherits only `on_disk_full`.
+    #[test]
+    fn governance_log_uses_fixed_rotation() {
+        use crate::security::transparency_log::OnDiskFull;
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let yaml = "security:\n  transparency_log:\n    enabled: true\n    rotation:\n      max_segment_bytes: 2097152\n      retain_segments: 30\n      on_disk_full: refuse\n";
+        let (config, _) = load(cfg_dir.path(), yaml);
+        let gov = super::governance_log_config(&config, cfg_dir.path());
+        assert_eq!(gov.rotation.max_segment_bytes, 16 * 1024 * 1024);
+        assert_eq!(gov.rotation.retain_segments, 4);
+        assert_eq!(gov.rotation.on_disk_full, OnDiskFull::Refuse);
     }
 
     #[test]

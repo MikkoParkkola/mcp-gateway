@@ -95,3 +95,48 @@ pub(in crate::gateway) fn identified_caller(
         ..anonymous_caller()
     }
 }
+
+/// A capability that registers a caller-supplied callback URL with a third
+/// party, loaded as backend `caps`: the shape the admin-capability rule
+/// reserves for admins (MIK-7263). Shared so the meta and router cells refuse
+/// the same definition.
+pub(in crate::gateway) async fn callback_capability(
+    dir: &std::path::Path,
+) -> std::sync::Arc<crate::capability::CapabilityBackend> {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    std::fs::create_dir_all(dir).unwrap();
+    crate::gateway::test_helpers::write_owner_only(
+        dir.join("hook.yaml"),
+        r#"fulcrum: "1.0"
+name: register_webhook
+description: registers a caller-supplied address with a third party
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+    required: [url]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /hooks
+      method: POST
+auth:
+  required: false
+  type: none
+"#,
+    )
+    .unwrap();
+    let backend = std::sync::Arc::new(CapabilityBackend::new(
+        "caps",
+        std::sync::Arc::new(CapabilityExecutor::new()),
+    ));
+    backend
+        .load_from_directory(dir.to_str().unwrap())
+        .await
+        .unwrap();
+    backend
+}
