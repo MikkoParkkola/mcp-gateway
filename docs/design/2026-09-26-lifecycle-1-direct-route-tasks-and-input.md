@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 6. Five review rounds; rounds 3 to 5: one SHIP, one SHIP-WITH-FIXES each. Every finding is
-dispositioned in §7-§11. Revision 6 needs a delta review before code.
+Status: REVISION 7. Six review rounds; round 6: two SHIP-WITH-FIXES (one shared finding). Every finding is
+dispositioned in §7-§12. Revision 7 needs a delta review before code.
 
 ## 1. Problem
 
@@ -111,7 +111,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 
 1. **Produce.** `classify_dispatch` gains a third outcome built from
    `InputRequired::from_result` (`src/protocol/mrtr.rs:241-276`). Three cases:
-   (a) requests present: `TaskTransition::RequireInput(InputRequired)`;
+   (a) requests present: `TaskTransition::RequireInput(InputRequired)`; the producing worker
+   then returns, dropping its `Handoff` and permit, so the row has no owner while it waits;
    (b) no requests but a `requestState` (a state-only round): no client round; the worker
    immediately resumes with that state, bounded to 4 consecutive state-only rounds (a fixed ceiling that stops a backend looping the
    gateway forever; not configurable until a real backend needs more), after which
@@ -134,8 +135,12 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    is answered. Accepted answers are durable: `ProvideInput` returns them in
    `TaskChange::accepted_inputs` (`src/protocol/tasks.rs:63-67`) and today nothing keeps them,
    so the same store transaction appends them to an `accepted_inputs` map on the record
-   (optional, serde default, dropped with the continuation on cancel or settle). The completing
-   resume sends the full accumulated map as `inputResponses`. The model's no-op behaviour is kept for its existing callers. The refusal at
+   (optional, serde default, dropped with the continuation on cancel or settle), held to the same
+   store byte cap as `requestState`: an answer that would exceed it is refused `-32602`, nothing
+   written. Partial updates need no CAS of their own: each is applied inside one store
+   transaction against the current row, so two partial updates with disjoint keys both land;
+   only the step to `working` is the CAS of §4.3a. The completing resume sends the full
+   accumulated map as `inputResponses`. The model's no-op behaviour is kept for its existing callers. The refusal at
    `tasks.rs:378-382` remains for a task with no outstanding round.
 3. **Resume needs a new worker entry.** `tasks/update` is an acknowledgement today
    (`src/gateway/task_service/service.rs:197`) and the only spawn is create-only
@@ -144,10 +149,17 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    TRY-acquired (`workers.try_acquire_owned`) BEFORE the `input_required -> working` CAS; with
    no permit the update is refused (`-32603`, message "task worker pool is full, retry",
    distinct from the store-outage text create uses at `execution.rs:86`) and the task stays
-   `input_required` with its answers unapplied. With the permit held, `Handoff::accept`
-   registers the owner FIRST, then the CAS commits, then the spawn, so a concurrent cancel
-   always finds an owner to signal; if the CAS loses, the handoff is released and the permit
-   dropped (both RAII), so neither outlives a lost race or a failed spawn. `cancel_rx` is threaded into the same dispatch
+   `input_required` with its answers unapplied. Ownership is EXCLUSIVE: a new
+   `Handoff::try_accept` inserts only when no owner exists for the id (compare-and-insert;
+   today's `insert` at `observe.rs:73` overwrites, and `release` at `:116` removes by id, so two
+   racing acceptors would orphan the winner). The order is: `try_accept` (a second concurrent
+   completing update finds an owner and gets `-32602`, touching nothing of the winner's), then
+   ONE store write that takes the permit through the same try-acquire closure create uses
+   (`execution.rs:370-390`) and performs the `input_required -> working` CAS together, then the
+   spawn. If that write loses (a cancel already settled the row) the handoff and any permit are
+   released (RAII). Cancel on an `input_required` row always performs its own store transition
+   to `cancelled`, whether or not an owner is registered, so a cancel that raced a losing resume
+   leaves the row `cancelled`, never `working`. `cancel_rx` is threaded into the same dispatch
    `select!` as the first dispatch, so cancel during a resume aborts the backend call and a
    drain sees the work. The update answers after the CAS commits (the ack means "input
    accepted, task working"), not after the dispatch starts. It is spawned from the `tasks/update`
@@ -221,6 +233,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | resume carries the call | resume dispatch has the stored tool name and arguments plus requestState | resume sends the fragment only |
 | resume carries the answers | two partial updates, then resume: backend receives both answers in `inputResponses` | accepted answers not persisted, or resume omits `inputResponses` |
 | cancel races resume | cancel arrives between CAS and spawn: task `cancelled`, no backend call | handoff registered after the CAS |
+| racing completing updates | two concurrent completing updates: one resume, the other `-32602`, cancel still reaches the one worker | overwrite-on-insert handoff |
+| answers over the cap | an answer pushing `accepted_inputs` past the byte cap: refused, nothing written | cap check removed |
 | expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
 | cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
 | resume uses the caller of the update | policy for the updating caller denies the tool: resume refused | resume built from stored caller context |
@@ -311,3 +325,14 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | mutant for inputResponses in the resume | improvement | - | ADOPTED: test row |
 | merge the tasks extension, do not append | improvement | - | ADOPTED: §3 A.4 |
 | rationale for the state-only bound | improvement | - | ADOPTED: §4.1 b |
+
+## 12. Round 6 dispositions (two SHIP-WITH-FIXES, the same HIGH from both)
+
+| finding | sev | check at source | disposition |
+|---|---|---|---|
+| racing resumes overwrite and then release the winner's handoff | HIGH | observe.rs:73 insert overwrites; :116 release removes by id | ADOPTED: exclusive `try_accept`; test row |
+| cancel between handoff and a losing CAS | MEDIUM | - | ADOPTED: cancel always performs its own store transition |
+| take the permit in the same store write as the CAS | improvement | execution.rs:370-390 | ADOPTED |
+| producing worker drops handoff and permit on RequireInput | improvement | - | ADOPTED: §4.1 a |
+| bound `accepted_inputs` | improvement | - | ADOPTED: byte cap; test row |
+| partial-answer revision race | improvement | - | ADOPTED: partial updates are transactional, no CAS |
