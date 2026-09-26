@@ -17,8 +17,8 @@
 //!
 //! ## Anchoring strategy
 //!
-//! The hash is computed over the **raw file contents with the `sha256:` line
-//! removed**. This is a deliberate choice:
+//! The hash is computed over the **file contents, CRLF read as LF, with the
+//! `sha256:` line removed**. This is a deliberate choice:
 //!
 //! - **Full file** binds every byte a human sees, including comments and
 //!   provider order — the exact thing a rug-pull would mutate.
@@ -31,15 +31,22 @@
 //! be reproduced from a shell with:
 //!
 //! ```bash
-//! grep -v '^sha256:' capability.yaml | sha256sum
+//! sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum
 //! ```
+//!
+//! CRLF line endings are hashed as LF (the `sed` above), so a pin survives a
+//! checkout or an editor that converts them. A lone CR is content and stays.
+//! The recipe assumes the pin line holds only the pin: text after a CR, NEL,
+//! LS or PS on it is hashed by the gateway and dropped by `grep -v`.
 
 use sha2::{Digest, Sha256};
 
 /// Strip the top-level `sha256:` line from a YAML document.
 ///
-/// Only lines that begin at column 0 with `sha256:` are removed — a nested
-/// `sha256:` field inside a provider block is left untouched.
+/// Only lines that begin at column 0 with `sha256:` are affected — a nested
+/// `sha256:` field inside a provider block is left untouched — and of such a
+/// line only the pin itself is removed: anything after a YAML line break
+/// inside it (CR, NEL, LS, PS) is kept and hashed.
 #[must_use]
 pub fn strip_sha256_line(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
@@ -47,6 +54,19 @@ pub fn strip_sha256_line(content: &str) -> String {
         // Only strip top-level `sha256:` — anything indented is a nested
         // field (e.g. some future provider key) and must stay in the hash.
         if line.starts_with("sha256:") {
+            // Only the pin itself is excluded. libyaml also ends a line at CR,
+            // NEL, LS and PS, so text after one of those is another line, and
+            // it is hashed like any other: otherwise it would parse as YAML and
+            // escape the pin. The line's own CRLF terminator is not such a line.
+            let brk = line
+                .char_indices()
+                .find(|(_, c)| matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'));
+            if let Some((at, c)) = brk {
+                let rest = &line[at + c.len_utf8()..];
+                if !(c == '\r' && rest == "\n") {
+                    out.push_str(rest);
+                }
+            }
             continue;
         }
         out.push_str(line);
@@ -54,13 +74,17 @@ pub fn strip_sha256_line(content: &str) -> String {
     out
 }
 
-/// Compute the canonical capability hash over the raw file contents,
+/// Compute the canonical capability hash over the file contents, CRLF read as LF,
 /// excluding the top-level `sha256:` field.
 ///
 /// Returns a lowercase hex-encoded SHA-256 digest.
 #[must_use]
 pub fn compute_capability_hash(file_content: &str) -> String {
-    let stripped = strip_sha256_line(file_content);
+    // CRLF is read as LF first. YAML treats the two as one line break, so a
+    // checkout or an editor that converts line endings has not changed the
+    // capability, and must not break its pin. A lone CR stays: that is content.
+    let normalised = file_content.replace("\r\n", "\n");
+    let stripped = strip_sha256_line(&normalised);
     let digest = Sha256::digest(stripped.as_bytes());
     hex::encode(digest)
 }
@@ -171,5 +195,74 @@ mod tests {
         let pinned = rewrite_with_pin(body, &hash);
         assert_eq!(compute_capability_hash(&pinned), hash);
         assert!(pinned.contains(r"C:\Users\alice\capabilities\foo.yaml"));
+    }
+
+    /// A pin survives a checkout or an editor that rewrites line endings.
+    /// YAML reads CRLF and LF as the same line break, so the two files are one
+    /// capability; hashing raw bytes refused every pinned file a Windows
+    /// checkout (`core.autocrlf`) had converted.
+    #[test]
+    fn hash_is_the_same_for_crlf_and_lf_line_endings() {
+        let lf = "sha256: x\nname: foo\ndescription: |\n  two\n  lines\n";
+        let crlf = "sha256: x\r\nname: foo\r\ndescription: |\r\n  two\r\n  lines\r\n";
+        assert_eq!(compute_capability_hash(lf), compute_capability_hash(crlf));
+    }
+
+    /// A lone CR on the pin line cannot hide YAML from the hash. YAML reads a
+    /// lone CR as a line break, so `sha256: x\rinjected: y` parses as two
+    /// keys; stripping the whole LF-delimited line would drop `injected: y`
+    /// from the hash while the loader still reads it.
+    #[test]
+    fn a_lone_cr_on_the_pin_line_does_not_hide_a_key_from_the_hash() {
+        let clean = "sha256: x\nname: foo\n";
+        let smuggled = "sha256: x\rinjected: y\nname: foo\n";
+        assert_ne!(
+            compute_capability_hash(clean),
+            compute_capability_hash(smuggled)
+        );
+    }
+
+    /// Every character libyaml reads as a line break ends the pin line, so
+    /// what follows one is hashed as the body it parses as: CR, NEL, LS, PS.
+    #[test]
+    fn text_after_any_yaml_break_on_the_pin_line_is_hashed_as_body() {
+        let body = compute_capability_hash("injected: y\nname: foo\n");
+        for brk in ['\r', '\u{85}', '\u{2028}', '\u{2029}'] {
+            // After the value, and straight after the colon, before any value.
+            for pin in ["sha256: x", "sha256:"] {
+                let smuggled = format!("{pin}{brk}injected: y\nname: foo\n");
+                assert_eq!(compute_capability_hash(&smuggled), body, "{pin:?} {brk:?}");
+            }
+            // Stacked breaks: every line after the first break is body.
+            let stacked = format!("sha256: x{brk}injected: y{brk}more: z\nname: foo\n");
+            let stacked_body = format!("injected: y{brk}more: z\nname: foo\n");
+            assert_eq!(
+                compute_capability_hash(&stacked),
+                compute_capability_hash(&stacked_body),
+                "stacked {brk:?}"
+            );
+        }
+    }
+
+    /// `cap pin` over an already-pinned CRLF file writes a pin that matches:
+    /// the pin line's own CRLF terminator is not a hidden line.
+    #[test]
+    fn re_pinning_a_pinned_crlf_file_verifies() {
+        let crlf = "sha256: old\r\nname: foo\r\ndescription: bar\r\n";
+        let hash = compute_capability_hash(crlf);
+        let pinned = rewrite_with_pin(crlf, &hash);
+        assert_eq!(compute_capability_hash(&pinned), hash, "{pinned:?}");
+    }
+
+    /// Only the CRLF pair is a line ending. A lone CR is content, and a file
+    /// that gained one is a different file.
+    #[test]
+    fn a_lone_carriage_return_still_changes_the_hash() {
+        let clean = "name: foo\ndescription: bar\n";
+        let with_cr = "name: foo\ndescription: b\rar\n";
+        assert_ne!(
+            compute_capability_hash(clean),
+            compute_capability_hash(with_cr)
+        );
     }
 }

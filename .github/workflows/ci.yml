@@ -261,7 +261,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      - run: cargo check --all-features
+      # Every test target still has to compile for Windows. The run below is
+      # a subset, and this is what catches a unix-only API slipping into any
+      # target it does not run.
+      - run: cargo test --all-features --no-run
+      # Library and binary unit tests. Two module trees are skipped rather than
+      # run, both for one reason: their fixtures open the task store or the
+      # personal-account store, which refuse on non-unix by design (W1, #1142).
+      # The integration targets under tests/ are compiled above and not run
+      # here yet (W1, #1142). Green means Windows coverage for what runs, and
+      # no more than that.
+      - run: >-
+          cargo test --all-features --lib --bins --no-fail-fast --
+          --skip gateway:: --skip personal_accounts::
 
   test:
     name: Tests
@@ -273,7 +285,7 @@ jobs:
       # The external journey is executed by the mandatory SDK job below.
       # Not a flake skip (MIK-7534): it needs Python and Redis, which only
       # that job provisions, and the gate below `needs` that job.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   task-sdk-recovery:
     uses: ./.github/workflows/task-sdk-recovery.yml
@@ -417,13 +429,19 @@ jobs:
 
   file-size-ceiling:
     name: File-size ceiling (800 lines)
-    # The ceiling governs a file, not a change. 91 files already exceed it, so
-    # the gate ratchets off a recorded baseline: a listed file may shrink,
-    # never grow, and no file may newly cross 800 lines. Splitting the existing
-    # offenders is sequenced after the release to avoid mass merge conflicts.
+    # The ceiling governs a file, not a change. The files already over it
+    # ratchet off a recorded baseline: a listed file may shrink, never grow,
+    # and no file may newly cross 800 lines. Splitting the existing offenders
+    # is sequenced after the release to avoid mass merge conflicts.
+    # A module declaration (`mod child;` and the inert attributes above it) is
+    # not counted, so attaching an extracted file is not scored as growth (#609).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The exemption must not become the way to grow a file with code. Run
+      # first: a failing tree check would otherwise hide which rule broke.
+      - name: Check the gate refuses what it claims to
+        run: python3 scripts/dev/test_check_file_size.py
       - name: Check the 800-line ceiling
         run: python3 scripts/dev/check-file-size.py
 
@@ -436,11 +454,13 @@ jobs:
     # design documents and in three implementation briefs before anyone tried to
     # run it. The sweep is tree-wide, not directory-scoped: a module may be
     # declared from a sibling by `#[path = "..."]`, and a directory-scoped
-    # version of this check reported 72 false orphans.
+    # version of this check reported 72 false orphans. Declarations are
+    # followed from the crate roots, so a file declared only by an uncompiled
+    # file is itself reported, and every `.rs` under `src/` is swept (#1339).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check every test file is declared
+      - name: Check every source file is reachable from a crate root
         run: python3 scripts/dev/check-orphan-test-modules.py
       # The resolver has already been wrong twice -- once directory-scoped,
       # reporting 72 false orphans out of 113, and once name-matching, which
@@ -658,7 +678,8 @@ jobs:
     # Same condition as docker-build, whose digests this job assembles, and
     # the tag clause is scoped to a push for the same reason: a dispatch aimed
     # at a tag ref must not admit the release steps. Those steps carry the
-    # clause themselves, so a rehearsal ends at the both-platforms assertion.
+    # clause themselves, so a rehearsal ends at the both-platforms assertion,
+    # apart from "Install cosign" and the read-only rehearsal verify below it.
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
       || (github.event_name == 'workflow_dispatch'
@@ -793,13 +814,47 @@ jobs:
       # push. A rehearsal dispatch ends at the assertion above: the index it
       # built carries the provenance name only, and signing, attesting or
       # naming it :VERSION is what a release does with an index nobody has
-      # asked for yet.
+      # asked for yet. Two exceptions, both read-only: "Install cosign" and
+      # the rehearsal verify after it, which runs the release verify command
+      # against a release that is already signed, so the verify path is
+      # tested before a tag (docs/design/2026-09-26-rehearsal-readonly-verify.md).
       - name: Install cosign
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
+
+      # Read-only: verifies v4.0.0-beta.2, signed and SBOM-attested by run
+      # 36193916273, with the release verify step's body verbatim. Only the
+      # env differs: pinned literal digests and a literal tag identity, never
+      # the build under rehearsal. Nothing is signed, attested or published.
+      # The body, cosign calls and timeout must match the release step
+      # (scripts/release/test_check_tag_manifest.py RehearsalVerify).
+      - name: Rehearse the release verify against a pinned signed release
+        if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true')
+        timeout-minutes: 10
+        env:
+          LIST: sha256:1471cafc9f2a88855fd8997da8316b8122335bef3d3886a3bbb64768aebc9638
+          AMD64: sha256:e6f42fff9d678367a500d3d3d0177d77edbb6c6d96086c7f8dd7e74952a44cfc
+          ARM64: sha256:50ec31205c65ed27a1d30c056960f2b31de34b72bb7efb98440fbf5d4465bdef
+          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@refs/tags/v4.0.0-beta.2
+          LIST_FULL: sha256:ce949392883b14034db9ec60ffb2f808c5458f5ce4bb26402ffa42eb45a47a8e
+          AMD64_FULL: sha256:9c4712b85974f150874d16ec1b7b7e72c858673093eed33732f91e9b2adde4c5
+          ARM64_FULL: sha256:d267a3477aeec6f8702b2851e93d9e29ba8fd94cd13920dd158d8cb43e929da9
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do
+            cosign verify \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${IMAGE}@${d}" > /dev/null
+            cosign verify-attestation --type spdxjson \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${IMAGE}@${d}" > /dev/null
+          done
 
       - name: Install syft (SBOM)
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -842,8 +897,17 @@ jobs:
             cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${d}"
           done
 
+      # stdout goes to /dev/null: verify-attestation prints the whole base64
+      # SBOM attestation there (~52 MB over six digests, lines up to 14.5 MB),
+      # and v4.0.0-beta.2's step never finished under that volume (run
+      # 36193916273). The exit status is the verdict and still fails the step
+      # under `set -e`; the verification summary is on stderr and stays in the
+      # log. The redirect is the fix: a runner wedged on log volume did not
+      # enforce step or job timeout-minutes in the repro (#1143). The timeout
+      # bounds a live-runner stall, such as a Rekor or registry fetch.
       - name: Verify the release signature + SBOM attestation
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        timeout-minutes: 10
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -861,11 +925,11 @@ jobs:
             cosign verify \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-              "${IMAGE}@${d}"
+              "${IMAGE}@${d}" > /dev/null
             cosign verify-attestation --type spdxjson \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-              "${IMAGE}@${d}"
+              "${IMAGE}@${d}" > /dev/null
           done
 
       # Only now does a release name exist. Copying an index by digest is a

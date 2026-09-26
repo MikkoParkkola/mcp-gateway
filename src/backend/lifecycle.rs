@@ -19,6 +19,7 @@ use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
+use crate::transport::websocket::WebSocketTransport;
 use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
 use crate::{Error, Result};
 
@@ -432,6 +433,14 @@ impl Backend {
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
                 transport
+            }
+            TransportConfig::WebSocket {
+                ws_url,
+                protocol_version,
+            } => {
+                let (headers, timeout) = (&self.config.headers, self.config.timeout);
+                WebSocketTransport::start(ws_url, headers, timeout, protocol_version.clone())
+                    .await?
             }
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => {
@@ -852,21 +861,6 @@ impl Backend {
         }
     }
 
-    /// Check if backend is running (canonical shared slot connected).
-    pub fn is_running(&self) -> bool {
-        self.pool
-            .get(&PoolKey::Shared)
-            .and_then(|entry| {
-                entry
-                    .value()
-                    .transport
-                    .read()
-                    .as_ref()
-                    .map(|t| t.is_connected())
-            })
-            .unwrap_or(false)
-    }
-
     /// Tear down the current transport (killing any child process) and start a
     /// fresh one.
     ///
@@ -1051,7 +1045,7 @@ impl Backend {
     /// `backend.request("ping")` health check could not:
     ///
     /// 1. **It bypasses the circuit breaker.** A probe routed through
-    ///    [`request`](Self::request) short-circuits on `can_proceed()` and
+    ///    [`request`](Self::request) short-circuits on `Failsafe::admit` and
     ///    returns `CircuitOpen` *without touching the backend* -- so it could
     ///    never discover that an `Open` backend had recovered. This probe talks
     ///    to the transport directly.

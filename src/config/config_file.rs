@@ -25,13 +25,8 @@ pub(crate) struct ConfigFile {
 impl ConfigFile {
     /// Read `path`. On Unix a file other users can read is refused here.
     pub(crate) fn read(path: PathBuf) -> Result<Self> {
-        #[cfg(unix)]
         let text =
             super::secret_file::read_secret_file(&path, super::secret_file::SecretFile::Config)?;
-        #[cfg(not(unix))]
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            crate::Error::Config(format!("Cannot read config file {}: {e}", path.display()))
-        })?;
         Ok(Self { path, text })
     }
 

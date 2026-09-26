@@ -10,7 +10,6 @@ use super::*;
 use crate::config::Config;
 use axum::http::header;
 use pretty_assertions::assert_eq;
-use std::os::unix::fs::PermissionsExt as _;
 
 const ADMIN: &str = "admin-bearer-c7";
 const SCRAPE: &str = "scrape-token-c7";
@@ -58,8 +57,7 @@ fn assert_refused(response: &axum::response::Response, case: &str) {
 /// An env file at mode 0600 holding `line`, wired into `config.env_files`.
 fn env_file(dir: &tempfile::TempDir, config: &mut Config, line: &str) {
     let path = dir.path().join("metrics.env");
-    std::fs::write(&path, format!("{line}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, format!("{line}\n")).unwrap();
     config.env_files = vec![path.display().to_string()];
 }
 
@@ -141,12 +139,11 @@ async fn metrics_token_missing_env_starts_and_401s() {
 
     // The loader `serve` uses accepts the reference with the variable unset.
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         format!("server:\n  metrics_token: \"{reference}\"\n"),
     )
     .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let loaded = Config::load_evaluated(Some(&path));
     assert!(
         loaded.is_ok(),

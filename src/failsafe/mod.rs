@@ -43,10 +43,42 @@ impl Failsafe {
         }
     }
 
-    /// Check if requests can proceed
-    #[must_use]
-    pub fn can_proceed(&self) -> bool {
-        self.circuit_breaker.can_proceed() && self.rate_limiter.try_acquire()
+    /// Admit a request, or say which guard refused it.
+    ///
+    /// The breaker is asked first, so an open circuit does not spend a
+    /// rate-limit token. The two refusals are distinct errors on purpose: a
+    /// rate-limit refusal is the gateway throttling a caller, not a backend
+    /// failure, and reporting it as `CircuitOpen` let the error budgets count
+    /// it as one, so one caller's burst disabled a capability for all (F23).
+    ///
+    /// # Errors
+    ///
+    /// `CircuitOpen` while the breaker refuses; `RateLimited` when the
+    /// limiter has no token.
+    ///
+    /// Also sets `mcp_backend_circuit_state` from the breaker's decision alone,
+    /// so the request and notification paths cannot drift and a rate-limit
+    /// refusal never reports an open circuit, and counts each limiter refusal
+    /// in `mcp_backend_rate_limited_total{backend}`.
+    pub fn admit(&self, backend: &str) -> crate::Result<()> {
+        let closed = self.circuit_breaker.can_proceed();
+        telemetry_metrics::gauge!("mcp_backend_circuit_state", "backend" => backend.to_string())
+            .set(if closed { 1.0_f64 } else { 0.0_f64 });
+        if !closed {
+            return Err(crate::Error::circuit_open(backend, &self.circuit_breaker));
+        }
+        if !self.rate_limiter.try_acquire() {
+            // The operator's view of limiter refusals: they are excluded from
+            // the error budgets and from the circuit gauge, so this counter is
+            // the only place they show (F23b, MIK-7579).
+            telemetry_metrics::counter!(
+                "mcp_backend_rate_limited_total",
+                "backend" => backend.to_string()
+            )
+            .increment(1);
+            return Err(crate::Error::RateLimited(backend.to_string()));
+        }
+        Ok(())
     }
 
     /// Record a success with latency
@@ -127,8 +159,26 @@ mod tests {
         failsafe.record_failure("boom", latency);
 
         assert!(
-            !failsafe.can_proceed(),
+            matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen { .. })),
             "the circuit must be open: a throttle is not evidence the backend recovered"
         );
+    }
+
+    /// F23 T4 — an exhausted limiter with a closed breaker refuses as
+    /// `RateLimited`, and the refusal leaves the breaker closed.
+    #[test]
+    fn an_exhausted_limiter_refuses_rate_limited_and_leaves_the_breaker_closed() {
+        let mut config = FailsafeConfig::default();
+        config.rate_limit.enabled = true;
+        config.rate_limit.requests_per_second = 1;
+        config.rate_limit.burst_size = 1;
+        let failsafe = Failsafe::new("limited-backend", &config);
+
+        assert!(failsafe.admit("b").is_ok(), "the burst token admits");
+        assert!(
+            matches!(failsafe.admit("b"), Err(crate::Error::RateLimited(_))),
+            "an empty bucket is a rate-limit refusal, not an open circuit"
+        );
+        assert_eq!(failsafe.circuit_breaker.state(), CircuitState::Closed);
     }
 }

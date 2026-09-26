@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::backend::RestartOutcome;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -206,7 +205,7 @@ async fn cross_tenant_circuit_breaker_trip_does_not_reject_other_identity() {
         .await
         .expect_err("userA's own tripped slot must reject its traffic");
     assert!(
-        matches!(err, Error::CircuitOpen(_)),
+        matches!(err, Error::CircuitOpen { .. }),
         "expected CircuitOpen for userA, got {err:?}"
     );
 
@@ -1592,7 +1591,7 @@ done
     flipper.await.expect("flipper task panicked");
 
     assert!(
-        matches!(outcome, Ok(RestartOutcome::SkippedStopping)),
+        matches!(outcome, Ok(crate::backend::RestartOutcome::SkippedStopping)),
         "a restart that finished after shutdown reported success: {outcome:?}"
     );
     assert!(
@@ -1731,6 +1730,7 @@ done
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_after_shutdown_never_spawns_a_child() {
+    use crate::backend::RestartOutcome::SkippedStopping;
     let dir = tempfile::tempdir().expect("create temp dir");
     let log = dir.path().join("spawns");
     let backend = stoppable_backend_with_command(
@@ -1754,7 +1754,7 @@ async fn a_start_after_shutdown_never_spawns_a_child() {
         "a stopped backend reported a successful start"
     );
     assert!(
-        matches!(restarted, Ok(RestartOutcome::SkippedStopping)),
+        matches!(restarted, Ok(SkippedStopping)),
         "force_restart on a stopped backend should report that it did nothing, \
          got {restarted:?}"
     );

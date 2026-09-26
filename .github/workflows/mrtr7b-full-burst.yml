@@ -1,0 +1,57 @@
+name: MRTR.7b full burst
+
+# MIK-7479: the ticket's exact scenario (1026 stdio calls against a client that
+# never answers) is given up to eight and a half minutes, so it runs here rather than in the
+# per-PR Tests job, which skips it. Nightly from the default branch, on demand,
+# and on a PR carrying the `mrtr7b-full-burst` label.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+# One burst per PR (or ref) at a time: a newer push supersedes the older run.
+concurrency:
+  group: mrtr7b-full-burst-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  full-burst:
+    name: MRTR.7b full burst ledger
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mrtr7b-full-burst')
+    runs-on: ubuntu-latest
+    # A cold --all-features compile plus a burst of up to 8.5 minutes.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Run the full-burst ledger
+        # Plain output, so the log file can be matched line by line.
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set -o pipefail
+          cargo test --all-features --test mik_7479_mrtr7b_ledger -- --exact \
+            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture 2>&1 \
+            | tee "$RUNNER_TEMP/ledger.log"
+          # Read from the saved file, not a pipe, so an early grep exit cannot
+          # SIGPIPE the writer. A filter that matches nothing exits 0 with
+          # "0 passed", so the pass is asserted positively, not only by exit code.
+          grep -q '^running 1 test$' "$RUNNER_TEMP/ledger.log"
+          grep -q '^test result: ok\. 1 passed' "$RUNNER_TEMP/ledger.log"
+      - name: Upload the ledger report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mrtr7b-ledger
+          path: ${{ runner.temp }}/ledger.log
+          if-no-files-found: warn
