@@ -442,6 +442,8 @@ Two increments, one at a time. **1a (P1, direct-route tasks):** builds on the se
 `settle_backend_call`); direct admission, worker first dispatch through `run`, guard refusals
 settled `Fail(guard_error)`, owner-checked `tasks/*` on `/mcp/{name}` replacing the F1 refusal,
 advertisement, idempotency, F1 test updates, UPGRADING item 67 amended. A backend `InputRequired`
-keeps today's abandoned result, so 1a fails safe. **1b (P2):** the input round on both routes.
+keeps today's abandoned result, so 1a fails safe. **1b (P2):** the input round on both routes, plus `subscriptions/listen` naming `taskIds`
+on `/mcp/{name}` served through the same owner-checked arm as `/mcp` (4.0 scope; until 1b it keeps
+F1's `-32601`).
 The criterion stays unmet, and MIK-7311 stays open, until 1b merges. New code goes in new modules;
 headroom is measured with the repository's size checker, not raw line counts.
