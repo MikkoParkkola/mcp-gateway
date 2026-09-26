@@ -144,13 +144,14 @@ async fn revoke_for(
     };
     evict_slots(state, &config, &key, &account_id).await;
     let audited = audit_identity_propagation(
-        state.transparency_log.as_deref(),
+        state.transparency_log.as_ref(),
         "account_revoke",
         &identity.stable_actor_id(),
         &account_id,
         None,
         None,
-    );
+    )
+    .await;
     // The provider call runs even without an audit row: the tokens were
     // captured once and are wiped on drop, so withholding them would leave
     // the grant live at the provider with no later chance to revoke it.

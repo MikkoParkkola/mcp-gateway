@@ -1254,6 +1254,7 @@ impl MetaMcp {
                 result,
                 dispatch_failure,
             )
+            .await
         })
         .await
     }
@@ -2900,32 +2901,20 @@ impl MetaMcp {
         // refusal on THIS route is recorded, identically to the direct backend
         // route. Only subject/backend/audience/reason reach the log — never the
         // minted credential bytes.
-        let audit_logger = self.transparency_logger.as_deref();
+        let audit_logger = self.transparency_logger.as_ref();
         let subject_id = crate::identity_propagation::audit_subject(verified_identity);
         let audience = idp_cfg.audience.as_str();
 
         let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
-        let refuse = |msg: String| -> Result<CallerCredential> {
+        let refuse = async |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required || vault {
                 // The request is already being refused on identity-propagation
                 // grounds; an audit-write failure here does not change that
                 // outcome (unlike the mint path below, which is fail-closed on
                 // the audit write itself) — but it must not be silently
                 // dropped, so it is logged.
-                if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
-                    audit_logger,
-                    "idp_refuse",
-                    &subject_id,
-                    server,
-                    Some(audience),
-                    Some(&msg),
-                ) {
-                    tracing::warn!(
-                        server,
-                        error = %audit_err,
-                        "identity-propagation refuse audit write failed"
-                    );
-                }
+                Self::audit_refused_credential(audit_logger, &subject_id, server, audience, &msg)
+                    .await;
                 Err(Error::Config(format!(
                     "identity propagation required for backend '{server}' but {msg}"
                 )))
@@ -2947,7 +2936,8 @@ impl MetaMcp {
         if vault && !account_bound {
             return refuse(
                 "raw Vault identity propagation requires an account descriptor".to_string(),
-            );
+            )
+            .await;
         }
 
         // MIK-6710: refuse BEFORE minting when this backend's transport cannot
@@ -2968,11 +2958,11 @@ impl MetaMcp {
             idp_cfg.required,
             transport_capable,
         ) {
-            return refuse(msg);
+            return refuse(msg).await;
         }
 
         let Some(identity) = verified_identity else {
-            return refuse("the request carries no verified end-user identity".to_string());
+            return refuse("the request carries no verified end-user identity".to_string()).await;
         };
         // An explicit account reference requires its own installed strategy.
         // A missing or stale install must never borrow an unrelated global
@@ -2984,7 +2974,7 @@ impl MetaMcp {
                 .or_else(|| self.identity_propagation.read().clone())
         };
         let Some(strategy) = strategy else {
-            return refuse("no identity-propagation strategy is configured".to_string());
+            return refuse("no identity-propagation strategy is configured".to_string()).await;
         };
 
         let descriptor = BackendDescriptor {
@@ -3002,7 +2992,7 @@ impl MetaMcp {
                     if k.parse::<reqwest::header::HeaderName>().is_err()
                         || v.parse::<reqwest::header::HeaderValue>().is_err()
                     {
-                        return refuse(format!("minted credential header '{k}' is invalid"));
+                        return refuse(format!("minted credential header '{k}' is invalid")).await;
                     }
                 }
                 // cache_binding distinguishes user AND audience (collision-safe),
@@ -3015,18 +3005,48 @@ impl MetaMcp {
                         audit_logger,
                         &subject_id,
                         audience,
-                    )?;
+                    )
+                    .await?;
                 }
                 Ok(CallerCredential {
                     headers: cred.headers,
                     cache_binding: Some(cred.cache_binding),
                 })
             }
-            Err(e) => refuse(format!("credential minting failed: {e}")).map_err(|refused| {
-                let backend = self.backends.get(server);
-                let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
-                crate::personal_accounts::refusal::mark(refused, &e, account_id)
-            }),
+            Err(e) => refuse(format!("credential minting failed: {e}"))
+                .await
+                .map_err(|refused| {
+                    let backend = self.backends.get(server);
+                    let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
+                    crate::personal_accounts::refusal::mark(refused, &e, account_id)
+                }),
+        }
+    }
+
+    /// Record an `idp_refuse`. The request is refused on identity-propagation
+    /// grounds either way, so a failed write is logged, never dropped.
+    async fn audit_refused_credential(
+        audit_logger: Option<&Arc<crate::security::TransparencyLogger>>,
+        subject_id: &str,
+        server: &str,
+        audience: &str,
+        msg: &str,
+    ) {
+        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
+            audit_logger,
+            "idp_refuse",
+            subject_id,
+            server,
+            Some(audience),
+            Some(msg),
+        )
+        .await
+        {
+            tracing::warn!(
+                server,
+                error = %audit_err,
+                "identity-propagation refuse audit write failed"
+            );
         }
     }
 
@@ -3046,10 +3066,10 @@ impl MetaMcp {
     /// (Non-required backends keep the `None -> Ok(())` best-effort
     /// behavior — a mint there is not covered by the durable-record
     /// guarantee.)
-    fn audit_minted_credential(
+    async fn audit_minted_credential(
         server: &str,
         idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
-        audit_logger: Option<&crate::security::TransparencyLogger>,
+        audit_logger: Option<&Arc<crate::security::TransparencyLogger>>,
         subject_id: &str,
         audience: &str,
     ) -> Result<()> {
@@ -3067,7 +3087,9 @@ impl MetaMcp {
             server,
             Some(audience),
             None,
-        ) {
+        )
+        .await
+        {
             // CWE-209: `audit_err` can carry the transparency-log filesystem
             // path / IO detail. Keep it in the server log only; return a
             // generic client-facing message so the sensitive detail never

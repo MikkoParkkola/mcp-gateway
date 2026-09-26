@@ -338,7 +338,7 @@ where
         }
         let audit = |action| {
             crate::identity_propagation::audit_identity_propagation(
-                request.audit.as_deref(),
+                request.audit.as_ref(),
                 action,
                 &journey.admitted.owner_subject,
                 account,
@@ -346,7 +346,7 @@ where
                 None,
             )
         };
-        if audit("account_grant_attempt").is_err() {
+        if audit("account_grant_attempt").await.is_err() {
             return Ok(abort(JourneyReason::AuditUnavailable, Mark::Record).await);
         }
         let Some((key, record)) = grant_of(&journey, descriptor, &tokens) else {
@@ -358,7 +358,7 @@ where
             Ok(JourneyCommit::Committed) => "connected",
             Ok(JourneyCommit::CommittedStatusUnavailable) => "connected; status unavailable",
             Ok(JourneyCommit::Fenced) => {
-                let _ = audit("account_grant_fenced");
+                let _ = audit("account_grant_fenced").await;
                 return Ok(abort(JourneyReason::SupersededGrant, Mark::AlreadyRecorded).await);
             }
             Ok(JourneyCommit::JourneyGone) => {
@@ -368,7 +368,7 @@ where
                 return Ok(abort(JourneyReason::StorageUnavailable, Mark::AlreadyRecorded).await);
             }
         };
-        let _ = audit("account_grant");
+        let _ = audit("account_grant").await;
         Ok(journey.page(message.to_owned()))
     }
 

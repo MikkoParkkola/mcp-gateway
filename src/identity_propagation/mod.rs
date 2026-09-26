@@ -602,9 +602,9 @@ pub(crate) fn audit_subject(verified_identity: Option<&VerifiedIdentity>) -> Str
 /// [`PropagationError::AuditFailed`] when
 /// [`crate::security::TransparencyLogger::append_event`] fails (e.g. disk
 /// full, permission revoked, filesystem gone read-only underneath the
-/// gateway).
-pub(crate) fn audit_identity_propagation(
-    logger: Option<&crate::security::TransparencyLogger>,
+/// gateway), or when the bounded append times out on a stalled disk (F20).
+pub(crate) async fn audit_identity_propagation(
+    logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
     action: &'static str,
     subject: &str,
     backend: &str,
@@ -628,8 +628,11 @@ pub(crate) fn audit_identity_propagation(
     }
 
     let envelope = crate::security::audit::AuditEnvelope::identity_propagation(action, subject);
+    // F20: on the blocking pool under the append bound, so a stalled disk
+    // cannot pin a runtime worker on the mint path.
     logger
-        .append_event(fields, &envelope)
+        .append_bounded(move |l| l.append_event(fields, &envelope))
+        .await
         .map(|_| ())
         .map_err(|e| {
             tracing::warn!(
@@ -891,7 +894,7 @@ mod tests {
         use crate::security::TransparencyLogger;
         use crate::security::transparency_log::TransparencyLogConfig;
 
-        fn open_logger() -> (NamedTempFile, TransparencyLogger) {
+        fn open_logger() -> (NamedTempFile, Arc<TransparencyLogger>) {
             let file = NamedTempFile::new().expect("tempfile");
             let cfg = Arc::new(TransparencyLogConfig {
                 enabled: true,
@@ -899,15 +902,15 @@ mod tests {
                 key_id: "test".to_string(),
                 ..TransparencyLogConfig::default()
             });
-            let logger = TransparencyLogger::open(cfg).expect("logger opens");
+            let logger = Arc::new(TransparencyLogger::open(cfg).expect("logger opens"));
             (file, logger)
         }
 
         // `logger = None` (transparency log disabled) is a no-op success, not
         // a failure — the mint path must not be blocked when the operator has
         // not configured a transparency log at all.
-        #[test]
-        fn logger_disabled_is_ok_noop() {
+        #[tokio::test]
+        async fn logger_disabled_is_ok_noop() {
             let result = audit_identity_propagation(
                 None,
                 "idp_mint",
@@ -915,13 +918,14 @@ mod tests {
                 "github",
                 Some("https://github.test.invalid/api"),
                 None,
-            );
+            )
+            .await;
             assert_eq!(result, Ok(()));
         }
 
         // A durable write succeeds and reports `Ok(())`.
-        #[test]
-        fn mint_write_success_is_ok() {
+        #[tokio::test]
+        async fn mint_write_success_is_ok() {
             let (_file, logger) = open_logger();
             let result = audit_identity_propagation(
                 Some(&logger),
@@ -930,8 +934,40 @@ mod tests {
                 "github",
                 Some("https://github.test.invalid/api"),
                 None,
-            );
+            )
+            .await;
             assert_eq!(result, Ok(()));
+        }
+
+        // F20 T6: the mint audit goes through the bounded append, so a
+        // stalled disk refuses the mint within the bound (no durable record,
+        // no credential) instead of pinning a runtime worker.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
+            let (_file, logger) = open_logger();
+            let bound = std::time::Duration::from_millis(200);
+            let release = logger.stall_next_write_for_test(bound);
+            let start = std::time::Instant::now();
+            let result = audit_identity_propagation(
+                Some(&logger),
+                "idp_mint",
+                "alice",
+                "github",
+                Some("https://github.test.invalid/api"),
+                None,
+            )
+            .await;
+            assert!(
+                start.elapsed() < bound * 5,
+                "bounded: {:?}",
+                start.elapsed()
+            );
+            assert!(
+                matches!(result, Err(PropagationError::AuditFailed(_))),
+                "{result:?}"
+            );
+            assert!(logger.is_stalled());
+            release.release();
         }
 
         // Fail-closed contract: a genuine transparency-log write failure MUST
@@ -952,8 +988,8 @@ mod tests {
         // stdout — no `unsafe` code, no new dependency, isolated to the
         // child only. Unix-only (the technique is POSIX shell + rlimit).
         #[cfg(unix)]
-        #[test]
-        fn mint_write_failure_is_fail_closed() {
+        #[tokio::test]
+        async fn mint_write_failure_is_fail_closed() {
             const ENV_VAR: &str = "IDP_AUDIT_FSIZE_CHILD_PATH";
             const MARK_OK: &str = "AUDIT_WRITE_FAILED_AS_EXPECTED";
             const TEST_PATH: &str =
@@ -972,8 +1008,9 @@ mod tests {
                 // `open()` performs no write (only reads an existing tail, if
                 // any), so it must still succeed under the zero file-size
                 // limit — only the append write below is expected to fail.
-                let logger =
-                    TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed");
+                let logger = Arc::new(
+                    TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed"),
+                );
                 let result = audit_identity_propagation(
                     Some(&logger),
                     "idp_mint",
@@ -981,7 +1018,8 @@ mod tests {
                     "github",
                     Some("https://github.test.invalid/api"),
                     None,
-                );
+                )
+                .await;
                 match result {
                     Err(PropagationError::AuditFailed(_)) => println!("{MARK_OK}"),
                     other => println!("UNEXPECTED_RESULT:{other:?}"),

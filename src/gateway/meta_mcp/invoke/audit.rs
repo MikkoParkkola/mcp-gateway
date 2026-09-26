@@ -65,7 +65,7 @@ impl MetaMcp {
     /// included; `response_hash` covers the value returned to the caller
     /// (D1-d.1). A failed call has no response hash. `dispatch_failure` is
     /// the code of a backend failure the call converted to a tool result.
-    pub(super) fn audit_invocation(
+    pub(super) async fn audit_invocation(
         &self,
         args: &Value,
         session_id: Option<&str>,
@@ -118,13 +118,24 @@ impl MetaMcp {
             outcome,
             who: AuditWho::from_caller(caller),
         };
-        let written = log.log_invocation_correlated(
-            key,
-            &envelope,
-            InvocationTarget::meta(server, tool),
-            &sha256_of(args),
-            response_hash.as_deref(),
-        );
+        // F20: on the blocking pool, bounded; a stalled disk answers 503
+        // instead of pinning a runtime worker.
+        let (key_id, key_source) = (key.id.to_string(), key.source);
+        let (srv, tl, request_hash) = (server.to_string(), tool.to_string(), sha256_of(args));
+        let written = log
+            .append_bounded(move |log| {
+                log.log_invocation_correlated(
+                    CorrelationKey {
+                        id: &key_id,
+                        source: key_source,
+                    },
+                    &envelope,
+                    InvocationTarget::meta(&srv, &tl),
+                    &request_hash,
+                    response_hash.as_deref(),
+                )
+            })
+            .await;
         match written {
             Ok(()) => result,
             Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {

@@ -1893,25 +1893,28 @@ async fn meta_mcp_dispatch(
     if is_modern {
         shape_modern_response(&mut response, &method);
     }
-    response = state.meta_mcp.finalize_response_after_inspection(
-        response,
-        &crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
-            method: &method,
-            targets: &response_targets,
-            correlation: crate::security::response_policy::ResponseCorrelation {
-                session_id: &session_id,
-                caller: client
-                    .as_ref()
-                    .map_or("anonymous", |client| client.name.as_str()),
-                external_server: "gateway",
-                external_tool: &external_tool,
+    response = state
+        .meta_mcp
+        .finalize_response_after_inspection(
+            response,
+            &crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
+                method: &method,
+                targets: &response_targets,
+                correlation: crate::security::response_policy::ResponseCorrelation {
+                    session_id: &session_id,
+                    caller: client
+                        .as_ref()
+                        .map_or("anonymous", |client| client.name.as_str()),
+                    external_server: "gateway",
+                    external_tool: &external_tool,
+                },
+                mutation:
+                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+                signing: signing_context.as_ref(),
             },
-            mutation:
-                crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
-            signing: signing_context.as_ref(),
-        },
-        delivery_inspection,
-    );
+            delivery_inspection,
+        )
+        .await;
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
     }

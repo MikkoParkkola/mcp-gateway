@@ -245,7 +245,11 @@ async fn readyz(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             format!(
                 "audit log unavailable: {}",
-                log.last_failure_cause().unwrap_or("io_error")
+                if log.is_stalled() {
+                    "stalled"
+                } else {
+                    log.last_failure_cause().unwrap_or("io_error")
+                }
             ),
         ),
         _ => (axum::http::StatusCode::OK, "ok".to_string()),

@@ -121,6 +121,10 @@ impl TransparencyLogger {
     ///
     /// Returns the append's I/O error.
     pub fn probe(&self) -> io::Result<()> {
+        #[cfg(test)]
+        self.hooks
+            .probes
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let mut fields = serde_json::Map::new();
         fields.insert("type".into(), AUDIT_PROBE_TYPE.into());
         fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
@@ -136,13 +140,24 @@ impl TransparencyLogger {
     /// [`crate::Error::AuditUnavailable`] when degraded and the probe fails or
     /// times out.
     pub async fn admit(self: &Arc<Self>) -> crate::Result<()> {
+        let fail_closed = self.failure_policy == AuditFailurePolicy::FailClosed;
+        // F20: a stalled fail-closed log refuses at once, with no probe and
+        // no thread; a best-effort one keeps serving, as D1 left it.
+        if self.is_stalled() {
+            return if fail_closed {
+                Err(crate::Error::AuditUnavailable)
+            } else {
+                Ok(())
+            };
+        }
         if !self.is_degraded() {
             return Ok(());
         }
-        let logger = Arc::clone(self);
-        let probe = tokio::task::spawn_blocking(move || logger.probe());
+        // The probe takes the same single permit, so a stall parks no second
+        // thread; no permit within the probe bound is a 503.
+        let probe = self.append_bounded(TransparencyLogger::probe);
         match tokio::time::timeout(AUDIT_PROBE_TIMEOUT, probe).await {
-            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(())) => Ok(()),
             _ => Err(crate::Error::AuditUnavailable),
         }
     }

@@ -85,7 +85,12 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
 
 /// Write the record for `call` and hand `answer` on, or withhold it when the
 /// write fails under [`AuditFailurePolicy::FailClosed`] (D1-f, D2-g).
-pub(super) fn record(state: &AppState, server: &str, call: DirectCall, answer: Answer) -> Answer {
+pub(super) async fn record(
+    state: &AppState,
+    server: &str,
+    call: DirectCall,
+    answer: Answer,
+) -> Answer {
     let Some(log) = state.transparency_log.as_ref() else {
         return answer;
     };
@@ -95,34 +100,46 @@ pub(super) fn record(state: &AppState, server: &str, call: DirectCall, answer: A
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // D2-f: the caller's W3C trace id, else a trace id; no session rung.
     let trace_id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
-    let key = match call.otel_trace_id.as_deref() {
-        Some(otel) => CorrelationKey {
-            id: otel,
-            source: CorrelationSource::OtelTraceId,
-        },
-        None => CorrelationKey {
-            id: &trace_id,
-            source: CorrelationSource::TraceId,
-        },
-    };
     let envelope = AuditEnvelope {
         trace_id: Some(trace_id.clone()),
         otel_trace_id: call.otel_trace_id.clone(),
         outcome,
         who: call.who,
     };
-    let target = InvocationTarget {
-        route: InvocationRoute::Direct,
-        server,
-        tool: call.tool.as_deref(),
-    };
-    let written = log.log_invocation_correlated(
-        key,
-        &envelope,
-        target,
-        &call.request_hash,
-        response_hash.as_deref(),
+    let (srv, tool, request_hash, otel) = (
+        server.to_string(),
+        call.tool,
+        call.request_hash,
+        call.otel_trace_id,
     );
+    // F20: on the blocking pool under the append bound, so a stalled disk
+    // answers 503 instead of pinning a runtime worker.
+    let written = log
+        .append_bounded(move |log| {
+            let key = match otel.as_deref() {
+                Some(otel) => CorrelationKey {
+                    id: otel,
+                    source: CorrelationSource::OtelTraceId,
+                },
+                None => CorrelationKey {
+                    id: &trace_id,
+                    source: CorrelationSource::TraceId,
+                },
+            };
+            let target = InvocationTarget {
+                route: InvocationRoute::Direct,
+                server: &srv,
+                tool: tool.as_deref(),
+            };
+            log.log_invocation_correlated(
+                key,
+                &envelope,
+                target,
+                &request_hash,
+                response_hash.as_deref(),
+            )
+        })
+        .await;
     match written {
         Ok(()) => answer,
         Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {

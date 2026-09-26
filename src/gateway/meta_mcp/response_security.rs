@@ -66,17 +66,18 @@ pub(crate) struct ResponseDeliveryContext<'a> {
 
 impl super::MetaMcp {
     /// Complete all output mutations before recording the attempted response.
-    pub(crate) fn finalize_response_for_delivery(
+    pub(crate) async fn finalize_response_for_delivery(
         &self,
         response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
     ) -> crate::protocol::JsonRpcResponse {
         self.finalize_response_after_inspection(response, context, DeliveryInspection::Required)
+            .await
     }
 
     /// [`Self::finalize_response_for_delivery`] for a caller that may already
     /// have run the response firewall on this exact artifact.
-    pub(crate) fn finalize_response_after_inspection(
+    pub(crate) async fn finalize_response_after_inspection(
         &self,
         mut response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
@@ -149,7 +150,10 @@ impl super::MetaMcp {
 
         // Logging applies to every actual response, including unscanned methods.
         // With auth on, a response whose delivery cannot be audited is withheld.
-        if !self.record_response_delivery_attempt(&response, &context.correlation) {
+        if !self
+            .record_response_delivery_attempt(&response, &context.correlation)
+            .await
+        {
             let error = crate::Error::AuditUnavailable;
             response = match response.id {
                 Some(id) => super::error_response_preserving_status(id, &error),
@@ -168,7 +172,7 @@ impl super::MetaMcp {
     /// Returns `false` only when the append failed under
     /// [`AuditFailurePolicy::FailClosed`](crate::security::audit::AuditFailurePolicy),
     /// meaning the response must not be delivered.
-    fn record_response_delivery_attempt(
+    async fn record_response_delivery_attempt(
         &self,
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
@@ -204,7 +208,13 @@ impl super::MetaMcp {
                 .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code)),
             ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
         };
-        if let Err(error) = logger.append_event(fields, &envelope) {
+        // F20: bounded on the blocking pool; a stalled disk withholds the
+        // response (FailClosed) instead of pinning a runtime worker.
+        let logger = std::sync::Arc::clone(logger);
+        if let Err(error) = logger
+            .append_bounded(move |l| l.append_event(fields, &envelope))
+            .await
+        {
             tracing::warn!(
                 error_kind = ?error.kind(),
                 "Failed to append response delivery attempt to transparency log"

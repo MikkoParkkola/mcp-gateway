@@ -1221,6 +1221,32 @@ On a signed log, `.hwm` is signed too.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
+## 50. A stalled audit disk answers 503 within seconds instead of hanging
+
+With auth on, every tool call waits for its audit record (item 43). Before this release a
+filesystem that stopped answering (a hung NFS mount, a throttled volume) blocked that write
+indefinitely, and the blocked writes used up the server's worker threads until the gateway stopped
+answering at all. Now every audit append on the request path runs off the request threads and is
+bounded: the invocation record on both routes (`gateway_invoke` and `POST /mcp/{name}`), the
+response delivery attempt, and the identity-propagation mint, refuse and revoke records. Each waits
+at most 5 s behind another append, then writes for at most 5 s. A mint whose record times out is
+refused, so no credential is issued without a durable record.
+
+When the bound expires, the call is refused with 503 (`AuditUnavailable`), the log is marked
+stalled, `mcp_audit_append_timeouts_total` goes up and `/readyz` answers 503 with
+`audit log unavailable: stalled`. Later calls are refused at once, without waiting, until the
+stuck write returns. When it returns, the log clears itself; a failed write leaves it degraded with
+the real cause (item 43). With auth off (`BestEffort`) calls keep being served, and `/readyz` stays
+200.
+
+A write the kernel never returns cannot be abandoned, so a mount that never recovers keeps the
+gateway refusing calls until it is restarted. Alert on `mcp_audit_append_timeouts_total` and on
+the `stalled` `/readyz` body.
+
+A call refused this way can still gain an invocation record when the stuck write finally lands.
+That record has no `response_delivery_attempt` record after it: an invocation record with no
+delivery attempt means the result was withheld.
+
 ## 51. SSO admin rules now grant full gateway admin
 
 A `control_plane.role_mapping` rule with `role: admin` used to make its identity

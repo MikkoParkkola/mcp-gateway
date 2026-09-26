@@ -459,7 +459,7 @@ pub(super) async fn backend_handler(
     let mut call = None;
     let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
     match call {
-        Some(call) => direct_audit::record(&state, &name, call, answer),
+        Some(call) => direct_audit::record(&state, &name, call, answer).await,
         None => answer,
     }
 }
@@ -793,13 +793,15 @@ async fn backend_handler_inner(
                         );
                     }
                     if let Err(audit_err) = audit_identity_propagation(
-                        state.transparency_log.as_deref(),
+                        state.transparency_log.as_ref(),
                         "idp_mint",
                         &subject,
                         &name,
                         audience,
                         None,
-                    ) {
+                    )
+                    .await
+                    {
                         // CWE-209: the audit error can carry the transparency-log
                         // filesystem path / IO error. Keep it in the server log
                         // only; return a generic client-facing message.
@@ -825,13 +827,15 @@ async fn backend_handler_inner(
                 // the audit write itself) — but it must not be silently
                 // dropped, so it is logged.
                 if let Err(audit_err) = audit_identity_propagation(
-                    state.transparency_log.as_deref(),
+                    state.transparency_log.as_ref(),
                     "idp_refuse",
                     &subject,
                     &name,
                     audience,
                     Some(&e),
-                ) {
+                )
+                .await
+                {
                     warn!(
                         backend = %name,
                         error = %audit_err,
