@@ -922,6 +922,15 @@ async fn backend_handler_inner(
     // same shape as the isolation guard above. A broken stream forces re-issue
     // with a NEW request id, so without this the duplicate side effect lands
     // twice on the one route that never reaches `invoke_tool_traced`.
+    // One answer for a dispatched failure, used by whichever arm dispatches.
+    let failed = DirectFailure {
+        state: &state,
+        name: &name,
+        id: id.clone(),
+        client: client.as_ref(),
+        identity: verified_identity.as_ref(),
+        managed: managed.as_ref(),
+    };
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1012,17 +1021,7 @@ async fn backend_handler_inner(
                     }
                     // Settled as terminal unless raised before dispatch
                     // (ADR-012 consequence 1; see `settle_direct_failure`).
-                    Err(e) => {
-                        let failed = DirectFailure {
-                            state: &state,
-                            name: &name,
-                            id,
-                            client: client.as_ref(),
-                            identity: verified_identity.as_ref(),
-                            managed: managed.as_ref(),
-                        };
-                        failed.answer(idem_reservation.as_mut(), e).await
-                    }
+                    Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
                 };
             }
             Err(rejection) => return rejection,
@@ -1085,17 +1084,7 @@ async fn backend_handler_inner(
         }
         // Settled, never dropped: an unsettled reservation releases the key and
         // lets a retry re-execute a side effect (ADR-012 consequence 1).
-        Err(e) => {
-            let failed = DirectFailure {
-                state: &state,
-                name: &name,
-                id,
-                client: client.as_ref(),
-                identity: verified_identity.as_ref(),
-                managed: managed.as_ref(),
-            };
-            failed.answer(idem_reservation.as_mut(), e).await
-        }
+        Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
     }
 }
 
