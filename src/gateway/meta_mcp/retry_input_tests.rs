@@ -148,18 +148,33 @@ fn both_refusal_sites_share_the_rule() {
             .collect::<Vec<_>>()
             .join("\n")
     }
+    // `tools/call` reaches the rule through `RetryFields::solicited_input_responses`,
+    // `tasks/update` directly; mrtr.rs is the one place it is defined.
     let sites = [
-        ("meta_mcp/invoke.rs", code_lines(include_str!("invoke.rs"))),
+        (
+            "meta_mcp/invoke.rs",
+            code_lines(include_str!("invoke.rs")),
+            ".solicited_input_responses()",
+        ),
+        (
+            "protocol/mrtr.rs",
+            code_lines(include_str!("../../protocol/mrtr.rs")),
+            "input_responses_nonempty(self.input_responses.as_ref())",
+        ),
         (
             "router/handlers/tasks.rs",
             code_lines(include_str!("../router/handlers/tasks.rs")),
+            "mrtr::input_responses_nonempty(",
         ),
     ];
-    for (file, code) in &sites {
+    for (file, code, needle) in &sites {
         assert!(
-            code.contains("mrtr::input_responses_nonempty("),
-            "{file} must refuse stray answers through the shared rule"
+            code.contains(needle),
+            "{file} must refuse stray answers through the shared rule ({needle})"
         );
+    }
+    // mrtr.rs is the one definition; the two refusal sites may not grow a copy.
+    for (file, code, _) in [&sites[0], &sites[2]] {
         assert!(
             !code.contains("fn input_responses_nonempty"),
             "{file} defines its own emptiness rule, which can drift from the shared one"
