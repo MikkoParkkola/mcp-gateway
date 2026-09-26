@@ -1060,7 +1060,8 @@ fn named_config_path(path: PathBuf) -> PathBuf {
 
 impl ConfigWatcher {
     /// The chain watch, for tests that wait on its ledger and counters.
-    #[cfg(test)]
+    // Only the unix-gated watcher tests read it.
+    #[cfg(all(test, unix))]
     #[expect(
         clippy::used_underscore_binding,
         reason = "the field is named for keeping the watch alive; only tests read it"
