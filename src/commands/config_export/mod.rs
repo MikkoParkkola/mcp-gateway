@@ -249,7 +249,7 @@ pub fn merge_into_config(
 /// The one stderr line `merge_into_config` prints when it tightened the file's
 /// mode, or `None` when the file was already 0600 or did not exist.
 fn tightening_notice(path: &Path, old_mode: Option<u32>) -> Option<String> {
-    old_mode.filter(|mode| *mode != 0o600).map(|old| {
+    Some(old_mode.unwrap_or(0)).map(|old| {
         format!(
             "Note: {} is now mode 0600 (it holds other servers' secrets); it was {old:04o}.",
             path.display()
