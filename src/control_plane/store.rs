@@ -42,8 +42,7 @@ use crate::control_plane::{
     ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlaneGrantStatus,
     ControlPlanePolicy, ControlPlaneRollbackPlan,
 };
-use crate::fs_lock::ExclusiveFileLock;
-use crate::security::TransparencyLogger;
+use crate::{config::CheckedFile, fs_lock::ExclusiveFileLock, security::TransparencyLogger};
 
 /// On-disk schema version for a persisted collection.
 const COLLECTION_SCHEMA_VERSION: u32 = 1;
@@ -654,8 +653,9 @@ impl FileControlPlaneStore {
     /// Load a collection, treating a missing file as empty (generation 0) and a
     /// present-but-unparseable file as [`StoreError::Corrupt`] (fail closed).
     fn load<T: DeserializeOwned>(file: &Path) -> StoreResult<VersionedCollection<T>> {
-        match std::fs::read(file) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
+        let what = CheckedFile::ControlPlaneCollection; // mode-checked on read (F18 I4)
+        match crate::config::read_checked_file(file, what) {
+            Ok(text) => serde_json::from_str(&text)
                 .map_err(|e| StoreError::Corrupt(format!("{}: {e}", file.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(VersionedCollection {
                 schema_version: COLLECTION_SCHEMA_VERSION,

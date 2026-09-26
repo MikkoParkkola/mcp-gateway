@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The twenty-three 4.0.0 changes, in the order they are printed.
+/// The twenty-four 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -101,4 +101,8 @@ backend-blind, so Kubernetes probes are unaffected.",
 a signed `audit_segment_expired` record for each; on a full disk it deletes the oldest sealed \
 segment (`rotation.on_disk_full: refuse` keeps every record and goes unready instead). \
 `audit verify` reads every segment. Do not rotate the log externally: logrotate breaks the chain.",
+    "Legacy HTTP session ids are now always minted by the gateway: a client-chosen \
+`Mcp-Session-Id` that names no live session is replaced (the new id is in the response header), \
+an empty one counts as absent, and logs carry an 8-hex fingerprint instead of the id. With auth \
+off, holding a session id is what makes a session yours.",
 ];

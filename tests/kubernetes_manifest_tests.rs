@@ -555,7 +555,6 @@ fn enterprise_alpha_args_parse() {
 /// the manifest shipped a sequence, which is a fatal load error.
 #[test]
 fn enterprise_alpha_config_loads() {
-    use std::os::unix::fs::PermissionsExt as _;
     let config = docs(BASE_CONFIGMAP)
         .into_iter()
         .next()
@@ -571,12 +570,10 @@ fn enterprise_alpha_config_loads() {
         format!("MCP_GATEWAY_TOKEN={}\n", "k".repeat(48)),
     )
     .expect("write env");
-    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).expect("chmod");
     let path = dir.path().join("gateway.yaml");
     let shipped = str_at(&config, &["data", "gateway.yaml"]);
     let text = format!("{shipped}\nenv_files:\n  - {}\n", env.display());
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
 
     let loaded = mcp_gateway::config::Config::load_evaluated(Some(&path));
     let evaluated = match loaded {

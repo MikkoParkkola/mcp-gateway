@@ -135,18 +135,47 @@ impl CallerStanding {
     }
 }
 
-pub(super) fn require_admin_tool_access(
+/// The admin meta-tool gate (E1-d). With an audit log it admits the call,
+/// decides standing, and appends an `admin_action` record naming the caller
+/// before the tool runs, so a refused attempt is recorded too. A log that
+/// cannot take the record refuses with `AuditUnavailable` under `FailClosed`.
+pub(super) async fn require_admin_tool_access(
+    log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
     client: Option<&AuthenticatedClient>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
     tool_name: &str,
 ) -> Result<(), AuthorizationError> {
-    if CallerStanding::of_client(client).permits(tool_name) {
-        return Ok(());
-    }
-
-    Err(AuthorizationError::forbidden(
-        -32600,
-        format!("Tool '{tool_name}' requires admin access"),
-    ))
+    use crate::security::audit::{AuditEnvelope, AuditOutcome, AuditWho};
+    let verdict = if CallerStanding::of_client(client).permits(tool_name) {
+        Ok(())
+    } else {
+        Err(AuthorizationError::forbidden(
+            -32600,
+            format!("Tool '{tool_name}' requires admin access"),
+        ))
+    };
+    let Some(log) = log else {
+        return verdict;
+    };
+    let unavailable = |error: crate::Error| AuthorizationError {
+        code: error.to_rpc_code(),
+        status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        message: error.to_string(),
+    };
+    log.admit().await.map_err(unavailable)?;
+    let outcome = match &verdict {
+        Ok(()) => AuditOutcome::Ok,
+        Err(e) => AuditOutcome::Denied(e.code),
+    };
+    let mut fields = serde_json::Map::new();
+    fields.insert("tool".into(), tool_name.into());
+    let envelope = AuditEnvelope {
+        outcome,
+        ..AuditEnvelope::ok(AuditWho::from_request(client, grant_subject))
+    };
+    log.append_admin_action("meta_tool", fields, &envelope)
+        .map_err(unavailable)?;
+    verdict
 }
 
 /// Admin gate for `logging/setLevel` on both HTTP routes.

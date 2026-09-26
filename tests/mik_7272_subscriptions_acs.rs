@@ -793,18 +793,18 @@ mod http {
         let (state, _store_dir) = state(true).await;
 
         // Seeded through the real legacy path, not a fixture: the same handler
-        // under test is what stores the id.
-        let (status, _, _, _) = get_mcp(
-            &state,
-            &[
-                ("mcp-session-id", "sub3-probe"),
-                ("last-event-id", "seed-1"),
-            ],
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "the seeding GET must have streamed");
+        // under test is what stores the id; the probe is the id it mints (F9).
+        let seed = Request::get("/mcp").header("accept", "text/event-stream");
+        let seed = seed.header("last-event-id", "seed-1").body(Body::empty());
+        let router = create_router(Arc::clone(&state));
+        let seeding = router
+            .oneshot(seed.expect("request"))
+            .await
+            .expect("answer");
+        assert_eq!(seeding.status(), StatusCode::OK, "seeding GET must stream");
+        let probe = seeding.headers()["mcp-session-id"].to_str().expect("id");
         assert_eq!(
-            state.multiplexer.last_event_id("sub3-probe"),
+            state.multiplexer.last_event_id(probe),
             Some("seed-1".to_string()),
             "seeding failed, so the assertion below would pass vacuously"
         );
@@ -814,7 +814,7 @@ mod http {
             &state,
             &[
                 ("mcp-protocol-version", "2026-07-28"),
-                ("mcp-session-id", "sub3-probe"),
+                ("mcp-session-id", probe),
                 ("last-event-id", "seed-2"),
             ],
         )
@@ -825,7 +825,7 @@ mod http {
             "modern GET must be refused"
         );
         assert_eq!(
-            state.multiplexer.last_event_id("sub3-probe"),
+            state.multiplexer.last_event_id(probe),
             Some("seed-1".to_string()),
             "a refused caller must not move the owner's resumption point"
         );

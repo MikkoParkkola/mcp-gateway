@@ -102,7 +102,7 @@ pub fn build_tls_config(config: &MtlsConfig) -> Result<ServerConfig> {
 /// Returns an error if the file cannot be read or contains no valid PEM
 /// certificate blocks.
 pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let pem_data = read_file(path)?;
+    let pem_data = read_file(path, crate::config::CheckedFile::TlsCert)?;
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem_data.as_slice())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Config(format!("Failed to parse certs from '{path}': {e}")))?;
@@ -123,7 +123,7 @@ pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
 /// Returns an error if the file cannot be read, contains no private key, or
 /// the key format is unsupported.
 pub fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
-    let pem_data = read_file(path)?;
+    let pem_data = read_file(path, crate::config::CheckedFile::TlsKey)?;
     let key = PrivateKeyDer::from_pem_slice(pem_data.as_slice()).map_err(|e| {
         // NoItemsFound maps to the "no key" case; all other errors are parse failures.
         match e {
@@ -274,7 +274,7 @@ impl CertGenerator {
 
     /// Write a [`GeneratedCert`] to disk.
     ///
-    /// Writes `<stem>.crt` and `<stem>.key` under `dir`.
+    /// Writes `<stem>.crt` (`0644`) and `<stem>.key` (`0600`) under `dir` (`0700`).
     ///
     /// # Errors
     ///
@@ -287,8 +287,14 @@ impl CertGenerator {
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
             .map_err(|e| Error::Config(format!("Cannot set dir permissions: {e}")))?;
 
-        fs::write(dir.join(format!("{stem}.crt")), &cert.cert_pem)
+        let cert_path = dir.join(format!("{stem}.crt"));
+        fs::write(&cert_path, &cert.cert_pem)
             .map_err(|e| Error::Config(format!("Cannot write cert: {e}")))?;
+        // Exactly 0644 whatever the umask or an older file's mode: `serve`
+        // refuses a cert others can change (F18 I1), and this one is public.
+        #[cfg(unix)]
+        fs::set_permissions(&cert_path, fs::Permissions::from_mode(0o644))
+            .map_err(|e| Error::Config(format!("Cannot set cert permissions: {e}")))?;
 
         write_private_key(&dir.join(format!("{stem}.key")), &cert.key_pem)?;
 
@@ -358,8 +364,10 @@ fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
 // Private helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn read_file(path: &str) -> Result<Vec<u8>> {
-    fs::read(path).map_err(|e| Error::Config(format!("Cannot read '{path}': {e}")))
+fn read_file(path: &str, what: crate::config::CheckedFile) -> Result<Vec<u8>> {
+    crate::config::read_checked_file(Path::new(path), what)
+        .map(String::into_bytes)
+        .map_err(|e| Error::Config(e.to_string()))
 }
 
 /// Build a `WebPkiClientVerifier` with optional CRL support.
@@ -395,7 +403,7 @@ fn build_client_verifier(
 
 /// Load CRL entries from a PEM file.
 fn load_crls(path: &str) -> Result<Vec<CertificateRevocationListDer<'static>>> {
-    let pem_data = read_file(path)?;
+    let pem_data = read_file(path, crate::config::CheckedFile::TlsCrl)?;
     CertificateRevocationListDer::pem_slice_iter(pem_data.as_slice())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Config(format!("Failed to parse CRL from '{path}': {e}")))
@@ -598,7 +606,7 @@ mod tests {
         })
         .unwrap();
         let path = dir.path().join("ca.crt");
-        fs::write(&path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, &ca.cert_pem).unwrap();
 
         let certs = load_certs(path.to_str().unwrap()).unwrap();
         assert_eq!(certs.len(), 1);
@@ -613,7 +621,7 @@ mod tests {
         })
         .unwrap();
         let path = dir.path().join("ca.key");
-        fs::write(&path, &ca.key_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, &ca.key_pem).unwrap();
 
         let key = load_private_key(path.to_str().unwrap()).unwrap();
         // Key should be non-empty (exact type varies by rcgen algorithm)
@@ -654,7 +662,7 @@ mod tests {
         })
         .unwrap();
         let path = dir.path().join("cert_only.pem");
-        fs::write(&path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, &ca.cert_pem).unwrap();
 
         let result = load_private_key(path.to_str().unwrap());
         assert!(result.is_err());
@@ -687,9 +695,9 @@ mod tests {
         let cert_path = dir.join("server.crt");
         let key_path = dir.join("server.key");
 
-        fs::write(&ca_path, &ca.cert_pem).unwrap();
-        fs::write(&cert_path, &leaf.cert_pem).unwrap();
-        fs::write(&key_path, &leaf.key_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&ca_path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&cert_path, &leaf.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&key_path, &leaf.key_pem).unwrap();
 
         (
             ca_path.to_str().unwrap().to_string(),
@@ -798,9 +806,9 @@ mod tests {
         // Deliberately use leaf_b's key with leaf_a's cert
         let key_path = dir.path().join("server.key");
 
-        fs::write(&ca_path, &ca.cert_pem).unwrap();
-        fs::write(&cert_path, &leaf_a.cert_pem).unwrap();
-        fs::write(&key_path, &leaf_b.key_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&ca_path, &ca.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&cert_path, &leaf_a.cert_pem).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&key_path, &leaf_b.key_pem).unwrap();
 
         let config = MtlsConfig {
             enabled: true,

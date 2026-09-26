@@ -164,6 +164,36 @@ fn apply_backend_tool_call_security(
     }
 }
 
+/// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
+///
+/// A missing target field is matched as the empty capability, which only a
+/// `"*"` token satisfies: a malformed call never falls back to authenticity.
+/// A method outside the table needs `"*"`, so a narrowly scoped token cannot
+/// drive a vendor method whose side effects the gateway cannot see.
+fn direct_route_attestation_scope<'a>(
+    method: &str,
+    params: Option<&'a Value>,
+) -> crate::attestation::validator::AttestationScope<'a> {
+    use crate::attestation::validator::AttestationScope;
+    let field = |name: &str| {
+        let value = params.and_then(|p| p.get(name));
+        value.and_then(Value::as_str).unwrap_or_default()
+    };
+    match method {
+        "tools/call" | "prompts/get" => AttestationScope::Capability(field("name")),
+        "resources/read" | "resources/subscribe" | "resources/unsubscribe" => {
+            AttestationScope::Capability(field("uri"))
+        }
+        "tools/list"
+        | "resources/list"
+        | "resources/templates/list"
+        | "prompts/list"
+        | "completion/complete"
+        | "logging/setLevel" => AttestationScope::AuthenticOnly,
+        _ => AttestationScope::Capability("*"),
+    }
+}
+
 /// Remove the attestation token from `params._meta` and return it if a string.
 fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
     let meta = params?.get_mut("_meta")?.as_object_mut()?;
@@ -542,7 +572,7 @@ async fn backend_handler_inner(
         Err(refusal) => return refusal,
     };
 
-    let json_request: Value = match serde_json::from_slice(&body_bytes) {
+    let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
             return build_http_error_response(
@@ -558,16 +588,17 @@ async fn backend_handler_inner(
     // malformed tools/call is recorded as `invalid` too.
     *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
 
+    // After the audit hash (D2-e: params as sent), before anything else reads
+    // the request: parse, telemetry and every forwarding arm see no token.
+    let attestation = take_attestation_token(json_request.get_mut("params"));
+
     // Parse request
-    let (id, method, mut params) = match parse_request(&json_request) {
+    let (id, method, params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return build_http_response(&response, StatusCode::BAD_REQUEST);
         }
     };
-    // Out of the owned params before anything reads or forwards them, so no
-    // arm (sanitized, passthrough, no-tool, other methods) sends it upstream.
-    let attestation = take_attestation_token(params.as_mut());
 
     // D2-b: scope is checked after the parse, so its refusal names the tool,
     // and before the backend lookup, so a scoped key gets 403 for an unknown
@@ -700,6 +731,24 @@ async fn backend_handler_inner(
     // identity-dependent, so it lists from the caller's slot (MIK-7546).
     let isolation_guarded =
         !matches!(method.as_str(), "initialize" | "ping") && !method.starts_with("notifications/");
+
+    // MIK-7570.ATTEST.1: every method that reaches the backend is attested, on
+    // the same predicate as identity propagation, and BEFORE it: an unattested
+    // call must not mint a per-user credential or write a mint audit row. Also
+    // ahead of the idempotency guard, so a replay needs a token too.
+    if isolation_guarded {
+        let scope = direct_route_attestation_scope(&method, params.as_ref());
+        let agent = client.as_ref().map(|c| c.name.as_str());
+        if let Err(e) = state.meta_mcp.check_attestation_scoped(
+            attestation.as_deref(),
+            scope,
+            agent,
+            "direct_route",
+        ) {
+            let (code, message) = (e.to_rpc_code(), e.to_string());
+            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
+        }
+    }
     // Caller's stable identity binding (MIK-6784) for per-identity upstream
     // session partitioning on this direct route. Set only when a minting
     // strategy resolves a binding; passthrough / no-identity keep `None` (shared
@@ -868,21 +917,6 @@ async fn backend_handler_inner(
             e.to_string(),
             StatusCode::FORBIDDEN,
         );
-    }
-
-    // MIK-7570.ATTEST.1: attested like `gateway_invoke`, for every tools/call
-    // shape, and ahead of the idempotency guard so a replay needs a token too.
-    if method == "tools/call" {
-        let tool = params.as_ref().and_then(|p| p.get("name")).cloned();
-        let envelope = json!({"tool": tool, "attestation": attestation});
-        let agent = client.as_ref().map(|c| c.name.as_str());
-        if let Err(e) = state
-            .meta_mcp
-            .check_attestation(&envelope, agent, "direct_route")
-        {
-            let (code, message) = (e.to_rpc_code(), e.to_string());
-            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
-        }
     }
 
     // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the

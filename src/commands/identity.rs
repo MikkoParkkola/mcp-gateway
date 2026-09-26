@@ -594,4 +594,26 @@ mod tests {
             assert_eq!(agent_summary(&agent), value);
         }
     }
+
+    /// F18 I3: the CLI refuses a grants file other users can change, and
+    /// `upsert` does not overwrite it, because the file exists.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn identity_cli_refuses_group_writable_grants() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identity-grants.yaml");
+        let body = "schema_version: identity_grants.v1\ngrants: []\n";
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        let err = upsert_local_grant(grant_input(path.clone()))
+            .await
+            .unwrap_err();
+        assert!(err.contains("change it"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            body,
+            "not overwritten"
+        );
+    }
 }

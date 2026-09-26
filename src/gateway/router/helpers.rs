@@ -45,6 +45,9 @@ pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session
             );
         }
         Err(err) => {
+            // Unreachable for gateway sessions: every id is a minted `gw-<uuid>`,
+            // always a valid header value. Fingerprinted all the same (F9).
+            let session_id = crate::gateway::session_id::session_fp(session_id);
             warn!(%session_id, %err, "failed to set mcp-session-id response header");
         }
     }

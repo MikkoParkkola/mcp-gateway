@@ -341,9 +341,10 @@ async fn gh452_session_4_session_header_boundaries_after_authentication() {
         send(&state, invalid).await.status(),
         StatusCode::BAD_REQUEST
     );
+    // An empty id is absent (F9): the same 400 as a missing header.
     assert_eq!(
         delete(&state, Some(ALICE_KEY), Some("")).await.status(),
-        StatusCode::NOT_FOUND
+        StatusCode::BAD_REQUEST
     );
     assert_eq!(state.multiplexer.session_count(), 1);
     prove_original_stream(&state, &mut alice, "bad-header-does-not-delete").await;
