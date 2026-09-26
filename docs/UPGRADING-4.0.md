@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 58 and 59 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 58 and 59 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -70,6 +70,7 @@ upgrading a running deployment.
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 | 47 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §47 for what is refused on `ws_url` |
 | 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
+| 49 | The audit log rotates at 64 MiB and keeps 12 sealed segments; `audit verify` reads every segment and detects a deleted or truncated active file | Copy or archive the segments together, never rotate the log externally, and size the volume for `(retain_segments + 1) x max_segment_bytes` (Helm refuses an emptyDir too small) |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 | 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 53 | A backend's own rate-limit refusal reads `Rate limit exceeded for backend 'x'` (hint `RATE_LIMITED`, code still -32000) and no longer counts against the error budgets or `mcp_backend_circuit_state` | Match the new text in clients and alerts that looked for "Circuit breaker open"; watch `mcp_backend_rate_limited_total` for throttling |
@@ -1264,6 +1265,60 @@ error can name the configured command.
 `CircuitOpen { backend: String, last_failure: Option<String> }`. A `match` on the old tuple
 variant no longer compiles; match `CircuitOpen { backend, .. }`.
 
+## 49. The audit log rotates, and verify spans its segments
+
+With auth on, the audit log is required (item 43). Before this release it grew until its
+volume filled, and then every call was refused with `storage_full`. It now rotates at 64 MiB.
+The active file keeps its path, and sealed segments sit beside it as
+`transparency.jsonl.00000000000000000001` and so on. The gateway keeps 12 sealed segments and
+deletes older ones. For each deletion it first writes an `audit_segment_expired` record into the
+log, so a deletion can be verified, and a missing file with no such record is reported as
+tampering. Set `security.transparency_log.rotation.retain_segments` and `max_segment_bytes`
+(1 MiB to 128 MiB) to change this. Rotation cannot be turned off.
+
+`audit verify <path>` now reads every segment beside `<path>`, even when `<path>` itself is
+missing. Copy or archive the segments together: a segment you delete by hand makes verify fail.
+To keep the log longer, ship it out (SIEM, `control_plane.export`) and size the volume. Disk use
+is at most `(retain_segments + 1) x max_segment_bytes`, plus one record and a 1 MiB reserve.
+
+If the volume still fills, the gateway deletes the oldest sealed segment, records the deletion
+with `reason: storage_full`, and carries on. It keeps a 1 MiB `transparency.jsonl.reserve` file
+beside the log so that record can still be written on a full disk. The reserve exists once the
+log has rotated at least once. Set `rotation.on_disk_full: refuse` to keep every record and go
+unready instead (the item 43 behaviour).
+
+Do not rotate the log with an external tool (logrotate, `copytruncate`, a cron `mv`). Any
+external rotation breaks the hash chain, and verify then reports it as tampering.
+
+On Windows, a writer recognises a file by its creation time, because there is no inode. So run a single gateway process per log path there; two processes sharing one path can miss each other's rotation.
+
+Sizing: one tool call writes one or two records of about 1 KiB, so each MiB holds roughly
+500-1000 calls, and the default 832 MiB holds the last 400k-800k calls. For more, set
+`audit.existingClaim` to a larger PersistentVolumeClaim and raise `audit.rotation.retainSegments`.
+The Helm chart refuses to render an emptyDir whose `sizeLimit` cannot hold
+`(retainSegments + 1) x maxSegmentBytes + 1Mi` within 90%.
+
+The governance log (`<control_plane.store_dir>/audit.jsonl`) also rotates, at 16 MiB with 4
+segments kept, so it uses at most 80 MiB. Size the `store_dir` volume for that.
+
+The SIEM exporter (`control_plane.export`) now follows segments across a rotation. If retention
+deletes a segment before it was exported, the exporter re-anchors, reports `reanchored`, and
+counts the skipped segments in `mcp_audit_export_segments_skipped_total`.
+
+The log now carries housekeeping records that SIEM tailers and `control_plane.export`
+consumers see: `audit_segment_sealed`, `audit_segment_opened`, `audit_segment_expired`, and a
+rare `audit_segment_torn_tail_dropped`. A parser that rejects an `event` value it does not know
+must accept these.
+
+Deleting or truncating the active `transparency.jsonl` is now detected. A
+`transparency.jsonl.hwm` file records how far the log got, and verify reports the missing
+counters. After a power loss on the hot invocation path, which flushes but does not fsync,
+verify can report such a gap for records that never reached disk. To verify a copied set that
+has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
+On a signed log, `.hwm` is signed too.
+
+A log written before this release is read as segment 0 and verifies unchanged. If it is over
+256 MiB, verify still refuses it; archive it before upgrading.
 ## 51. SSO admin rules now grant full gateway admin
 
 A `control_plane.role_mapping` rule with `role: admin` used to make its identity

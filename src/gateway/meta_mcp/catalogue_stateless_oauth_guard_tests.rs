@@ -152,7 +152,7 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
                 enabled: true,
                 path,
                 key_id: "catalogue-stateless".to_string(),
-                shared_secret: String::new(),
+                ..crate::security::TransparencyLogConfig::default()
             },
         ))
         .expect("transparency logger opens"),

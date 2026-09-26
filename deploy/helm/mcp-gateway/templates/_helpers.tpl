@@ -88,3 +88,25 @@ own HOME, so it is refused at render time instead of failing in the cluster. */}
 {{- .Values.server.cleartextHttp | default "cluster_internal" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+D6: refuse to render an audit emptyDir that cannot hold the rotating log:
+(retainSegments + 1) x maxSegmentBytes + a 1Mi reserve must fit in 90% of
+sizeLimit. Quantities: plain bytes, or Ki/Mi/Gi/Ti, or k/M/G/T.
+*/}}
+{{- define "mcp-gateway.auditFitsVolume" -}}
+{{- $q := toString .Values.audit.sizeLimit -}}
+{{- $units := dict "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 "k" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 -}}
+{{- $bytes := 0 -}}
+{{- $num := regexFind "^[0-9]+" $q -}}
+{{- $suffix := trimPrefix $num $q -}}
+{{- if not $num }}{{- fail (printf "audit.sizeLimit %q is not a quantity" $q) }}{{- end }}
+{{- if eq $suffix "" }}{{- $bytes = int64 $num }}
+{{- else if hasKey $units $suffix }}{{- $bytes = mul (int64 $num) (get $units $suffix) }}
+{{- else }}{{- fail (printf "audit.sizeLimit %q: unsupported unit %q" $q $suffix) }}{{- end }}
+{{- $rot := .Values.audit.rotation -}}
+{{- $need := add 1048576 (mul (add1 (int64 $rot.retainSegments)) (int64 $rot.maxSegmentBytes)) -}}
+{{- if gt (mul $need 10) (mul $bytes 9) }}
+{{- fail (printf "audit: (retainSegments + 1) x maxSegmentBytes + 1Mi = %d bytes does not fit in 90%% of sizeLimit %s; raise sizeLimit, lower audit.rotation, or set audit.existingClaim (UPGRADING-4.0 item 49)" $need $q) }}
+{{- end }}
+{{- end }}

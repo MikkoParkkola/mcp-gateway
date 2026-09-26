@@ -41,6 +41,14 @@ data:
     {{- /* Always the mounted file: a path off the `audit` volume would land on
            the read-only root filesystem and stop the pod at startup. */}}
     {{- $_ := set $tlog "path" "/var/lib/mcp-gateway/audit/transparency.jsonl" }}
+    {{- /* D6: rotation from audit.rotation, and a render guard on the emptyDir. */}}
+    {{- $rot := .Values.audit.rotation }}
+    {{- $rendered := dict "max_segment_bytes" (int64 $rot.maxSegmentBytes) "retain_segments" (int64 $rot.retainSegments) "on_disk_full" $rot.onDiskFull }}
+    {{- if $rot.maxSegmentAgeSecs }}{{- $_ := set $rendered "max_segment_age_secs" (int64 $rot.maxSegmentAgeSecs) }}{{- end }}
+    {{- $_ := set $tlog "rotation" $rendered }}
+    {{- if not .Values.audit.existingClaim }}
+    {{- include "mcp-gateway.auditFitsVolume" . }}
+    {{- end }}
     {{- $_ := set $sec "transparency_log" $tlog }}
     {{- $_ := set $cfg "security" $sec }}
     {{- end }}

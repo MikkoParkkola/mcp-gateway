@@ -96,7 +96,7 @@ async fn fixture(setup: Setup) -> Fixture {
             enabled: true,
             path: path.to_string_lossy().into_owned(),
             key_id: "d2".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("open log")
         .with_failure_policy(policy),

@@ -80,7 +80,7 @@ fn meta_with_transparency_log() -> (MetaMcp, std::path::PathBuf) {
         enabled: true,
         path: path.to_string_lossy().to_string(),
         key_id: "test".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     });
     let logger = Arc::new(TransparencyLogger::open(cfg).expect("logger opens"));
 

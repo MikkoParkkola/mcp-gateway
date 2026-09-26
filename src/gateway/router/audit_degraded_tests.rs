@@ -77,7 +77,7 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
                 .to_string_lossy()
                 .into_owned(),
             key_id: "d1".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("open log")
         .with_failure_policy(policy),
