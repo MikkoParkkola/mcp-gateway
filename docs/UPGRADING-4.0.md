@@ -14,8 +14,8 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 Items 38, 51 and 54 refuse the start with their own error, which names the setting or file, so a notice would
-only repeat it; item 51 also warns once per `role: admin` rule at every load. Item 60 is decided per
-capability file, and a file it affects is refused at load with an error that names it.
+only repeat it; item 51 also warns once per `role: admin` rule at every load. Items 60 and 64 are decided per
+capability file, and a file they affect is refused at load with an error that names it.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
@@ -1459,6 +1459,26 @@ To reproduce a pin from a shell, strip the CR of each CRLF first:
 `sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`. The recipe assumes the
 pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by the gateway
 and dropped by `grep -v` (item 64).
+
+## 63. Error results are never served from a response cache
+
+In 3.x and in the 4.0 betas, the response cache stored an error result like any answer and
+served it to every later call with the same key until the TTL ran out (60 s by default). That
+included the gateway's own refusals: a rate-limit refusal, an open breaker, a failed connect.
+One 10 ms throttle could therefore answer hundreds of calls with a stale refusal after the
+bucket had refilled, and a backend that recovered kept being reported as failing.
+
+- **A result with `isError: true` is no longer cached**, whether the gateway produced it or the
+  backend returned it. The next call is dispatched again.
+- **The capability cache behaves the same way.** A 2xx upstream body carrying `isError: true`
+  is not stored (a non-2xx response never was).
+- Successful results are cached exactly as before, under the same keys and TTLs.
+- The idempotency store is unchanged: a caller retrying with the same idempotency key still
+  receives its own settled outcome, including a failure, as ADR-012 requires.
+
+What to check: a deployment that leaned on a cached error to shed load from a failing backend
+now reaches that backend on every call. Use the circuit breaker and `failsafe.rate_limit`
+for that; they are the load-shedding controls.
 
 ## 64. Text after a line break inside a pin line is hashed
 
