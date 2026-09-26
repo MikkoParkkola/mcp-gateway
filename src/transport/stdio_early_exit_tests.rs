@@ -149,6 +149,19 @@ async fn t3b_a_secret_across_the_line_cut_is_redacted() {
     assert!(!excerpt.contains("env-ca"), "{excerpt}");
 }
 
+/// T3c: a multi-line env value is redacted line by line.
+#[tokio::test]
+async fn t3c_a_multi_line_secret_is_redacted_line_by_line() {
+    let t = transport(
+        "printf \"%s\\n\" \"$KEY\" >&2; exit 1",
+        &[("KEY", "pem-line-one-9c2\npem-line-two-4d7")],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("pem-line-one-9c2"), "{excerpt}");
+    assert!(!excerpt.contains("pem-line-two-4d7"), "{excerpt}");
+}
+
 /// T2d: an overlong line is read in bounded chunks and the lines after it
 /// still arrive.
 #[tokio::test]

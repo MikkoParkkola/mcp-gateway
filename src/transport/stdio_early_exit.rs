@@ -57,14 +57,17 @@ pub(super) fn spawn_stderr_tail(
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     debug!(command = %command, line_len = n, "Received line from stderr");
+                    {
+                        let mut tail = shared.lock();
+                        if tail.len() == TAIL_LINES {
+                            tail.pop_front();
+                        }
+                        tail.push_back(buf.clone());
+                    }
+                    // Published first, so a held pipe cannot lose the prefix.
                     if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {
                         discard_rest_of_line(&mut reader).await;
                     }
-                    let mut tail = shared.lock();
-                    if tail.len() == TAIL_LINES {
-                        tail.pop_front();
-                    }
-                    tail.push_back(buf.clone());
                 }
             }
         }
@@ -98,9 +101,13 @@ pub(super) fn excerpt(
     argv: &[String],
     env: &HashMap<String, String>,
 ) -> String {
-    let secrets: Vec<&String> = argv
+    // Matched line by line, so a multi-line value (a PEM key) is matched by
+    // each of its own lines.
+    let secrets: Vec<&str> = argv
         .iter()
         .chain(env.values())
+        .flat_map(|s| s.lines())
+        .map(str::trim)
         .filter(|s| s.len() >= 4)
         .collect();
     let lines: Vec<String> = tail
@@ -109,7 +116,7 @@ pub(super) fn excerpt(
             let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
             let mut line = String::from_utf8_lossy(raw).into_owned();
             for secret in &secrets {
-                line = line.replace(secret.as_str(), "[REDACTED]");
+                line = line.replace(secret, "[REDACTED]");
                 if cut_on_read {
                     mask_secret_head(&mut line, secret);
                 }
