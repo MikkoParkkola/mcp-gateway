@@ -132,6 +132,32 @@ pub fn attestation_wiring_from_overlay(
     )
 }
 
+/// An Enforce validator built the way a deployment builds one: an env file
+/// with `enforce` and a signing key, read through the overlay. For tests that
+/// must not hand-build `AttestationMode::Enforce` (MIK-7570.ATTEST.1).
+#[cfg(test)]
+pub(crate) fn enforce_from_env_file(
+    key: &str,
+    key_id: &str,
+) -> (Arc<AttestationValidator>, AttestationMode) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env_file,
+        format!(
+            "{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}={key}\n\
+             {ATTESTATION_KEY_ID_ENV}={key_id}\n"
+        ),
+    )
+    .expect("env file");
+    let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
+    let (validator, mode) = attestation_wiring_from_overlay(&overlay)
+        .expect("enforce with a key parses")
+        .expect("enforce attaches a validator");
+    assert_eq!(mode, AttestationMode::Enforce);
+    (validator, mode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

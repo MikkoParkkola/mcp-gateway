@@ -56,6 +56,8 @@
 
 mod support;
 
+/// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
+mod attestation_tasks;
 mod capacity;
 mod client_extensions;
 mod confirmation;

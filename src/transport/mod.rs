@@ -7,11 +7,20 @@ mod http;
 pub(crate) mod notification_sink;
 mod stdio;
 pub mod websocket;
+#[cfg(test)]
+pub(crate) mod websocket_test_server;
 
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
 pub use self::stdio::{StdioTransport, isolated_package_manager_env};
 pub use self::websocket::McpFrame;
+
+/// Reduce a URL to its origin before it reaches a log line or an error string.
+/// Shared by the HTTP and WebSocket transports: either URL may carry userinfo
+/// or a query-string token.
+fn sanitize_url_for_diagnostics(raw: &str) -> String {
+    crate::security::sanitize::redact_url_for_diagnostics(raw)
+}
 
 use std::collections::HashSet;
 

@@ -38,6 +38,12 @@ def tree(root: Path, files: dict[str, str]) -> None:
 
 class OrphanGuard(unittest.TestCase):
     def orphans_of(self, files: dict[str, str]) -> list[str]:
+        # A crate root that declares each top-level module, unless the case
+        # supplies its own: reachability starts at the root, so a tree
+        # without one would report everything.
+        if "src/lib.rs" not in files:
+            tops = sorted({rel.split("/")[1] for rel in files if rel.count("/") >= 2})
+            files = {"src/lib.rs": "".join(f"mod {top};\n" for top in tops), **files}
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             tree(root, files)
@@ -120,6 +126,105 @@ class OrphanGuard(unittest.TestCase):
             {
                 "src/a/mod.rs": '#[cfg(test)]\n#[path = "foo_tests.rs"]\nmod foo_tests;\n',
                 "src/a/foo_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_a_declaration_inside_an_unreached_file_declares_nothing(self):
+        # The MIK-7518 shape: `invoke.rs` lost `mod suggestion;`, and the
+        # `#[path]` declaration inside the now-uncompiled `suggestion.rs` kept
+        # vouching for its test file. Both are in no compilation unit.
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "// `mod suggestion;` was dropped here\n",
+                "src/a/suggestion.rs": '#[cfg(test)]\n#[path = "suggestion_tests.rs"]\nmod suggestion_tests;\n',
+                "src/a/suggestion_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/suggestion.rs", "src/a/suggestion_tests.rs"])
+
+    def test_an_undeclared_production_module_is_reported(self):
+        found = self.orphans_of({"src/a/mod.rs": "", "src/a/helper.rs": ""})
+        self.assertEqual(found, ["src/a/helper.rs"])
+
+    def test_a_directory_binary_root_owns_its_directory(self):
+        # `src/bin/tool/main.rs` is a crate root; `helper.rs` beside it is
+        # not, so only the root's declaration can reach it.
+        found = self.orphans_of(
+            {"src/bin/tool/main.rs": "mod helper;\n", "src/bin/tool/helper.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_path_declaration_does_not_also_claim_the_default_file(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": '#[path = "actual.rs"]\nmod named;\n',
+                "src/a/actual.rs": "",
+                "src/a/named.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/named.rs"])
+
+    def test_a_raw_identifier_path_declaration_declares_its_file(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": '#[path = "kind.rs"]\nmod r#type;\n', "src/a/kind.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_declaration_inside_a_string_declares_nothing(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": 'const DOC: &str = "mod foo;";\nconst RAW: &str = r#"mod bar;"#;\n',
+                "src/a/foo.rs": "",
+                "src/a/bar.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/bar.rs", "src/a/foo.rs"])
+
+    def test_a_declaration_inside_a_nested_block_comment_declares_nothing(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": "/* outer /* inner */ mod foo; */\n", "src/a/foo.rs": ""}
+        )
+        self.assertEqual(found, ["src/a/foo.rs"])
+
+    def test_an_inline_module_does_not_lend_its_name_to_a_sibling_declaration(self):
+        # `mod inner;` sits OUTSIDE `mod tests { }`, so it names `a/inner.rs`,
+        # and `a/tests/inner.rs` is in no compilation unit.
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "mod tests {\n}\nmod inner;\n",
+                "src/a/inner.rs": "",
+                "src/a/tests/inner.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/tests/inner.rs"])
+
+    def test_a_quote_char_literal_does_not_open_a_string(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": "const Q: char = '\"';\nfn f<'a>(_: &'a str) {}\nmod foo;\n", "src/a/foo.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_nested_inline_modules_resolve_through_every_level(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "mod x {\n    fn f() {}\n    mod y {\n        mod z;\n    }\n}\n",
+                "src/a/x/y/z.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_a_raw_identifier_declares_its_file(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": "pub mod r#override;\n", "src/a/override.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_declaration_inside_an_inline_module_resolves_below_it(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "#[cfg(test)]\nmod tests {\n    mod fsm;\n}\n",
+                "src/a/tests/fsm.rs": "",
             }
         )
         self.assertEqual(found, [])

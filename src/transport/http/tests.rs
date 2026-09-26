@@ -2236,16 +2236,13 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    // Same host AND port as the base URL: `evaluate_redirect` refuses a
-    // cross-origin hop, so a redirect is only ever followed within one origin.
-    // `localhost` is a name rather than an IP literal, which is what clears the
-    // SSRF guard on a loopback target.
+    // Same host AND port as the base URL (`evaluate_redirect` refuses a
+    // cross-origin hop); `localhost`, a name, clears the loopback SSRF guard.
     let target = format!("http://localhost:{port}/moved");
     let server = tokio::spawn(async move {
         if let Ok((mut stream, _)) = listener.accept().await {
-            // Close the port BEFORE answering, so the hop the client is about
-            // to take is deterministically refused rather than racing this
-            // task's exit.
+            // Close the port BEFORE answering, so the hop the client is about to
+            // take is deterministically refused rather than racing this task.
             drop(listener);
             let response = format!(
                 "HTTP/1.1 307 Temporary Redirect\r\nLocation: {target}\r\n\
@@ -2253,6 +2250,9 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
             );
             let _ = stream.write_all(response.as_bytes()).await;
             let _ = stream.shutdown().await;
+            // Drain before drop: closing with the request unread sends RST, which
+            // can overtake the 307, so the FIRST request fails and no hop is taken.
+            let _ = tokio::io::copy(&mut stream, &mut tokio::io::sink()).await;
         }
     });
 

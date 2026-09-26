@@ -17,6 +17,12 @@ use crate::gateway::trace;
 #[path = "order2_fsm_tests.rs"]
 mod order2_fsm;
 
+#[path = "empty_session_gate_tests.rs"]
+mod empty_session_gate;
+
+#[path = "session_fp_tests.rs"]
+mod session_fp;
+
 /// The permissive authorizer the helpers below hand out.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
@@ -6214,7 +6220,10 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
     use crate::gateway::meta_mcp::invoke::classify_bridged_dispatch_error;
 
     for error in [
-        crate::Error::CircuitOpen("breaker open".into()),
+        crate::Error::CircuitOpen {
+            backend: "breaker open".into(),
+            last_failure: None,
+        },
         crate::Error::BackendNotFound("no such backend".into()),
         crate::Error::ToolNotFound("no such tool".into()),
         crate::Error::TransportConnect("connection refused".into()),

@@ -9,19 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- New entries go here, under the heading that fits, never under a tagged release below. -->
 
+### Highlights
+
+The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
+stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
+caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
+one replica while it is on. On stdio, `server/discover` lists only the older revisions. For teams, each caller now sees and invokes only what it was granted,
+and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
+rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
+with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
+with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
+unrecognised config key, a config file other users can read, an unresolved secret or, with auth
+on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+
 ### Added
 
 - `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
   launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
   and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
   backend under a runtime profile is skipped. (#526)
+- **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
+  reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
+  by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket
+  drops, and never logs more of its URL than the origin. `mcp-gateway add`, the admin UI and
+  discovery store a `ws://`/`wss://` URL as `ws_url`. Refused on `ws_url`: cleartext `ws://`
+  credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
+  header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §47.
+
+- `mcp_backend_rate_limited_total{backend}` counts requests and notifications refused by a
+  backend's own `failsafe.rate_limit` before dispatch. Those refusals are excluded from the
+  error budgets and the circuit gauge (F23), so this is where operators see them. See
+  `docs/UPGRADING-4.0.md` item 53 (F23b).
+
 - `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
   item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
   the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
   A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
   (C9, MIK-7570.SECRET.2)
+- A per-call-id ledger for stdio bursts against a client that never answers its asks: every call
+  must reach exactly one terminal response, and one client's silence must not disable the capability
+  for other callers. 194 calls run per PR; the ticket's 1026-call
+  burst (about 8 minutes) runs nightly and on a PR labelled `mrtr7b-full-burst`. (MIK-7479.STDIO.1)
 
 ### Changed
+
+- **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
+  `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
+  `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
+  extracted out of an over-ceiling file is not scored as growth. An inline `mod x { ... }`,
+  a macro attribute and a `cfg_attr` still count. The baseline is re-recorded under the new count, with
+  every row lower or equal. (#609)
+- **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
+  token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
+  read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
+  collections may be read by others but not changed by them. `config export` writes the client
+  config it edits as `0600`. UPGRADING-4.0 item 54. (F18)
+
+- **Breaking: a backend that fails to start counts toward its circuit breaker, on every
+  transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
+  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §48.
+- **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
+  line prints the upgrade request with its query string and headers.
+- **Admin actions write an `admin_action` audit record and are refused while the
+  audit log is down.** Admin meta-tool calls, allowed or refused, and every
+  `/ui/api/*` request other than `GET` or `HEAD`, control-plane POSTs included,
+  record who acted (issuer and subject for an SSO admin), the tool or route
+  template, and the outcome; bodies and queries are never logged. With auth on
+  they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
+  item 51.
 
 ### Fixed
 
@@ -30,6 +85,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discarded. The error now names the exit status and points at the gateway log, where one record
   carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
   text redacted. The stderr never goes to MCP clients. (#526)
+- **An error result is never replayed from a cache.** The response cache and the capability
+  cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
+  refusals, and served them to every call with the same key for the whole TTL (60 s by default).
+  One throttle could answer hundreds of later calls with a stale refusal. Errors are now never
+  cached; successes are cached as before. See `docs/UPGRADING-4.0.md` item 63 (F26, GH #1158).
+
+- **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`
+  dropped every inbound notification. It now delivers `notifications/progress` to the call whose
+  request carried that `progressToken`, under the stdio transport's rules: progress only, the
+  token must belong to a live call, and a frame it cannot attribute is dropped. The caller gets
+  its own token back through the request-scoped translation, as on stdio.
+- **One caller's burst no longer disables a tool for every caller.** A refusal by a
+  backend's own rate limiter was reported as "Circuit breaker open" and counted as a
+  backend failure, so a burst past the limit could auto-disable the capability or kill
+  the backend for all tenants. It is now `Rate limit exceeded for backend 'x'` (code
+  still -32000, recovery hint `RATE_LIMITED`), is not sampled by the error budgets, and leaves
+  `mcp_backend_circuit_state` alone. See `docs/UPGRADING-4.0.md` item 53 (F23).
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
@@ -37,9 +109,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
   stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
   item 52.
+- **Capability pins survive CRLF line endings.** The `sha256:` pin now reads CRLF as LF, so
+  a pinned capability that a Windows checkout or editor converted to CRLF is no longer
+  refused as tampered. A lone CR still changes the hash. Capability YAML is checked out
+  with LF on every platform (`capabilities/.gitattributes`), so the Windows binary embeds
+  the same starter capabilities as the others. A pin made over CRLF bytes must be re-made: see
+  UPGRADING-4.0 item 60. (#524)
+- **`doctor` finds stdio commands on Windows.** It split `PATH` on `:`, which takes
+  `C:\...` apart, so it reported every stdio backend's command missing. It now uses the
+  platform separator and, on Windows, also the `.exe` name a spawn resolves a bare
+  command to. (#524)
+- **The `Windows check` CI job runs tests.** It compiles every test target for Windows
+  and runs the library and binary unit tests, except `gateway::` and
+  `personal_accounts::`, whose fixtures open stores that refuse on non-unix (#1142). Before,
+  it ran `cargo check` only. (#524)
 
 ### Security
 
+- **A non-admin call to a callback-registering capability is refused as a denial.** It was
+  answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
+  JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by
+  authorization" warning. See UPGRADING-4.0 item 66 for when the invocation audit log
+  records it.
+
+- **Capability pins cover text after a line break inside the pin line.** The pin hash
+  excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
+  so text after one was parsed yet not hashed. Only the pin value is excluded now; re-pinning
+  a pinned CRLF file still verifies. See UPGRADING-4.0 item 64. (#1212)
+
+- **Legacy HTTP session ids are minted by the gateway and never adopted** (F9, MIK-7585,
+  #1140). A client-chosen `Mcp-Session-Id` that names no live session gets a fresh `gw-` id
+  instead of becoming the session's id, so an unauthenticated caller can no longer pick an id
+  ahead of another caller and receive or answer its elicitation prompts. Every
+  unauthenticated caller is one owner class, separated only by holding the minted id. An
+  empty or whitespace id is treated as absent (DELETE answers 400, was 404). Session ids in logs, the
+  firewall audit log and the transparency log are 8-hex fingerprints; `audit show --session` finds
+  entries by the raw id or its fingerprint (a fingerprint can collide). Breaking for library users: `first_session_id` is removed from
+  `NotificationMultiplexer` and `ProxyManager`, and `get_or_create_session_for` is no
+  longer public. See UPGRADING-4.0 item 58.
 - **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
   (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
   now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
@@ -49,6 +156,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
   forwarded without the per-tool authorization check.
   See UPGRADING-4.0 item 43.
+- **Attestation `enforce` covers every method on the direct route (breaking)**
+  (MIK-7570.ATTEST.1). `POST /mcp/{name}` now refuses, with -32002 and HTTP 403,
+  any forwarded method whose token is missing or does not grant its target:
+  `resources/read`, `resources/subscribe` and `resources/unsubscribe` match the
+  URI, `prompts/get` the prompt name, list methods need an authentic token, and
+  a method outside the table needs a `"*"` token. `initialize`, `ping` and
+  notifications are exempt. The check runs before identity minting, and the
+  token is stripped before telemetry. A surfaced tool run as a task carries its
+  `_meta` token to dispatch. See UPGRADING-4.0 item 46.
 
 ## [4.0.0-beta.2] - 2026-09-25
 
@@ -64,19 +180,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.2`,
 > `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`);
 > no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
-
-### Highlights
-
-The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
-stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
-caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
-one replica while it is on. On stdio, `server/discover` lists only the older revisions. For teams, each caller now sees and invokes only what it was granted,
-and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
-rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
-with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
-with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read, an unresolved secret or, with auth
-on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
 ### Added
 
@@ -141,6 +244,15 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
   is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
   A budget that has blocked stays blocked across a restart until UTC midnight.
+
+### Removed
+
+- Removed the `session_sandbox` and `tunnel` modules. No configuration key reached
+  either: nothing constructed a `SandboxEnforcer` outside its own tests and a
+  benchmark, and there is no `tunnel:` section (a config that has one already
+  fails the load as an unread key). The `session_sandbox/*` benchmark group goes
+  with them. Also removed `src/gateway/ui/costs.rs`, a second `/ui/api/costs`
+  handler that no module declared, so it was never compiled.
 
 ## [4.0.0-beta.1] - 2026-09-25
 
@@ -431,13 +543,6 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Removed
 
-- Removed the `session_sandbox` and `tunnel` modules. No configuration key reached
-  either: nothing constructed a `SandboxEnforcer` outside its own tests and a
-  benchmark, and there is no `tunnel:` section (a config that has one already
-  fails the load as an unread key). The `session_sandbox/*` benchmark group goes
-  with them. Also removed `src/gateway/ui/costs.rs`, a second `/ui/api/costs`
-  handler that no module declared, so it was never compiled.
-
 - **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
   its backend's `timeout`. A config that still sets it now fails to load with an
   explanation. See UPGRADING-4.0.md item 39.
@@ -452,7 +557,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   (Streamable HTTP or SSE) and A2A, and no config path builds the WebSocket
   client in `src/transport/websocket.rs`. The docs no longer list it.
 
-## [4.0.0] - 2026-09-19
+## [4.0.0] - Unreleased
+
+> **Not tagged yet.** No `v4.0.0` tag exists. The changes this section describes shipped in
+> `4.0.0-beta.1`; its text has been corrected since, without adding changes. At the 4.0.0
+> release it merges with `[Unreleased]` into one dated section.
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). No migration edits a
 > 3.x `gateway.yaml`; strict `env_files` parsing, cleartext credential backends, empty or repeated
@@ -2286,7 +2395,7 @@ credential path.
 [Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.2...HEAD
 [4.0.0-beta.2]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...v4.0.0-beta.2
 [4.0.0-beta.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
-[4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
+[4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
