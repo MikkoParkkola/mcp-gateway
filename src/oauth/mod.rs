@@ -16,6 +16,7 @@ mod callback;
 pub mod client;
 mod metadata;
 mod storage;
+mod token_file;
 #[cfg(test)]
 mod upgrade_path_tests;
 

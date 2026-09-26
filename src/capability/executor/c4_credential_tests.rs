@@ -79,3 +79,43 @@ async fn capability_file_ref_stays_literal() {
         "{whole}"
     );
 }
+
+/// F18 R3: a capability `file:` credential other users can read is refused on
+/// the call that uses it; an owner-only one resolves.
+#[cfg(unix)]
+#[tokio::test]
+async fn capability_file_credential_world_readable_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (dir, executor) = executor_with_blank_var();
+    let json = dir.path().join("cred.json");
+    std::fs::write(&json, r#"{"token":"f18-field"}"#).expect("write json");
+    std::fs::set_permissions(&json, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    let auth = AuthConfig {
+        key: format!("file:{}:token", json.display()),
+        ..AuthConfig::default()
+    };
+    let err = executor
+        .fetch_credential(&auth, &CapabilityExecutionContext::default())
+        .await
+        .expect_err("a 0644 credential file is refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("credential file") && msg.contains("0644"),
+        "{msg}"
+    );
+    assert!(!msg.contains("f18-field"), "{msg}");
+
+    std::fs::set_permissions(&json, std::fs::Permissions::from_mode(0o640)).expect("chmod");
+    let group = executor
+        .fetch_credential(&auth, &CapabilityExecutionContext::default())
+        .await
+        .expect_err("an owned group-readable credential file is refused");
+    assert!(group.to_string().contains("lets group"), "{group}");
+
+    std::fs::set_permissions(&json, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let value = executor
+        .fetch_credential(&auth, &CapabilityExecutionContext::default())
+        .await
+        .expect("an owner-only credential file resolves");
+    assert_eq!(value, "f18-field");
+}

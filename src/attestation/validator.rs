@@ -32,6 +32,19 @@ pub const DEFAULT_AUDIT_CAPACITY: usize = 1024;
 /// Default grace window during which a rotated-out token still validates.
 pub const DEFAULT_ROTATION_GRACE_SECS: i64 = 30;
 
+/// What a presented token must grant for one call (MIK-7570.ATTEST.1).
+///
+/// An enum rather than an optional string, so "no capability to match" is a
+/// named decision at each call site and never the accident of a missing field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttestationScope<'a> {
+    /// The token's capabilities must include this one, or `"*"`. An empty
+    /// string is satisfied only by `"*"`.
+    Capability(&'a str),
+    /// Any authentic, unexpired token; no capability is matched.
+    AuthenticOnly,
+}
+
 /// How a wired attestation boundary treats a rejected token.
 ///
 /// Distinct from the boot-time [`crate::attestation::AttestationEnforcement`]

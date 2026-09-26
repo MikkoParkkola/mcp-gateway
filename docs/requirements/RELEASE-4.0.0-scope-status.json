@@ -681,9 +681,15 @@
         "src/config/secret_file.rs",
         "src/config/secret_file_tests.rs",
         "scripts/dev/helm-chart-smoke.sh",
-        "tests/kubernetes_manifest_tests.rs"
+        "tests/kubernetes_manifest_tests.rs",
+        "src/mtls/mode_tests.rs",
+        "src/oauth/token_file_tests.rs",
+        "tests/control_plane_file_modes.rs",
+        "src/config/secret_file_population_tests.rs",
+        "tests/f18_init_ca_umask.rs",
+        "src/config/secret_file_type_tests.rs"
       ],
-      "note": "Graded 2026-09-25 (C2, design tier2-config-design.md section C2). On Unix the gateway refuses a config file (Config::prepare, every loader) or env file (EnvOverlay::apply_file; fatal on the serving loaders, a warning on the tolerant ones) that other users can read: any world bit or group write is refused; group read is refused on an own file and allowed on a file another uid owns (fsGroup projections). Windows is unchecked (UPGRADING-4.0 item 35). Clause coverage in src/config/secret_file_tests.rs: rule table secret_file_refusal_table; config file world_readable_config_refused_at_load and group_readable_own_config_refused; env file world_readable_env_file_refused_on_serve_path; reload reload_refuses_loosened_env_file; positive control owner_only_files_load. RED CI run 36124912134 (only --lib failed; names from run 36125990401: 5 failed, owner_only_files_load passed). GREEN CI run 36127855632, Docker run 36127855320 (Helm chart starts the real image). Delete-the-branch: world-bit row neutralised, run 36126689406, red on secret_file_refusal_table and world_readable_config_refused_at_load; owner comparison always true, run 36126695314, red on the table's not-owner rows; env-file check skipped with the pre-C2 chart, CI run 36127864835 red on the two env-file tests and the chart smoke, Docker run 36127864705 red with the real image refusing /etc/mcp-gateway/gateway.yaml mode 0644. owner_only_files_load stayed green in every mutant."
+      "note": "Graded 2026-09-25 (C2, design tier2-config-design.md section C2). On Unix the gateway refuses a config file (Config::prepare, every loader) or env file (EnvOverlay::apply_file; fatal on the serving loaders, a warning on the tolerant ones) that other users can read: any world bit or group write is refused; group read is refused on an own file and allowed on a file another uid owns (fsGroup projections). Windows is unchecked (UPGRADING-4.0 item 35). Clause coverage in src/config/secret_file_tests.rs: rule table secret_file_refusal_table; config file world_readable_config_refused_at_load and group_readable_own_config_refused; env file world_readable_env_file_refused_on_serve_path; reload reload_refuses_loosened_env_file; positive control owner_only_files_load. RED CI run 36124912134 (only --lib failed; names from run 36125990401: 5 failed, owner_only_files_load passed). GREEN CI run 36127855632, Docker run 36127855320 (Helm chart starts the real image). Delete-the-branch: world-bit row neutralised, run 36126689406, red on secret_file_refusal_table and world_readable_config_refused_at_load; owner comparison always true, run 36126695314, red on the table's not-owner rows; env-file check skipped with the pre-C2 chart, CI run 36127864835 red on the two env-file tests and the chart smoke, Docker run 36127864705 red with the real image refusing /etc/mcp-gateway/gateway.yaml mode 0644. owner_only_files_load stayed green in every mutant. F18 (MIK-7575, GH #1132, PR #1120) extends the rule, status unchanged: the mTLS key, OAuth token files, capability file: credentials and the tls issue-* --ca-key take the secrecy rule; mTLS cert/CA/CRL, the identity-grants file and control-plane grants.json/policies.json are refused when group- or world-writable; config export writes 0600; certificates the tls commands write are set 0644 (amendment A1); a non-regular file (FIFO, device, directory) is refused without blocking, on the same fd, for every file this rule reads (amendment A2). CI: RED run 36197484017 (21 F18 rows red, no compile error), A1 RED run 36214181732, A2 RED run 36221742612; GREEN on the final code head 63be4f772: CI run 36222041050, Docker run 36222041039. Mutants (Tests-only throwaways): secrecy, load_private_key plain read, run 36197882302; integrity, group-write bit dropped, run 36197490058; writer, merge keeps fs::write, run 36197493967; A1 cert chmod removed, run 36214186146; A1 chmod 0664, run 36217324859; A2 no O_NONBLOCK, run 36221754066; A2 no type check, run 36221756224; the full design mutant table is listed with run ids in PR #1120."
     },
     {
       "id": "MIK-7570.TRANSPORT.1",
@@ -769,11 +775,17 @@
     },
     {
       "id": "MIK-7570.ATTEST.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570. Stage 1 of C5 (#895): default is off, unrecognised modes fail startup. Stage 2 (branch fix/c5-attestation-enforce): enforce is wired on gateway_invoke, surfaced tools and the direct route, plans are refused under it, and enforce without a key fails startup. Pending until stage 2 merges and is graded. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/tests/attestation_routes/methods.rs",
+        "src/gateway/router/tests/task_execution_adapter/attestation_tasks.rs",
+        "src/gateway/router/tests/task_execution_adapter/signing_joint/policy.rs",
+        "src/gateway/router/direct_audit_tests.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (C5 part 3, PR #1130). Stage 1 (#895): off by default, unrecognised modes fail startup. Part 2 (#1003): enforce on gateway_invoke, surfaced tools and direct-route tools/call; plans refused; enforce without a key fails startup. Part 3: every direct-route method is attested under enforce (URI for resources/read, subscribe and unsubscribe; name for tools/call and prompts/get; an authentic token for list methods, completion/complete and logging/setLevel; '*' for any other method; initialize, ping and notifications exempt; a missing name or uri needs '*'). The check runs before identity minting, a surfaced tool run as a task carries its _meta token into dispatch, and the token is stripped after the audit hash, before telemetry and forwarding. Option A: no resources/updated outlives its call, so there is no subscription to cut. Tests: src/gateway/router/tests/attestation_routes/methods.rs, task_execution_adapter/attestation_tasks.rs, signing_joint/policy.rs, query_serialization.rs, direct_audit_tests.rs. Red CI run 36179731401, green 36215088680. Mutants, each reddening its named test: uri-scope 36198498378, prompt-name 36198478581, missing-field 36198474387, unknown-default 36198493569, methods 36198470278, strip-deleted 36198483291, task-carry 36198488695, after-minting 36217117465, list-authentic 36217120658. Documented in UPGRADING-4.0 item 46."
     },
     {
       "id": "MIK-7570.AUDIT.1",
@@ -811,11 +823,17 @@
     },
     {
       "id": "MIK-7570.ADMINSSO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/sso_admin_tests/cells.rs",
+        "src/gateway/router/sso_admin_tests/admin_action.rs",
+        "src/gateway/router/authorization.rs",
+        "src/gateway/ui/admin_audit.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-26 (E1-core PR #1027, E1 part 2 PR #1166). An issuer-scoped control_plane.role_mapping role: admin rule makes a key-server SSO identity a gateway admin on every surface, decided per request from the live mapping; a domain-only admin rule fails to load; email rules need email_verified; header and mTLS identities never confer admin (E1-core cells in cells.rs). Every admin action is audited: the admin meta-tool gate admits, records admin_action {surface: meta_tool, tool} as ok or denied(-32600) before the tool runs; one layer on /ui/api records every request other than GET/HEAD {surface: admin_ui, route template, method, http_status} with the outcome from AuditOutcome::from_http_status, control-plane POSTs included (409 error, RBAC 403 denied; design amendment A1); who names the issuer and subject, never the email; body and query never logged; FailClosed refuses while degraded and withholds on a failed append (503 AuditUnavailable). Red CI run 36197657309 (tests commit alone, 11 cells fail) and 36220442917 (PATCH cell). Mutants killed in CI: m1 gate record 36216286648, m2 UI layer 36216289398, m3 GET 36216292404, m4 control-plane skip 36216295474, m5 raw path 36216298334, m6 layer admit 36220333899, m7 gate admit 36220337308, m8 best effort 36220340265. UPGRADING-4.0 item 51."
     },
     {
       "id": "MIK-7479.STDIO.1",
