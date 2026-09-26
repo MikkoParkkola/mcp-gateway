@@ -42,7 +42,7 @@ fn notice_4_0_0_carries_all_twenty_four_items() {
         "ws_url",
         "circuit breaker is open",
         "minted by the gateway",
-        "requeststate this gateway issued",
+        "without the `requeststate`",
     ] {
         assert!(
             all.contains(expected),

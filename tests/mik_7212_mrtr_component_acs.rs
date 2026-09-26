@@ -800,9 +800,10 @@ fn retry_via_invoke(
     json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params })
 }
 
-/// GIVEN a handle the gateway minted, WHEN a retry presents it in each of the
-/// three shapes a server may legitimately send back, THEN the backend receives
-/// the continuation the handle sealed — and nothing the client authored.
+/// GIVEN a minted handle, WHEN a retry presents it with or without answers, THEN
+/// the backend receives the continuation it sealed and nothing client-authored.
+/// Answers without the handle get -32602 (MRTR client rule 2: echo the requestState
+/// this gateway always sends): `retry_input_tests::unsolicited_input_responses_are_refused`.
 ///
 /// The fourth shape, neither field, is the fresh call: it is
 /// `fixture_control_a_fresh_call_reaches_the_backend`, which passes today and
@@ -815,9 +816,8 @@ fn retry_via_invoke(
 #[tokio::test]
 async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
     let answers = json!({ "city": "Helsinki" });
-    let cases: [(&str, bool, Option<Value>); 3] = [
+    let cases: [(&str, bool, Option<Value>); 2] = [
         ("both fields", true, Some(answers.clone())),
-        ("responses only", false, Some(answers.clone())),
         ("state only", true, None),
     ];
 

@@ -665,21 +665,8 @@ async fn redeem_retry(
 ) -> Result<OutboundRetry> {
     use crate::protocol::continuation::ContinuationError;
 
-    let input_responses = caller.retry.input_responses.clone();
+    let input_responses = caller.retry.solicited_input_responses()?;
     let Some(token) = caller.retry.request_state.as_deref() else {
-        // Every interim this gateway relays carries a `requestState` it
-        // minted, so answers without one are not a retry of anything it
-        // asked. Forwarded, a backend that ignores the field would run the
-        // call again: the repeat the retry contract exists to prevent.
-        if crate::protocol::mrtr::input_responses_nonempty(input_responses.as_ref()) {
-            return Err(Error::JsonRpc {
-                code: -32602,
-                message: "inputResponses are not accepted without the requestState this \
-                          gateway issued"
-                    .to_owned(),
-                data: None,
-            });
-        }
         return Ok(OutboundRetry {
             request_state: None,
             input_responses,

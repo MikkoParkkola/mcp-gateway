@@ -112,6 +112,26 @@ pub(crate) fn input_responses_nonempty(answers: Option<&Value>) -> bool {
 }
 
 impl RetryFields {
+    /// The answers to forward, or a refusal when they arrive without the
+    /// `requestState` this gateway issued (MIK-7325.RETRY.1).
+    ///
+    /// Every interim the gateway relays carries a `requestState` it minted,
+    /// so answers without one are not a retry of anything it asked. Forwarded,
+    /// a backend that ignores the field would run the call again: the repeat
+    /// the retry contract exists to prevent.
+    pub(crate) fn solicited_input_responses(&self) -> crate::Result<Option<Value>> {
+        if self.request_state.is_none() && input_responses_nonempty(self.input_responses.as_ref()) {
+            return Err(crate::Error::JsonRpc {
+                code: -32602,
+                message: "inputResponses are not accepted without the requestState this gateway \
+                          issued"
+                    .to_owned(),
+                data: None,
+            });
+        }
+        Ok(self.input_responses.clone())
+    }
+
     /// Read the retry fields from a `tools/call` params object.
     #[must_use]
     pub fn from_params(params: Option<&Value>) -> Self {
