@@ -317,7 +317,7 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
 fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     let see = format!("(see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})");
     match (what.protects(), owned, what) {
-        (Protects::Integrity, true, _) => format!("Fix: chmod go-w {} {see}.", path.display()),
+        (Protects::Integrity, true, _) => format!("Fix: chmod 600 {} {see}.", path.display()),
         (Protects::Integrity, false, _) => {
             format!("Fix: clear the group- and world-write bits {see}.")
         }
