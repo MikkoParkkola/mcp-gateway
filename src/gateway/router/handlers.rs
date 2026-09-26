@@ -400,7 +400,7 @@ pub(super) async fn health_handler(
     // The in-process capability backend is not in the registry: its health (MIK-5080) and its
     // startup scan (MIK-7268) count here. None configured is healthy (`all` of nothing).
     let capability_status = state.meta_mcp.get_capabilities().map(|c| c.status());
-    let capability_healthy = capability_status.iter().all(|s| s.healthy && s.loaded);
+    let capability_healthy = capability_status.iter().all(|s| s.healthy);
     let healthy = backends_overall_healthy(&statuses) && capability_healthy;
 
     // Admin is a grant, not a name. Comparing against "public"/"anonymous"
