@@ -48,7 +48,6 @@ fn main() -> ExitCode {
 fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
         .name("main".into())
-        .stack_size(MAIN_STACK_BYTES)
         .spawn(body)
         .expect("spawn the main runtime thread")
         .join()
