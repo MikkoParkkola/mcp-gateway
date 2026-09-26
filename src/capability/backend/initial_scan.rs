@@ -8,6 +8,8 @@
 
 use super::CapabilityBackend;
 
+// Red-first stubs have no production caller until the fix wires them in.
+#[allow(dead_code)]
 impl CapabilityBackend {
     /// Record that the startup scan has loaded every configured directory.
     pub(crate) fn mark_initial_scan_complete(&self) {}
