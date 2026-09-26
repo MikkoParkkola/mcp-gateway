@@ -45,10 +45,12 @@ SKIP_DIRS = {".git", "target", "node_modules"}
 # the semicolon is load-bearing rather than incidental.
 MOD_DECL = re.compile(r"\bmod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
 # `#[path = "..."]` immediately preceding a `mod foo;`, allowing other
-# attributes and doc comments between the two.
+# attributes between the two. It runs on comment-stripped text, so doc comments
+# are already gone; matching `//` here too made the pattern exponential on a
+# run of slashes.
 PATH_MOD = re.compile(
     r"""#\s*\[\s*path\s*=\s*["']([^"']+)["']\s*\]"""
-    r"""(?:\s*(?:\#\s*\[[^\]]*\]|//[^\n]*))*"""
+    r"""(?:\s*\#\s*\[[^\]]*\])*"""
     r"""\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;""",
     re.S,
 )

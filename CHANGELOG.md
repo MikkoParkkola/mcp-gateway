@@ -91,6 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The orphan-test-module CI gate no longer backtracks exponentially.** Its `#[path]`
+  pattern also matched `//` comments, which are stripped before it runs; a run of slashes
+  after a `#[path]` attribute took minutes. The dead alternative is removed (code scanning
+  alert `py/redos`). CI tooling only; the gateway binary is unaffected.
+
 - **Capability pins cover text after a line break inside the pin line.** The pin hash
   excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
   so text after one was parsed yet not hashed. Only the pin value is excluded now; re-pinning
