@@ -5,6 +5,7 @@
 import contextlib
 import importlib.util
 import io
+import itertools
 import os
 import pathlib
 import re
@@ -1086,11 +1087,17 @@ class WorkflowWiring(unittest.TestCase):
             signing = 0
             for block in steps(workflow):
                 bindings = env_of(block)
-                block = joined(block)
+                raw, block = block, joined(block)
                 if not any(runs(c, COSIGN_ANY) for c in block):
                     continue
                 signing += 1
                 name = block[0]
+                # E1: the rehearsal verify binds pinned literals on purpose; it
+                # verifies a signed release, never the build. Held to E1 here,
+                # and to the release step's body by RehearsalVerify.
+                if condition_of(raw) == REHEARSAL_CONDITION:
+                    self.assertEqual(readonly_verify_refusals(raw), [], f"{workflow}: {name}")
+                    continue
                 for digest in digests:
                     self.assertTrue(
                         any(digest.match(c) for c in bindings),
@@ -1178,7 +1185,10 @@ class WorkflowWiring(unittest.TestCase):
             if found:
                 creates.append((index, block[0], found))
             if any(COSIGN_VERIFY.match(p) for p in pieces(block)):
-                verifies.append(index)
+                # The rehearsal verify checks a pinned older release, not this
+                # index, so it cannot be the verify a release tag waits for.
+                if condition_of(block) != REHEARSAL_CONDITION:
+                    verifies.append(index)
         self.assertTrue(creates, "ci.yml: docker-manifest creates no manifest list")
         self.assertTrue(verifies, "ci.yml: docker-manifest never verifies a signature")
 
@@ -1650,9 +1660,14 @@ class WorkflowWiring(unittest.TestCase):
         # report this whole matrix as passing.
         self.assertEqual(
             len(sites),
-            12,
-            f"ci.yml: expected 12 publish-path conditions, read {sorted(sites)}",
+            13,
+            f"ci.yml: expected 13 publish-path conditions, read {sorted(sites)}",
         )
+        # Classified by exact label: a blanket "release or rehearse" would
+        # green a later edit that signs on a rehearsal.
+        rehearsal_capable = {"docker-manifest -> Install cosign"}
+        rehearsal_only = {f"docker-manifest -> {REHEARSAL_VERIFY}"}
+        self.assertLessEqual(rehearsal_capable | rehearsal_only, set(sites))
 
         for label, condition in sites.items():
             for event in events:
@@ -1663,11 +1678,17 @@ class WorkflowWiring(unittest.TestCase):
                             True,
                             "true",
                         )
-                        want = release or (
-                            label.endswith("(job)")
-                            and not label.startswith("publish-mcp-registry")
-                            and rehearse
-                        )
+                        if label in rehearsal_only:
+                            want = rehearse
+                        else:
+                            want = release or (
+                                (
+                                    label.endswith("(job)")
+                                    and not label.startswith("publish-mcp-registry")
+                                    or label in rehearsal_capable
+                                )
+                                and rehearse
+                            )
                         self.assertEqual(
                             evaluate(condition, event, ref, value),
                             want,
@@ -1793,25 +1814,48 @@ class WorkflowWiring(unittest.TestCase):
                 guard = own or (
                     [job_if("ci.yml", job)] if job == "publish-mcp-registry" else []
                 )
-                found.append((label, guard))
+                found.append((label, guard, block))
         self.assertGreaterEqual(
             len(found),
             9,
             f"ci.yml: the release-sensitive inventory shrank to {sorted(f[0] for f in found)}",
         )
-        for label, guard in found:
+        tag_guarded_verifies = 0
+        for label, guard, block in found:
             self.assertTrue(guard, f"ci.yml: {label} publishes with no condition")
-            for condition in guard:
-                self.assertIn(
-                    "github.event_name == 'push'",
-                    " ".join(condition.split()),
-                    f"ci.yml: {label} admits an event other than a push: {condition}",
+            self.assertEqual(len(guard), 1, f"ci.yml: {label} has more than one if:")
+            condition = " ".join(guard[0].split())
+            # E1 (design 2026-09-26): a read-only verify of a pinned, already
+            # signed release may run on a rehearsal alone. Nothing that writes
+            # qualifies, whatever its env holds.
+            if condition == REHEARSAL_CONDITION:
+                self.assertEqual(
+                    readonly_verify_refusals(block),
+                    [],
+                    f"ci.yml: {label} runs on a rehearsal but is not a read-only pinned verify",
                 )
-                self.assertIn(
-                    "refs/tags/v",
-                    condition,
-                    f"ci.yml: {label} is not scoped to a release tag: {condition}",
+                continue
+            # E2: the cosign installer may add the rehearsal, and only that.
+            if condition == f"({' && '.join(TAG_CONJUNCTS)}) || ({REHEARSAL_CONDITION})":
+                self.assertTrue(
+                    any(re.match(r"^\s*(?:- )?uses:\s*sigstore/cosign-installer@", l) for l in block)
+                    and not any(re.match(r"^\s*(?:- )?run:", l) for l in block),
+                    f"ci.yml: {label} takes the installer's exemption without being it",
                 )
+                continue
+            # Exact top-level conjuncts, not substrings: `push && (tag || x)`
+            # contains both strings and admits any event x admits.
+            parts = conjuncts(condition)
+            for want in TAG_CONJUNCTS:
+                self.assertIn(
+                    want,
+                    parts,
+                    f"ci.yml: {label} is not scoped to a tag push by an exact conjunct: {condition}",
+                )
+            if any(COSIGN_VERIFY.match(p) for c in joined(block) for p in segments(shell(c))):
+                tag_guarded_verifies += 1
+        # The rehearsal verify is an addition. The release verify stays guarded.
+        self.assertGreaterEqual(tag_guarded_verifies, 1, "ci.yml: no tag-guarded cosign verify remains")
 
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are
@@ -2451,6 +2495,235 @@ class SmokeGateCoverage(unittest.TestCase):
             r"/health",
             "smoke-image.sh: nothing pins the HEALTHCHECK to the health endpoint",
         )
+
+
+# The read-only rehearsal verify (docs/design/2026-09-26-rehearsal-readonly-verify.md).
+# A rehearsal cannot sign (a public Rekor entry per dispatch), so it verifies a
+# release that is already signed, with the release step's own command.
+RELEASE_VERIFY = "Verify the release signature + SBOM attestation"
+REHEARSAL_VERIFY = "Rehearse the release verify against a pinned signed release"
+TAG_CONJUNCTS = ("github.event_name == 'push'", "startsWith(github.ref, 'refs/tags/v')")
+REHEARSAL_CONDITION = (
+    "github.event_name == 'workflow_dispatch' && "
+    "(inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true')"
+)
+DIGEST_KEYS = ("LIST", "AMD64", "ARM64", "LIST_FULL", "AMD64_FULL", "ARM64_FULL")
+PINNED_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+PINNED_IDENTITY = re.compile(
+    r"^https://github\.com/MikkoParkkola/mcp-gateway/\.github/workflows/ci\.yml"
+    r"@refs/tags/v[0-9][0-9A-Za-z.-]*$"
+)
+# What a read-only verify may never run, however it is guarded.
+WRITES = (
+    re.compile(r"cosign\s+(?:sign|attest)(?![-\w])"),
+    re.compile(r"\bsyft\s"),
+    IMAGETOOLS_CREATE,
+    re.compile(r"\$\{?VERSION\b"),
+)
+
+
+def step_named(job, name):
+    """The one step of `job` whose `name:` is `name`, or None."""
+    for block in steps("ci.yml", job):
+        for line in block:
+            match = re.match(r"^\s+(?:- )?name:\s*(.*)$", line)
+            if match and match.group(1).strip() == name:
+                return block
+    return None
+
+
+def condition_of(block):
+    """A step's `if:` value, a folded `if: >-` joined, whitespace-normalised."""
+    for index, line in enumerate(block):
+        match = re.match(r"^(\s*)(?:- )?if:\s*(.*)$", line)
+        if match:
+            value = match.group(2)
+            if re.match(r"^[>|][-+]?$", value.strip()):
+                indent = len(match.group(1))
+                value = " ".join(
+                    l.strip()
+                    for l in itertools.takewhile(
+                        lambda l: len(l) - len(l.lstrip()) > indent, block[index + 1 :]
+                    )
+                )
+            return " ".join(value.split())
+    return None
+
+
+def run_body(block):
+    """A step's `run:` script, continuations joined."""
+    return [c for c in joined(block) if c.startswith("run:")]
+
+
+def cosign_calls(block):
+    return [
+        piece
+        for command in joined(block)
+        for piece in segments(shell(command))
+        if COSIGN_ANY.match(piece)
+    ]
+
+
+def timeout_of(block):
+    for line in block:
+        match = re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def env_map(block):
+    found = {}
+    for entry in env_of(block):
+        key, _, value = entry.partition(":")
+        found[key.strip()] = value.strip().strip("'\"")
+    return found
+
+
+def readonly_verify_refusals(block):
+    """Why `block` is not the design's E1 read-only verify; empty if it is."""
+    refusals = []
+    pieces = [p for c in joined(block) for p in segments(shell(c))]
+    if not any(COSIGN_VERIFY.match(p) for p in pieces):
+        refusals.append("runs no cosign verify")
+    for piece in pieces:
+        if any(w.search(piece) for w in WRITES):
+            refusals.append(f"writes: {piece}")
+    env = env_map(block)
+    if set(env) != set(DIGEST_KEYS) | {"IDENTITY"}:
+        refusals.append(f"env keys are not the release verify's: {sorted(env)}")
+    for key, value in env.items():
+        if "${{" in value:
+            refusals.append(f"{key} is derived: {value}")
+    for key in DIGEST_KEYS:
+        if not PINNED_DIGEST.match(env.get(key, "")):
+            refusals.append(f"{key} is not a pinned digest: {env.get(key)}")
+    if not PINNED_IDENTITY.match(env.get("IDENTITY", "")):
+        refusals.append(f"IDENTITY is not a literal tag identity: {env.get('IDENTITY')}")
+    words = " ".join(f'"${{{k}}}"' for k in DIGEST_KEYS)
+    loops = [p for p in pieces if re.search(r"\bfor\s+d\s+in\b", p)]
+    if not loops or any(not p.rstrip().endswith(f"in {words}") for p in loops):
+        refusals.append(f"for-list is not exactly {words}: {loops}")
+    for piece in pieces:
+        if re.match(rf"^(?:export\s+|local\s+|readonly\s+)?(?:{'|'.join(DIGEST_KEYS)}|IDENTITY)=", piece):
+            refusals.append(f"body reassigns a pinned key: {piece}")
+    # An allowlist, not a blocklist: every command the body runs is one the
+    # release verify runs. `cosign attach`, `docker push` or a new pusher are
+    # refused without anyone having to name them first.
+    body = pieces[pieces.index("run:") + 1 :] if "run:" in pieces else []
+    if not body:
+        refusals.append("no run body")
+    issuer = r"--certificate-oidc-issuer 'https://token\.actions\.githubusercontent\.com'"
+    allowed = (
+        re.compile(r"^set -euo pipefail$"),
+        re.compile(r"^IMAGE=ghcr\.io/mikkoparkkola/mcp-gateway$"),
+        re.compile(rf"^for d in {re.escape(words)}$"),
+        re.compile(r"^(?:do|done)$"),
+        re.compile(
+            r"^cosign (?:verify|verify-attestation --type spdxjson) "
+            rf'--certificate-identity "\$\{{IDENTITY\}}" {issuer} '
+            r'"\$\{IMAGE\}@\$\{d\}" > /dev/null$'
+        ),
+    )
+    for piece in body:
+        if "${{" in piece or not any(a.match(piece) for a in allowed):
+            refusals.append(f"runs a command the release verify does not: {piece}")
+    return refusals
+
+
+class RehearsalVerify(unittest.TestCase):
+    def setUp(self):
+        self.release = step_named("docker-manifest", RELEASE_VERIFY)
+        self.rehearsal = step_named("docker-manifest", REHEARSAL_VERIFY)
+        self.assertIsNotNone(self.release, f"ci.yml: no step named {RELEASE_VERIFY!r}")
+
+    def test_t1_a_rehearsal_step_runs_the_verify(self):
+        self.assertIsNotNone(self.rehearsal, f"ci.yml: no step named {REHEARSAL_VERIFY!r}")
+        calls = cosign_calls(self.rehearsal)
+        self.assertTrue(any(re.match(r"cosign\s+verify\s", c) for c in calls), calls)
+        self.assertTrue(any(c.startswith("cosign verify-attestation") for c in calls), calls)
+
+    def test_t2_the_rehearsal_runs_the_release_command_verbatim(self):
+        # Same body, same cosign calls in the same order, same timeout: only
+        # the env differs, so a verify-step regression shows on a rehearsal.
+        self.assertIsNotNone(self.rehearsal, f"ci.yml: no step named {REHEARSAL_VERIFY!r}")
+        self.assertEqual(run_body(self.rehearsal), run_body(self.release))
+        self.assertEqual(cosign_calls(self.rehearsal), cosign_calls(self.release))
+        self.assertIsNotNone(timeout_of(self.release))
+        self.assertEqual(timeout_of(self.rehearsal), timeout_of(self.release))
+
+    def test_t3_t9_the_rehearsal_verifies_only_a_pinned_signed_release(self):
+        self.assertIsNotNone(self.rehearsal, f"ci.yml: no step named {REHEARSAL_VERIFY!r}")
+        self.assertEqual(readonly_verify_refusals(self.rehearsal), [])
+
+    def test_t4_the_exemption_refuses_a_step_that_writes(self):
+        # Fixtures, so the detector is proved before the live step exists.
+        pinned = [f"          {k}: sha256:{'a' * 64}" for k in DIGEST_KEYS]
+        base = [
+            f"      - name: {REHEARSAL_VERIFY}",
+            f"        if: {REHEARSAL_CONDITION}",
+            "        env:",
+            *pinned,
+            "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@refs/tags/v4.0.0-beta.2",
+            "        run: |",
+            "          set -euo pipefail",
+            "          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway",
+            '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do',
+            '            cosign verify --certificate-identity "${IDENTITY}" '
+            "--certificate-oidc-issuer 'https://token.actions.githubusercontent.com' "
+            '"${IMAGE}@${d}" > /dev/null',
+            "          done",
+        ]
+        self.assertEqual(readonly_verify_refusals(base), [])
+        for extra in (
+            '            cosign sign --yes "${IMAGE}@${d}"',
+            '            cosign attest --yes --predicate x "${IMAGE}@${d}"',
+            '            syft "${IMAGE}@${d}" -o spdx-json > sbom.json',
+            '            docker buildx imagetools create --tag "${IMAGE}:${VERSION}" "${IMAGE}@${d}"',
+            '            LIST="$(cat digests/amd64)"',
+            '            cosign attach sbom --sbom x "${IMAGE}@${d}"',
+            '            cosign copy "${IMAGE}@${d}" "${IMAGE}:4.0.0"',
+            '            docker push "${IMAGE}:rehearsal"',
+            '            oras push "${IMAGE}:x" f',
+            '            echo "${{ github.ref }}"',
+        ):
+            block = base[:-1] + [extra, base[-1]]
+            self.assertTrue(readonly_verify_refusals(block), f"admitted: {extra}")
+        derived = [
+            line.replace(f"sha256:{'a' * 64}", "${{ steps.list.outputs.list }}")
+            if line.strip().startswith("LIST:")
+            else line
+            for line in base
+        ]
+        self.assertTrue(readonly_verify_refusals(derived), "admitted a derived subject")
+
+    def test_t7_the_rehearsal_step_runs_on_a_rehearsal_only(self):
+        self.assertIsNotNone(self.rehearsal, f"ci.yml: no step named {REHEARSAL_VERIFY!r}")
+        self.assertEqual(condition_of(self.rehearsal), REHEARSAL_CONDITION)
+
+    def test_t6_only_the_cosign_installer_is_widened_to_a_rehearsal(self):
+        # E2: exactly tag-push OR rehearsal, on one line. syft stays tag-only.
+        installer = step_named("docker-manifest", "Install cosign")
+        self.assertIsNotNone(installer)
+        self.assertEqual(
+            condition_of(installer),
+            f"({' && '.join(TAG_CONJUNCTS)}) || ({REHEARSAL_CONDITION})",
+        )
+        syft = step_named("docker-manifest", "Install syft (SBOM)")
+        self.assertEqual(conjuncts(condition_of(syft)), list(TAG_CONJUNCTS))
+
+    def test_t8_the_rehearsal_step_runs_after_cosign_is_installed(self):
+        names = []
+        for block in steps("ci.yml", "docker-manifest"):
+            for line in block:
+                match = re.match(r"^\s+(?:- )?name:\s*(.*)$", line)
+                if match:
+                    names.append(match.group(1).strip())
+                    break
+        self.assertIn(REHEARSAL_VERIFY, names)
+        at = names.index(REHEARSAL_VERIFY)
+        self.assertLess(names.index("Install cosign"), at)
+        self.assertLess(at, names.index("Install syft (SBOM)"))
 
 
 if __name__ == "__main__":
