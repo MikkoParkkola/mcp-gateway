@@ -676,3 +676,7 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
     meta.code_mode_execute(&args, Some("rest-fixture-session"), &context)
         .await
 }
+
+/// A11: the rejected-upstream-token cells, which drive this fixture.
+#[path = "upstream_401_tests.rs"]
+mod upstream_401;

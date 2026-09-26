@@ -11,7 +11,7 @@
 
 use crate::personal_accounts::refusal::marked;
 
-use super::super::account_resolver_fixture::{
+use super::super::super::account_resolver_fixture::{
     ALICE_WORK_TOKEN, Answer, Bind, Descriptors, ProviderStep, ROTATED_TOKEN, WORK, account_key,
     custody_with_steps, execute, execute_bridged, external_cfg, gateway, grant, identity, slots,
 };
