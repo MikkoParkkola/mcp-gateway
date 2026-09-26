@@ -336,7 +336,7 @@ impl ManagedLease {
         &self,
         installed: &Arc<VaultStrategy>,
     ) -> Result<(), PropagationError> {
-        if !Arc::ptr_eq(installed, &self.strategy) {
+        if !Arc::ptr_eq(installed, installed) {
             return Err(PropagationError::Refuse(
                 "the managed custody backing it was replaced after the credential was minted"
                     .to_string(),
