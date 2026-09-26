@@ -58,6 +58,12 @@ fn sections(doc: &str) -> BTreeSet<u32> {
 fn every_numbered_item_has_a_summary_row_and_every_row_an_item() {
     let rows = summary_rows(DOC);
     let sections = sections(DOC);
+    for known in [1, 54, 58, 63] {
+        assert!(
+            sections.contains(&known) && rows.contains(&known),
+            "item {known} is in the file; the parser must see its section and row"
+        );
+    }
     assert!(
         sections.len() > 10 && rows.len() > 10,
         "the parser found {} sections and {} rows; it no longer matches the file's shape",
@@ -76,12 +82,27 @@ fn every_numbered_item_has_a_summary_row_and_every_row_an_item() {
 
 /// The two parsers, on a fixture, so a green real-file check cannot be a
 /// parser that silently finds nothing (the size floor above guards the same
-/// thing on the real file).
+/// thing on the real file). The fixture carries the real file's awkward
+/// shapes: a two-digit heading, prose inside the summary block, and a
+/// numbered row in another table.
 #[test]
 fn the_parsers_see_rows_and_sections_where_they_are() {
     let doc = "## What changed\n\n| # | Change | Action |\n|---|---|---|\n| 1 | a | b |\n\
-               | 3 | c | d |\n\n## 1. One\n\ntext\n\n| 9 | not a summary row | x |\n\n\
-               ## 2. Two\n\n## After upgrading\n";
-    assert_eq!(summary_rows(doc), BTreeSet::from([1, 3]));
-    assert_eq!(sections(doc), BTreeSet::from([1, 2]));
+               | 54 | c | d |\n\nNumbers 18-20 are intentionally unused.\n\n## 1. One\n\n\
+               text\n\n| 9 | not a summary row | x |\n\n## 54. Fifty-four\n\n\
+               ## After upgrading\n";
+    assert_eq!(summary_rows(doc), BTreeSet::from([1, 54]));
+    assert_eq!(sections(doc), BTreeSet::from([1, 54]));
+}
+
+#[test]
+#[should_panic(expected = "item 3 has two summary rows")]
+fn a_duplicated_row_is_refused() {
+    summary_rows("## What changed\n\n| 3 | a | b |\n| 3 | c | d |\n");
+}
+
+#[test]
+#[should_panic(expected = "item 4 has two sections")]
+fn a_duplicated_section_is_refused() {
+    sections("## 4. One\n\n## 4. Again\n");
 }
