@@ -121,11 +121,9 @@ impl Ledger {
             let Some(id) = terminal_id(frame).filter(|id| ids.contains(id)) else {
                 continue;
             };
-            if seen.insert(id) {
-                *ledger.kinds.entry(kind_of(frame)).or_default() += 1;
-            } else {
-                ledger.duplicates.push(id);
-            }
+            // MUTANT M-L2: a duplicate counts as a second terminal.
+            let _ = seen.insert(id);
+            *ledger.kinds.entry(kind_of(frame)).or_default() += 1;
         }
         ledger.unaccounted = ids.filter(|id| !seen.contains(id)).collect();
         ledger
