@@ -482,6 +482,8 @@ pub(crate) use worker::{
     AccountHandles, CallbackOutcome, CallbackRequest, JourneyService, JourneyStarted,
 };
 pub(crate) use worker::{CustodyError, CustodyStartError};
+#[cfg(test)]
+pub(crate) use worker::{JourneyCreated, JourneyResult};
 
 /// The managed-account dispatch strategy and the object-safe custody it runs
 /// against. The gateway installs one `VaultStrategy` per bound backend; both

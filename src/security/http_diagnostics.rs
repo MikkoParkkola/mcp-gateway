@@ -182,6 +182,51 @@ mod tests {
 
     const CANARY: &str = "SENTINEL_SWEEP_7222";
 
+    /// A typed `reqwest::Error` for `status`, as the transport captures it.
+    fn typed(status: u16) -> Option<reqwest::Error> {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        reqwest::Response::from(response).error_for_status().err()
+    }
+
+    /// A11 T19: a 401 or 403 is typed only when its body does NOT signal an
+    /// expired MCP session. With the signal it keeps the untyped marker form
+    /// the transport re-initializes on, as 400 and 404 always do.
+    #[test]
+    fn a_session_expiry_body_keeps_the_reinit_marker_on_401_and_403() {
+        for status in [401_u16, 403] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            for body in ["session not found", r#"{"error":{"code":-32015}}"#] {
+                match status_refusal(typed(status), code, body) {
+                    Error::Transport(text) => assert!(
+                        text.contains(SESSION_EXPIRED_MARKER),
+                        "{status} {body}: {text}"
+                    ),
+                    other => panic!("{status} {body} must stay re-initializable: {other:?}"),
+                }
+            }
+            assert!(
+                matches!(
+                    status_refusal(typed(status), code, "denied"),
+                    Error::Http(_)
+                ),
+                "{status} with no session-expiry signal is a typed credential refusal"
+            );
+        }
+        for status in [400_u16, 404] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            assert!(
+                matches!(
+                    status_refusal(typed(status), code, "denied"),
+                    Error::Transport(_)
+                ),
+                "{status} is never typed"
+            );
+        }
+    }
+
     #[test]
     fn oauth_and_status_drop_body_canary() {
         let body = format!("{{\"access_token\":\"{CANARY}\",\"client_secret\":\"{CANARY}\"}}");

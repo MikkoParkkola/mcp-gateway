@@ -219,3 +219,6 @@ mod mcp_route;
 
 #[path = "upstream_401_direct_tests.rs"]
 mod direct_route;
+
+#[path = "upstream_401_offer_tests.rs"]
+mod offer_route;

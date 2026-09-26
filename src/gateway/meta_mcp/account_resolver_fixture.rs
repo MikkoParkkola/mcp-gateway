@@ -183,9 +183,14 @@ pub(super) fn key_descriptor(id: &str) -> AccountKeyDescriptor {
 
 /// The five-field key exactly as `identity::account_key` builds it.
 pub(super) fn account_key(subject: &str, id: &str) -> AccountKey {
+    account_key_for(&identity(subject), id)
+}
+
+/// [`account_key`] for any verified caller, e.g. a bridged Open `WebUI` one.
+pub(super) fn account_key_for(caller: &VerifiedIdentity, id: &str) -> AccountKey {
     crate::personal_accounts::identity::account_key(
         Some(crate::personal_accounts::identity::Principal::Verified(
-            &identity(subject),
+            caller,
         )),
         &key_descriptor(id),
     )
@@ -200,9 +205,12 @@ pub(super) fn account_key(subject: &str, id: &str) -> AccountKey {
 /// The digest comes from the production `AccountKey::digest`, and no token value
 /// enters the string. `propagate`/`refresh` are never called to manufacture it.
 pub(super) fn expected_identity_key(subject: &str, id: &str, token_revision: u64) -> String {
-    let digest = account_key(subject, id)
-        .digest()
-        .expect("fixture account key is well formed");
+    expected_identity_key_for(&account_key(subject, id), token_revision)
+}
+
+/// [`expected_identity_key`] for an already-built account key.
+pub(super) fn expected_identity_key_for(key: &AccountKey, token_revision: u64) -> String {
+    let digest = key.digest().expect("fixture account key is well formed");
     let revision = descriptor_revision();
     format!(
         "acct:v1:{digest}:{}:{GENERATION}:{AUTHORIZATION_EPOCH}:{token_revision}:{}:{revision}",

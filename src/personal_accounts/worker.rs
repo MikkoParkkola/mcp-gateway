@@ -318,6 +318,9 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
 #[path = "worker_journeys.rs"]
 mod journeys;
 pub(crate) use journeys::{AccountHandles, JourneyService, JourneyStarted};
+/// For a test double of [`JourneyService`] (A11 offer cell). Test-only.
+#[cfg(test)]
+pub(crate) use journeys::{JourneyCreated, JourneyResult};
 #[path = "worker_callback.rs"]
 mod callback;
 pub(crate) use callback::{CallbackOutcome, CallbackRequest};
