@@ -71,6 +71,7 @@ upgrading a running deployment.
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 | 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
+| 64 | Text after a lone CR on a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains a lone CR |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1270,6 +1271,18 @@ mcp-gateway cap pin path/to/capability.yaml
 
 To reproduce a pin from a shell, strip the CR of each CRLF first:
 `sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`.
+
+## 64. Text after a lone carriage return on a pin line is hashed
+
+The pin hash excludes a capability's top-level `sha256:` line. A lone carriage return (a CR
+not followed by LF) also ends a line in YAML, so text after one on that line is parsed as
+content, and it was excluded from the hash with the pin. Now only the pin itself is
+excluded: everything after a lone CR on the pin line is hashed like the rest of the file.
+
+**Action:** only a pinned file whose `sha256:` line contains a lone CR is affected, and it
+now fails verification until re-pinned. No shipped capability contains one. Inspect such a
+file before re-pinning it, since the text after the CR is content that was not covered by
+the old pin: `mcp-gateway cap pin path/to/capability.yaml`.
 
 ## After upgrading
 

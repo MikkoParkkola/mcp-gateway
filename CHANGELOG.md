@@ -51,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Capability pins cover text after a lone CR on the pin line.** The pin hash excluded the
+  whole `sha256:` line, but YAML also ends a line at a lone carriage return, so text after
+  one was parsed yet not hashed. Only the pin value is excluded now. See UPGRADING-4.0 item
+  64. (#1212)
+
 - **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
   (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
   now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
