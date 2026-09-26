@@ -71,7 +71,7 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
             .ok_or_else(|| std::io::Error::other(format!("{} names no file", hop.display())))?
             .to_os_string();
         let mut dir = watch_dir_of(&hop);
-        while std::fs::symlink_metadata(&dir)?.file_type().is_symlink() {
+        while false && std::fs::symlink_metadata(&dir)?.file_type().is_symlink() {
             expand()?;
             let holder = watch_dir_of(&dir);
             let holder_real = std::fs::canonicalize(&holder)?;
