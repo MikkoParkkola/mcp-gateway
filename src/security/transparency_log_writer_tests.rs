@@ -465,21 +465,38 @@ fn start_of_append_retention_on_a_full_disk_frees_space() {
     assert!(verify(&path, false).ok);
 }
 
-/// Stress: the synced append and rotate cycle, many times over. On Windows a
-/// single run of the test above failed with NotFound from the writer; this
-/// repeats the same cycle so the failing call site shows up in one CI run.
+/// Stress: the synced append and rotate cycle, on 8 loggers at once (each
+/// in its own directory) to load the machine the way the full suite does.
+/// Each writer also runs the original test's shape: a thread that stops at 3
+/// segments while the caller waits on a channel.
 #[test]
 fn synced_append_rotation_stress() {
-    for round in 0..40 {
-        let dir = tempfile::tempdir().unwrap();
-        let path = log_path(&dir);
-        let l = TransparencyLogger::open(cfg(&path, 3, false)).unwrap();
-        for i in 0..400 {
-            if let Err(e) = l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
-            {
-                panic!("round {round} append {i}: {e} (kind {:?})", e.kind());
-            }
-        }
-        assert!(verify(&path, false).ok, "round {round}: chain broken");
+    let handles: Vec<_> = (0..8)
+        .map(|w| {
+            std::thread::spawn(move || {
+                for round in 0..15 {
+                    let dir = tempfile::tempdir().unwrap();
+                    let path = log_path(&dir);
+                    let l = TransparencyLogger::open(cfg(&path, 3, false)).unwrap();
+                    for i in 0..300 {
+                        if let Err(e) =
+                            l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
+                        {
+                            panic!(
+                                "writer {w} round {round} append {i}: {e} (kind {:?})",
+                                e.kind()
+                            );
+                        }
+                    }
+                    assert!(
+                        verify(&path, false).ok,
+                        "writer {w} round {round}: chain broken"
+                    );
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
     }
 }
