@@ -119,6 +119,11 @@ async fn a_rate_limited_refusal_is_not_replayed_from_the_cache() {
         Some(&json!(true)),
         "the refusal must be an error result, the shape the cache refuses: {refusal}"
     );
+    assert_eq!(
+        refusal.pointer("/recovery/error_code"),
+        Some(&json!("RATE_LIMITED")),
+        "and typed as a rate-limit refusal: {refusal}"
+    );
     assert!(
         refusal
             .to_string()

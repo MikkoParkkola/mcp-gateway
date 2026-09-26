@@ -141,9 +141,8 @@ pub fn is_final(result: &Value) -> bool {
 /// this in its `set`, beside [`is_final`], so no store site can forget it.
 ///
 /// The response caches that call it are `crate::cache::ResponseCache` (the
-/// meta route) and the capability executor's cache. A new cache of tool results
-/// must call it too; `rg -n 'struct \w*Cache' src` lists the candidates, and
-/// the F26 census in PR #1273 records why each other store is exempt.
+/// meta route) and the capability executor's cache. A new cache of tool
+/// results must call it too.
 #[must_use]
 pub fn is_error(result: &Value) -> bool {
     result.get("isError").and_then(Value::as_bool) == Some(true)
