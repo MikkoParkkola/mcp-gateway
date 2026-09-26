@@ -1205,6 +1205,8 @@ Two things worth knowing before you shrink it:
 
 The gateway uses no database. Its state is per process (see "Replica Count and per-process state"): key-server tokens, sessions and continuations are lost on restart, and task records survive only as long as their volume. Cost-governance spend for the current UTC day is reloaded from `costs.json`; spend recorded since the last save (at most 5 minutes) is lost on a crash. A `costs.json` that cannot be read or parsed is logged at WARN and the budgets start at zero. Redeploy the binary with the same config to restore the service. Startup takes ~8ms; backends reconnect automatically; tool caches repopulate on first request.
 
+What to back up, how to restore it and how to rotate keys: [Backup, restore and key rotation](runbooks/backup-restore-and-keys.md).
+
 ## Scaling
 
 A single instance handles thousands of RPS with sub-2ms routing overhead. This is sufficient for virtually all use cases.
