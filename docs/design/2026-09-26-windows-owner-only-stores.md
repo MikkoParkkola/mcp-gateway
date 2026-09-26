@@ -1,6 +1,6 @@
 # Windows owner-only stores: task store and personal-account store
 
-Status: REVISION 4 after review rounds 1-3 (dispositions in §8-§10). Round 4 pending. No code until the maintainer decides ADR-016.
+Status: REVIEWED. Round 4: two independent reviews SHIP (dispositions in §8-§11). No code until the maintainer decides ADR-016.
 Linked: W1 (#1142) holds the Windows failure class; probe run 36197759127 / PR #1355.
 Maintainer decision (2026-09-26): 4.0 on Windows supports the long-running task
 store and the personal-account store, with security equivalent to the unix path.
@@ -191,7 +191,7 @@ state lock), and never outlives the read. An EXTERNAL holder (an antivirus scan,
 a backup agent) makes `replace` fail with a sharing violation: that is a `Staged`
 refusal, retried at most 3 times with 10, 20 and 40 ms waits, then reported as
 `StorageUnavailable` exactly like a failed unix rename.
-`// ponytail: fixed 3-try backoff; configurable if field reports show longer scans.` Probe E2 runs the COMPLETE
+Scratch names stay unique per attempt (a fresh 128-bit suffix in the account store, pid plus counter in the task store), so crash residue never blocks a later `CREATE_NEW`. Probe E2 runs the COMPLETE
 production sequence (share-0 temp created, written, synced, closed, then replaced over a
 destination another handle holds open) and is recorded, not assumed.
 
@@ -213,7 +213,9 @@ destination another handle holds open) and is recorded, not assumed.
   - 3.x token file: `icacls "<f>" /setowner "%USERDOMAIN%\%USERNAME%"` (P4), then
     `icacls "<f>" /inheritance:r /grant:r "%USERDOMAIN%\%USERNAME%:F"` (P5), then
     `icacls "<f>" /remove:g "*S-1-..."` (numeric SIDs need the `*` prefix) for each foreign SID the message lists (P2). The
-    migration re-checks P1-P5 after the operator runs these; W-T10b proves the sequence
+    first step changes the owner, so when P4 is the failing rule the sequence must run
+    from an elevated prompt (a standard user holds no right to take ownership); the
+    refusal message says so. The migration re-checks P1-P5 after the operator runs these; W-T10b proves the sequence
     turns a refused file into an accepted one.
 
 ## 3. Tests (run on the `windows-2025` CI job)
@@ -238,7 +240,7 @@ destination another handle holds open) and is recorded, not assumed.
 | W-T6 symlink as record (needs dev mode; skip with a logged reason if `mklink` fails) | `mklink` | refuses |
 | W-T7 UNC / `\\?\UNC` / `\\.\` config path | none | `InvalidConfiguration`; `C:\x` and `\\?\C:\x` accepted |
 | W-T8 NULL DACL | PowerShell `Set-Acl` with SDDL `D:NO_ACCESS_CONTROL` (no unsafe in tests) | refuses, and the refusal REASON is `NullDacl` (P1). A NULL DACL also fails P3, so only the reason assertion can kill M9 |
-| W-T8b allowed ACE without read+write | SDDL granting the user read only | refuses (P3) |
+| W-T8b allowed ACE without read+write | SDDL `O:<user>D:P(A;;FR;;;<user>)`: protected, one ACE for the user, owner = user, so P1, P2, P4 and P5 all pass | refuses with reason `NoReadWrite` (P3) |
 | W-T9 custody across processes | child process (re-exec of the test binary) holds the store; parent opens | `AlreadyOwned` / `StorageUnavailable` (not `Unsupported`); after the child is KILLED the parent reacquires |
 | W-T10 3.x token with inherited ACL | default-created file | `NotPrivate`, message lists the failed rule |
 | W-T10b remediation works | W-T10 file PLUS an explicit Everyone grant and owner set to Administrators; run the §2.4 `icacls` sequence | migration accepts it |
@@ -249,7 +251,8 @@ destination another handle holds open) and is recorded, not assumed.
 | W-T15 non-ACL volume | CI step creates and mounts a FAT32 VHD with `diskpart` (runner is admin); store on it | `volume_is_local` on the FAT32 directory handle returns false (asserted directly; P1-P5 would also refuse, so only this assertion kills M14), AND the store open refuses |
 | W-T16a pin holds the store directory itself | guard-level: hold the store directory handle ALONE (no custody sidecar, no files open), then rename that empty directory and replace it with a junction | both fail with a sharing violation; this is the test M15 must redden (an open descendant would otherwise mask it) |
 | W-T16 ancestor swap | with the store open, a second thread tries to rename the store directory's parent and to replace it with a junction | both fail; store still reads its own files |
-| W-T17 read/replace overlap | 32 threads alternating `lookup` and `refresh_tokens` on one account for 2 s | no `StorageUnavailable`; every lookup returns a committed version |
+| W-T17 read/replace ordering | barrier-controlled: a reader thread opens the record inside the mutex and signals; the writer then commits | the commit succeeds on its first `replace` attempt (asserted via a test-only attempt counter), and the reader saw a committed version. Deterministic, and independent of antivirus timing |
+| W-T18 final-path check | configure the store at `C:\\t\\a`; before open, the same user renames `a` away and moves a private directory of their own into its place via a directory whose final path differs (e.g. through a mount-point alias) | refuses with reason `PathMismatch` |
 
 W-T14, W-T15 and the `net use` part of W-T12 run in a dedicated Windows CI step (`--ignored` filter by name) so
 they need no privilege in the default test run.
@@ -288,6 +291,7 @@ test file; any probe needing Win32 waits for the maintainer's `unsafe` decision.
 | M15 store directory handle opened with `FILE_SHARE_DELETE` | W-T16a |
 | M16 held directory handle drops `FILE_LIST_DIRECTORY` | W-T16a |
 | M17 in-process reader keeps its handle past the store mutex | W-T17 |
+| M18 `final_path` comparison skipped | W-T18 |
 | M13 `create_file_private` falls back to std `create_new` (inherited DACL) | W-T1 (protected bit and single ACE) |
 
 ## 6. Risks
@@ -362,3 +366,12 @@ DEPLOYMENT.md Windows notes. ADR-016.
 | R3-6 MEDIUM | M14 masked by P1-P5 on FAT32 | Fixed: W-T15 asserts `volume_is_local` directly |
 | R3-I1 | assert `volume_is_local` directly for the mapped drive | Adopted (W-T12) |
 | R3-I2 | deterministic kill at commit boundaries | Covered by un-gating the existing fault-boundary and crash suites (`crash_tests.rs`, `repair_tests.rs`, the `faults` boundaries), which then run on Windows |
+
+
+## 11. Review round 4
+
+Both seats: SHIP. Remaining items folded in without changing the design:
+elevation note for the P4 remediation (§2.4); W-T17 made barrier-controlled and
+independent of antivirus timing; W-T8b pins P3 alone; W-T18 and M18 pin the final-path
+check; the `unsafe` fence covers `src/`, `build.rs`, `benches/` and `examples/`
+(ADR-016); scratch-name uniqueness stated (§2.3).

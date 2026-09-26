@@ -42,8 +42,8 @@ The module exports eight safe `pub(crate)` functions and nothing else:
 `inspect`, `replace`, `volume_is_local`, `final_path` (design §2.1). Callers never see a raw handle,
 pointer or Win32 type.
 
-A CI check fails the build if `allow(unsafe_code)` or `expect(unsafe_code)` appears in
-`src/` anywhere except `src/win_acl.rs` and the existing test-only
+A CI check fails the build if `allow(unsafe_code)`, `expect(unsafe_code)` or an
+`unsafe` block appears in `src/`, `build.rs`, `benches/` or `examples/` anywhere except `src/win_acl.rs` and the existing test-only
 `src/gateway/server/tests/alloc_meter.rs`.
 
 ## Safety contract
