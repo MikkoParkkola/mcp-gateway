@@ -208,10 +208,7 @@ pub async fn run_doctor_command(
 
     // ── 5. Stdio backends (spawn check) ───────────────────────────────────
     for (name, backend) in config.enabled_backends() {
-        results.extend(match stdio_probe {
-            StdioProbe::Locate => check_stdio_backend(name, &backend.transport),
-            StdioProbe::Start => start_stdio::start_stdio_backend(name, backend).await,
-        });
+        results.extend(start_stdio::stdio_row(stdio_probe, name, backend).await);
     }
 
     // ── 6. AI client configuration ─────────────────────────────────────────

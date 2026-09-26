@@ -25,6 +25,18 @@ pub enum StdioProbe {
     Start,
 }
 
+/// The stdio row for `backend` under `probe`.
+pub(super) async fn stdio_row(
+    probe: StdioProbe,
+    name: &str,
+    backend: &BackendConfig,
+) -> Option<CheckResult> {
+    match probe {
+        StdioProbe::Locate => super::check_stdio_backend(name, &backend.transport),
+        StdioProbe::Start => start_stdio_backend(name, backend).await,
+    }
+}
+
 /// Start `backend` through the same transport, env and cwd the gateway uses,
 /// then close it. `None` for a non-stdio backend.
 pub(super) async fn start_stdio_backend(
@@ -108,6 +120,25 @@ mod tests {
             timeout: Duration::from_secs(30),
             ..BackendConfig::default()
         }
+    }
+
+    /// T7e: the flag selects the launch; without it nothing runs.
+    #[tokio::test]
+    async fn t7e_the_start_probe_launches_and_the_locate_probe_does_not() {
+        let backend = stdio("sh -c 'echo dispatch-canary >&2; exit 5'", &[]);
+        let started = stdio_row(StdioProbe::Start, "b", &backend)
+            .await
+            .expect("row");
+        assert!(
+            started.detail.contains("exit status: 5"),
+            "{}",
+            started.detail
+        );
+        let located = stdio_row(StdioProbe::Locate, "b", &backend).await;
+        assert!(
+            located.is_none_or(|r| !r.detail.contains("exit status")),
+            "the locate probe ran the command"
+        );
     }
 
     /// T7: the same cause the gateway logs, through the backend's own env.

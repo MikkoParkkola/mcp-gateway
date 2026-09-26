@@ -136,6 +136,46 @@ async fn t3_argv_env_and_credentials_are_redacted() {
     assert!(!err.contains("env-canary-7c1"), "{err}");
 }
 
+/// T3b: a secret that straddles the per-line cut is redacted whole, because
+/// redaction runs before the cut.
+#[tokio::test]
+async fn t3b_a_secret_across_the_line_cut_is_redacted() {
+    let t = transport(
+        "printf \"%0250d%s\\n\" 0 \"$API_TOKEN\" >&2; exit 1",
+        &[("API_TOKEN", "env-canary-7c1")],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("env-ca"), "{excerpt}");
+}
+
+/// T2d: an overlong line is read in bounded chunks and the lines after it
+/// still arrive.
+#[tokio::test]
+async fn t2d_an_overlong_line_does_not_hide_the_next() {
+    let t = transport(
+        "head -c 100000 /dev/zero | tr '\\0' x >&2; echo >&2; echo after-canary >&2; exit 1",
+        &[],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(excerpt.ends_with("after-canary"), "{excerpt:?}");
+    assert!(excerpt.lines().all(|l| l.chars().count() <= 256));
+}
+
+/// T4b: a grandchild that keeps stderr open does not erase what was read.
+#[tokio::test]
+async fn t4b_a_held_stderr_pipe_keeps_the_tail() {
+    let t = transport(
+        "(sleep 3 >/dev/null </dev/null &); echo held-canary >&2; exit 3",
+        &[],
+    );
+    let err = start_err(&t).await;
+    assert!(err.contains("exit status: 3"), "{err}");
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(excerpt.contains("held-canary"), "{excerpt}");
+}
+
 /// T4: a child that closes stdout but keeps running is reported at once and
 /// does not outlive the failed start.
 #[tokio::test]
