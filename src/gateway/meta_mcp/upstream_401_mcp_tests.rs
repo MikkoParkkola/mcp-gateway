@@ -90,7 +90,7 @@ async fn non_vault_401_forces_no_refresh() {
     assert_eq!(dispatches.count(), 1);
 }
 
-/// T7-meta-b (grok): on the meta Err arm, a rotation becomes a tool result
+/// T7-meta-b: on the meta Err arm, a rotation becomes a tool result
 /// telling the caller to retry, with the code the single mapping chose.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mcp_route_401_with_live_grant_says_retry() {
