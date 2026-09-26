@@ -640,7 +640,7 @@ fn contradiction(declared: &DeclaredLabel, proven: &ProvenPrincipal) -> String {
         "Request rejected: the declared agent label {} (via {}) contradicts the proven \
          principal {} (via {}). Add it to agent_identity.principal_labels for that principal \
          if this caller is entitled to declare it.",
-        quoted(&declared.id),
+        quoted("?"),
         declared.source,
         quoted(proven.id()),
         proven.proof()
