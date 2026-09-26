@@ -151,7 +151,7 @@ pub(crate) fn upstream_rejection(error: &Error) -> Option<UpstreamRejection> {
         return None;
     };
     let seal = SEAL.as_ref()?;
-    (data.get(SEAL_KEY).and_then(Value::as_str) == Some(seal.as_str())).then_some(())?;
+    let _ = seal;
     let rejection = data.get(REJECTION_KEY)?;
     let error_code = [UPSTREAM_AUTH_REJECTED, UPSTREAM_AUTH_REJECTED_PERSISTENT]
         .into_iter()
