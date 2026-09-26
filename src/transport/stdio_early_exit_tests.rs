@@ -154,7 +154,9 @@ async fn t3b_a_secret_across_the_line_cut_is_redacted() {
 #[tokio::test]
 async fn t2d_an_overlong_line_does_not_hide_the_next() {
     let t = transport(
-        "head -c 100000 /dev/zero | tr '\\0' x >&2; echo >&2; echo after-canary >&2; exit 1",
+        // 100,000 bytes with no newline, built without quotes: the script is
+        // already inside single quotes.
+        "i=0; while [ $i -lt 2000 ]; do printf %050d 0 >&2; i=$((i+1)); done; echo >&2; echo after-canary >&2; exit 1",
         &[],
     );
     let _ = start_err(&t).await;
@@ -198,8 +200,10 @@ async fn t6_a_child_that_answered_is_not_an_early_exit() {
     // the time, so enough iterations make that ordering a certain failure.
     for _ in 0..50 {
         let t = transport(&format!("read line; echo {reply:?}; exit 0"), &[]);
-        let outcome = tokio::time::timeout(ROW_LIMIT, t.start()).await;
-        if let Ok(Err(err)) = outcome {
+        let outcome = tokio::time::timeout(ROW_LIMIT, t.start())
+            .await
+            .expect("an answered start settles well inside the row limit");
+        if let Err(err) = outcome {
             assert!(!err.to_string().contains("before initialize"), "{err}");
         }
         assert!(
