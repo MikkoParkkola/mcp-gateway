@@ -414,6 +414,7 @@ pub(super) async fn tasks_cancel(
     }
 }
 
+// MUTANT M4 (throwaway): an inlined copy of the shared rule.
 fn input_responses_nonempty(params: Option<&Value>) -> bool {
     params
         .and_then(|params| params.get("inputResponses"))
