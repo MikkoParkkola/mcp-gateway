@@ -85,7 +85,7 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    Named function: `DirectRouteGuards::run`, in the router. The worker lives in `task_service`,
    so calling it may need a visibility change (for example `pub(super)` to `pub(crate)`); that
    is an owner decision, asked before code, not assumed.
-1b. **Upstream-armed jobs keep today's path.** When a trusted recovery adapter claims the
+2b. **Upstream-armed jobs keep today's path.** When a trusted recovery adapter claims the
    backend, the worker arms `UpstreamSubmission` (`worker.rs:113-178`) and the backend owns
    the task; its `input_required` is the backend's own task state and stays under the reviewed
    I3 treatment. The input round of §4 applies only to the un-armed path. A test pins that an
@@ -215,7 +215,7 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 |---|---|---|---|
 | resume named the create-only worker | HIGH | `commit_and_run` worker.rs:29-56 commits a Create first | ADOPTED: §4.3 new `resume_and_run` entry |
 | resume params were only the continuation fragment | HIGH | mrtr.rs:539-551; meta path builds OutboundRetry with tool and arguments at invoke.rs:960-972 | ADOPTED: §4.3 dispatches stored tool and arguments with OutboundRetry |
-| armed UpstreamSubmission bypasses classify_dispatch | HIGH | worker.rs:113-178 | ADOPTED: §3 A.1b, input round only on the un-armed path; test row |
+| armed UpstreamSubmission bypasses classify_dispatch | HIGH | worker.rs:113-178 | ADOPTED: §3 A.2b, input round only on the un-armed path; test row |
 | concurrent updates could spawn two resumes | HIGH | update ignores revision today (service.rs:201 `_revision`) | ADOPTED: §4.3a revision CAS; test row |
 | no settlement for a rejected claimed round | MEDIUM | settlement.rs:16-23; mrtr.rs:241-276 | ADOPTED: §4.1 case (c) |
 | first-dispatch guard bypass had no mutant | MEDIUM | plan tested resume only | ADOPTED: test row |
