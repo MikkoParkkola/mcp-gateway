@@ -19,6 +19,7 @@ use crate::gateway::session_id::log_capture::{assert_fingerprinted, capture_debu
 fn unauthenticated(name: &str) -> AuthenticatedClient {
     AuthenticatedClient {
         name: name.to_string(),
+        principal: String::new(),
         ..anonymous_client()
     }
 }
@@ -26,7 +27,7 @@ fn unauthenticated(name: &str) -> AuthenticatedClient {
 fn credential(principal: &str) -> AuthenticatedClient {
     AuthenticatedClient {
         name: "key".to_string(),
-        principal: principal.to_string(),
+        principal: crate::gateway::auth::principal_of(principal),
         authenticated: true,
         ..anonymous_client()
     }
