@@ -88,10 +88,19 @@ async fn call_as_alice(router: &axum::Router) -> (StatusCode, Value) {
         .expect("request builds");
     // Auth is off in this harness, so the middleware leaves the identity in place.
     request.extensions_mut().insert(identity("alice"));
-    let response = router.clone().oneshot(request).await.expect("router answers");
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
-    (status, serde_json::from_slice(&bytes).expect("a JSON-RPC body"))
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).expect("a JSON-RPC body"),
+    )
 }
 
 /// T7-direct: a 401 on a revoked grant forces one refresh and answers with the
@@ -124,5 +133,9 @@ async fn direct_route_401_with_live_grant_says_retry() {
     );
     assert_eq!(body["error"]["data"]["retry"], true, "{body}");
     assert_eq!(fixture.custody.refreshes(), 1);
-    assert_eq!(fixture.dispatches.count(), 1, "the call itself is not retried");
+    assert_eq!(
+        fixture.dispatches.count(),
+        1,
+        "the call itself is not retried"
+    );
 }

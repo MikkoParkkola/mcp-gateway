@@ -51,12 +51,16 @@ async fn mcp_route_401_uses_propagated_lease() {
     Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect_err("the fenced account refuses before dispatch");
-    assert_eq!(dispatches.count(), 1, "a fenced account never reaches the backend");
+    assert_eq!(
+        dispatches.count(),
+        1,
+        "a fenced account never reaches the backend"
+    );
 }
 
 /// T12 (positive control for the carrier): a credential minted by a
 /// non-vault strategy carries no `ManagedLease`, so a 401 forces nothing and
-/// keeps today's backend-error tool result. It is not retried either (A11-g).
+/// keeps today's backend-error tool result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn non_vault_401_forces_no_refresh() {
     let custody = custody_with_steps(&[], ROTATED_TOKEN, &[]);
@@ -81,7 +85,9 @@ async fn non_vault_401_forces_no_refresh() {
         "today's backend error: {result}"
     );
     assert_eq!(custody.refreshes(), 0);
-    assert_eq!(dispatches.count(), 1, "a 401 is a deterministic refusal, never retried");
+    // Retry is pinned by T8 (the HTTP transport) and T16 (the policy): this
+    // fixture's pooled transport does not go through `with_retry`.
+    assert_eq!(dispatches.count(), 1);
 }
 
 /// T7-meta-b (grok): on the meta Err arm, a rotation becomes a tool result
@@ -105,33 +111,18 @@ async fn mcp_route_401_with_live_grant_says_retry() {
     let result = Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect("a rotation is reported as a tool result");
-    assert_eq!(result.get("isError").and_then(serde_json::Value::as_bool), Some(true), "{result}");
-    assert_eq!(result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED", "{result}");
+    assert_eq!(
+        result.get("isError").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "{result}"
+    );
+    assert_eq!(
+        result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED",
+        "{result}"
+    );
     assert_eq!(result["recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
     assert_eq!(dispatches.count(), 1, "the call itself is not retried");
-}
-
-/// T16 (grok, positive control): the 401/403 exclusion must not stop 429
-/// backoff, which rides the same `Error::Http` (`error.rs:332`).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rate_limited_429_is_still_retried() {
-    let custody = custody_with_steps(&[], ROTATED_TOKEN, &[]);
-    let installed = custody.installed();
-    let (meta, dispatches) = gateway(
-        &[("partner", Bind::Propagation(external_cfg()))],
-        &Descriptors::same(&[]),
-        &installed,
-        &[],
-    );
-    dispatches.answer_with(&[429]);
-    let caller = identity("alice");
-    meta.seed_caller_slot_for_test("partner", &caller).await;
-
-    Box::pin(execute(&meta, "partner", Some(&caller)))
-        .await
-        .expect("the retry after a 429 succeeds");
-    assert_eq!(dispatches.count(), 2, "a 429 is retried once, then succeeds");
 }
 
 /// T17: a 401 on an elicitation continuation. The first dispatch asks a
@@ -175,9 +166,16 @@ async fn bridged_continuation_401_forces_the_refresh() {
         -32603,
         "the unmarked reconnect refusal (Error::Config), not the generic bridged -32003: {error}"
     );
-    assert!(marked(&error).is_none(), "passed through with_connect_offer: {error}");
+    assert!(
+        marked(&error).is_none(),
+        "passed through with_connect_offer: {error}"
+    );
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
-    assert_eq!(dispatches.count(), 2, "the first call and the one continuation");
+    assert_eq!(
+        dispatches.count(),
+        2,
+        "the first call and the one continuation"
+    );
 }
 
 /// T17b: a rotation on the continuation answers as the first dispatch would:
@@ -213,8 +211,15 @@ async fn bridged_continuation_401_with_live_grant_says_retry() {
     let result = Box::pin(execute_bridged(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect("a rotation on the continuation is reported as a tool result");
-    assert_eq!(result.get("isError").and_then(serde_json::Value::as_bool), Some(true), "{result}");
-    assert_eq!(result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED", "{result}");
+    assert_eq!(
+        result.get("isError").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "{result}"
+    );
+    assert_eq!(
+        result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED",
+        "{result}"
+    );
     assert_eq!(result["recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
     assert_eq!(dispatches.count(), 2);

@@ -119,10 +119,7 @@ pub(crate) fn upstream_rejection(_error: &Error) -> Option<UpstreamRejection> {
 ///
 /// RED-FIRST STUB: returns `refused` unmarked.
 #[cfg(test)]
-pub(crate) fn mark_rejection(
-    _outcome: super::RejectionOutcome,
-    refused: Error,
-) -> Error {
+pub(crate) fn mark_rejection(_outcome: super::RejectionOutcome, refused: Error) -> Error {
     refused
 }
 

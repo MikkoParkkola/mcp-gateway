@@ -320,8 +320,6 @@ pub(super) enum ProviderStep {
     Rotate(&'static str),
     /// The grant is dead: `invalid_grant`.
     InvalidGrant,
-    /// The provider could not be reached.
-    Unavailable,
 }
 
 impl RefreshProvider for ScriptedProvider {
@@ -336,11 +334,6 @@ impl RefreshProvider for ScriptedProvider {
             Some(ProviderStep::InvalidGrant) => {
                 return futures::future::Either::Left(std::future::ready(Err(
                     ProviderRefreshError::InvalidGrant,
-                )));
-            }
-            Some(ProviderStep::Unavailable) => {
-                return futures::future::Either::Left(std::future::ready(Err(
-                    ProviderRefreshError::Unavailable,
                 )));
             }
             None => self.rotated.clone(),
