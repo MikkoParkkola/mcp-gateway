@@ -271,6 +271,19 @@ test file; any probe needing Win32 waits for the maintainer's `unsafe` decision.
 - E2b `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` over a destination held open by a std read handle: fails (expected), confirming R3-2.
 - E6 while a handle to `C:\\a\\b\\store` is held WITHOUT `FILE_SHARE_DELETE`, renaming `C:\\a\\b` and `C:\\a` fails (sharing violation), and so does replacing either with a junction.
 
+### 4.1 Probe results (throwaway PR #1508, CI run 36279012847, job 108507160087, windows-2025)
+
+| Probe | Result | Amendment |
+|---|---|---|
+| E1 directory flush | `sync_all` on a directory handle opened with BACKUP_SEMANTICS succeeds with `GENERIC_WRITE` (with or without `GENERIC_READ`); read-only gives `ERROR_ACCESS_DENIED` | R7 directory step is MANDATORY on Windows: `sync_dir` = BACKUP_SEMANTICS + `GENERIC_WRITE` + `sync_all`. M32 applies |
+| E2 / E2b replace | `MoveFileExW(REPLACE_EXISTING \| WRITE_THROUGH)` over a destination a std reader holds open fails with `ERROR_ACCESS_DENIED` (5), not a sharing violation; after the reader closes it succeeds. Std `fs::rename` over the same open reader SUCCEEDS (current std uses POSIX rename semantics) | R3-2 retry triggers on `ERROR_ACCESS_DENIED` and `ERROR_SHARING_VIOLATION`. Design unchanged otherwise: write-through `MoveFileExW` is kept for its documented durability |
+| E3 owner | runner token is the built-in Administrator (RID 500), elevated; a std-created file is owned by BUILTIN\Administrators, unprotected, 3 ACEs; `create_file_private` / `create_dir_private` give owner = user, protected, exactly one allow ACE (`FILE_ALL_ACCESS`; directories `OI\|CI`) | Confirms §2.2: explicit owner is required and works elevated. P4' fallback not needed |
+| E4 custody | `try_lock` on a second shared handle returns `WouldBlock`; after the first handle drops, it succeeds | Confirms R8 |
+| E5 network drive | a `net use` drive letter's final path is `\\?\UNC\localhost\C$\...`; `volume_is_local` false; a local temp dir true | Confirms G3 via the UNC leg; W-T12 is primary, W-T12b not needed |
+| E6 pinning | handle WITH `FILE_LIST_DIRECTORY`, no delete share: renaming the store dir fails 32, parent and grandparent fail 5. Metadata-only handle: store-dir rename SUCCEEDS, ancestors still fail 5 | Confirms R3-1 (data access is what pins the directory itself) and R2-1 (ancestors pinned). W-T16a expects 32; W-T16 expects 5 for ancestors. No ancestor-handle fallback needed |
+
+No probe contradicts the design.
+
 ## 5. Mutation proof (one throwaway PR each; named test must redden)
 
 | Mutant | Reddens |
