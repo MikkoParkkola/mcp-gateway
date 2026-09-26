@@ -71,7 +71,7 @@ pub(super) async fn start_stdio_backend(
         }
         Ok(Err(error)) => {
             let detail = match transport.start_failure_excerpt() {
-                Some(excerpt) if !excerpt.is_empty() => format!("{error}\nstderr:\n{excerpt}"),
+                Some(excerpt) if excerpt.is_empty() => format!("{error}\nstderr:\n{excerpt}"),
                 _ => error.to_string(),
             };
             CheckResult::fail(&label, detail).with_category("backend_stdio")
