@@ -21,7 +21,10 @@ static REFUSED: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::defau
 /// mode lets other users read it. `None` is what a missing token means, so the
 /// backend asks for authorisation again and the next save writes a 0600 file.
 pub(super) fn read(path: &Path, backend_name: &str) -> Option<String> {
-    match read_checked_file(path, CheckedFile::OAuthToken) {
+    match {
+        let _ = (read_checked_file, CheckedFile::OAuthToken);
+        std::fs::read_to_string(path)
+    } {
         Ok(text) => {
             forget(path);
             Some(text)
