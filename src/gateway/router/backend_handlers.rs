@@ -468,6 +468,8 @@ async fn dispatch_in_scope(
 /// `subscriptions/listen` naming `taskIds`. KEEP IN STEP with
 /// `reaches_tasks_extension` in `router/handlers.rs`: a task-reaching method
 /// added there and not here is forwarded here without an owner check.
+/// The one intended difference: `tools/call` carrying `task` still forwards;
+/// task creation on this route is separate work (LIFECYCLE.1).
 fn is_task_method(method: &str, params: Option<&Value>) -> bool {
     method
         .get(..6)

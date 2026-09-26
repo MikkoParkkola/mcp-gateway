@@ -186,6 +186,11 @@ fn assert_refused_without_forward(
         wire.seen.lock()
     );
     assert_eq!(body["error"]["code"], -32601, "{method}: {body}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("use /mcp"),
+        "{method} must point at /mcp: {body}"
+    );
     assert_eq!(
         body["id"], 77,
         "{method} refusal must carry the caller's id: {body}"
@@ -279,9 +284,14 @@ async fn caller_b_task_subscription_never_reaches_backend() {
 async fn out_of_scope_caller_still_gets_403_for_task_methods() {
     let (state, wire) = gateway().await;
 
-    let (status, body) = send(&state, KEY_C, "tasks/get", json!({ "taskId": TASK_A })).await;
+    for (method, params) in [
+        ("tasks/get", json!({ "taskId": TASK_A })),
+        ("subscriptions/listen", json!({ "taskIds": [TASK_A] })),
+    ] {
+        let (status, body) = send(&state, KEY_C, method, params).await;
 
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method}: {body}");
+        assert_eq!(body["error"]["code"], -32003, "{method}: {body}");
+    }
     assert_eq!(wire.task_calls(), 0, "{:?}", wire.seen.lock());
 }
