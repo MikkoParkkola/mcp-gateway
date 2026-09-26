@@ -269,7 +269,7 @@ mod tests {
 
         assert!(entry.get("timestamp").is_some(), "missing timestamp");
         assert_eq!(entry["event"], "request");
-        assert_eq!(entry["session_id"], "my-session");
+        assert_eq!(entry["session_id"], crate::gateway::session_id::session_fp("my-session"));
         assert_eq!(entry["server"], "backend");
         assert_eq!(entry["tool"], "my_tool");
         assert_eq!(entry["caller"], "api-key-1");

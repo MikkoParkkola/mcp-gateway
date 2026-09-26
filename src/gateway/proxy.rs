@@ -63,6 +63,29 @@ pub enum SamplingError {
 ///
 /// Holds a reference to the [`NotificationMultiplexer`] used for forwarding
 /// requests to connected clients via SSE.
+///
+/// There is no "first session" accessor: any session is not the caller's
+/// session (F9). This compiles:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use mcp_gateway::{backend::BackendRegistry, config::StreamingConfig};
+/// # use mcp_gateway::gateway::{proxy::ProxyManager, streaming::NotificationMultiplexer};
+/// let m = NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
+/// let x = ProxyManager::new(Arc::new(m));
+/// assert!(x.cached_roots().is_empty());
+/// ```
+///
+/// and this does not:
+///
+/// ```compile_fail
+/// # use std::sync::Arc;
+/// # use mcp_gateway::{backend::BackendRegistry, config::StreamingConfig};
+/// # use mcp_gateway::gateway::{proxy::ProxyManager, streaming::NotificationMultiplexer};
+/// let m = NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
+/// let x = ProxyManager::new(Arc::new(m));
+/// let _ = x.first_session_id();
+/// ```
 pub struct ProxyManager {
     /// Notification multiplexer for sending to clients
     multiplexer: Arc<NotificationMultiplexer>,

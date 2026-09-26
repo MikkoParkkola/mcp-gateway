@@ -605,7 +605,7 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
 }
 
 /// Authenticated fixture whose executor capacity comes from the supplied config.
-async fn test_router_app_state_with_auth_and_config(
+pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,
     config: crate::config::Config,
 ) -> (Arc<AppState>, tempfile::TempDir) {
@@ -671,7 +671,7 @@ async fn test_router_app_state_with_auth_and_config(
     (state, store_dir)
 }
 
-fn scoped_auth_config(admin: bool) -> AuthConfig {
+pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
     AuthConfig {
         enabled: true,
         bearer_token: None,

@@ -6010,3 +6010,6 @@ mod identity_propagation_enforcement_tests {
 
 #[cfg(test)]
 mod error_budget_tests;
+
+#[cfg(test)]
+mod session_fp_tests;

@@ -2117,6 +2117,10 @@ pub(super) async fn metrics_handler(
 mod health_predicate_tests;
 
 #[cfg(test)]
+#[path = "handlers_session_tests.rs"]
+mod session_tests;
+
+#[cfg(test)]
 mod cacheable_field_tests {
     use super::{CACHEABLE_METHODS, build_modern_response};
     use crate::protocol::{JsonRpcResponse, RequestId};
