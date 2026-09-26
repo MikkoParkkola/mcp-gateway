@@ -109,7 +109,7 @@ impl AuditLogger {
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
             event: "request",
-            session_id: session_fp(session_id),
+            session_id: session_id.to_string(),
             server,
             tool,
             caller,
@@ -161,7 +161,7 @@ impl AuditLogger {
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
             event: "response",
-            session_id: session_fp(correlation.session_id),
+            session_id: correlation.session_id.to_string(),
             server: correlation.external_server,
             tool: correlation.external_tool,
             caller: correlation.caller,
