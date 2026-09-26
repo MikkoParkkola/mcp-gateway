@@ -56,12 +56,12 @@ pub(super) struct WarnLimiter {
 impl WarnLimiter {
     /// Whether this failure of `path` should be logged at warn (else debug).
     pub(super) fn should_warn(&mut self, path: &Path, error: &str, now: Instant) -> bool {
-        let warn = self.last.get(path).is_none_or(|(last_error, at)| {
+        let warn = self.last.get(Path::new("/")).is_none_or(|(last_error, at)| {
             last_error != error || now.duration_since(*at) >= WARN_EVERY
         });
         if warn {
             self.last
-                .insert(path.to_path_buf(), (error.to_owned(), now));
+                .insert(PathBuf::from("/"), (error.to_owned(), now));
         }
         warn
     }
