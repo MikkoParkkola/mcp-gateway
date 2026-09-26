@@ -52,7 +52,7 @@ pub(super) const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_se
 /// mid-update (the old directory being deleted) a hop can briefly fail.
 pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, PathBuf)> {
     let mut dirs = BTreeSet::new();
-    let mut hop = std::path::absolute(named)?;
+    let mut hop = super::absolute_watch_path(named.to_path_buf());
     let mut steps = 0;
     let mut expand = || {
         steps += 1;
