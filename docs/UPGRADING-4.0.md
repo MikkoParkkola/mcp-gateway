@@ -1237,7 +1237,7 @@ the caller has no credential, so the gateway now treats it as a secret.
   roots). Before this release the gateway adopted the id the client chose, which
   let any caller pick an id before another caller and share its stream.
 - **An empty or whitespace-only `Mcp-Session-Id` counts as absent.** On `DELETE`
-  it is a 400, the same as a missing header.
+  it is a 400, the same as a missing header (it was a 404, "no owned session").
 - **Every unauthenticated caller is one class.** With auth off that is every
   caller; with auth on it is callers on public paths. Whatever name they carry,
   the session id is the only thing that tells them apart, so anyone who holds an

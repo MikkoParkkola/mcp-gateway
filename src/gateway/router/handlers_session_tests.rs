@@ -249,7 +249,8 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["result"]["action"], "accept", "{json}");
+    // The gateway answers A's elicitation/create with the POST-back A sent.
+    assert_eq!(json["result"]["result"]["action"], "accept", "{json}");
 }
 
 // F9-T7: the session-creating and prompt-delivering flow logs fingerprints only
