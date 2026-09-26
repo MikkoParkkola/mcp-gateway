@@ -80,3 +80,69 @@ fn a_name_cannot_escape_the_state_directory() {
         );
     }
 }
+
+#[test]
+fn operator_npm_settings_reach_the_backend() {
+    let vars = vec![
+        ("npm_config_allow_git".into(), "all".into()),
+        (
+            "npm_config_registry".into(),
+            "https://example.invalid".into(),
+        ),
+        ("PATH".into(), "/usr/bin".into()),
+    ];
+    let forwarded = forwarded_npm_config(vars);
+    assert_eq!(forwarded.len(), 2, "only npm settings are forwarded");
+    assert!(
+        forwarded
+            .iter()
+            .any(|(k, v)| k == "npm_config_allow_git" && v == "all")
+    );
+}
+
+#[test]
+fn the_gateways_own_cache_assignment_is_not_overridden() {
+    let vars = vec![("npm_config_cache".into(), "/operator/cache".into())];
+    assert!(
+        forwarded_npm_config(vars).is_empty(),
+        "the per-backend cache the gateway assigns must not be replaced by the operator's"
+    );
+}
+
+#[test]
+fn a_cache_shaped_failure_is_recognised() {
+    for text in [
+        "Failed to get stdout",
+        "Error: Cannot find module '/x/_npx/1/node_modules/zod/v3/index.js'",
+        "npm error code EALLOWGIT",
+        "ERR_MODULE_NOT_FOUND",
+    ] {
+        let expected = text.contains("Cannot find module")
+            || text.contains("EALLOWGIT")
+            || text.contains("ERR_MODULE_NOT_FOUND");
+        assert_eq!(
+            cache_failure(&Error::Transport(text.to_string())),
+            expected,
+            "misjudged: {text}"
+        );
+    }
+    assert!(
+        !cache_failure(&Error::Transport("connection reset by peer".to_string())),
+        "an unrelated transport failure must not have its cache thrown away"
+    );
+}
+
+#[test]
+fn clearing_a_cache_removes_it_and_tolerates_a_missing_one() {
+    let dir = std::env::temp_dir().join(format!("cache-recovery-{}", std::process::id()));
+    let nested = dir.join("_npx/1/node_modules");
+    std::fs::create_dir_all(&nested).expect("create temp cache");
+    std::fs::write(nested.join("index.js"), "x").expect("seed file");
+
+    assert!(remove_cache_dir(&dir), "an existing cache is removed");
+    assert!(!dir.exists(), "the tree is gone");
+    assert!(
+        remove_cache_dir(&dir),
+        "clearing an already-absent cache is success, not failure"
+    );
+}

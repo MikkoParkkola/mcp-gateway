@@ -71,10 +71,61 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
         }
     }
 
+    // Operator-level npm settings reach the package managers a backend shells
+    // out to. `npm_config_cache` is not forwarded: the gateway assigns that per
+    // backend, and inheriting the operator's shared cache is what tears trees
+    // two backends install into concurrently.
+    for (name, value) in forwarded_npm_config(std::env::vars_os()) {
+        cmd.env(name, value);
+    }
+
     // Backend configuration is authoritative and may intentionally override
     // a safe default such as PATH, HOME, or TMPDIR.
     for (key, value) in backend_env {
         cmd.env(key, value);
+    }
+}
+
+const CACHE_ENV: &str = "npm_config_cache";
+
+/// The operator's npm settings, minus the cache directory the gateway assigns
+/// per backend.
+fn forwarded_npm_config<I>(vars: I) -> Vec<(std::ffi::OsString, std::ffi::OsString)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    vars.into_iter()
+        .filter(|(key, _)| {
+            key.to_str()
+                .is_some_and(|name| name.starts_with("npm_config_") && name != CACHE_ENV)
+        })
+        .collect()
+}
+
+/// Whether a failed start is one a fresh package install can fix.
+///
+/// A tree that is missing, half-unpacked, or refused by npm (a git dependency
+/// needs `npm_config_allow_git`, for instance) kills the backend during
+/// initialization with one of these, and nothing else repairs it.
+fn cache_failure(error: &Error) -> bool {
+    let text = error.to_string();
+    [
+        "Cannot find module",
+        "ERR_MODULE_NOT_FOUND",
+        "MODULE_NOT_FOUND",
+        "EALLOWGIT",
+        "ENOENT",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+/// Removes a directory tree, treating "already gone" as success.
+fn remove_cache_dir(dir: &std::path::Path) -> bool {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
     }
 }
 
@@ -198,6 +249,35 @@ impl StdioTransport {
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        match self.start_once().await {
+            Ok(()) => Ok(()),
+            Err(error) if cache_failure(&error) && self.clear_package_cache() => {
+                warn!(
+                    command = %self.command,
+                    "package cache cleared after a failed start; retrying once"
+                );
+                self.start_once().await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Removes this backend's package cache, so the next spawn installs afresh.
+    ///
+    /// `false` when the backend has no cache of its own, which is the case for
+    /// everything that does not shell out to a package manager.
+    fn clear_package_cache(&self) -> bool {
+        let Some(dir) = self.env.get(CACHE_ENV) else {
+            return false;
+        };
+        if remove_cache_dir(std::path::Path::new(dir)) {
+            return true;
+        }
+        warn!(path = %dir, "could not clear package cache");
+        false
+    }
+
+    async fn start_once(self: &Arc<Self>) -> Result<()> {
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
