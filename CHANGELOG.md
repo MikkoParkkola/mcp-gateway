@@ -93,6 +93,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
+  about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
+  thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
+  Release builds were not affected.
 - **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
   durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
   non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
