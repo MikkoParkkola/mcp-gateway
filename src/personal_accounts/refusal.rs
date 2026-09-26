@@ -125,7 +125,7 @@ impl UpstreamRejection {
 /// permission. Every other outcome means the next call presents a newer or
 /// different token. The mark is sealed like an offer, so a backend's own
 /// JSON-RPC error carrying the same keys is never read as one.
-pub(crate) fn mark_rejection(outcome: super::RejectionOutcome, refused: Error) -> Error {
+pub(crate) fn mark_rejection(outcome: super::RejectionOutcome, refused: &Error) -> Error {
     use super::RejectionOutcome::{AlreadyForced, Rotated, Stale, Unavailable};
     let (error_code, retry) = match outcome {
         AlreadyForced => (UPSTREAM_AUTH_REJECTED_PERSISTENT, false),

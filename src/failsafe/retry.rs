@@ -118,6 +118,28 @@ mod tests {
 
     use super::*;
 
+    /// A typed `Error::Http` carrying `status`, as the HTTP transport builds it.
+    fn typed_status(status: u16) -> Error {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        Error::Http(
+            reqwest::Response::from(response)
+                .error_for_status()
+                .expect_err("a fixture status is non-2xx"),
+        )
+    }
+
+    /// A11 T16: the backend retry policy never retries a typed credential
+    /// refusal, and still retries a typed 429 (A11-g).
+    #[test]
+    fn a_typed_credential_refusal_is_not_retried_but_429_is() {
+        assert!(!is_retryable(&typed_status(401)));
+        assert!(!is_retryable(&typed_status(403)));
+        assert!(is_retryable(&typed_status(429)));
+    }
+
     fn policy(max_attempts: u32) -> RetryPolicy {
         RetryPolicy {
             enabled: true,

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use crate::security::http_diagnostics::safe_http_status_error;
 use std::collections::HashMap;
 use std::time::Duration;
 

@@ -2371,7 +2371,9 @@ impl MetaMcp {
                     }
                     let refused = account_refusal.lock().take().expect("checked above");
                     if crate::personal_accounts::refusal::marked(&refused).is_some() {
-                        return self.with_connect_offer(Err(refused), verified_identity).await;
+                        return self
+                            .with_connect_offer(Err(refused), verified_identity)
+                            .await;
                     }
                     // Anything else the 401 site produced (a rejection mark, or
                     // a custody refusal connecting cannot fix) answers exactly
@@ -3060,23 +3062,10 @@ impl MetaMcp {
         // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
         // whose `propagate` is `prepare` minus the lease. Keeping the lease is
         // the only difference: headers, binding, refusals and audit are unchanged.
-        let managed_vault = self
-            .backends
-            .get(server)
-            .and_then(|backend| backend.account_descriptor_id().map(str::to_owned))
-            .and_then(|id| self.account_strategies.installed(&id))
-            .and_then(|installed| installed.managed.clone());
-        let minted = match managed_vault {
-            Some(vault) => vault
-                .prepare_held(
-                    crate::personal_accounts::identity::Principal::Verified(identity),
-                    &descriptor,
-                )
-                .await
-                .map(|(cred, managed)| (cred, Some(managed))),
-            None => strategy.propagate(identity, &descriptor).await.map(|cred| (cred, None)),
-        };
-        match minted {
+        match self
+            .mint_held(server, &strategy, identity, &descriptor)
+            .await
+        {
             Ok((cred, managed)) => {
                 // Validate every header parses BEFORE dispatch, so an invalid
                 // minted credential fails closed rather than silently letting the
@@ -3111,6 +3100,44 @@ impl MetaMcp {
                 let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
                 crate::personal_accounts::refusal::mark(refused, &e, account_id)
             }),
+        }
+    }
+
+    /// Mint for `server`, keeping the managed lease when the backend's account
+    /// descriptor is installed with vault custody (A11-e′). The typed vault is
+    /// the SAME instance as `strategy` (`InstalledAccount`), and its `propagate`
+    /// is `prepare` minus the lease, so keeping the lease is the only difference.
+    async fn mint_held(
+        &self,
+        server: &str,
+        strategy: &Arc<dyn crate::identity_propagation::IdentityPropagation>,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        descriptor: &crate::identity_propagation::BackendDescriptor,
+    ) -> std::result::Result<
+        (
+            crate::identity_propagation::PropagatedCredential,
+            Option<crate::personal_accounts::ManagedLease>,
+        ),
+        crate::identity_propagation::PropagationError,
+    > {
+        let managed_vault = self
+            .backends
+            .get(server)
+            .and_then(|backend| backend.account_descriptor_id().map(str::to_owned))
+            .and_then(|id| self.account_strategies.installed(&id))
+            .and_then(|installed| installed.managed.clone());
+        match managed_vault {
+            Some(vault) => vault
+                .prepare_held(
+                    crate::personal_accounts::identity::Principal::Verified(identity),
+                    descriptor,
+                )
+                .await
+                .map(|(cred, managed)| (cred, Some(managed))),
+            None => strategy
+                .propagate(identity, descriptor)
+                .await
+                .map(|cred| (cred, None)),
         }
     }
 
@@ -4046,7 +4073,7 @@ fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Value {
         },
     );
     if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(e) {
-        hint.error_code = rejection.error_code.to_owned();
+        rejection.error_code.clone_into(&mut hint.error_code);
         hint.retry = rejection.retry;
     }
     attach_recovery(

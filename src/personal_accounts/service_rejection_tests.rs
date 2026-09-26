@@ -27,11 +27,8 @@ fn persistent_401_costs_one_forced_refresh() {
 
         let lease = refuse_scaffold(service.resolve(&alice()), "resolve")
             .expect("a connected grant resolves");
-        let first = refuse_scaffold(
-            service.refresh_after_rejection(&lease).await,
-            "first 401",
-        )
-        .expect("the first 401 is answered, not refused");
+        let first = refuse_scaffold(service.refresh_after_rejection(&lease).await, "first 401")
+            .expect("the first 401 is answered, not refused");
         assert_eq!(first, RejectionOutcome::Rotated);
 
         for call in 2..=5 {
@@ -104,8 +101,11 @@ fn forced_revision_survives_restart() {
         let service = AccountService::new(reopened, provider, observer);
         let lease = refuse_scaffold(service.resolve(&alice()), "resolve after restart")
             .expect("still connected");
-        let again = refuse_scaffold(service.refresh_after_rejection(&lease).await, "401 after restart")
-            .expect("answered");
+        let again = refuse_scaffold(
+            service.refresh_after_rejection(&lease).await,
+            "401 after restart",
+        )
+        .expect("answered");
 
         assert_eq!(again, RejectionOutcome::AlreadyForced);
         assert_eq!(after_restart.load(Ordering::SeqCst), 0);
@@ -128,15 +128,26 @@ fn stale_lease_401_does_not_refresh() {
         let service = AccountService::new(store, provider, observer);
 
         let stale = refuse_scaffold(service.resolve(&alice()), "resolve rev 1").expect("connected");
-        let current = refuse_scaffold(service.refresh_if_expired(&alice()).await, "expiry rotation")
-            .expect("the expired grant rotates");
+        let current = refuse_scaffold(
+            service.refresh_if_expired(&alice()).await,
+            "expiry rotation",
+        )
+        .expect("the expired grant rotates");
         assert!(current.token_revision > stale.token_revision);
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "setup: the expiry rotation");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "setup: the expiry rotation"
+        );
 
         let outcome = refuse_scaffold(service.refresh_after_rejection(&stale).await, "stale 401")
             .expect("answered");
         assert_eq!(outcome, RejectionOutcome::Stale);
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "a stale lease makes no provider call");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a stale lease makes no provider call"
+        );
     });
 }
 
@@ -155,8 +166,11 @@ fn expiry_rotation_then_401_still_forces_once() {
         let (observer, _) = counting_observer();
         let service = AccountService::new(store, provider, observer);
 
-        let rotated = refuse_scaffold(service.refresh_if_expired(&alice()).await, "expiry rotation")
-            .expect("the expired grant rotates");
+        let rotated = refuse_scaffold(
+            service.refresh_if_expired(&alice()).await,
+            "expiry rotation",
+        )
+        .expect("the expired grant rotates");
         assert_eq!(expiry_calls.load(Ordering::SeqCst), 1);
 
         let forced_calls = service
@@ -168,7 +182,11 @@ fn expiry_rotation_then_401_still_forces_once() {
             domain_err(outcome, "401 after expiry rotation"),
             AccountServiceError::ReconnectRequired
         );
-        assert_eq!(forced_calls.load(Ordering::SeqCst), 1, "exactly one forced refresh");
+        assert_eq!(
+            forced_calls.load(Ordering::SeqCst),
+            1,
+            "exactly one forced refresh"
+        );
         assert!(matches!(
             service.store().lookup(&alice()).expect("lookup"),
             AccountLookup::ReconnectRequired(_)

@@ -35,8 +35,8 @@ use crate::protocol::{
     parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    RedirectEvidence, SESSION_EXPIRED_MARKER, is_deterministic_refusal, safe_http_status_error,
-    safe_request_error, safe_request_error_for,
+    RedirectEvidence, SESSION_EXPIRED_MARKER, safe_request_error, safe_request_error_for,
+    status_refusal,
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -152,7 +152,8 @@ const SESSION_NOT_FOUND_CODE: i32 = -32015;
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches the safe markers emitted at the HTTP boundary:
-/// - `session expired`, produced by [`safe_http_status_error`] after an untrusted
+/// - `session expired`, produced by
+///   [`crate::security::http_diagnostics::safe_http_status_error`] after an untrusted
 ///   body contained JSON-RPC `-32015` or a case-insensitive `session not found`.
 ///   The classifier reads that marker rather than the body, because the body no
 ///   longer reaches an error string — it may echo our own credentials back at us.
@@ -223,7 +224,8 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 /// restarting the transport tears down a connection that is working. The
 /// `id` test is what keeps that narrow. A proxy's error page, a gateway's own
 /// JSON, or an error correlated to some other call are none of them this call's
-/// answer, and each stays [`safe_http_status_error`]'s opaque transport fault.
+/// answer, and each stays
+/// [`crate::security::http_diagnostics::safe_http_status_error`]'s opaque transport fault.
 ///
 /// The peer's `message` does reach the caller here, which the surrounding
 /// status-error path deliberately avoids for untrusted bodies. The exposure is
@@ -1531,10 +1533,7 @@ impl HttpTransport {
             if let Some(refusal) = peer_refusal(&body, &request.id, status) {
                 return Err(refusal);
             }
-            return Err(match typed {
-                Some(e) if is_deterministic_refusal(status) => Error::Http(e.without_url()),
-                _ => safe_http_status_error(status, &body),
-            });
+            return Err(status_refusal(typed, status, &body));
         }
 
         // Check Content-Type to determine response format

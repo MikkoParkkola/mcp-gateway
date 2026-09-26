@@ -314,7 +314,8 @@ pub(in super::super) async fn execute_bridged(
     )
     .declared_capabilities();
     let args = json!({"server": server, "tool": "read", "arguments": {"folder": "inbox"}});
-    meta.invoke_tool(&args, Some("fixture-session"), &context).await
+    meta.invoke_tool(&args, Some("fixture-session"), &context)
+        .await
 }
 
 /// Per-user pool slots for each `(subject, descriptor)` pair, at BOTH the seeded

@@ -113,6 +113,20 @@ pub(crate) const fn is_deterministic_refusal(status: StatusCode) -> bool {
     matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
 }
 
+/// A non-2xx the HTTP transport answers with. A credential refusal keeps its
+/// typed status (A11-b), URL stripped; anything else keeps today's safe
+/// transport text, which MCP session-expiry detection reads.
+pub(crate) fn status_refusal(
+    typed: Option<reqwest::Error>,
+    status: StatusCode,
+    body: &str,
+) -> Error {
+    match typed {
+        Some(e) if is_deterministic_refusal(status) => Error::Http(e.without_url()),
+        _ => safe_http_status_error(status, body),
+    }
+}
+
 /// A11-b: the backend refused the presented credential. Read from the typed
 /// status only, never from body text (ADR-008, `personal_accounts/refusal.rs`).
 pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {

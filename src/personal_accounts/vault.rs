@@ -351,8 +351,13 @@ impl ManagedLease {
     /// refusal that connecting cannot fix (busy, shut down, a store fault)
     /// leaves `refused` as it was.
     pub(crate) async fn after_upstream_401(&self, refused: crate::Error) -> crate::Error {
-        match self.strategy.custody.refresh_after_rejection(&self.lease).await {
-            Ok(outcome) => super::refusal::mark_rejection(outcome, refused),
+        match self
+            .strategy
+            .custody
+            .refresh_after_rejection(&self.lease)
+            .await
+        {
+            Ok(outcome) => super::refusal::mark_rejection(outcome, &refused),
             Err(error) => {
                 let cause = refusal("the backend refused the account's token", &error);
                 if matches!(cause, PropagationError::AccountReconnectRequired(_)) {

@@ -37,7 +37,11 @@ async fn managed_capability(
     statuses: &[u16],
     steps: &[ProviderStep],
     multi_user: bool,
-) -> (Arc<crate::capability::CapabilityBackend>, Custody, Arc<Captured>) {
+) -> (
+    Arc<crate::capability::CapabilityBackend>,
+    Custody,
+    Arc<Captured>,
+) {
     let custody = custody_with_steps(
         &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
         ROTATED_TOKEN,
@@ -48,7 +52,11 @@ async fn managed_capability(
     let (port, captured) = capture_endpoint_answering(statuses).await;
     let backend = backend_with(
         &registry,
-        capability(&format!("http://127.0.0.1:{port}"), "oauth:google", Some(WORK)),
+        capability(
+            &format!("http://127.0.0.1:{port}"),
+            "oauth:google",
+            Some(WORK),
+        ),
     )
     .expect("the capability must register");
     backend.set_multi_user(multi_user);
@@ -57,15 +65,20 @@ async fn managed_capability(
 
 #[track_caller]
 fn assert_reconnect(error: &crate::Error, what: &str) {
-    let refusal = marked(error).unwrap_or_else(|| panic!("{what}: not a reconnect refusal: {error}"));
+    let refusal =
+        marked(error).unwrap_or_else(|| panic!("{what}: not a reconnect refusal: {error}"));
     assert_eq!(refusal.state, AccountState::ReconnectRequired, "{what}");
 }
 
 #[track_caller]
 fn assert_rejected(error: &crate::Error, code: &str, retry: bool, what: &str) {
-    let rejection =
-        upstream_rejection(error).unwrap_or_else(|| panic!("{what}: not an upstream rejection: {error}"));
-    assert_eq!((rejection.error_code, rejection.retry), (code, retry), "{what}");
+    let rejection = upstream_rejection(error)
+        .unwrap_or_else(|| panic!("{what}: not an upstream rejection: {error}"));
+    assert_eq!(
+        (rejection.error_code, rejection.retry),
+        (code, retry),
+        "{what}"
+    );
 }
 
 /// T1: a revoked upstream grant becomes a reconnect refusal on the first 401,
@@ -85,7 +98,11 @@ async fn upstream_401_with_revoked_grant_returns_reconnect_offer() {
         .await
         .expect_err("a fenced account must refuse");
     assert_reconnect(&second, "after the fence");
-    assert_eq!(captured.count(), 1, "the fenced account never reaches the wire again");
+    assert_eq!(
+        captured.count(),
+        1,
+        "the fenced account never reaches the wire again"
+    );
     assert_eq!(custody.refreshes(), 1);
 }
 
@@ -110,7 +127,9 @@ async fn upstream_401_with_live_grant_refreshes_and_says_retry() {
     let (backend, custody, captured) =
         managed_capability(&[401], &[ProviderStep::Rotate(FORCED_TOKEN)], true).await;
 
-    let first = call(&backend, Some("alice")).await.expect_err("the 401 is reported");
+    let first = call(&backend, Some("alice"))
+        .await
+        .expect_err("the 401 is reported");
     assert_rejected(&first, "UPSTREAM_AUTH_REJECTED", true, "after a rotation");
     assert_eq!(custody.refreshes(), 1);
 
@@ -119,8 +138,14 @@ async fn upstream_401_with_live_grant_refreshes_and_says_retry() {
         .expect("the retry presents the rotated token and succeeds");
     let seen = captured.authorizations();
     assert_eq!(seen.len(), 2);
-    assert_eq!(seen[0].as_deref(), Some(format!("Bearer {ALICE_WORK_TOKEN}").as_str()));
-    assert_eq!(seen[1].as_deref(), Some(format!("Bearer {FORCED_TOKEN}").as_str()));
+    assert_eq!(
+        seen[0].as_deref(),
+        Some(format!("Bearer {ALICE_WORK_TOKEN}").as_str())
+    );
+    assert_eq!(
+        seen[1].as_deref(),
+        Some(format!("Bearer {FORCED_TOKEN}").as_str())
+    );
 }
 
 /// T3: a backend that refuses every token costs one provider round trip per
@@ -145,7 +170,11 @@ async fn persistent_401_costs_one_forced_refresh() {
             &format!("call {n}"),
         );
     }
-    assert_eq!(custody.refreshes(), 1, "one forced refresh per token revision");
+    assert_eq!(
+        custody.refreshes(),
+        1,
+        "one forced refresh per token revision"
+    );
     assert_eq!(captured.count(), 5, "no call is retried automatically");
 }
 
@@ -155,7 +184,9 @@ async fn non_401_status_is_unchanged() {
     let (backend, custody, captured) = managed_capability(&[500, 403], &[], true).await;
 
     for status in [500, 403] {
-        let error = call(&backend, Some("alice")).await.expect_err("an error status fails");
+        let error = call(&backend, Some("alice"))
+            .await
+            .expect_err("an error status fails");
         assert!(
             marked(&error).is_none() && upstream_rejection(&error).is_none(),
             "{status} must keep today's backend error: {error}"

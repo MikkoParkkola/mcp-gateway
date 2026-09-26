@@ -54,9 +54,12 @@ impl DirectFailure<'_> {
         error!(backend = %self.name, error = %error, "Backend request failed");
         let (code, text) = (error.to_rpc_code(), refusal_text(&error));
         let response = match upstream_rejection(&error) {
-            Some(rejection) => {
-                JsonRpcResponse::error_with_data(Some(self.id.clone()), code, text, rejection.data())
-            }
+            Some(rejection) => JsonRpcResponse::error_with_data(
+                Some(self.id.clone()),
+                code,
+                text,
+                rejection.data(),
+            ),
             None => JsonRpcResponse::error(Some(self.id.clone()), code, text),
         };
         settle_direct_failure(reservation, &error, &response);

@@ -569,7 +569,11 @@ fn a_held_lease_rechecks_only_against_the_vault_that_released_it() {
         )
         .expect("custody starts against a seeded store");
         let custody: Arc<dyn AccountCustody> = Arc::new(handle);
-        let released = Arc::new(VaultStrategy::new(Arc::clone(&custody), descriptor(), false));
+        let released = Arc::new(VaultStrategy::new(
+            Arc::clone(&custody),
+            descriptor(),
+            false,
+        ));
         let reinstalled = Arc::new(VaultStrategy::new(custody, descriptor(), false));
 
         let (_credential, held) = released

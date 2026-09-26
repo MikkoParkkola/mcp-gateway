@@ -3,7 +3,7 @@
 //! A11 T14: the one outcome-to-caller mapping, pinned per outcome.
 
 use super::super::RejectionOutcome;
-use super::{marked, mark_rejection, upstream_rejection};
+use super::{mark_rejection, marked, upstream_rejection};
 use crate::Error;
 
 fn refused() -> Error {
@@ -15,7 +15,11 @@ fn every_rejection_outcome_maps_to_one_code_and_retry_flag() {
     let cases = [
         (RejectionOutcome::Rotated, "UPSTREAM_AUTH_REJECTED", true),
         (RejectionOutcome::Stale, "UPSTREAM_AUTH_REJECTED", true),
-        (RejectionOutcome::Unavailable, "UPSTREAM_AUTH_REJECTED", true),
+        (
+            RejectionOutcome::Unavailable,
+            "UPSTREAM_AUTH_REJECTED",
+            true,
+        ),
         (
             RejectionOutcome::AlreadyForced,
             "UPSTREAM_AUTH_REJECTED_PERSISTENT",
@@ -23,7 +27,7 @@ fn every_rejection_outcome_maps_to_one_code_and_retry_flag() {
         ),
     ];
     for (outcome, code, retry) in cases {
-        let error = mark_rejection(outcome, refused());
+        let error = mark_rejection(outcome, &refused());
         let rejection = upstream_rejection(&error)
             .unwrap_or_else(|| panic!("{outcome:?} must carry the rejection mark: {error}"));
         assert_eq!(
