@@ -30,6 +30,7 @@ use crate::protocol::LoggingLevel;
 use crate::protocol::mrtr::{InputRequired, Refusal};
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
+use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::security::validate_tool_name;
 use crate::transport::notification_sink::emit_log;
 use crate::{Error, Result};
@@ -59,7 +60,19 @@ struct CallerCredential {
     /// Collision-safe user+audience cache binding. `Some` → mix into cache keys
     /// so per-user results stay isolated (IDP.8); `None` → shared key is safe.
     cache_binding: Option<String>,
+    /// A11-e′: the managed custody handle and the lease the headers were
+    /// released under, kept to the post-dispatch 401 site. Only a vault mint
+    /// produces one; every other strategy leaves it `None`.
+    managed: Option<crate::personal_accounts::ManagedLease>,
 }
+
+/// Headers, cache binding and, for a managed account, the lease they were
+/// released under (A11-e′).
+pub(crate) type HeldCredential = (
+    Vec<(String, String)>,
+    Option<String>,
+    Option<crate::personal_accounts::ManagedLease>,
+);
 
 impl std::fmt::Debug for CallerCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,6 +81,7 @@ impl std::fmt::Debug for CallerCredential {
         f.debug_struct("CallerCredential")
             .field("headers", &format_args!("{header_names:?} = <redacted>"))
             .field("cache_binding", &self.cache_binding)
+            .field("managed", &self.managed.is_some())
             .finish()
     }
 }
@@ -884,6 +898,13 @@ struct BridgeDispatcher<'a> {
     protocol_revision: Option<&'a str>,
     routing_profile: &'a str,
     scope: super::InvokeScope<'a>,
+    /// A11: the managed lease the headers were released under, if any.
+    managed: Option<&'a crate::personal_accounts::ManagedLease>,
+    /// A11: a round's 401 turned into a reconnect refusal or a rejection mark.
+    /// A side slot, not a `BridgeError` variant, because that enum is public:
+    /// the bridge sees today's `BackendFailed`, and the call site answers with
+    /// this instead of the generic bridged-exchange refusal.
+    account_refusal: &'a parking_lot::Mutex<Option<Error>>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -964,7 +985,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 .map(str::to_owned),
             input_responses: retry_params.get("inputResponses").cloned(),
         };
-        self.meta
+        let dispatched = self
+            .meta
             .accounted_dispatch(
                 self.server,
                 self.tool,
@@ -986,8 +1008,21 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.routing_profile,
                 self.scope,
             )
-            .await
-            .map_err(|e| classify_bridged_dispatch_error(&e))
+            .await;
+        let error = match dispatched {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        // A11-c: a 401 on a managed credential forces at most one refresh.
+        let classified = classify_bridged_dispatch_error(&error);
+        // Every error that reached the 401 site is parked, marked or not, so
+        // the call site answers it as the first dispatch would.
+        if let Some(managed) = self.managed
+            && is_upstream_unauthorized(&error)
+        {
+            *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
+        }
+        Err(classified)
     }
 }
 
@@ -2110,6 +2145,23 @@ impl MetaMcp {
                 }
             }
             Err(e) => {
+                // A11-c: a 401 on a managed credential forces at most one
+                // refresh, then either asks the user to reconnect (an offer,
+                // returned as the refusal it is) or tells the caller whether a
+                // retry can help (the recovery hint below).
+                let e = match caller_credential.managed.as_ref() {
+                    Some(managed) if is_upstream_unauthorized(&e) => {
+                        managed.after_upstream_401(e).await
+                    }
+                    _ => e,
+                };
+                if crate::personal_accounts::refusal::marked(&e).is_some() {
+                    // Settled like every dispatched failure (ADR-012).
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&withheld_side_effect());
+                    }
+                    return self.with_connect_offer(Err(e), verified_identity).await;
+                }
                 // ADR-012 consequence 1: a reservation may be released only
                 // when the backend cannot have acted, because a released key
                 // readmits the retry that would execute the side effect a
@@ -2128,34 +2180,10 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // The caller gets a tool result, but the audit record says
-                // `error` with this code (D1-d.2: a backend failure).
-                audit::note_dispatch_failure(&e);
-                // Classify the error and convert to a structured tool-level
-                // error response.  This keeps `isError + content + recovery`
-                // in the tool result body rather than promoting to a JSON-RPC
-                // protocol error, which gives the LLM actionable recovery
-                // guidance without breaking the MCP framing.
-                let (category, detail) = classify_dispatch_error(&e);
-                let hint = recovery_for(
-                    category,
-                    RecoveryContext {
-                        tool: Some(tool),
-                        backend: Some(server),
-                        detail: Some(&detail),
-                        ..Default::default()
-                    },
-                );
                 // Still record the error budget failure (already done above via
                 // `record_error_budget`).  The idempotency reservation is left
                 // for the commit below unless the refusal was pre-dispatch.
-                attach_recovery(
-                    json!({
-                        "isError": true,
-                        "content": [{"type": "text", "text": e.to_string()}],
-                    }),
-                    hint,
-                )
+                dispatch_error_result(&e, tool, server)
             }
         };
 
@@ -2247,6 +2275,7 @@ impl MetaMcp {
             // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
+            let account_refusal = parking_lot::Mutex::new(None);
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
                     meta: self,
@@ -2268,6 +2297,8 @@ impl MetaMcp {
                     protocol_revision,
                     routing_profile: &profile.name,
                     scope: caller.scope(),
+                    managed: caller_credential.managed.as_ref(),
+                    account_refusal: &account_refusal,
                 },
                 caller.channel,
                 session,
@@ -2276,6 +2307,9 @@ impl MetaMcp {
                 trace_id,
             ))
             .await;
+            // Taken once, here: a guard held into a match arm would be held
+            // across that arm's awaits and make this future non-Send.
+            let mut parked = account_refusal.into_inner();
             match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
@@ -2358,6 +2392,28 @@ impl MetaMcp {
                         "Bridged challenge refused by the response firewall"
                     );
                     return Err(Error::ResponseFirewallRefused);
+                }
+                // A11-c: a round's 401 on a managed account answers with the
+                // reconnect refusal or the rejection, not the generic refusal.
+                // Settled like any round that reached the backend.
+                Err(_) if parked.is_some() => {
+                    let refused = parked.take().expect("the arm's guard checked it");
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&uncertain_side_effect());
+                    }
+                    if crate::personal_accounts::refusal::marked(&refused).is_some() {
+                        return self
+                            .with_connect_offer(Err(refused), verified_identity)
+                            .await;
+                    }
+                    // Anything else the 401 site produced (a rejection mark, or
+                    // a custody refusal connecting cannot fix) answers exactly
+                    // as the same failure on the first dispatch would. Sealed
+                    // like the undeclared-key refusal above: the result is
+                    // gateway-built from a typed error, never backend bytes.
+                    return Ok(GuardedValue::sealed_by_guard(dispatch_error_result(
+                        &refused, tool, server,
+                    )));
                 }
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
@@ -2865,18 +2921,30 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
+        self.resolve_propagation_credential_held(server, verified_identity)
+            .await
+            .map(|(headers, cache_binding, _)| (headers, cache_binding))
+    }
+
+    /// [`Self::resolve_propagation_credential`], keeping the managed lease for
+    /// the direct route's post-dispatch 401 site (A11-e′).
+    pub(crate) async fn resolve_propagation_credential_held(
+        &self,
+        server: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<HeldCredential> {
         let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         else {
             self.refuse_unbound_account_backend(server)?;
-            return Ok((Vec::new(), None));
+            return Ok((Vec::new(), None, None));
         };
         let cred = self
             .resolve_caller_credential(server, &idp_cfg, verified_identity)
             .await?;
-        Ok((cred.headers, cred.cache_binding))
+        Ok((cred.headers, cred.cache_binding, cred.managed))
     }
 
     /// Fail closed for a backend that names an `accounts.descriptors` entry but
@@ -3021,8 +3089,15 @@ impl MetaMcp {
             token_exchange_endpoint: idp_cfg.token_exchange_endpoint.clone(),
             token_exchange_scope: idp_cfg.token_exchange_scope.clone(),
         };
-        match strategy.propagate(identity, &descriptor).await {
-            Ok(cred) => {
+        // A11-e′: a managed descriptor mints through its typed vault, the SAME
+        // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
+        // whose `propagate` is `prepare` minus the lease. Keeping the lease is
+        // the only difference: headers, binding, refusals and audit are unchanged.
+        match self
+            .mint_held(server, &strategy, identity, &descriptor)
+            .await
+        {
+            Ok((cred, managed)) => {
                 // Validate every header parses BEFORE dispatch, so an invalid
                 // minted credential fails closed rather than silently letting the
                 // static Authorization through (MIK-6734 review carry-forward).
@@ -3048,6 +3123,7 @@ impl MetaMcp {
                 Ok(CallerCredential {
                     headers: cred.headers,
                     cache_binding: Some(cred.cache_binding),
+                    managed,
                 })
             }
             Err(e) => refuse(format!("credential minting failed: {e}")).map_err(|refused| {
@@ -3055,6 +3131,44 @@ impl MetaMcp {
                 let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
                 crate::personal_accounts::refusal::mark(refused, &e, account_id)
             }),
+        }
+    }
+
+    /// Mint for `server`, keeping the managed lease when the backend's account
+    /// descriptor is installed with vault custody (A11-e′). The typed vault is
+    /// the SAME instance as `strategy` (`InstalledAccount`), and its `propagate`
+    /// is `prepare` minus the lease, so keeping the lease is the only difference.
+    async fn mint_held(
+        &self,
+        server: &str,
+        strategy: &Arc<dyn crate::identity_propagation::IdentityPropagation>,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        descriptor: &crate::identity_propagation::BackendDescriptor,
+    ) -> std::result::Result<
+        (
+            crate::identity_propagation::PropagatedCredential,
+            Option<crate::personal_accounts::ManagedLease>,
+        ),
+        crate::identity_propagation::PropagationError,
+    > {
+        let managed_vault = self
+            .backends
+            .get(server)
+            .and_then(|backend| backend.account_descriptor_id().map(str::to_owned))
+            .and_then(|id| self.account_strategies.installed(&id))
+            .and_then(|installed| installed.managed.clone());
+        match managed_vault {
+            Some(vault) => vault
+                .prepare_held(
+                    crate::personal_accounts::identity::Principal::Verified(identity),
+                    descriptor,
+                )
+                .await
+                .map(|(cred, managed)| (cred, Some(managed))),
+            None => strategy
+                .propagate(identity, descriptor)
+                .await
+                .map(|cred| (cred, None)),
         }
     }
 
@@ -3971,6 +4085,37 @@ impl MetaMcp {
 // Recovery classification helpers
 // ============================================================================
 
+/// A dispatched failure as the caller receives it: a tool result, not a
+/// JSON-RPC protocol error, carrying `isError`, the text and a recovery hint,
+/// so the model gets actionable guidance without breaking the MCP framing.
+/// The audit record still says `error` with the failure's code (D1-d.2). A11:
+/// an upstream-rejection mark sets the hint's code and retry flag. Shared by
+/// the first dispatch and a bridged continuation, so both answer alike.
+fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Value {
+    audit::note_dispatch_failure(e);
+    let (category, detail) = classify_dispatch_error(e);
+    let mut hint = recovery_for(
+        category,
+        RecoveryContext {
+            tool: Some(tool),
+            backend: Some(server),
+            detail: Some(&detail),
+            ..Default::default()
+        },
+    );
+    if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(e) {
+        rejection.error_code.clone_into(&mut hint.error_code);
+        hint.retry = rejection.retry;
+    }
+    attach_recovery(
+        json!({
+            "isError": true,
+            "content": [{"type": "text", "text": e.to_string()}],
+        }),
+        hint,
+    )
+}
+
 /// Map a dispatch [`Error`] to an [`ErrorCategory`] and a human-readable detail
 /// string suitable for embedding in a [`RecoveryHint`].
 fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
@@ -4124,152 +4269,8 @@ fn classify_from_detail(detail: Option<&str>) -> ErrorCategory {
     ErrorCategory::Validation
 }
 
-// ============================================================================
-// Tests — error classification
-// ============================================================================
-
 #[cfg(test)]
-mod error_classification_tests {
-    use super::classify_from_detail;
-    use crate::gateway::recovery::{ErrorCategory, RecoveryContext, recovery_for};
-
-    /// A typed 429 never reaches the prose classifier at all.
-    ///
-    /// `classify_dispatch_error` dispatches on the error VARIANT and only sends
-    /// `Protocol` through `classify_from_detail`. GH475.RL.10 made a capability
-    /// 429 an `Error::Http`, and although its `Display` still happens to say
-    /// "429" nothing reads that text -- it fell through to `BackendError`, and
-    /// the client was told to retry at once instead of backing off. The
-    /// listener answers one request and is the only way to obtain a real
-    /// `reqwest::Error` carrying a status.
-    #[tokio::test]
-    async fn a_typed_429_is_still_rate_limited() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut scratch = [0u8; 1024];
-            let _ = socket.read(&mut scratch).await;
-            let _ = socket
-                .write_all(b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n\r\n")
-                .await;
-        });
-
-        let response = reqwest::get(format!("http://{addr}/")).await.unwrap();
-        let error = crate::Error::Http(response.error_for_status().unwrap_err().without_url());
-        let (category, _) = super::classify_dispatch_error(&error);
-        assert_eq!(
-            category,
-            ErrorCategory::RateLimited,
-            "a typed 429 must keep the backoff hint the prose one earned"
-        );
-    }
-
-    #[test]
-    fn rate_limit_429_classified_as_rate_limited() {
-        // The exact shape returned by archive.org through the REST provider.
-        let detail = "Protocol error: API returned 429 Too Many Requests: \
-                      <html><body><h1>429 Too Many Requests</h1></body></html>";
-        let cat = classify_from_detail(Some(detail));
-        assert!(matches!(cat, ErrorCategory::RateLimited));
-
-        // And the resulting hint must be RATE_LIMITED + retryable, NOT
-        // INVALID_PARAM with a "fix your params" suggestion.
-        let hint = recovery_for(cat, RecoveryContext::default());
-        assert_eq!(hint.error_code, "RATE_LIMITED");
-        assert!(hint.retry, "rate-limited calls are retryable after backoff");
-    }
-
-    #[test]
-    fn rate_limit_phrasings_all_match() {
-        for s in [
-            "rate limit exceeded",
-            "Rate-Limit hit",
-            "ratelimit reached",
-            "request throttled by upstream",
-            "HTTP 429",
-        ] {
-            assert!(
-                matches!(classify_from_detail(Some(s)), ErrorCategory::RateLimited),
-                "expected RateLimited for {s:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn timeout_signals_classified_as_timeout() {
-        for s in [
-            "request timeout",
-            "connection timed out",
-            "HTTP 504",
-            "504 Gateway Timeout",
-        ] {
-            assert!(
-                matches!(classify_from_detail(Some(s)), ErrorCategory::Timeout),
-                "expected Timeout for {s:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn server_errors_classified_as_backend_error() {
-        for s in [
-            "500 Internal Server Error",
-            "502 Bad Gateway",
-            "503 Service Unavailable",
-        ] {
-            assert!(
-                matches!(classify_from_detail(Some(s)), ErrorCategory::BackendError),
-                "expected BackendError for {s:?}"
-            );
-        }
-    }
-
-    /// Row 16c - the client-facing category must not move when a status-carried
-    /// refusal starts arriving as `Error::JsonRpc` instead of `Error::Transport`.
-    /// Both already map to `BackendError`; this pins that, because the transport
-    /// rows cannot reach this classifier.
-    #[test]
-    fn row_16c_a_json_rpc_refusal_and_a_transport_fault_share_one_category() {
-        use super::classify_dispatch_error;
-        use crate::Error;
-
-        for error in [
-            Error::json_rpc(-32601, "Method not found: server/discover"),
-            Error::Transport("HTTP 404".to_string()),
-        ] {
-            assert!(
-                matches!(
-                    classify_dispatch_error(&error).0,
-                    ErrorCategory::BackendError
-                ),
-                "expected BackendError for {error:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn genuine_validation_errors_default_to_validation() {
-        // Schema/param errors must keep the prior behaviour.
-        for s in [
-            "missing required field 'url'",
-            "invalid enum value for 'output'",
-            "expected string, got integer",
-        ] {
-            assert!(
-                matches!(classify_from_detail(Some(s)), ErrorCategory::Validation),
-                "expected Validation for {s:?}"
-            );
-        }
-        // No detail at all also defaults to Validation.
-        assert!(matches!(
-            classify_from_detail(None),
-            ErrorCategory::Validation
-        ));
-    }
-}
+mod error_classification_tests;
 
 // ============================================================================
 // Tests — response_transform wiring

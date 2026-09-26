@@ -73,6 +73,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   template, and the outcome; bodies and queries are never logged. With auth on
   they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
   item 51.
+- **A backend that refuses a managed personal account's token (HTTP 401) forces one refresh of
+  that token**, then answers with the reconnect offer when the provider has revoked the grant,
+  or with `recovery.error_code` `UPSTREAM_AUTH_REJECTED` (`retry: true`) or
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` (`retry: false`). At most one forced refresh per token
+  revision, recorded durably. A 401 or 403 from an HTTP backend is no longer retried. A downgrade
+  to an earlier 4.0 beta after a forced refresh is unsupported. See UPGRADING-4.0 item 61.
+  (A11, MIK-7570.RECONNECT.1)
 
 ### Fixed
 

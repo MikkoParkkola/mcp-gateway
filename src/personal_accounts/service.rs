@@ -31,7 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::consent::{GuardedCommit, GuardedCommitError};
 use super::revoke::RevocationMaterial;
 use super::{
-    AccountError, AccountKey, AccountLookup, FenceOutcome, GrantRecord, GrantVersion,
+    AccountError, AccountKey, AccountLookup, FenceOutcome, ForceClaim, GrantRecord, GrantVersion,
     PersonalAccountStore, RefreshOutcome,
 };
 
@@ -91,6 +91,20 @@ pub(crate) struct CredentialLease {
     pub(crate) scopes: Vec<String>,
     pub(crate) descriptor_revision: String,
     pub(crate) token_revision: u64,
+}
+
+/// What a forced refresh after an upstream 401 did (A11-c′). `InvalidGrant`
+/// is not an outcome: it fences, and comes back as `Err(ReconnectRequired)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RejectionOutcome {
+    /// The provider rotated the token; the next call presents the new one.
+    Rotated,
+    /// The lease was already superseded, so nobody was asked.
+    Stale,
+    /// The provider could not be reached; the revision is still marked.
+    Unavailable,
+    /// This revision was already force-tried; the backend still refuses it.
+    AlreadyForced,
 }
 
 /// Transport credentials, produced only after a successful release recheck.
@@ -280,6 +294,60 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
             Err(ProviderRefreshError::InvalidGrant) => {
                 self.fence_after_invalid_grant(account, &expected)
             }
+        }
+    }
+
+    /// A11-c: the backend refused this lease's token with HTTP 401.
+    ///
+    /// At most one provider round trip per token revision. The revision is
+    /// marked force-tried BEFORE the provider is asked, whatever it answers,
+    /// so neither an unavailable provider nor a restart buys a second one. A
+    /// lease the store has already rotated past asks nobody: the next call
+    /// presents the newer token. Only the provider can fence the account:
+    /// a 401 alone never does.
+    pub(crate) async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<RejectionOutcome, AccountServiceError> {
+        let account = &lease.account;
+        let flight = self.flight(account)?;
+        let _rotating = flight.lock().await;
+
+        let current = self.connected(account)?;
+        if lease_of(account, &current) != *lease {
+            return Ok(RejectionOutcome::Stale);
+        }
+        let expected = version_of(&current);
+        match self.store.claim_forced_refresh(account, &expected)? {
+            ForceClaim::Claimed => {}
+            ForceClaim::AlreadyForced => return Ok(RejectionOutcome::AlreadyForced),
+            ForceClaim::Superseded => return Ok(RejectionOutcome::Stale),
+        }
+        match self.provider.refresh(account, &current).await {
+            Ok(rotated) => {
+                let next = self.apply(account, &current, &expected, rotated)?;
+                // The rotated revision is force-tried too, or a backend that
+                // refuses every token would earn one refresh per call from a
+                // provider that rotates on every refresh.
+                // ponytail: a second authority write; a crash between the two
+                // costs one extra provider call, never a missed fence.
+                self.store.claim_forced_refresh(
+                    account,
+                    &GrantVersion {
+                        generation: next.generation,
+                        token_revision: next.token_revision,
+                        authorization_epoch: next.authorization_epoch,
+                        descriptor_revision: next.descriptor_revision,
+                    },
+                )?;
+                Ok(RejectionOutcome::Rotated)
+            }
+            Err(ProviderRefreshError::Unavailable) => Ok(RejectionOutcome::Unavailable),
+            // The fence only ever answers with a refusal: ReconnectRequired,
+            // or why the rejected version was already superseded.
+            Err(ProviderRefreshError::InvalidGrant) => self
+                .fence_after_invalid_grant(account, &expected)
+                .map(|_| RejectionOutcome::Stale),
         }
     }
 
