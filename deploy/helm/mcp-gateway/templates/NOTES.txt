@@ -1,7 +1,13 @@
 {{- if and (ne .Values.auth.mode "mesh") (not .Values.audit.existingClaim) }}
-WARNING: the audit log is on an emptyDir. It dies with the pod, and it is not
-rotated yet: when the {{ .Values.audit.sizeLimit }} volume fills, the gateway
-refuses tool calls with 503 and /readyz fails until space is freed. Set
+WARNING: the audit log is on an emptyDir, which dies with the pod. It rotates
+at {{ .Values.audit.rotation.maxSegmentBytes }} bytes and keeps
+{{ .Values.audit.rotation.retainSegments }} sealed segments. Set
 audit.existingClaim to a PersistentVolumeClaim, or export the log
-(control_plane.export). See UPGRADING-4.0 item 43.
+(control_plane.export). See UPGRADING-4.0 items 43 and 49.
+{{- end }}
+{{- if and (ne .Values.auth.mode "mesh") .Values.audit.existingClaim }}
+The audit log uses at most (retainSegments + 1) x maxSegmentBytes + 1Mi =
+{{ add 1048576 (mul (add1 (int64 .Values.audit.rotation.retainSegments)) (int64 .Values.audit.rotation.maxSegmentBytes)) }} bytes on
+{{ .Values.audit.existingClaim }}. A governance log under
+control_plane.store_dir uses at most 80 MiB more. See UPGRADING-4.0 item 49.
 {{- end }}

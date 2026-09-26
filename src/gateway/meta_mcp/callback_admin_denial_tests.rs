@@ -34,7 +34,7 @@ async fn meta(dir: &tempfile::TempDir) -> MetaMcp {
             .to_string_lossy()
             .into_owned(),
         key_id: "cb".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     }))
     .expect("open log");
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));

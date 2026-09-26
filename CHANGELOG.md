@@ -49,6 +49,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
+  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
+  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
+  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
+  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
+  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
+  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
 - **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
   `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
   `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
