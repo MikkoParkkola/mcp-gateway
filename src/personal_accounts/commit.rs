@@ -13,31 +13,24 @@
 //! manifest rename the in-memory copy is discarded rather than served — see
 //! `write_manifest`.
 
-#[cfg(unix)]
 use super::{
     AUTHORITY_FILE, AUTHORITY_SCHEMA, accepted_basename, authority_aad, seal_bytes, seal_token,
     sync_directory, token_aad,
 };
-#[cfg(unix)]
 use crate::personal_accounts::{
     AccountError, AccountKey, Authority, AuthorityEntry, FenceOutcome, GrantRecord, GrantState,
     GrantVersion, RefreshOutcome, StoreConfig,
 };
-#[cfg(unix)]
-#[cfg(unix)]
 use sha2::{Digest as _, Sha256};
-#[cfg(unix)]
 use std::fs;
-#[cfg(unix)]
 use std::io::Write as _;
-#[cfg(unix)]
 use std::path::Path;
 
 // Bounded regressions for runtime review r1. A child of this module because two
 // of them must hand the delete paths a pointer a sealed manifest would never
 // carry, which only a module inside the store can construct. Every frozen test
 // file stays byte-identical.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "repair_tests.rs"]
 mod repair_tests;
 
@@ -46,7 +39,6 @@ mod repair_tests;
 /// nine names cost nothing. A macro rather than a function because the enum it
 /// selects does not exist outside test builds, and duplicating that enum here
 /// would create two lists that can silently disagree.
-#[cfg(unix)]
 macro_rules! boundary {
     ($name:ident) => {
         #[cfg(test)]
@@ -57,7 +49,6 @@ macro_rules! boundary {
 }
 
 /// A private scratch name inside the same directory, so the rename is atomic.
-#[cfg(unix)]
 fn scratch_name(name: &str) -> Result<String, AccountError> {
     Ok(format!(".{name}.{}.tmp", super::random_hex()?))
 }
@@ -73,9 +64,26 @@ fn open_private(path: &Path) -> Result<fs::File, AccountError> {
         .map_err(|_| AccountError::StorageUnavailable)
 }
 
+#[cfg(unix)]
+use std::fs::rename;
+
+#[cfg(unix)]
+fn sync_file(file: &fs::File) -> std::io::Result<()> {
+    file.sync_all()
+}
+
+/// Windows: private from creation, no sharing (design §2.3 R4).
+#[cfg(windows)]
+fn open_private(path: &Path) -> Result<fs::File, AccountError> {
+    crate::private_fs::create_file_private(path, crate::private_fs::Share::Exclusive)
+        .map_err(|_| AccountError::StorageUnavailable)
+}
+
+#[cfg(windows)]
+use crate::private_fs::{replace as rename, sync_file};
+
 /// Where a replace-by-rename stopped. Before the rename nothing durable moved;
 /// after it the file on disk may be newer than any in-memory copy.
-#[cfg(unix)]
 pub(super) enum Replace {
     Staged(AccountError),
     Renamed(AccountError),
@@ -83,7 +91,6 @@ pub(super) enum Replace {
 
 /// The durable steps `replace_file` announces, in order, so a caller can map
 /// them onto its own fault boundaries.
-#[cfg(unix)]
 #[derive(Clone, Copy)]
 pub(super) enum ReplaceStep {
     Write,
@@ -95,7 +102,6 @@ pub(super) enum ReplaceStep {
 /// Scratch file, write, `sync_all`, rename over `name`, sync the directory
 /// (journey design §5.2): the one sequence `authority.json` and
 /// `journeys.json` share. A failure before the rename removes the scratch file.
-#[cfg(unix)]
 pub(super) fn replace_file(
     dir: &Path,
     name: &str,
@@ -109,11 +115,10 @@ pub(super) fn replace_file(
         file.write_all(bytes)
             .map_err(|_| AccountError::StorageUnavailable)?;
         step(ReplaceStep::Sync)?;
-        file.sync_all()
-            .map_err(|_| AccountError::StorageUnavailable)?;
+        sync_file(&file).map_err(|_| AccountError::StorageUnavailable)?;
         drop(file);
         step(ReplaceStep::Rename)?;
-        fs::rename(&tmp, dir.join(name)).map_err(|_| AccountError::StorageUnavailable)
+        rename(&tmp, dir.join(name)).map_err(|_| AccountError::StorageUnavailable)
     })();
     if let Err(error) = staged {
         let _ = fs::remove_file(&tmp);
@@ -125,7 +130,6 @@ pub(super) fn replace_file(
 
 /// Write one immutable candidate record: create, write, sync, rename, sync the
 /// parent. No debris is left behind on any failure.
-#[cfg(unix)]
 fn persist_record(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), AccountError> {
     let tmp = dir.join(scratch_name(name)?);
     let staged = (|| -> Result<(), AccountError> {
@@ -134,11 +138,10 @@ fn persist_record(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), AccountErr
         file.write_all(bytes)
             .map_err(|_| AccountError::StorageUnavailable)?;
         boundary!(RecordSync);
-        file.sync_all()
-            .map_err(|_| AccountError::StorageUnavailable)?;
+        sync_file(&file).map_err(|_| AccountError::StorageUnavailable)?;
         drop(file);
         boundary!(RecordRename);
-        fs::rename(&tmp, dir.join(name)).map_err(|_| AccountError::StorageUnavailable)?;
+        rename(&tmp, dir.join(name)).map_err(|_| AccountError::StorageUnavailable)?;
         boundary!(RecordParentSync);
         sync_directory(dir)
     })();
@@ -165,7 +168,6 @@ fn persist_record(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), AccountErr
 ///
 /// Failing to remove is not failing to commit — the manifest is already
 /// authoritative and the file is merely unreferenced — so nothing is reported.
-#[cfg(unix)]
 fn remove_unreferenced(config: &StoreConfig, digest: &str, basename: &str) {
     if accepted_basename(basename, digest).is_ok() {
         let _ = fs::remove_file(config.store_dir.join(basename));
@@ -175,7 +177,6 @@ fn remove_unreferenced(config: &StoreConfig, digest: &str, basename: &str) {
 /// Why a manifest commit did not complete. The variants exist to answer two
 /// questions the caller cannot otherwise ask: may my candidate be swept, and is
 /// this refusal permanent?
-#[cfg(unix)]
 enum ManifestRefusal {
     /// The sealed manifest exceeds `max_authority_bytes`. Permanent, and no IO
     /// was attempted, so the category is the CALLER's to choose: only an
@@ -195,7 +196,6 @@ enum ManifestRefusal {
 /// Separate from the write so a permanent cap refusal happens BEFORE a
 /// candidate record exists. An orphan swept afterwards is a worse answer than
 /// an orphan never created, and the cap cannot be reached by writing less.
-#[cfg(unix)]
 fn seal_authority(config: &StoreConfig, next: &Authority) -> Result<String, ManifestRefusal> {
     let key_id = &config.current_key_id;
     let key = config
@@ -225,7 +225,6 @@ fn seal_authority(config: &StoreConfig, next: &Authority) -> Result<String, Mani
 /// authority. Serving the prior state would keep handing out a credential a
 /// durable revoke has already retired, and the next write would rebuild from a
 /// stale revision and silently undo a durable change.
-#[cfg(unix)]
 // Spelled out rather than `boundary!`, for the same reason `ParentSync`
 // is: this site needs the refusal category, which the macro cannot give.
 fn commit_checkpoint(
@@ -243,7 +242,6 @@ fn commit_checkpoint(
     write_manifest(config, slot, encoded, next)
 }
 
-#[cfg(unix)]
 fn write_manifest(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -276,7 +274,7 @@ fn write_manifest(
 }
 
 /// The manifest's own fault boundaries, in `replace_file` step order.
-#[cfg(all(unix, test))]
+#[cfg(test)]
 fn manifest_boundary(step: ReplaceStep) -> crate::personal_accounts::faults::Boundary {
     use crate::personal_accounts::faults::Boundary;
     match step {
@@ -290,7 +288,6 @@ fn manifest_boundary(step: ReplaceStep) -> crate::personal_accounts::faults::Bou
 /// Seal a record, make it the accepted candidate, and publish the manifest that
 /// names it. Shared by first consent, re-consent and refresh — they differ only
 /// in what they check beforehand.
-#[cfg(unix)]
 fn stage_publication(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -384,7 +381,6 @@ fn stage_publication(
 /// a capacity answer; everyone else gets the storage category. Keeping the two
 /// apart is what stops revoke and the reconnect fence reporting a capacity
 /// problem they cannot have.
-#[cfg(unix)]
 ///
 /// No provenance parameter of its own: `refresh_tokens` is this function's only
 /// caller, and a refresh must CARRY a marker forward, never set one. Passing
@@ -407,7 +403,6 @@ fn publish(
 /// manifest still names that file and the credential is still live — so a
 /// return value meaning "the entry used to point here" would be an invitation
 /// to delete a referenced record. What comes back means *unreferenced now*.
-#[cfg(unix)]
 fn restate(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -442,7 +437,6 @@ fn restate(
     Ok(retired)
 }
 
-#[cfg(unix)]
 pub(in crate::personal_accounts) fn commit_grant(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -472,7 +466,6 @@ pub(in crate::personal_accounts) fn commit_grant(
     })
 }
 
-#[cfg(unix)]
 pub(in crate::personal_accounts) fn refresh_tokens(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -519,7 +512,6 @@ pub(in crate::personal_accounts) fn refresh_tokens(
 
 /// The category for every operation that adds no entry: an authority that no
 /// longer fits is not a capacity answer they can honestly give.
-#[cfg(unix)]
 fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
     match refusal {
         ManifestRefusal::TooLarge => AccountError::StorageUnavailable,
@@ -527,7 +519,6 @@ fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
     }
 }
 
-#[cfg(unix)]
 pub(in crate::personal_accounts) fn revoke(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -551,7 +542,6 @@ pub(in crate::personal_accounts) fn revoke(
     Ok(())
 }
 
-#[cfg(unix)]
 #[cfg_attr(
     all(not(test), not(kani)),
     expect(
@@ -597,7 +587,6 @@ pub(in crate::personal_accounts) fn mark_reconnect_required(
 ///
 /// The four version fields are untouched: `restate` replaces the state and
 /// nothing else, so a fenced entry discloses the same version it committed.
-#[cfg(unix)]
 pub(in crate::personal_accounts) fn fence_expected_version(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -623,61 +612,4 @@ pub(in crate::personal_accounts) fn fence_expected_version(
     restate(config, slot, &digest, GrantState::ReconnectRequired)
         .map_err(|e| refusal_as_fault(&e))?;
     Ok(FenceOutcome::Fenced)
-}
-
-#[cfg(not(unix))]
-use crate::personal_accounts::{
-    AccountError, AccountKey, Authority, FenceOutcome, GrantRecord, GrantVersion, RefreshOutcome,
-    StoreConfig,
-};
-
-#[cfg(not(unix))]
-pub(in crate::personal_accounts) fn fence_expected_version(
-    _config: &StoreConfig,
-    _slot: &mut Option<Authority>,
-    _account: &AccountKey,
-    _expected: &GrantVersion,
-) -> Result<FenceOutcome, AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(not(unix))]
-pub(in crate::personal_accounts) fn commit_grant(
-    _config: &StoreConfig,
-    _slot: &mut Option<Authority>,
-    _account: &AccountKey,
-    _record: &GrantRecord,
-    _provenance: Option<&str>,
-) -> Result<(), AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(not(unix))]
-pub(in crate::personal_accounts) fn refresh_tokens(
-    _config: &StoreConfig,
-    _slot: &mut Option<Authority>,
-    _account: &AccountKey,
-    _expected: &GrantVersion,
-    _record: &GrantRecord,
-) -> Result<RefreshOutcome, AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(not(unix))]
-pub(in crate::personal_accounts) fn revoke(
-    _config: &StoreConfig,
-    _slot: &mut Option<Authority>,
-    _account: &AccountKey,
-) -> Result<(), AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(not(unix))]
-pub(in crate::personal_accounts) fn mark_reconnect_required(
-    _config: &StoreConfig,
-    _slot: &mut Option<Authority>,
-    _account: &AccountKey,
-    _descriptor_revision: &str,
-) -> Result<(), AccountError> {
-    Err(AccountError::InvalidConfiguration)
 }

@@ -423,7 +423,6 @@ fn s03_every_token_envelope_field_rejects_tampering() {
 }
 
 #[test]
-#[cfg(unix)]
 fn s03_authority_uses_aes256_gcm_and_rejects_wrong_keys_and_tampering() {
     use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
     let root = tempfile::tempdir().unwrap();
@@ -526,39 +525,92 @@ mod bounds;
 
 // Lookup authority-entry validation, kept separate from the frozen lookup
 // packet so each source binding stays clear.
-#[cfg(unix)]
 #[path = "authority_tests.rs"]
 mod authority;
 
-#[cfg(unix)]
 #[path = "wire_bound_tests.rs"]
 mod wire_bound;
 
 // Durable store operations. Separate modules keep each evidence packet bound to
 // its own source, and store_tests.rs is already at its 800-line cap.
-#[cfg(unix)]
 #[path = "child_probe.rs"]
 mod probe;
 
-#[cfg(unix)]
 #[path = "commit_tests.rs"]
 mod commit;
 
-#[cfg(unix)]
 #[path = "fence_tests.rs"]
 mod fence;
 
-#[cfg(unix)]
 #[path = "revoke_tests.rs"]
 mod revoke;
 
-#[cfg(unix)]
 #[path = "crash_tests.rs"]
 mod crash;
 
 // MIK-6744.STORE.1 acceptance. Its own module: the 3.x credential migration is
 // a separate evidence packet from the durable-store primitives above, and
 // crash_tests.rs is held by another change.
-#[cfg(unix)]
 #[path = "migration_provenance_tests.rs"]
 mod migration_provenance;
+
+/// Owner-only fixture writes for the suites that run on every platform: `0600`
+/// / `0700` on unix, the Windows store primitives on Windows.
+pub(super) mod private_io {
+    use std::fs::File;
+    use std::path::Path;
+
+    #[cfg(unix)]
+    pub(crate) fn create_dir(path: &Path) {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn create_dir(path: &Path) {
+        crate::private_fs::create_dir_private(path).unwrap();
+    }
+
+    /// A new file; panics if the name exists.
+    #[cfg(unix)]
+    pub(crate) fn create_new(path: &Path) -> File {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn create_new(path: &Path) -> File {
+        crate::private_fs::create_file_private(path, crate::private_fs::Share::Exclusive).unwrap()
+    }
+
+    /// Create or truncate; an existing file keeps its own permissions.
+    #[cfg(unix)]
+    pub(crate) fn create_or_truncate(path: &Path) -> File {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn create_or_truncate(path: &Path) -> File {
+        if path.exists() {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)
+                .unwrap()
+        } else {
+            create_new(path)
+        }
+    }
+}

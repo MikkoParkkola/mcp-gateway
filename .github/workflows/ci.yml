@@ -265,15 +265,18 @@ jobs:
       # a subset, and this is what catches a unix-only API slipping into any
       # target it does not run.
       - run: cargo test --all-features --no-run
-      # Library and binary unit tests. Two module trees are skipped rather than
-      # run, both for one reason: their fixtures open the task store or the
-      # personal-account store, which refuse on non-unix by design (W1, #1142).
-      # The integration targets under tests/ are compiled above and not run
-      # here yet (W1, #1142). Green means Windows coverage for what runs, and
-      # no more than that.
+      # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
+      # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
+      # clippy jobs never see them. Lint them where they compile.
+      # `unnecessary_wraps` is allowed here only: it fires on the existing
+      # non-unix no-op stubs, which keep the unix signature on purpose.
       - run: >-
-          cargo test --all-features --lib --bins --no-fail-fast --
-          --skip gateway:: --skip personal_accounts::
+          cargo clippy --all-targets --all-features --
+          -D warnings -A clippy::unnecessary_wraps
+      # Library and binary unit tests, the store suites included: both stores
+      # run on Windows with owner-only DACLs (ADR-016). The integration targets
+      # under tests/ are compiled above and not run here yet (W1, #1142).
+      - run: cargo test --all-features --lib --bins --no-fail-fast -- --show-output
 
   test:
     name: Tests
