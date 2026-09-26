@@ -62,6 +62,7 @@ fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
         }
         // Every other caller, named or not, is one class: an unvalidated name is
         // not a credential. Only the minted session id separates them (F9).
+        Some(c) if c.name != "anonymous" => SessionOwner::Credential(format!("unauthenticated:{}", c.name)),
         _ => SessionOwner::Anonymous,
     }
 }
