@@ -585,7 +585,7 @@ def steps(workflow, job=None):
 
     def close():
         nonlocal current
-        if current and (job is None or where == job):
+        if current:
             blocks.append(current)
         current = None
 
