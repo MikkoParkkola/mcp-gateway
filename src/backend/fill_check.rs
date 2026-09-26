@@ -268,6 +268,8 @@ mod tests {
         let start = doc.find("## 59.").expect("section 59");
         let section = &doc[start..];
         let section = &section[..section[3..].find("\n## ").map_or(section.len(), |e| e + 3)];
+        // Whitespace-normalised: a Windows checkout reads the doc with CRLF.
+        let section = section.split_whitespace().collect::<Vec<_>>().join(" ");
         let secs = LIST_FILL_COOLDOWN.as_secs();
         for quoted in [
             format!("{LIST_MAX_PAGES}-page cap"),
@@ -275,7 +277,7 @@ mod tests {
             format!("The {LIST_MAX_PAGES} pages and the {secs} s above"),
             // A3: both answers to a failed list are described.
             "the same error a failed tool call to that backend gets".to_owned(),
-            "not counted as a\n  backend failure".to_owned(),
+            "not counted as a backend failure".to_owned(),
         ] {
             assert!(section.contains(&quoted), "UPGRADING §59 lacks {quoted:?}");
         }
