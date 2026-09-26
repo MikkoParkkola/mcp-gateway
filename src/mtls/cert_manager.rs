@@ -293,7 +293,7 @@ impl CertGenerator {
         // Exactly 0644 whatever the umask or an older file's mode: `serve`
         // refuses a cert others can change (F18 I1), and this one is public.
         #[cfg(unix)]
-        fs::set_permissions(&cert_path, fs::Permissions::from_mode(0o644))
+        fs::set_permissions(&cert_path, fs::Permissions::from_mode(0o664))
             .map_err(|e| Error::Config(format!("Cannot set cert permissions: {e}")))?;
 
         write_private_key(&dir.join(format!("{stem}.key")), &cert.key_pem)?;
