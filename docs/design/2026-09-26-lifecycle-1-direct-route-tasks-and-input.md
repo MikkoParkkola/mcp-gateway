@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
 Status: REVISION 9, DESIGN FINAL for implementation. Eight review rounds; round 8: SHIP and SHIP-WITH-FIXES (one LOW, adopted). Every finding is
-dispositioned in §7-§14. Open before code: the owner visibility question in §3 A.2.
+dispositioned in §7-§15. Visibility settled by maintainer decision (§6 Q4).
 
 ## 1. Problem
 
@@ -82,9 +82,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    per-user identity headers resolved at dispatch time, and the response scan. A policy or
    isolation change during an input wait therefore refuses the resume. The extracted chain
    keeps the per-backend passthrough opt-out (`backend_handlers.rs:957-959`) exactly as today.
-   Named function: `DirectRouteGuards::run`, in the router. The worker lives in `task_service`,
-   so calling it may need a visibility change (for example `pub(super)` to `pub(crate)`); that
-   is an owner decision, asked before code, not assumed.
+   Named function: `DirectRouteGuards::run`, in the router, `pub(crate)` so the worker in
+   `task_service` can call it (maintainer decision 2026-09-26, §6 Q4).
 2b. **Upstream-armed jobs keep today's path.** When a trusted recovery adapter claims the
    backend, the worker arms `UpstreamSubmission` (`worker.rs:113-178`) and the backend owns
    the task; its `input_required` is the backend's own task state and stays under the reviewed
@@ -261,6 +260,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 - Q3. F1 lands first as its own small change: `tasks/*` on `/mcp/{name}` answer from the
   gateway store (an id the store does not hold gets `-32602`) instead of being forwarded.
   Both reviews called F1 real; this design builds on that change.
+- Q4. Visibility of `DirectRouteGuards::run`: maintainer decision 2026-09-26, `pub(crate)`
+  is approved. No other visibility widening is covered by this decision.
 
 ## 7. Review dispositions (two independent reviews, 2026-09-26, both SHIP-WITH-FIXES)
 
