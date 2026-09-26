@@ -3,7 +3,7 @@
 //! F18 A2: a path that is not a regular file is refused, and a FIFO is refused
 //! without blocking the reader.
 
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -26,7 +26,8 @@ fn fifo(dir: &Path) -> PathBuf {
 
 /// Runs `op` on its own thread and waits at most [`BOUND`]. On a timeout the
 /// FIFO's write end is opened and dropped, so a reader blocked in `open` gets
-/// EOF and exits instead of leaking; the timeout is still reported as `None`.
+/// EOF and exits on its own (it is not joined: a failed unblock would then hang
+/// the test); the timeout is still reported as `None`.
 fn bounded<T: Send + 'static>(fifo: &Path, op: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let (tx, rx) = mpsc::channel();
     let reader = std::thread::spawn(move || {
@@ -66,6 +67,8 @@ fn directory_is_refused_as_not_regular() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("env.d");
     std::fs::create_dir(&path).unwrap();
+    // Owner-only, so only the type can be what is refused, whatever the umask.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     let err = read_secret_file(&path, SecretFile::EnvFile)
         .expect_err("a directory is not an env file")
         .to_string();

@@ -175,7 +175,7 @@ pub(crate) fn read_guarded_file(
     use std::io::Read as _;
 
     let noun = what.noun();
-    let mut file = open_without_blocking(path).map_err(GuardedRead::Io)?;
+    let mut file = open_for_guarded_read(path).map_err(GuardedRead::Io)?;
     #[cfg(unix)]
     check_mode(&file, path, what)?;
     let mut bytes = Vec::new();
@@ -212,7 +212,7 @@ pub(crate) fn read_guarded_file(
 /// could refuse it. `O_NONBLOCK` has no effect on reading a regular file, the
 /// only kind that is ever read; `O_NOCTTY` keeps a terminal from becoming ours.
 #[cfg(unix)]
-fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
+fn open_for_guarded_read(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let flags = rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
     std::fs::OpenOptions::new()
@@ -221,9 +221,9 @@ fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-/// Windows: no file types or modes are checked (UPGRADING item 35).
+/// Windows: a plain open; no file types or modes are checked (UPGRADING item 35).
 #[cfg(not(unix))]
-fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
+fn open_for_guarded_read(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
@@ -259,7 +259,7 @@ fn check_mode(
     // Type before mode, on the same handle: nothing but a regular file is read.
     if !meta.file_type().is_file() {
         return Err(GuardedRead::Refused(format!(
-            "Refusing to load {} {}: it is a {}, not a regular file.",
+            "Refusing to load {} {}: it is a {}, not a regular file. Write the content to a regular file.",
             what.noun(),
             path.display(),
             file_kind(meta.file_type())
