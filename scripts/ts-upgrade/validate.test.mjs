@@ -78,7 +78,11 @@ test("refuses fewer than five fixtures", () => {
     encoding: "utf8",
     env: { ...process.env, TSC: "tsc-not-installed-mik3160" },
   });
-  if (run.status === 0) {
-    throw new Error("a short fixture directory must not pass");
+  if (run.status !== 1) {
+    throw new Error(`status ${run.status}, want 1\n${run.stderr || run.stdout}`);
+  }
+  const report = JSON.parse(readFileSync(out, "utf8"));
+  if (report.recommendation !== "skip" || report.fixtures.length !== 0) {
+    throw new Error(JSON.stringify(report));
   }
 });
