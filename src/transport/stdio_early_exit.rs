@@ -156,7 +156,7 @@ fn mask_secret_head(line: &mut String, secret: &str) {
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     exited: std::sync::atomic::AtomicBool,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     failure: parking_lot::Mutex<Option<String>>,
 }
 
@@ -164,7 +164,7 @@ impl StartState {
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
         // An excerpt describes the last start only.
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         {
             *self.failure.lock() = None;
         }
@@ -180,7 +180,7 @@ impl StartState {
 impl StdioTransport {
     /// The redacted stderr tail of the last start that ended in an early exit,
     /// as the log record carried it.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn start_failure_excerpt(&self) -> Option<String> {
         self.start.failure.lock().clone()
     }
@@ -259,7 +259,7 @@ impl StdioTransport {
         };
         // `doctor --start-stdio` reads this record's `stderr` field.
         warn!(command = %command, stderr = %excerpt, "stdio backend {what}");
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         {
             *self.start.failure.lock() = Some(excerpt);
         }
