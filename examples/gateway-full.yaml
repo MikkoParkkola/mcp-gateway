@@ -117,6 +117,8 @@ failsafe:
     enabled: true
     requests_per_second: 100      # Per-backend RPS
     burst_size: 50                # Token bucket burst
+                                  # A refusal reads "Rate limit exceeded for backend
+                                  # '<name>'" and is never counted by error_budget.
 
   health_check:
     enabled: true
@@ -127,6 +129,8 @@ failsafe:
 
 # Error budget / kill switch (GH #475). Every key is optional; an absent key
 # keeps the shipped default. Thresholds are failure RATES in (0.0, 1.0].
+# Throttling is never a failure sample: neither a backend's 429 nor a refusal by
+# the gateway's own failsafe.rate_limit above.
 error_budget:
   threshold: 0.8          # backend auto-kill at an 80% failure rate
   window_size: 100        # calls in the backend sliding window

@@ -3947,10 +3947,21 @@ impl MetaMcp {
 /// string suitable for embedding in a [`RecoveryHint`].
 fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
     match error {
-        Error::CircuitOpen(backend) => (
+        Error::CircuitOpen {
+            backend,
+            last_failure,
+        } => (
             ErrorCategory::CircuitBreakerTrip,
-            format!("Circuit breaker is open for backend '{backend}'"),
+            match last_failure {
+                Some(reason) => {
+                    format!(
+                        "Circuit breaker is open for backend '{backend}'; last failure: {reason}"
+                    )
+                }
+                None => format!("Circuit breaker is open for backend '{backend}'"),
+            },
         ),
+        Error::RateLimited(_) => (ErrorCategory::RateLimited, error.to_string()),
         Error::BackendNotFound(name) | Error::ToolNotFound(name) => {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
@@ -3982,7 +3993,9 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
 pub(super) enum BudgetOutcome {
     Success,
     Failure,
-    /// The backend answered, and answered "not so fast".
+    /// Throttled: the backend answered "not so fast", or the gateway's own
+    /// rate limiter refused before dispatch (F23). Neither is evidence about
+    /// the backend's health, so neither is sampled.
     IgnoredRateLimit,
 }
 
@@ -4018,6 +4031,9 @@ impl BudgetOutcome {
                     Self::Success
                 }
             }
+            // The gateway's own limiter refused: the backend was never asked.
+            // Matched on the variant, not on its message (F23).
+            Err(Error::RateLimited(_)) => Self::IgnoredRateLimit,
             Err(error) => {
                 if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
                     Self::IgnoredRateLimit
@@ -6010,3 +6026,6 @@ mod identity_propagation_enforcement_tests {
 
 #[cfg(test)]
 mod error_budget_tests;
+
+#[cfg(test)]
+mod circuit_open_hint_tests;
