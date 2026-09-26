@@ -162,7 +162,6 @@ pub(super) async fn require_admin_tool_access(
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
     };
-    log.admit().await.map_err(unavailable)?;
     let outcome = match &verdict {
         Ok(()) => AuditOutcome::Ok,
         Err(e) => AuditOutcome::Denied(e.code),
