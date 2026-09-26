@@ -47,7 +47,7 @@ fn response() -> JsonRpcResponse {
     )
 }
 
-fn finalize(
+async fn finalize(
     meta: &MetaMcp,
     response: JsonRpcResponse,
     signing: Option<&SigningInvocationContext>,
@@ -70,6 +70,7 @@ fn finalize(
             signing,
         },
     )
+    .await
 }
 
 // The reviewed Node implementation computes the MAC independently of Rust. A
@@ -141,7 +142,8 @@ async fn signing_delivery_external_success_covers_all_supplied_final_fields() {
         &meta(true, true),
         original,
         Some(&SigningInvocationContext::external_for_test(Some(NONCE))),
-    );
+    )
+    .await;
     let mut verified =
         verify(&actual, Some(NONCE)).expect("final response must independently verify");
     verified["result"]
@@ -165,7 +167,8 @@ async fn signing_delivery_optional_absent_nonce_is_authenticated_null() {
         &meta(true, false),
         response(),
         Some(&SigningInvocationContext::external_for_test(None)),
-    );
+    )
+    .await;
     let verified =
         verify(&actual, None).expect("optional absence still requires an authenticated response");
     assert!(verified["result"]["_signature"]["nonce"].is_null());
@@ -179,7 +182,7 @@ async fn signing_delivery_internal_and_absent_origin_remain_unsigned() {
     for context in [None, Some(&internal)] {
         let original = response();
         let expected = serde_json::to_value(&original).unwrap();
-        let actual = finalize(&meta, original, context);
+        let actual = finalize(&meta, original, context).await;
         assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
         assert!(!actual.delivery_refusal);
     }
@@ -193,7 +196,8 @@ async fn signing_delivery_disabled_skips_invalid_context() {
         &meta(false, true),
         original,
         Some(&SigningInvocationContext::invalid_for_test()),
-    );
+    )
+    .await;
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
     assert!(!actual.delivery_refusal);
 }
@@ -205,7 +209,8 @@ async fn signing_delivery_invalid_context_becomes_safe_marked_error() {
         &meta,
         response(),
         Some(&SigningInvocationContext::invalid_for_test()),
-    );
+    )
+    .await;
     assert_failure(&actual);
     assert_attempt(&path, &actual);
 }
@@ -219,7 +224,8 @@ async fn signing_delivery_real_primitive_refuses_nonobject_success() {
         &meta,
         original,
         Some(&SigningInvocationContext::external_for_test(Some(NONCE))),
-    );
+    )
+    .await;
     assert_failure(&actual);
     assert_attempt(&path, &actual);
 }
@@ -231,7 +237,8 @@ async fn signing_delivery_required_nonce_defensive_failure_is_marked() {
         &meta,
         response(),
         Some(&SigningInvocationContext::external_for_test(None)),
-    );
+    )
+    .await;
     assert_failure(&actual);
     assert_attempt(&path, &actual);
 }
@@ -354,7 +361,8 @@ async fn signing_delivery_attempt_hash_includes_final_signature_and_request_id()
         &meta,
         response(),
         Some(&SigningInvocationContext::external_for_test(Some(NONCE))),
-    );
+    )
+    .await;
     verify(&actual, Some(NONCE))
         .expect("delivery attempt must describe an independently valid signed response");
     let event = assert_attempt(&path, &actual);
@@ -389,7 +397,11 @@ fn measured_finalize(
     let handle = recorder.handle();
     let response = telemetry_metrics::with_local_recorder(&recorder, || {
         telemetry_metrics::counter!("signing_test_recorder_canary_total").increment(1);
-        finalize(meta, response, Some(context))
+        // The recorder is thread-local and takes a sync closure, so the
+        // (now async) delivery path is driven to completion on this thread.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(finalize(meta, response, Some(context)))
+        })
     });
     let rendered = handle.render();
     assert!(
@@ -414,7 +426,7 @@ fn measured_finalize(
 }
 
 #[cfg(feature = "metrics")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signing_delivery_accessor_and_primitive_failures_each_count_once() {
     let invalid = SigningInvocationContext::invalid_for_test();
     let valid = SigningInvocationContext::external_for_test(Some(NONCE));
@@ -437,7 +449,7 @@ async fn signing_delivery_accessor_and_primitive_failures_each_count_once() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signing_delivery_existing_error_bypasses_invalid_context_and_failure_counter() {
     assert_unsigned_bypass(JsonRpcResponse::error_with_data(
         Some(RequestId::Number(-41)),
@@ -447,7 +459,7 @@ async fn signing_delivery_existing_error_bypasses_invalid_context_and_failure_co
     ));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signing_delivery_no_result_bypasses_invalid_context_and_failure_counter() {
     let mut original = response();
     original.result = None;
@@ -462,7 +474,9 @@ fn assert_unsigned_bypass(original: JsonRpcResponse) {
     #[cfg(feature = "metrics")]
     let (actual, failures) = measured_finalize(&meta, original, &invalid);
     #[cfg(not(feature = "metrics"))]
-    let actual = finalize(&meta, original, Some(&invalid));
+    let actual = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(finalize(&meta, original, Some(&invalid)))
+    });
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
     #[cfg(feature = "metrics")]
     assert_eq!(failures, 0);
@@ -509,7 +523,8 @@ async fn signing_delivery_one_firewall_redaction_precedes_final_mac() {
         &meta,
         original,
         Some(&SigningInvocationContext::external_for_test(Some(NONCE))),
-    );
+    )
+    .await;
     let wire = serde_json::to_string(&actual).unwrap();
     assert!(
         !wire.contains(CANARY),
@@ -538,7 +553,7 @@ async fn signing_delivery_one_firewall_redaction_precedes_final_mac() {
 }
 
 #[cfg(all(feature = "firewall", feature = "metrics"))]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signing_delivery_firewall_block_skips_invalid_context_and_signing_failure() {
     let mut meta = meta(true, true);
     let firewall = install_firewall(&mut meta, crate::security::firewall::FirewallAction::Block);

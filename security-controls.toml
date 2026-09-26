@@ -341,6 +341,13 @@ probe = "none"
 reason = "an on-disk property of the log; nothing on the wire changes when it rotates"
 
 [[control]]
+id = "audit-append-bound"
+description = "every hot-path audit append runs off the request threads under a 5 s wait and 5 s write bound; a stalled disk refuses fail-closed calls with 503 and marks /readyz stalled instead of exhausting the workers (F20)"
+source = "src/security/transparency_log_bounded.rs"
+probe = "none"
+reason = "fires only when the audit volume stops answering; a live probe cannot stall the disk of the install it probes"
+
+[[control]]
 id = "audit-log-verify"
 description = "audit verify reads every segment and reports a deleted, truncated, reordered or re-linked segment, or a missing active tail against .hwm, as tampering (D6)"
 source = "src/security/transparency_log_verify.rs"

@@ -514,12 +514,46 @@ pub(crate) enum WriteFault {
     FullAfterRename,
 }
 
+/// F20: holds one write "in the kernel" until the test opens it, or for at
+/// most three seconds. The deadline turns an unbounded append (a mutant) into
+/// a failed timing assertion instead of a hung test run.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct StallGate {
+    open: std::sync::Mutex<bool>,
+    cv: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl StallGate {
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+    /// Block the writer until opened or the deadline passes.
+    pub(crate) fn hold(&self) {
+        let guard = self.open.lock().expect("gate lock");
+        let _ = self
+            .cv
+            .wait_timeout_while(guard, Self::DEADLINE, |open| !*open)
+            .expect("gate lock");
+    }
+
+    /// Let the held write finish.
+    pub(crate) fn release(&self) {
+        *self.open.lock().expect("gate lock") = true;
+        self.cv.notify_all();
+    }
+}
+
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct TestHooks {
     pub(crate) fault: std::sync::Mutex<Option<WriteFault>>,
     pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
     pub(crate) clock_offset: std::sync::atomic::AtomicI64,
+    /// F20: the next write blocks on this gate (a stalled filesystem).
+    pub(crate) stall: std::sync::Mutex<Option<std::sync::Arc<StallGate>>>,
+    /// F20: probe appends started.
+    pub(crate) probes: std::sync::atomic::AtomicUsize,
     /// Set once the disk-full path has unlinked the reserve.
     pub(crate) reserve_released: std::sync::atomic::AtomicBool,
     /// Set while an expiry record is being written.

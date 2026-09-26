@@ -202,6 +202,10 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn injected_write(&self, inner: &mut Inner, bytes: &[u8]) -> Option<io::Result<()>> {
         use super::rotation::WriteFault;
+        let stall = self.hooks.stall.lock().unwrap().take();
+        if let Some(gate) = stall {
+            gate.hold(); // held under `Inner`, like a write stuck in the kernel
+        }
         let fault = *self.hooks.fault.lock().unwrap();
         let full = match fault {
             Some(WriteFault::FullForever) => true,

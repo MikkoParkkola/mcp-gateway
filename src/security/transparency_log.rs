@@ -78,6 +78,9 @@ mod degraded;
 // D6 segment files, rotation and recovery, multi-segment verify.
 #[path = "transparency_log_append.rs"]
 mod append;
+// F20: the bounded async append.
+#[path = "transparency_log_bounded.rs"]
+mod bounded;
 #[path = "transparency_log_rotation.rs"]
 mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
@@ -198,6 +201,8 @@ pub struct TransparencyLogger {
     append_failures: std::sync::atomic::AtomicU64,
     /// Index of the last failure's cause (`usize::MAX` before any failure).
     last_failure_cause: std::sync::atomic::AtomicUsize,
+    /// F20: the append permit and stall state.
+    bound: bounded::Bound,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -284,6 +289,7 @@ impl TransparencyLogger {
             degraded: std::sync::atomic::AtomicBool::new(false),
             append_failures: std::sync::atomic::AtomicU64::new(0),
             last_failure_cause: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            bound: bounded::Bound::default(),
         })
     }
 
@@ -715,6 +721,9 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "transparency_log_bounded_tests.rs"]
+mod bounded_tests;
 #[cfg(test)]
 #[path = "transparency_log_recovery_tests.rs"]
 mod recovery_tests;

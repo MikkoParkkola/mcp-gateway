@@ -533,3 +533,28 @@ async fn backend_503_32005_is_recorded_as_error() {
     assert_eq!(entry["outcome"], "error", "{entry}");
     assert_eq!(entry["error_code"], -32005);
 }
+
+/// F20 on the direct route (added by #1092 after the F20 design): a stalled
+/// audit disk withholds the result with 503 within the bound, instead of
+/// pinning a runtime worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_append_on_a_stalled_disk_is_bounded() {
+    let fx = fixture(Setup {
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    let bound = Duration::from_millis(200);
+    let release = fx.log.stall_next_write_for_test(bound);
+    let start = std::time::Instant::now();
+    let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
+    assert!(
+        start.elapsed() < bound * 5,
+        "bounded: {:?}",
+        start.elapsed()
+    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], -32005, "{body}");
+    assert!(fx.log.is_stalled());
+    release.release();
+}

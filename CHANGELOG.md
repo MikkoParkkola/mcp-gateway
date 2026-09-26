@@ -49,6 +49,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
+
 - **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
   12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
   `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,

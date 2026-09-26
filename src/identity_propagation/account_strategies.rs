@@ -274,8 +274,8 @@ impl AccountStrategyRegistry {
     /// Validate a minted credential's headers, then audit the mint. Split
     /// out of [`Self::resolve`] purely to keep that function under the line
     /// budget — logic, ordering and every error message are unchanged.
-    fn validate_and_audit_mint(
-        logger: Option<&TransparencyLogger>,
+    async fn validate_and_audit_mint(
+        logger: Option<&Arc<TransparencyLogger>>,
         subject_id: &str,
         descriptor_id: &str,
         audience: &str,
@@ -319,7 +319,9 @@ impl AccountStrategyRegistry {
             descriptor_id,
             Some(audience),
             None,
-        ) {
+        )
+        .await
+        {
             // CWE-209: the audit error can carry a filesystem path. Keep it in
             // the server log; return a generic message to the caller.
             tracing::warn!(
@@ -409,12 +411,13 @@ impl AccountStrategyRegistry {
         // it has no assertion to consult and still needs a verified caller.
         let Some(principal) = Self::principal(installed.as_ref(), caller) else {
             Self::audit_refusal(
-                logger.as_deref(),
+                logger.as_ref(),
                 &audit_subject(caller.verified()),
                 descriptor_id,
                 audience,
                 "the request carries no verified end-user identity",
-            );
+            )
+            .await;
             return Err(Error::Config(format!(
                 "capability auth references account '{descriptor_id}' but the request carries no \
                  verified end-user identity. Refusing rather than falling back to the \
@@ -440,12 +443,13 @@ impl AccountStrategyRegistry {
             Err(error) => {
                 let reason = error.to_string();
                 Self::audit_refusal(
-                    logger.as_deref(),
+                    logger.as_ref(),
                     &subject_id,
                     descriptor_id,
                     audience,
                     &reason,
-                );
+                )
+                .await;
                 let refused = Error::Config(format!(
                     "account '{descriptor_id}' produced no credential for this caller: {reason}"
                 ));
@@ -469,12 +473,13 @@ impl AccountStrategyRegistry {
         if managed.is_none() && credential.expires_at <= minted_at {
             let reason = "the external strategy published an expiry that has already passed";
             Self::audit_refusal(
-                logger.as_deref(),
+                logger.as_ref(),
                 &subject_id,
                 descriptor_id,
                 audience,
                 reason,
-            );
+            )
+            .await;
             return Err(Error::Config(format!(
                 "account '{descriptor_id}' minted a credential that is already expired: {reason}. \
                  Refusing rather than caching or dispatching with it."
@@ -482,13 +487,14 @@ impl AccountStrategyRegistry {
         }
 
         Self::validate_and_audit_mint(
-            logger.as_deref(),
+            logger.as_ref(),
             &subject_id,
             descriptor_id,
             audience,
             installed.required,
             &credential,
-        )?;
+        )
+        .await?;
 
         Ok(AccountCredential::Prepared(Arc::new(
             PreparedAccountCredential {
@@ -685,8 +691,8 @@ impl AccountStrategyRegistry {
     /// Record a refusal. The request is already being refused, so an audit-write
     /// failure does not change the outcome — but it must not be dropped
     /// silently.
-    fn audit_refusal(
-        logger: Option<&TransparencyLogger>,
+    async fn audit_refusal(
+        logger: Option<&Arc<TransparencyLogger>>,
         subject_id: &str,
         descriptor_id: &str,
         audience: &str,
@@ -699,7 +705,9 @@ impl AccountStrategyRegistry {
             descriptor_id,
             Some(audience),
             Some(reason),
-        ) {
+        )
+        .await
+        {
             tracing::warn!(
                 account = descriptor_id,
                 error = %error,
@@ -710,90 +718,5 @@ impl AccountStrategyRegistry {
 }
 
 #[cfg(test)]
-mod lifetime_tests {
-    use super::*;
-
-    struct NeverMints;
-
-    #[async_trait::async_trait]
-    impl IdentityPropagation for NeverMints {
-        async fn propagate(
-            &self,
-            _identity: &crate::key_server::oidc::VerifiedIdentity,
-            _backend: &BackendDescriptor,
-        ) -> std::result::Result<super::super::PropagatedCredential, super::super::PropagationError>
-        {
-            unreachable!("the lifetime predicate never mints")
-        }
-    }
-
-    /// `managed: None` is the EXTERNAL shape: no lease, so the durable custody
-    /// half of `revalidate` is skipped and this predicate is the only thing
-    /// standing between a stale published expiry and the wire.
-    fn external(expires_at: i64, minted_at: i64) -> PreparedAccountCredential {
-        PreparedAccountCredential {
-            descriptor_id: "acct".to_string(),
-            auth_key: "oauth:google".to_string(),
-            actor_id: "actor".to_string(),
-            audience: "https://partner.invalid/".to_string(),
-            cache_binding: "binding".to_string(),
-            expires_at,
-            minted_at,
-            strategy: Arc::new(NeverMints),
-            managed: None,
-            headers: vec![("Authorization".to_string(), "Bearer x".to_string())],
-        }
-    }
-
-    #[test]
-    fn execution_context_debug_redacts_prepared_credential_headers() {
-        let secrets = [
-            "Bearer fixture-token-never-log-1839",
-            "fixture-api-key-never-log-2940",
-        ];
-        let mut credential = external(1_800_000_060, 1_800_000_000);
-        credential.headers = vec![
-            ("Authorization".to_string(), secrets[0].to_string()),
-            ("X-Api-Key".to_string(), secrets[1].to_string()),
-        ];
-        let context = crate::capability::CapabilityExecutionContext::default()
-            .with_account_credential(Arc::new(credential));
-        let output = format!("{context:?}");
-        assert!(output.contains("PreparedAccountCredential"));
-        assert!(output.contains("Authorization"));
-        assert!(output.contains("X-Api-Key"));
-        assert!(output.contains("<redacted>"));
-        for secret in secrets {
-            assert!(
-                !output.contains(secret),
-                "execution context exposed credential material"
-            );
-        }
-    }
-
-    /// THE REGRESSION, at the predicate itself. An external credential whose
-    /// published expiry is in the past looks exactly like `expires_at <=
-    /// minted_at`, which the old universal reading treated as "no lifetime
-    /// published" and therefore as usable.
-    #[test]
-    fn an_external_credential_with_a_past_expiry_is_closed() {
-        let now = 1_800_000_000;
-        assert!(
-            !external(now - 3600, now).published_lifetime_open(now),
-            "an external credential whose expiry has already passed must never be open"
-        );
-        assert!(
-            !external(now, now).published_lifetime_open(now),
-            "expiry exactly at now is not a lifetime an external credential may use"
-        );
-        assert!(
-            !external(0, now).published_lifetime_open(now),
-            "an external strategy publishing no usable expiry publishes no usable credential"
-        );
-        assert!(
-            external(now + 60, now).published_lifetime_open(now),
-            "an external credential inside its own published lifetime stays usable; nothing \
-             here shortens it"
-        );
-    }
-}
+#[path = "account_strategies_tests.rs"]
+mod lifetime_tests;
