@@ -3,6 +3,8 @@
 //! Gateway server implementation
 
 pub mod auth;
+mod change_feed;
+pub(crate) use change_feed::ChangeFeed;
 pub(crate) mod authz;
 pub mod destructive_confirmation;
 mod differential;
@@ -86,6 +88,12 @@ pub mod test_helpers {
     pub use super::task_service::{
         ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,
     };
+
+    /// Bind `meta` to the HTTP server's change feed, as `serve` does (F24), so
+    /// an in-process fixture advertises what the HTTP server advertises.
+    pub fn bind_http_change_feed(meta: &MetaMcp) {
+        meta.set_change_feed(super::ChangeFeed::Http);
+    }
 
     /// The authorizer a fixture's `SubscriptionRegistry` re-validates against:
     /// `config` with no key server, as a fixture's `AppState` carries it.
