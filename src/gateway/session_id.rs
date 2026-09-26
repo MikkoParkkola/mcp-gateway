@@ -71,7 +71,7 @@ impl std::borrow::Borrow<str> for SessionId {
 
 impl fmt::Display for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&session_fp(&self.0))
+        f.write_str(&self.0)
     }
 }
 
