@@ -80,3 +80,10 @@ fn a_name_cannot_escape_the_state_directory() {
         );
     }
 }
+
+/// Throwaway canary (#524 T1/T2): fails only where Windows tests execute.
+#[cfg(windows)]
+#[test]
+fn windows_only_canary() {
+    panic!("windows-only canary");
+}
