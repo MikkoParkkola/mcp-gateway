@@ -6058,6 +6058,8 @@ mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
+#[cfg(test)]
+mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod session_fp_tests;
