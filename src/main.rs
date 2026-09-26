@@ -52,7 +52,7 @@ fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -
         .spawn(body)
         .expect("spawn the main runtime thread")
         .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        .unwrap_or_else(|_| panic!("mutant payload"))
 }
 
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
