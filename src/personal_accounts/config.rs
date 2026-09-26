@@ -32,6 +32,7 @@ mod adapters;
 mod descriptor_debug;
 mod journey;
 mod limits;
+mod references;
 
 // Re-exported so the provider names the canonical types, not the module.
 pub(crate) use journey::{AccessType, AuthorizeExtra, Prompt};
@@ -44,6 +45,7 @@ pub(crate) use adapters::AdapterConfig;
 // Gateway-credential view for the separation checks; only `config::Config` sees `auth`.
 pub(crate) use adapters::GatewayCredential;
 use journey::HostedConfig;
+use references::{is_reference, reference_name, resolve_key};
 
 /// Structural gateway separation for the whole block: no adapter names the same
 /// environment variable as a gateway credential.
@@ -146,18 +148,7 @@ pub(crate) fn resolve_adapter_runtime(
 
     let mut keys = BTreeMap::new();
     for (key_id, reference) in &accounts.keys {
-        let variable = reference.strip_prefix("env:").ok_or_else(|| {
-            AccountsConfigError::KeyNotAReference {
-                key_id: key_id.clone(),
-            }
-        })?;
-        let encoded = overlay.resolve(variable).ok_or_else(|| {
-            AccountsConfigError::KeyReferenceUnresolved {
-                key_id: key_id.clone(),
-                variable: variable.to_string(),
-            }
-        })?;
-        keys.insert(key_id.clone(), decode_key(key_id, &encoded)?);
+        keys.insert(key_id.clone(), resolve_key(key_id, reference, overlay)?);
     }
 
     let secrets = adapters::resolve_runtime_secrets(&accounts.adapters, overlay, &keys)?;
@@ -330,10 +321,14 @@ pub(crate) enum AccountsConfigError {
     #[error("accounts.current_key_id is absent from accounts.keys")]
     CurrentKeyMissing,
     /// Named by key id only. The value is never part of the message.
-    #[error("accounts.keys[{key_id}] must be an env: reference")]
+    #[error("accounts.keys[{key_id}] must be an env: or file: reference")]
     KeyNotAReference { key_id: String },
     #[error("accounts.keys[{key_id}] reference {variable} is unresolved")]
     KeyReferenceUnresolved { key_id: String, variable: String },
+    /// A `file:` secret that could not be read or was refused (C9). The
+    /// message names the field and path, never the content.
+    #[error("{0}")]
+    SecretFile(String),
     #[error("accounts.keys[{key_id}] must decode to exactly 32 bytes")]
     KeyMaterial { key_id: String },
     #[error("accounts.limits.{field} must be a positive integer within bounds")]
@@ -477,7 +472,7 @@ pub(crate) fn resolve(
     // Reject malformed references anywhere in the block before resolving any
     // secret. A later invalid key must not cause an earlier environment read.
     for (key_id, reference) in &accounts.keys {
-        if !reference.starts_with("env:") {
+        if !is_reference(reference) {
             return Err(AccountsConfigError::KeyNotAReference {
                 key_id: key_id.clone(),
             });
@@ -487,20 +482,8 @@ pub(crate) fn resolve(
     let mut keys = BTreeMap::new();
     let mut secret_refs_read = Vec::new();
     for (key_id, reference) in &accounts.keys {
-        let variable = reference.strip_prefix("env:").ok_or_else(|| {
-            AccountsConfigError::KeyNotAReference {
-                key_id: key_id.clone(),
-            }
-        })?;
-        secret_refs_read.push(variable.to_string());
-        let encoded = overlay.resolve(variable).ok_or_else(|| {
-            AccountsConfigError::KeyReferenceUnresolved {
-                key_id: key_id.clone(),
-                variable: variable.to_string(),
-            }
-        })?;
-        let material = decode_key(key_id, &encoded)?;
-        keys.insert(key_id.clone(), material);
+        secret_refs_read.push(reference_name(reference).to_string());
+        keys.insert(key_id.clone(), resolve_key(key_id, reference, overlay)?);
     }
     secret_refs_read.extend(adapters::resolve_secrets(
         &accounts.adapters,
@@ -721,9 +704,9 @@ fn validate_managed(
     if descriptor
         .client_secret_ref
         .as_ref()
-        .is_some_and(|value| !value.starts_with("env:"))
+        .is_some_and(|value| !is_reference(value))
     {
-        return Err(fail("client_secret_ref must be an env: reference"));
+        return Err(fail("client_secret_ref must be an env: or file: reference"));
     }
     // Absence is the failure; `false` is a valid declaration (Google REST takes
     // no RFC 8707 resource parameter) and must not be reachable by omission.
@@ -788,11 +771,15 @@ fn decode_key(key_id: &str, encoded: &str) -> Result<Vec<u8>, AccountsConfigErro
     Ok(material)
 }
 
-/// The existing overlay contract, narrowed to what this slice needs: a name in,
-/// an optional value out. Implemented by `config::EnvOverlay` in production and
-/// by a counting fake in tests.
+/// The existing overlay contract, narrowed to what this slice needs: a
+/// reference in, an optional value out. Implemented by `config::EnvOverlay` in
+/// production and by a counting fake in tests.
 pub(crate) trait SecretOverlay {
-    fn resolve(&self, name: &str) -> Option<String>;
+    /// A whole reference: `env:NAME` looked up in the overlay
+    /// (`Ok(None)` when unset), `file:PATH` read under the C2 mode rule (C9),
+    /// anything else the literal. `Err` is a message naming `field`, never a
+    /// value.
+    fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String>;
 }
 
 #[cfg(test)]

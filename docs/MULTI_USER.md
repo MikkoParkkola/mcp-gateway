@@ -1,5 +1,17 @@
 # Running the gateway for more than one person
 
+> **New in 4.0.** A caller now sees and invokes only the backends and tools it
+> was granted, on every discovery surface, and a new backend is reachable by no
+> key until you grant it. Cached results, backend notifications and
+> `subscriptions/listen` streams are kept per caller. An SSO `role_mapping` rule
+> with `role: admin` makes an identity-provider group a full gateway admin (see
+> [Admins from your identity provider](#admins-from-your-identity-provider)), and
+> key-server OIDC rules must name an issuer and match only verified emails. With
+> auth on, the tool-call audit log is required, and API keys are stored as
+> SHA-256 digests. Several of these refuse a 3.x config at startup; read
+> [UPGRADING-4.0.md](UPGRADING-4.0.md) before upgrading. Still open for 4.0.0:
+> [Known gaps](release/4.0.0-beta.2-notes.md#known-gaps).
+
 A single-user gateway trusts whoever can reach the port. A multi-user gateway has
 to answer three questions instead, and they are answered by three different
 pieces of configuration:

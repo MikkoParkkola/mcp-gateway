@@ -589,20 +589,17 @@ mod http {
     }
 
     #[tokio::test]
-    async fn ac_sub_1_resources_subscribe_still_works_on_the_legacy_path() {
-        // The regression. A 2025 client subscribes this way and always has.
-        let (status, body) = post(
+    async fn ac_sub_1_resources_subscribe_is_refused_on_the_legacy_path_too() {
+        // F24: the gateway never delivers `resources/updated`, so a legacy
+        // subscription it accepted would wait forever. Refused on both eras.
+        let (_status, body) = post(
             false,
             json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/subscribe",
                     "params": { "uri": "file:///x" } }),
             &[],
         )
         .await;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "the legacy method is untouched: {body}"
-        );
+        assert_eq!(body["error"]["code"], -32601, "{body}");
     }
 
     #[tokio::test]

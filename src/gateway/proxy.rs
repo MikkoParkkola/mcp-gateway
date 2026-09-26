@@ -457,10 +457,13 @@ impl ProxyManager {
     /// The frame has no content, but its timing still tells a caller that an
     /// operator edited a backend it cannot use, so out-of-scope sessions are
     /// skipped. Scope is re-checked per session at delivery.
+    ///
+    /// Sent as a `message` event, so the GET stream carries the bare JSON-RPC
+    /// notification an MCP client reads, not the gateway's envelope (F24).
     pub async fn broadcast_tools_list_changed(&self, backend: &str) {
         let notification = TaggedNotification {
             source: "gateway".to_string(),
-            event_type: "notification".to_string(),
+            event_type: "message".to_string(),
             data: json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/tools/list_changed"
@@ -926,7 +929,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broadcast_tools_list_changed_uses_notification_event_type() {
+    async fn broadcast_tools_list_changed_uses_the_mcp_message_event_type() {
         // GIVEN: one session
         let mux = auth_off_multiplexer();
         let (_id, mut rx) = mux.get_or_create_session(Some("tools-session-c"));
@@ -935,9 +938,10 @@ mod tests {
         // WHEN: broadcasting
         proxy.broadcast_tools_list_changed("alpha").await;
 
-        // THEN: event_type is "notification"
+        // THEN: event_type is "message", which the GET stream writes as bare
+        // JSON-RPC; any other type is wrapped in an envelope no MCP client reads.
         let received = rx.recv().await.unwrap();
-        assert_eq!(received.event_type, "notification");
+        assert_eq!(received.event_type, "message");
         assert_eq!(received.source, "gateway");
     }
 

@@ -209,7 +209,7 @@ async fn add_backend(
         }
     };
 
-    state.announce_tools_changed(&req.name).await;
+    // The reload registered it, and registration announces (F24).
 
     (
         StatusCode::CREATED,
@@ -260,7 +260,7 @@ async fn remove_backend(
         }
     }
 
-    state.announce_tools_changed(&name).await;
+    // The reload removed it, and removal announces (F24).
 
     (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
 }

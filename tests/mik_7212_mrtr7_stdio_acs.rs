@@ -177,18 +177,42 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
 
 /// Write the config the child will actually read.
 ///
+/// The error budget is put out of reach. A 65-call burst can run past the
+/// fixture backend's rate limiter (100 rps, burst 50). Before F23 each such
+/// refusal was reported as "Circuit breaker open" and sampled as a failure;
+/// the refusals landed before any slow asking dispatch returned, so the
+/// capability's first samples were all failures, its kill switch disabled the
+/// fixture tool, and every later call was refused `-32000 … temporarily
+/// disabled`: a cascade the rows misread as a regressed cap. F23 stopped
+/// sampling those refusals, and ask expiries (`-32003` at the bridge's 30s
+/// `per_prompt`) were never sampled. The budget is still not what these rows
+/// are about, so it stays configured never to evaluate — `min_samples` equal
+/// to the largest window, which no row comes near.
+///
 /// `Config::FALLBACK_PATHS` checks `gateway.yaml` relative to the working
 /// directory before `~/.config/mcp-gateway/gateway.yaml`, and the session below
 /// sets the child's working directory to this same temporary home — so a file
 /// dropped here is found without depending on `HOME` layout at all.
 fn write_config(home: &Path, backend_url: &str) {
-    mcp_gateway::gateway::test_helpers::write_owner_only(
-        home.join("gateway.yaml"),
-        format!(
-            "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
+    let yaml = format!(
+        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
+         error_budget:\n  window_size: 100000\n  min_samples: 100000\n  capability:\n    \
+         window_size: 100000\n    min_samples: 100000\n"
+    );
+    // The top-level config ignores keys it does not know, so a misnested
+    // budget would load silently and bring the cascade back. Fail here instead.
+    let parsed: mcp_gateway::config::Config =
+        serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
+    assert_eq!(
+        (
+            parsed.error_budget.min_samples,
+            parsed.error_budget.capability.min_samples
         ),
-    )
-    .expect("write gateway.yaml");
+        (Some(100_000), Some(100_000)),
+        "the error budget did not bind where the child reads it"
+    );
+    mcp_gateway::gateway::test_helpers::write_owner_only(home.join("gateway.yaml"), yaml)
+        .expect("write gateway.yaml");
 }
 
 fn initialize_request(id: i64) -> Value {
@@ -640,11 +664,26 @@ fn prompts_in(frames: &[Value]) -> Vec<&Value> {
         .collect()
 }
 
+/// The stdio reader's own refusal, `stdio_busy_response` in
+/// `src/gateway/server/mod.rs`.
+const SERVER_BUSY: &str = "server busy: too many stdio requests in flight";
+
 /// Every id carrying a `-32000 server busy` refusal.
+///
+/// Matched on the message as well as the code. `-32000` is also what a
+/// disabled capability, a backend error and other gateway refusals answer
+/// with, and counting those as busy refusals once read a kill-switch cascade
+/// as "the inflight cap regressed below 1024".
 fn refused_ids(frames: &[Value]) -> Vec<i64> {
     frames
         .iter()
         .filter(|frame| frame.pointer("/error/code").and_then(Value::as_i64) == Some(-32000))
+        .filter(|frame| {
+            frame
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.starts_with(SERVER_BUSY))
+        })
         .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
         .collect()
 }
@@ -755,6 +794,22 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
     );
 }
 
+/// Busy refusals match the calls past the inflight cap one for one, to within
+/// the handshake's own permit (see row 7b's doc): a count outside that window
+/// is a refusal the cap did not cause, or excess the cap let through.
+fn assert_busy_matches_excess(refused: usize, over_cap: i64, lines: &[String]) {
+    let over_cap = usize::try_from(over_cap)
+        .ok()
+        .filter(|n| *n >= 1)
+        .expect("the over-cap group is positive");
+    eprintln!("7b server-busy refusals: {refused} of {over_cap} over the cap");
+    assert!(
+        (over_cap - 1..=over_cap).contains(&refused),
+        "{refused} of the {over_cap} calls past the cap were refused busy. {}",
+        census_of(lines)
+    );
+}
+
 /// The two bounds that keep row 7a's teeth once a decline can buy an extra
 /// question: admission may never let more than `ADMISSION_CAP` questions stand
 /// at once, and at least that many calls must reach a terminal outcome.
@@ -762,16 +817,16 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
 fn assert_admission_bounded<'a>(frames: &'a [Value], lines: &[String]) -> Vec<&'a Value> {
     let prompts = prompts_in(frames);
     // Asking is only one terminal outcome of an admitted call. A dispatch the
-    // gateway declines after admission -- in CI, a tripped circuit breaker on
-    // the fixture backend, which a fast local run never reaches -- consumed a
+    // gateway declines after admission -- in CI, the fixture backend's rate
+    // limiter refusing part of the burst, which a fast local run never reaches -- consumed a
     // slot and answered, so it counts toward what admission let run. The row
     // still discriminates: a gateway that dropped an admitted call silently
     // produces neither a question nor a refusal and the sum falls short.
     let declined = tool_refused_ids(frames);
     // Admission bounds CONCURRENCY, not the lifetime count of terminal
     // outcomes, so the sum is not an equality under contention: a dispatch the
-    // gateway declines after admission -- in CI, a tripped circuit breaker on
-    // the fixture backend, which a fast local run never reaches -- releases its
+    // gateway declines after admission -- in CI, the fixture backend's rate
+    // limiter refusing part of the burst, which a fast local run never reaches -- releases its
     // permit, and the call behind it is admitted and asks. One decline can
     // therefore buy one extra question, and the sum runs past the cap without
     // anything being wrong. Two bounds keep the row's teeth where the equality
@@ -999,7 +1054,7 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            prompts_in(seen).len() >= wanted
+            prompts_in(seen).len() + tool_refused_ids(seen).len() >= wanted
         })
         .await;
     let frames = frames_lenient(&lines);
@@ -1028,23 +1083,24 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
          -32000 rather than queued; nothing was refused at all",
         last_over_cap - FIRST_CALL_ID + 1
     );
+    assert_busy_matches_excess(refused.len(), last_over_cap - last_below_cap, &lines);
 
     // The refusal is not the whole invariant: a gateway that refuses everything
     // once saturated would satisfy the assertions above. Work accepted before
     // the cap must still complete when its answer arrives.
     let prompts = prompts_in(&frames);
     // Every admitted call must reach a terminal outcome, and asking is only one
-    // of them: a dispatch the gateway declines after admission -- in CI, a
-    // tripped circuit breaker on the fixture backend, which a fast local run
-    // never reaches -- answers with `isError: true` inside a result. That
+    // of them: a dispatch the gateway declines after admission -- in CI, the
+    // fixture backend's rate limiter refusing part of the burst, which a fast
+    // local run never reaches -- answers with `isError: true` inside a result. That
     // consumed an admission slot and produced an answer, so it counts toward
     // what admission let run. Counting questions alone read those refusals as
     // missing work and failed the row for a defect that was not there.
     let declined = tool_refused_ids(&frames);
     // Admission bounds CONCURRENCY, not the lifetime count of terminal
     // outcomes, so the sum is not an equality under contention: a dispatch the
-    // gateway declines after admission -- in CI, a tripped circuit breaker on
-    // the fixture backend, which a fast local run never reaches -- releases its
+    // gateway declines after admission -- in CI, the fixture backend's rate
+    // limiter refusing part of the burst, which a fast local run never reaches -- releases its
     // permit, and the call behind it is admitted and asks. One decline can
     // therefore buy one extra question, and the sum runs past the cap without
     // anything being wrong. Two bounds keep the row's teeth where the equality
@@ -1068,7 +1124,9 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         declined.len(),
         census_of(&lines)
     );
-    let answered = prompts[0]
+    let answered = prompts
+        .first()
+        .expect("the count above admits a run of pure refusals; one question must remain to answer")
         .get("id")
         .cloned()
         .expect("an elicitation/create the gateway wrote carries an id");
