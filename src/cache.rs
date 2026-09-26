@@ -200,10 +200,7 @@ impl ResponseCache {
         }
         // Nor is an error: replayed, a transient refusal or tool error outlives
         // its cause for the whole TTL (F26).
-        if crate::protocol::cacheable::is_error(&value) {
-            debug!(key, "Refused to cache an error result");
-            return false;
-        }
+        // MUTANT M1: the error refusal is removed.
 
         // Enforce max_entries before inserting
         if self.max_entries > 0 && self.entries.len() >= self.max_entries {
