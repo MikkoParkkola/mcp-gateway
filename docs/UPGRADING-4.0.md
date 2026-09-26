@@ -1299,6 +1299,10 @@ caller.
   disable a capability or kill a backend.
 - **`mcp_backend_circuit_state` follows the breaker only.** A rate-limit refusal no
   longer drops it to 0.
+- **New counter `mcp_backend_rate_limited_total{backend}`** counts these refusals, on
+  requests and notifications. Now that they are excluded from the budgets and the
+  circuit gauge, this is where they show. A backend's own 429s stay in
+  `mcp_backend_requests_total{status="rate_limited"}`.
 - A breaker that is really open is unchanged: same message, and it still counts as a
   failure.
 
