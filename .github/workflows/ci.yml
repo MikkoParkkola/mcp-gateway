@@ -48,9 +48,11 @@ jobs:
       - name: Run each profile
         shell: bash
         run: |
+          set +e
+          ls -la target/debug/mcp-gateway* target/release/mcp-gateway* 2>&1 | head
           for p in debug release; do
             for args in "--version" "tool list -C does-not-exist" "--help"; do
-              ./target/$p/mcp-gateway.exe $args >/dev/null 2>&1; rc=$?
-              echo "PROBE profile=$p args='$args' rc=$rc"
+              out=$(./target/$p/mcp-gateway.exe $args 2>&1); rc=$?
+              echo "PROBE profile=$p args='$args' rc=$rc tail=$(echo "$out" | tail -c 200 | tr '\n' ' ')"
             done
           done
