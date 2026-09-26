@@ -94,7 +94,7 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
         } else {
             parent
         };
-        File::open(dir)?.sync_all()?;
+        File::open(dir)?.sync_all().map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     }
     #[cfg(not(unix))]
     let _ = path;
@@ -103,9 +103,9 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
 
 /// The first non-empty line of `path`, read through a 4 MiB window.
 pub(crate) fn read_first_line(path: &Path) -> io::Result<Option<String>> {
-    let file = File::open(path)?;
+    let file = File::open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let mut buf = Vec::new();
-    file.take(MAX_TAIL_SCAN_BYTES).read_to_end(&mut buf)?;
+    file.take(MAX_TAIL_SCAN_BYTES).read_to_end(&mut buf).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let text = String::from_utf8_lossy(&buf);
     Ok(text
         .lines()
@@ -190,10 +190,10 @@ pub(crate) fn write_hwm(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()>
         .create(true)
         .write(true)
         .truncate(false)
-        .open(hwm)?;
-    f.write_all(bytes)?;
+        .open(hwm).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+    f.write_all(bytes).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     if sync {
-        f.sync_all()?;
+        f.sync_all().map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     }
     Ok(())
 }
@@ -235,8 +235,8 @@ pub(crate) fn ensure_reserve(path: &Path) -> io::Result<()> {
     if std::fs::metadata(&reserve).is_ok_and(|m| m.len() == RESERVE_BYTES as u64) {
         return Ok(());
     }
-    let mut f = File::create(&reserve)?;
-    f.write_all(&vec![0u8; RESERVE_BYTES])?;
+    let mut f = File::create(&reserve).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+    f.write_all(&vec![0u8; RESERVE_BYTES]).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     f.sync_all()
 }
 
@@ -244,7 +244,7 @@ pub(crate) fn ensure_reserve(path: &Path) -> io::Result<()> {
 pub(crate) fn release_reserve(path: &Path) -> io::Result<bool> {
     match std::fs::remove_file(sibling(path, "reserve")) {
         Ok(()) => {
-            sync_dir(path)?;
+            sync_dir(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             Ok(true)
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),

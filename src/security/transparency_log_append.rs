@@ -39,7 +39,7 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
     let Err(e) = file.set_len(good) else {
         return Ok(());
     };
-    let writer = std::fs::OpenOptions::new().write(true).open(path)?;
+    let writer = std::fs::OpenOptions::new().write(true).open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let (ours, theirs) = (file.metadata()?, writer.metadata()?);
     if file_id(&theirs) != file_id(&ours) || theirs.len() != ours.len() {
         return Err(e);
@@ -77,15 +77,15 @@ impl TransparencyLogger {
             Err(e) => return Err(e),
         };
         if moved || resync {
-            let g = guard(&mut lock, &path)?;
-            self.rebuild(inner, &path, g)?;
+            let g = guard(&mut lock, &path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+            self.rebuild(inner, &path, g).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         }
         let (line, _) = chain_line(
             &self.config,
             fields.clone(),
             inner.counter + 1,
             &inner.last_entry_hash,
-        )?;
+        ).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         if line.len() + 1 > MAX_RECORD_BYTES {
             return Err(io::Error::other(OversizedRecord(line.len() + 1)));
         }
@@ -101,11 +101,11 @@ impl TransparencyLogger {
         // are appends too, so a full disk here takes the path below.
         let mut staged = Ok(());
         if inner.seg.sealed > rot.retain_segments as usize {
-            let g = guard(&mut lock, &path)?;
+            let g = guard(&mut lock, &path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             staged = self.apply_retention(inner, &path, g);
         }
         let rotated = if staged.is_ok() && inner.seg.has_records && (too_big || too_old) {
-            let g = guard(&mut lock, &path)?;
+            let g = guard(&mut lock, &path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             self.rotate(inner, &path, g, now)
         } else {
             staged
@@ -118,8 +118,8 @@ impl TransparencyLogger {
                 if e.kind() == io::ErrorKind::StorageFull
                     && rot.on_disk_full == OnDiskFull::ExpireOldest =>
             {
-                let g = guard(&mut lock, &path)?;
-                self.free_space(inner, &path, g, e)?;
+                let g = guard(&mut lock, &path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+                self.free_space(inner, &path, g, e).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
                 let retried = self.write_record(inner, &path, fields, resync);
                 if let Err(e) = segments::ensure_reserve(&path) {
                     tracing::warn!(error = %e, "audit log: disk-full reserve not recreated");
@@ -137,7 +137,7 @@ impl TransparencyLogger {
     /// writer rotated, finish a half-done rotation, or continue the counter
     /// past a deleted active file (2.8, 2.13).
     fn rebuild(&self, inner: &mut Inner, path: &Path, g: &ExclusiveFileLock) -> io::Result<()> {
-        let r = recover(path, &self.config, g, self.now())?;
+        let r = recover(path, &self.config, g, self.now()).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
@@ -154,8 +154,8 @@ impl TransparencyLogger {
         sync: bool,
     ) -> io::Result<String> {
         let counter = inner.counter + 1;
-        let (line, hash) = chain_line(&self.config, fields, counter, &inner.last_entry_hash)?;
-        self.write_line(inner, &line, sync)?;
+        let (line, hash) = chain_line(&self.config, fields, counter, &inner.last_entry_hash).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+        self.write_line(inner, &line, sync).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         inner.counter = counter;
         inner.last_entry_hash.clone_from(&hash);
         inner.seg.has_records = true;
@@ -276,9 +276,9 @@ impl TransparencyLogger {
                 ("next_segment_seq", (seq + 1).into()),
             ],
         );
-        self.write_record(inner, path, seal, true)?;
-        std::fs::rename(path, segments::sealed_path(path, seq))?;
-        segments::sync_dir(path)?;
+        self.write_record(inner, path, seal, true).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+        std::fs::rename(path, segments::sealed_path(path, seq)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+        segments::sync_dir(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         #[cfg(test)]
         {
             if let Some(probe) = self.hooks.in_rotation.lock().unwrap().as_ref() {
@@ -304,7 +304,7 @@ impl TransparencyLogger {
             &segments::list_segments(path)?,
             Some(&hw),
             now,
-        )?;
+        ).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
@@ -328,10 +328,10 @@ impl TransparencyLogger {
         path: &Path,
         g: &ExclusiveFileLock,
     ) -> io::Result<()> {
-        let sealed = segments::list_segments(path)?;
+        let sealed = segments::list_segments(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         let keep = self.config.rotation.retain_segments as usize;
         for seg in sealed.iter().take(sealed.len().saturating_sub(keep)) {
-            self.expire(inner, path, seg, "retention", g)?;
+            self.expire(inner, path, seg, "retention", g).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         }
         let left = segments::list_segments(path)?.len();
         inner.seg.sealed = left;
@@ -356,7 +356,7 @@ impl TransparencyLogger {
             seal
         } else {
             let tail = read_last_nonempty_line(&seg.path)?.unwrap_or_default();
-            let (c, h, _, _) = record_head(&tail)?;
+            let (c, h, _, _) = record_head(&tail).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             (c, h)
         };
         let bytes = std::fs::metadata(&seg.path)?.len();
@@ -381,9 +381,9 @@ impl TransparencyLogger {
             .expiry_in_flight
             .store(false, std::sync::atomic::Ordering::Release);
         written?;
-        std::fs::remove_file(&seg.path)?;
+        std::fs::remove_file(&seg.path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         inner.seg.sealed = inner.seg.sealed.saturating_sub(1);
-        segments::sync_dir(path)?;
+        segments::sync_dir(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         telemetry_metrics::counter!("mcp_audit_segments_expired_total", "reason" => reason)
             .increment(1);
         Ok(())
@@ -416,9 +416,9 @@ impl TransparencyLogger {
             .store(true, std::sync::atomic::Ordering::Release);
         let on_active = std::fs::metadata(path).is_ok_and(|m| file_id(&m) == inner.seg.id);
         if !on_active {
-            self.rebuild(inner, path, g)?;
+            self.rebuild(inner, path, g).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         }
-        let oldest = segments::list_segments(path)?;
+        let oldest = segments::list_segments(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         let Some(oldest) = oldest.first() else {
             return Err(cause);
         };

@@ -142,16 +142,16 @@ fn write_synced(
     counter: u64,
     prev: &str,
 ) -> io::Result<String> {
-    let (line, hash) = chain_line(config, fields, counter, prev)?;
-    file.write_all(format!("{line}\n").as_bytes())?;
-    file.sync_all()?;
+    let (line, hash) = chain_line(config, fields, counter, prev).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+    file.write_all(format!("{line}\n").as_bytes()).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+    file.sync_all().map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     Ok(hash)
 }
 
 /// `(counter, entry_hash, event)` of a parsed record.
 pub(super) fn record_head(line: &str) -> io::Result<(u64, String, Option<String>, Value)> {
     let v: Value =
-        serde_json::from_str(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        serde_json::from_str(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let counter = v.get("counter").and_then(Value::as_u64).unwrap_or(0);
     let hash = v
         .get("entry_hash")
@@ -167,7 +167,7 @@ pub(super) fn seal_of(seg: &Segment) -> io::Result<Option<(u64, String)>> {
     let Some(line) = read_last_nonempty_line(&seg.path)? else {
         return Ok(None);
     };
-    let (counter, hash, event, _) = record_head(&line)?;
+    let (counter, hash, event, _) = record_head(&line).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     Ok((event.as_deref() == Some(EV_SEALED)).then_some((counter, hash)))
 }
 
@@ -197,19 +197,19 @@ pub(super) fn recover(
     now: u64,
 ) -> io::Result<Recovered> {
     let secret = config.shared_secret.as_bytes();
-    let sealed = segments::list_segments(path)?;
+    let sealed = segments::list_segments(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let hw = segments::read_hwm(path, secret, &config.key_id);
     if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
-        repair_torn_tail(path, config, sealed.last())?;
+        repair_torn_tail(path, config, sealed.last()).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     }
     let mut state = match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
-            let (counter, hash, event, v) = record_head(&line)?;
+            let (counter, hash, event, v) = record_head(&line).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             if event.as_deref() == Some(EV_SEALED) {
                 // Crash after the seal, before the rename: finish it.
                 let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                std::fs::rename(path, segments::sealed_path(path, seq))?;
-                segments::sync_dir(path)?;
+                std::fs::rename(path, segments::sealed_path(path, seq)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+                segments::sync_dir(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
                 open_after_seal(
                     path,
                     config,
@@ -227,7 +227,7 @@ pub(super) fn recover(
         }
         Err(e) => return Err(e),
     };
-    finish_pending_expiry(path)?;
+    finish_pending_expiry(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     // The reserve only serves an expiry, which needs a sealed segment, so a
     // log that never rotated holds none (and leaves no 1 MiB file behind).
     if config.rotation.on_disk_full == OnDiskFull::ExpireOldest
@@ -248,11 +248,11 @@ pub(super) fn recover(
             path,
             &segments::encode_hwm(&mark, secret, &config.key_id)?,
             true,
-        )?;
+        ).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     }
     state.seg.id = file_id(&state.file.metadata()?);
     state.seg.sealed = segments::list_segments(path)?.len();
-    segments::sync_dir(path)?;
+    segments::sync_dir(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     Ok(state)
 }
 
@@ -266,7 +266,7 @@ fn resume_active(
     now: u64,
 ) -> io::Result<Recovered> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
-    let (_, _, first_event, first_v) = record_head(&first)?;
+    let (_, _, first_event, first_v) = record_head(&first).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let (seq, opened_at) = if first_event.as_deref() == Some(EV_OPENED) {
         (
             first_v
@@ -287,7 +287,7 @@ fn resume_active(
     let counter = hw
         .filter(|h| h.segment_seq == seq)
         .map_or(counter, |h| h.counter.max(counter));
-    let file = OpenOptions::new().append(true).open(path)?;
+    let file = OpenOptions::new().append(true).open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     Ok(Recovered {
         seg: SegState {
             seq,
@@ -317,8 +317,8 @@ pub(super) fn open_after_seal(
             .create(true)
             .write(true)
             .truncate(true)
-            .open(path)?;
-        stamp_created(&file)?;
+            .open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+        stamp_created(&file).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         Ok::<_, io::Error>(file)
     };
     let file_seg = |seq| SegState {
@@ -332,7 +332,7 @@ pub(super) fn open_after_seal(
         let hw_counter = hw.map_or(0, |h| h.counter);
         if hw_counter == 0 {
             drop(fresh()?);
-            let file = OpenOptions::new().append(true).open(path)?;
+            let file = OpenOptions::new().append(true).open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             return Ok(Recovered {
                 file,
                 counter: 0,
@@ -359,7 +359,7 @@ pub(super) fn open_after_seal(
             fields,
             hw.counter + 1,
             &hw.entry_hash,
-        )?;
+        ).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         return Ok(Recovered {
             file: OpenOptions::new().append(true).open(path)?,
             counter: hw.counter + 1,
@@ -388,7 +388,7 @@ pub(super) fn open_after_seal(
             ("segment_opened_at", now.into()),
         ],
     );
-    let hash = write_synced(&mut fresh()?, config, fields, counter, &seal_hash)?;
+    let hash = write_synced(&mut fresh()?, config, fields, counter, &seal_hash).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     Ok(Recovered {
         file: OpenOptions::new().append(true).open(path)?,
         counter,
@@ -409,12 +409,12 @@ fn repair_torn_tail(
     newest_sealed: Option<&Segment>,
 ) -> io::Result<()> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut file = OpenOptions::new().read(true).write(true).open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let len = file.metadata()?.len();
     let window = len.min(2 * MAX_TAIL_SCAN_BYTES);
-    file.seek(SeekFrom::Start(len - window))?;
+    file.seek(SeekFrom::Start(len - window)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let mut buf = Vec::new();
-    (&mut file).take(window).read_to_end(&mut buf)?;
+    (&mut file).take(window).read_to_end(&mut buf).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     if buf.last() == Some(&b'\n') {
         return Ok(());
     }
@@ -431,24 +431,24 @@ fn repair_torn_tail(
     };
     let (pred_counter, pred_hash) = match &pred {
         Some(line) => {
-            let (c, h, _, _) = record_head(line)?;
+            let (c, h, _, _) = record_head(line).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             (c, h)
         }
         None => (0, "genesis".to_string()),
     };
     if verifies_as_next(&torn, pred_counter, &pred_hash, config) {
-        file.seek(SeekFrom::End(0))?;
-        file.write_all(b"\n")?;
+        file.seek(SeekFrom::End(0)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+        file.write_all(b"\n").map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         return file.sync_all();
     }
-    file.set_len(keep_len)?;
-    file.sync_all()?;
+    file.set_len(keep_len).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+    file.sync_all().map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let dropped = len - keep_len;
     tracing::warn!(bytes = dropped, "audit log: dropped a torn final line");
     if keep_len > 0 && !before.trim().is_empty() {
-        let mut file = OpenOptions::new().append(true).open(path)?;
+        let mut file = OpenOptions::new().append(true).open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         let fields = housekeeping(EV_TORN, &[("bytes", dropped.into())]);
-        write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
+        write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     }
     Ok(())
 }
@@ -476,9 +476,9 @@ fn finish_pending_expiry(path: &Path) -> io::Result<()> {
     let len = file.metadata()?.len();
     let window = len.min(MAX_TAIL_SCAN_BYTES);
     let mut file = file;
-    file.seek(SeekFrom::Start(len - window))?;
+    file.seek(SeekFrom::Start(len - window)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let mut buf = Vec::new();
-    file.take(window).read_to_end(&mut buf)?;
+    file.take(window).read_to_end(&mut buf).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     for line in String::from_utf8_lossy(&buf).lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -489,8 +489,8 @@ fn finish_pending_expiry(path: &Path) -> io::Result<()> {
         if let Some(seq) = v.get("segment_seq").and_then(Value::as_u64) {
             let target = segments::sealed_path(path, seq);
             if target.exists() {
-                std::fs::remove_file(&target)?;
-                segments::sync_dir(path)?;
+                std::fs::remove_file(&target).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+                segments::sync_dir(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             }
         }
     }

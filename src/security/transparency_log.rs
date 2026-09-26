@@ -253,7 +253,7 @@ impl TransparencyLogger {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         }
 
         // D6 2.6: take `<path>.lock` (another process may be mid-rotation),
@@ -261,7 +261,7 @@ impl TransparencyLogger {
         // seed. Genesis only with no active record and no sealed segment.
         let recovered = {
             let guard =
-                crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?;
+                crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock")).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
             rotation::recover(&path, &config, &guard, rotation::now_secs(0))?
         };
         Ok(Self {
@@ -398,7 +398,7 @@ impl TransparencyLogger {
         fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
     ) -> io::Result<String> {
-        Self::reject_reserved_keys(&fields)?;
+        Self::reject_reserved_keys(&fields).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         self.append_core(fields, envelope, false)
     }
 
@@ -421,7 +421,7 @@ impl TransparencyLogger {
         fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
     ) -> io::Result<String> {
-        Self::reject_reserved_keys(&fields)?;
+        Self::reject_reserved_keys(&fields).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         self.append_core(fields, envelope, true)
     }
 
@@ -496,7 +496,7 @@ impl TransparencyLogger {
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
+            .map_err(|_| io::Error::other("transparency log mutex poisoned")).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
         // Rotation, the disk-full path and the one `<path>.lock` acquisition
         // all run under `Inner`, so `record_append` sees only the final result.
         self.append_locked(&mut inner, fields, resync)
@@ -556,7 +556,7 @@ fn bounded_read_to_string(path: &Path, max_bytes: u64) -> io::Result<String> {
 ///
 /// Returns `io::Error` if the file cannot be opened, seeked, or read.
 fn read_last_nonempty_line(path: &Path) -> io::Result<Option<String>> {
-    let mut file = File::open(path)?;
+    let mut file = File::open(path).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let file_len = file.metadata()?.len();
     if file_len == 0 {
         return Ok(None);
@@ -564,13 +564,13 @@ fn read_last_nonempty_line(path: &Path) -> io::Result<Option<String>> {
 
     let scan_len = file_len.min(MAX_TAIL_SCAN_BYTES);
     let offset =
-        i64::try_from(scan_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    file.seek(SeekFrom::End(-offset))?;
+        i64::try_from(scan_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
+    file.seek(SeekFrom::End(-offset)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
 
     let buf_len =
-        usize::try_from(scan_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        usize::try_from(scan_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let mut buf = vec![0u8; buf_len];
-    file.read_exact(&mut buf)?;
+    file.read_exact(&mut buf).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
 
     let text = String::from_utf8_lossy(&buf);
     Ok(text
@@ -592,7 +592,7 @@ fn read_last_nonempty_line(path: &Path) -> io::Result<Option<String>> {
 pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
     let obj = entry
         .as_object()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "entry is not a JSON object"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "entry is not a JSON object")).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
 
     // Build a clean copy without the hash-and-sig fields.
     let core: serde_json::Map<String, serde_json::Value> = obj
@@ -603,7 +603,7 @@ pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let core_json = serde_json::to_string(&core).map_err(io::Error::other)?;
+    let core_json = serde_json::to_string(&core).map_err(io::Error::other).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
 
     let hash_bytes = sha256_raw(core_json.as_bytes());
     Ok(format!("sha256:{}", hex::encode(hash_bytes)))
@@ -671,7 +671,7 @@ fn chain_line(
     fields.insert("counter".into(), counter.into());
     fields.insert("prev_entry_hash".into(), prev_entry_hash.into());
     let core_json = serde_json::to_string(&serde_json::Value::Object(fields.clone()))
-        .map_err(io::Error::other)?;
+        .map_err(io::Error::other).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
     let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
     // key_id is bound INTO the signed message (MIK-6700 review).
@@ -683,7 +683,7 @@ fn chain_line(
     }
     fields.insert("entry_hash".into(), entry_hash.clone().into());
     let line =
-        serde_json::to_string(&serde_json::Value::Object(fields)).map_err(io::Error::other)?;
+        serde_json::to_string(&serde_json::Value::Object(fields)).map_err(io::Error::other).map_err(|e| crate::security::transparency_log::tag_io(e, file!(), line!()))?;
     Ok((line, entry_hash))
 }
 
@@ -749,4 +749,10 @@ mod cwe532_debug_redaction {
             "missing redaction marker: {dbg}"
         );
     }
+}
+
+/// Throwaway diagnostic: name the call site of an I/O error.
+pub(crate) fn tag_io<E: std::fmt::Display + Into<io::Error>>(e: E, file: &str, line: u32) -> io::Error {
+    let e: io::Error = e.into();
+    io::Error::new(e.kind(), format!("{file}:{line}: {e}"))
 }
