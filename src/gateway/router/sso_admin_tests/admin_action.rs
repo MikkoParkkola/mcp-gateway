@@ -366,6 +366,32 @@ async fn ui_delete_writes_admin_action() {
     assert_eq!(records[0]["http_status"], 503);
 }
 
+/// A backend edit (`PATCH`) is recorded, allowed or refused, with its method
+/// and route template; the URL in its body is never logged.
+#[tokio::test]
+async fn ui_patch_writes_admin_action() {
+    let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    let uri = "/ui/api/backends/alpha";
+    let body = json!({"url": format!("wss://{BODY_CANARY}.example/mcp")});
+    let (status, answer) = fx.send(ui("PATCH", uri, &fx.alice(), &body)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "no config path: {answer}");
+    let (status, answer) = fx.send(ui("PATCH", uri, STANDARD_KEY, &body)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    let records = fx.admin_actions();
+    assert_eq!(records.len(), 2, "{records:#?}");
+    for (record, outcome, code, status) in [
+        (&records[0], "error", -32603, 503),
+        (&records[1], "denied", -32600, 403),
+    ] {
+        assert_record(record, "admin_ui", outcome, Some(code));
+        assert_eq!(record["route"], "/ui/api/backends/{name}", "{record}");
+        assert_eq!(record["method"], "PATCH", "{record}");
+        assert_eq!(record["http_status"], status, "{record}");
+    }
+    assert_alice(&records[0]);
+    assert!(!fx.raw().contains(BODY_CANARY), "the request body was logged");
+}
+
 /// E1-T12c (amended): a control-plane POST writes one `admin_action` each,
 /// the 409 as `error` and the RBAC refusal as `denied`, and nothing else.
 #[tokio::test]

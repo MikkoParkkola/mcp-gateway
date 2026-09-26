@@ -128,36 +128,6 @@ impl TransparencyLogger {
             .map(|_| ())
     }
 
-    /// Append one `admin_action` record (E1-d, E1-f) for `surface`, with the
-    /// route- or tool-specific `fields`. A failed append under `FailClosed` is
-    /// [`crate::Error::AuditUnavailable`], so the caller withholds its answer;
-    /// under `BestEffort` it is logged and the call goes on.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::Error::AuditUnavailable`] when the append fails under `FailClosed`.
-    pub fn append_admin_action(
-        &self,
-        surface: &'static str,
-        mut fields: serde_json::Map<String, serde_json::Value>,
-        envelope: &AuditEnvelope,
-    ) -> crate::Result<()> {
-        fields.insert("event".into(), "admin_action".into());
-        fields.insert("surface".into(), surface.into());
-        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
-        match self.append_event(fields, envelope) {
-            Ok(_) => Ok(()),
-            Err(error) if self.failure_policy == AuditFailurePolicy::FailClosed => {
-                tracing::error!(surface, %error, "admin_action audit write failed; result withheld");
-                Err(crate::Error::AuditUnavailable)
-            }
-            Err(error) => {
-                tracing::warn!(surface, %error, "admin_action audit write failed (non-fatal)");
-                Ok(())
-            }
-        }
-    }
-
     /// Admit a call. A healthy logger admits at once; a degraded one first
     /// tries a probe append, bounded by [`AUDIT_PROBE_TIMEOUT`].
     ///
