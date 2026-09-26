@@ -38,6 +38,12 @@ def tree(root: Path, files: dict[str, str]) -> None:
 
 class OrphanGuard(unittest.TestCase):
     def orphans_of(self, files: dict[str, str]) -> list[str]:
+        # A crate root that declares each top-level module, unless the case
+        # supplies its own: reachability starts at the root, so a tree
+        # without one would report everything.
+        if "src/lib.rs" not in files:
+            tops = sorted({rel.split("/")[1] for rel in files if rel.count("/") >= 2})
+            files = {"src/lib.rs": "".join(f"mod {top};\n" for top in tops), **files}
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             tree(root, files)
@@ -120,6 +126,44 @@ class OrphanGuard(unittest.TestCase):
             {
                 "src/a/mod.rs": '#[cfg(test)]\n#[path = "foo_tests.rs"]\nmod foo_tests;\n',
                 "src/a/foo_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_a_declaration_inside_an_unreached_file_declares_nothing(self):
+        # The MIK-7518 shape: `invoke.rs` lost `mod suggestion;`, and the
+        # `#[path]` declaration inside the now-uncompiled `suggestion.rs` kept
+        # vouching for its test file. Both are in no compilation unit.
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "// `mod suggestion;` was dropped here\n",
+                "src/a/suggestion.rs": '#[cfg(test)]\n#[path = "suggestion_tests.rs"]\nmod suggestion_tests;\n',
+                "src/a/suggestion_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/suggestion.rs", "src/a/suggestion_tests.rs"])
+
+    def test_an_undeclared_production_module_is_reported(self):
+        found = self.orphans_of({"src/a/mod.rs": "", "src/a/helper.rs": ""})
+        self.assertEqual(found, ["src/a/helper.rs"])
+
+    def test_a_crate_root_in_src_bin_owns_its_directory(self):
+        found = self.orphans_of(
+            {"src/bin/tool.rs": "mod helper;\n", "src/bin/helper.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_raw_identifier_declares_its_file(self):
+        found = self.orphans_of(
+            {"src/a/mod.rs": "pub mod r#override;\n", "src/a/override.rs": ""}
+        )
+        self.assertEqual(found, [])
+
+    def test_a_declaration_inside_an_inline_module_resolves_below_it(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": "#[cfg(test)]\nmod tests {\n    mod fsm;\n}\n",
+                "src/a/tests/fsm.rs": "",
             }
         )
         self.assertEqual(found, [])
