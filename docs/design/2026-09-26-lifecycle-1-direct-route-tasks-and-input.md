@@ -433,3 +433,14 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 Improvements adopted: the `worker.rs:327` reference reworded (it builds the Fail shape after dispatch);
 dangling parenthesis removed; the losing-write refusal code named; two test rows pin the
 no-wait branch and a winner holding past the timeout. DESIGN FINAL.
+
+## 18. Delivery plan (maintainer decision 2026-09-27)
+
+Two increments, one at a time. **1a (P1, direct-route tasks):** builds on the security lane's
+`direct_guards.rs` (MIK-7597 lands first and creates it with `admit_backend_call` /
+`settle_backend_call`); direct admission, worker first dispatch through `run`, guard refusals
+settled `Fail(guard_error)`, owner-checked `tasks/*` on `/mcp/{name}` replacing the F1 refusal,
+advertisement, idempotency, F1 test updates, UPGRADING item 67 amended. A backend `InputRequired`
+keeps today's abandoned result, so 1a fails safe. **1b (P2):** the input round on both routes.
+The criterion stays unmet, and MIK-7311 stays open, until 1b merges. New code goes in new modules;
+headroom is measured with the repository's size checker, not raw line counts.
