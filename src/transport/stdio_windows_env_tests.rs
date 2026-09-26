@@ -74,12 +74,12 @@ async fn windows_backend_receives_the_allowlist_and_nothing_else() {
         "the nested filter did not run the scenario; stdout={stdout:?} stderr={stderr:?}"
     );
     assert!(
-        stdout.contains("1 passed"),
-        "the nested run did not pass exactly the scenario; stdout={stdout:?}"
-    );
-    assert!(
         output.status.success(),
         "Windows child-environment scenario failed; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the nested run did not pass exactly the scenario; stdout={stdout:?} stderr={stderr:?}"
     );
 }
 
