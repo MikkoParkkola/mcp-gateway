@@ -37,9 +37,9 @@ and `schannel`; the change adds it as a direct Windows-only dependency with the
 `Win32_Storage_FileSystem` and `Win32_System_Threading` features and adds no package to
 the lock file.
 
-The module exports seven safe `pub(crate)` functions and nothing else:
+The module exports eight safe `pub(crate)` functions and nothing else:
 `current_user_sid`, `private_descriptor`, `create_dir_private`, `create_file_private`,
-`inspect`, `replace`, `volume_is_local` (design §2.1). Callers never see a raw handle,
+`inspect`, `replace`, `volume_is_local`, `final_path` (design §2.1). Callers never see a raw handle,
 pointer or Win32 type.
 
 A CI check fails the build if `allow(unsafe_code)` or `expect(unsafe_code)` appears in
@@ -66,10 +66,51 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
    values before it drops.
 5. **Strings.** Paths are converted with `OsStrExt::encode_wide` plus a trailing NUL,
    and a path containing an interior NUL is refused before any call.
-6. **Errors.** A zero or false return from any Win32 call becomes
-   `io::Error::last_os_error()` immediately, before any other call can overwrite the
-   thread's last-error value.
+6. **Errors.** There is no universal rule; each API's own contract is followed, and
+   the error value is captured before any other call can overwrite it:
+   - `BOOL` APIs (`OpenProcessToken`, `GetTokenInformation`, `CreateDirectoryW`,
+     `MoveFileExW`, `GetVolumePathNameW`, `GetVolumeInformationByHandleW`,
+     `InitializeAcl`, `AddAccessAllowedAceEx`, `InitializeSecurityDescriptor`,
+     `SetSecurityDescriptorOwner`, `SetSecurityDescriptorDacl`,
+     `SetSecurityDescriptorControl`, `GetAce`): zero is failure, then
+     `io::Error::last_os_error()`.
+   - `GetSecurityInfo` returns a `WIN32_ERROR`: `ERROR_SUCCESS` (0) is success, any
+     other value is the error itself (`io::Error::from_raw_os_error`); last-error is
+     not consulted.
+   - `CreateFileW` fails with `INVALID_HANDLE_VALUE`, never null; that is checked
+     before the value is wrapped in `OwnedHandle`.
+   - `GetFinalPathNameByHandleW` and `GetVolumePathNameW` sizes: zero is failure; a
+     return >= the buffer length means "retry with this size", done once.
+   - `GetDriveTypeW` returns a type code, never an error; only the accepted codes pass.
+   - `IsValidSid` false means invalid input: refuse without consulting last-error.
 7. **No global state.** No statics, no caching of SIDs or descriptors across calls.
+
+## Per-function contract
+
+- `current_user_sid`: `GetTokenInformation(TokenUser)` is called first with a zero
+  buffer to get the size, then into a `Vec<u64>`-backed buffer of at least that size
+  (TOKEN_USER holds a pointer, so 8-byte alignment is required). The returned `Sid`
+  pointer points INTO that buffer; it is validated (`IsValidSid`), its length taken
+  from `GetLengthSid` and checked to lie inside the buffer, then copied out. The token
+  handle is an `OwnedHandle`.
+- `private_descriptor`: builds an ABSOLUTE descriptor. The `SECURITY_DESCRIPTOR`, the
+  owner SID and the ACL each live in their own `Vec<u64>` inside the returned
+  `OwnedSd`, which is not `Clone` and is kept alive for as long as any
+  `SECURITY_ATTRIBUTES` points at it. The ACL size is computed as
+  `size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>() + sid_len`,
+  with checked arithmetic.
+- `create_dir_private` / `create_file_private`: the `SECURITY_ATTRIBUTES` and the wide
+  path live on the caller's stack for the duration of the call.
+- `inspect`: the descriptor returned by `GetSecurityInfo` is owned by a `LocalFree`
+  guard; the owner and DACL pointers are read only while it lives. For each ACE from
+  `GetAce`: the header's `AceSize` must be at least the fixed part of that ACE type,
+  and the SID starting at `SidStart` must have `GetLengthSid` that fits inside
+  `AceSize` BEFORE `IsValidSid` is called or the SID is copied. Only
+  `ACCESS_ALLOWED_ACE_TYPE` and `ACCESS_DENIED_ACE_TYPE` are decoded; any other type is
+  reported as "other" without reading past its header, and the caller refuses it.
+- `replace`: two NUL-terminated wide paths on the stack.
+- `volume_is_local` / `final_path`: output buffers sized from the first call, lengths
+  checked against the buffer before the `&[u16]` slice is formed.
 
 ## Consequences
 

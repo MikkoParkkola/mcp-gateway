@@ -1,6 +1,6 @@
 # Windows owner-only stores: task store and personal-account store
 
-Status: REVISION 2 after review round 1 (two independent reviews: SHIP; SHIP-WITH-FIXES). Round 2 pending. No code until the maintainer decides ADR-016.
+Status: REVISION 3 after review rounds 1 and 2 (both rounds: SHIP-WITH-FIXES from at least one seat; dispositions in §8-§9). Round 3 pending. No code until the maintainer decides ADR-016.
 Linked: W1 (#1142) holds the Windows failure class; probe run 36197759127 / PR #1355.
 Maintainer decision (2026-09-26): 4.0 on Windows supports the long-running task
 store and the personal-account store, with security equivalent to the unix path.
@@ -104,10 +104,11 @@ contract of each is in ADR-016):
 1. `current_user_sid() -> Sid`: `OpenProcessToken(TOKEN_QUERY)` + `GetTokenInformation(TokenUser)`; the SID is copied into an owned, length-checked buffer (`GetLengthSid`, `IsValidSid`). No global state.
 2. `private_descriptor(kind: Dir|File) -> OwnedSd`: an absolute security descriptor, owner = user SID, a protected DACL (`SE_DACL_PROTECTED`) with ONE `ACCESS_ALLOWED` ACE (`FILE_ALL_ACCESS`, user SID); `Dir` adds `OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE`. Setting yourself as owner needs no privilege.
 3. `create_dir_private(path) -> io::Result<()>`: `CreateDirectoryW(path, &SECURITY_ATTRIBUTES{ sd })`. **Atomic**: the directory never exists with any other DACL (review round 1, finding G1).
-4. `create_file_private(path) -> io::Result<File>`: `CreateFileW(path, GENERIC_READ|GENERIC_WRITE, share 0, &SECURITY_ATTRIBUTES{ sd }, CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)`, returned as `File::from(OwnedHandle)`. **Atomic** as above; `CREATE_NEW` fails on any existing name, reparse point included.
+4. `create_file_private(path, share: Share) -> io::Result<File>`: `CreateFileW(path, GENERIC_READ|GENERIC_WRITE|READ_CONTROL, share, &SECURITY_ATTRIBUTES{ sd }, CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT)`, `INVALID_HANDLE_VALUE` checked before the handle becomes `File::from(OwnedHandle)`. `Share::Exclusive` (0) for scratch files; `Share::LockSidecar` (`FILE_SHARE_READ|FILE_SHARE_WRITE`, never `FILE_SHARE_DELETE`) for custody sidecars, so a contender can open the sidecar and reach `LockFileEx` (R2-2). **Atomic** as above; `CREATE_NEW` fails on any existing name, reparse point included.
 5. `inspect(&File) -> io::Result<Inspection>`: `GetSecurityInfo(OWNER | DACL)`, ACEs walked with `GetAce` bounded by `AceCount` and each `AceSize`; returns owner SID, protected bit, NULL-DACL flag and (type, flags, SID, mask) per ACE. The handle must carry `READ_CONTROL` (G4).
 6. `replace(tmp, dest) -> io::Result<()>`: `MoveFileExW(tmp, dest, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`. Write-through is the documented Windows guarantee that the call does not return until the rename is flushed to disk (G2).
 7. `volume_is_local(&File) -> io::Result<bool>`: from the OPEN directory handle, `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)` must not begin `\\?\UNC\`, `GetDriveTypeW` on its volume root (`GetVolumePathNameW`) must be `DRIVE_FIXED` or `DRIVE_REMOVABLE`, and `GetVolumeInformationByHandleW` must report `FILE_PERSISTENT_ACLS` (refuses FAT/exFAT, where no DACL exists to check) (G3).
+8. `final_path(&File) -> io::Result<PathBuf>`: `GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)`, called twice (size, then fill) with the returned length checked against the buffer.
 
 No `SetSecurityInfo`: with atomic creation nothing is ever re-protected, so no handle
 needs `WRITE_DAC`/`WRITE_OWNER` (G4 resolved by removal, not by widening access).
@@ -145,10 +146,24 @@ creation is atomic (§2.1 items 3-4), a store object never carries an inherited 
 a file moved in from elsewhere (keeping its foreign or inherited DACL) fails P2/P5
 rather than passing by inheritance (test W-T13).
 
-**Parent directories (G1).** The unix design never required the PARENT of the store
-directory to be private, only the store directory itself; atomic creation keeps that
-true on Windows. There is no create-then-protect window left to justify, so the
-earlier claim that the R3 walk establishes a private parent is withdrawn.
+**Parent directories (G1, R2-1).** Atomic creation removes the create-then-protect
+window, but every later operation is still a path (`dir.join(name)`), so a writable
+ANCESTOR swapped for a junction after validation would redirect writes. Unix has the
+same path-based exposure; Windows makes it likelier because `C:\ProgramData` lets
+ordinary users create folders. The fix binds the store to its validated directory:
+
+- `open`/`initialize` open each store directory once (BACKUP_SEMANTICS, no-follow,
+  `share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)`, i.e. WITHOUT `FILE_SHARE_DELETE`)
+  and HOLD that handle in the store for its lifetime, beside the custody lock.
+- While a directory handle without delete-sharing is open, Windows refuses to rename
+  or delete that directory or any ancestor of it (probe E6 must confirm; W-T16 and
+  M15 pin it). So the path cannot be re-pointed while the store is open.
+- Before holding it, `GetFinalPathNameByHandleW` on the handle must equal the
+  configured path (case-insensitive, after `\\?\` normalisation), which catches a
+  swap between the R3 walk and the open. `volume_is_local` runs on the same handle.
+- If E6 shows ancestors CAN be renamed under a held handle, the fallback is to keep
+  every ancestor handle open the same way (bounded by path depth); that is an
+  amendment for re-review.
 
 ### 2.3 Rule mapping
 
@@ -159,13 +174,13 @@ unchanged byte for byte: the unix bodies move, they are not rewritten.
 
 | Rule | Windows mechanism |
 |---|---|
-| R1/T1 private dir | open dir with `custom_flags(FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT)` and `access_mode(READ_CONTROL \| FILE_READ_ATTRIBUTES)`; handle `file_attributes()` must be DIRECTORY and not REPARSE_POINT; `inspect` passes P1-P5; `volume_is_local` true |
+| R1/T1 private dir | open dir with `custom_flags(FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT)` and `access_mode(READ_CONTROL \| FILE_READ_ATTRIBUTES)`; handle `file_attributes()` must be DIRECTORY and not REPARSE_POINT; `inspect` passes P1-P5; `volume_is_local` true; `final_path` equals the configured path; the handle is HELD for the store lifetime without `FILE_SHARE_DELETE` (§2.2 Parent directories) |
 | R2/T5 create private dir | `create_dir_private` (atomic DACL), then open and judge exactly as R1. Missing ancestors are created with plain `create_dir` (they are outside the model, as on unix) |
 | R3 path | lexical: accept `Prefix(Disk)` and `Prefix(VerbatimDisk)` followed by `RootDir` + `Normal`; refuse UNC, `Verbatim`/`VerbatimUNC`, `DeviceNS`. A drive letter can still map a network share, so locality is decided on the OPEN store directory handle by `volume_is_local` (G3), not by the prefix. Walk: every existing component must be a directory with no REPARSE_POINT attribute (covers symlinks AND junctions, which `is_symlink` misses) |
 | R4/T4 create private file | `create_file_private` (atomic DACL, `CREATE_NEW`, share 0, reparse no-follow); the handle carries `GENERIC_READ\|GENERIC_WRITE` only, since nothing re-protects it |
 | R5/R6/T3 read | open with `FILE_FLAG_OPEN_REPARSE_POINT` (Windows `O_NOFOLLOW`) and `access_mode(GENERIC_READ \| READ_CONTROL)` (G4); judge the HANDLE: regular file, no REPARSE_POINT attribute, `inspect` passes P1-P5, size bound. FIFOs do not exist in the filesystem namespace, so `O_NONBLOCK` has no analogue to carry |
 | R7/T6 atomic replace | file `sync_all` (`FlushFileBuffers`), close, then `win_acl::replace` = `MoveFileExW(REPLACE_EXISTING \| WRITE_THROUGH)`. The directory fsync step maps to write-through; there is NO no-op fallback (G2). If `replace` fails the commit is refused before acknowledgement (`Staged`), exactly like a failed unix rename. The unix directory-sync step after rename becomes, on Windows, an explicit `FlushFileBuffers` on the directory handle (BACKUP_SEMANTICS, `GENERIC_WRITE`) where E1 shows it is supported; where it is not, write-through alone carries durability and this is stated, not silently skipped |
-| R8/T7 custody | `try_acquire` off unix: `create_file_private` the sidecar; on `AlreadyExists`, open it no-follow with `READ_CONTROL` and require P1-P5; then `File::try_lock()` (std, `LockFileEx` nonblocking). `TryLockError::WouldBlock` maps to `ErrorKind::WouldBlock` so `AlreadyOwned` is preserved. Atomic creation removes the create-then-protect race (review finding K1) |
+| R8/T7 custody | `try_acquire` off unix: `create_file_private(sidecar, Share::LockSidecar)`; on `AlreadyExists`, open it no-follow with `access_mode(GENERIC_READ \| GENERIC_WRITE \| READ_CONTROL)` and `share_mode(FILE_SHARE_READ \| FILE_SHARE_WRITE)`, require P1-P5. Both paths then call `File::try_lock()` (std, `LockFileEx` nonblocking; needs read or write access, which both handles carry). `TryLockError::WouldBlock` maps to `ErrorKind::WouldBlock` so `AlreadyOwned` is preserved; a sharing violation on open (a contender that did not exclude delete) also maps to `AlreadyOwned`. Atomic creation removes the create-then-protect race (review finding K1) |
 | R9 initial authority | `initialize` writes through the store's own `replace_file` instead of `write_config_text`, on both platforms (the unix result is identical: `0600` + fsync + rename + dir sync) |
 
 Open handles and rename: Rust's std opens with `FILE_SHARE_DELETE`, so a reader holding
@@ -190,7 +205,7 @@ destination another handle holds open) and is recorded, not assumed.
     it (no store data can pre-date this release on Windows);
   - 3.x token file: `icacls "<f>" /setowner "%USERDOMAIN%\%USERNAME%"` (P4), then
     `icacls "<f>" /inheritance:r /grant:r "%USERDOMAIN%\%USERNAME%:F"` (P5), then
-    `icacls "<f>" /remove:g <sid>` for each foreign SID the message lists (P2). The
+    `icacls "<f>" /remove:g "*S-1-..."` (numeric SIDs need the `*` prefix) for each foreign SID the message lists (P2). The
     migration re-checks P1-P5 after the operator runs these; W-T10b proves the sequence
     turns a refused file into an accepted one.
 
@@ -215,18 +230,19 @@ destination another handle holds open) and is recorded, not assumed.
 | W-T5 junction in store path | `mklink /J` | `validate_path` / `prepare_dir` refuses |
 | W-T6 symlink as record (needs dev mode; skip with a logged reason if `mklink` fails) | `mklink` | refuses |
 | W-T7 UNC / `\\?\UNC` / `\\.\` config path | none | `InvalidConfiguration`; `C:\x` and `\\?\C:\x` accepted |
-| W-T8 NULL DACL | PowerShell `Set-Acl` with SDDL `D:NO_ACCESS_CONTROL` (no unsafe in tests) | refuses (P1) |
+| W-T8 NULL DACL | PowerShell `Set-Acl` with SDDL `D:NO_ACCESS_CONTROL` (no unsafe in tests) | refuses, and the refusal REASON is `NullDacl` (P1). A NULL DACL also fails P3, so only the reason assertion can kill M9 |
 | W-T8b allowed ACE without read+write | SDDL granting the user read only | refuses (P3) |
 | W-T9 custody across processes | child process (re-exec of the test binary) holds the store; parent opens | `AlreadyOwned` / `StorageUnavailable` (not `Unsupported`); after the child is KILLED the parent reacquires |
 | W-T10 3.x token with inherited ACL | default-created file | `NotPrivate`, message lists the failed rule |
-| W-T10b remediation works | run the §2.4 `icacls` sequence on the W-T10 file | migration accepts it |
+| W-T10b remediation works | W-T10 file PLUS an explicit Everyone grant and owner set to Administrators; run the §2.4 `icacls` sequence | migration accepts it |
 | W-T11 foreign owner | `icacls f /setowner *S-1-5-32-544` | refuses (P4) |
 | W-T12 mapped network drive | `net use X: \\localhost\C$` (runner is admin), store under `X:\` | refuses (`volume_is_local`) |
-| W-T13 moved-in file | create a record in a non-store temp dir (inherited DACL), `fs::rename` it into the store under a valid name | refuses (P5/P2) |
+| W-T13 moved-in file | a file whose DACL is exactly one inherited (not protected) ACE for the user, owner = user, moved into the store under a valid name: fails ONLY P5 | refuses, reason `NotProtected` |
 | W-T14 independent identity | CI step creates a local non-admin user; a child started with `Start-Process -Credential` tries to read `authority.json`, a record and a task record | access denied for all three (checks the DACL through the kernel, not through `inspect`) |
-| W-T15 non-ACL volume (if the runner can mount a VHD as FAT32; else logged skip) | store on FAT32 | refuses (`FILE_PERSISTENT_ACLS`) |
+| W-T16 ancestor swap | with the store open, a second thread tries to rename the store directory's parent and to replace it with a junction | both fail; store still reads its own files |
+| W-T15 non-ACL volume | CI step creates and mounts a FAT32 VHD with `diskpart` (runner is admin); store on it | refuses (`FILE_PERSISTENT_ACLS`) |
 
-W-T14 and W-T15 run in a dedicated Windows CI step (`--ignored` filter by name) so
+W-T14, W-T15 and the `net use` part of W-T12 run in a dedicated Windows CI step (`--ignored` filter by name) so
 they need no privilege in the default test run.
 
 ## 4. Probes before implementation (throwaway CI PR, Windows job)
@@ -240,6 +256,7 @@ test file; any probe needing Win32 waits for the maintainer's `unsafe` decision.
 - E3 elevated runner: default owner of a new file, and `CreateFileW` with owner = user SID accepted.
 - E4 `File::try_lock` on a second handle in the same process returns `WouldBlock`; lock released when a killed child's handle closes.
 - E5 `GetFinalPathNameByHandleW` / `GetDriveTypeW` on a `net use` drive letter report remote.
+- E6 while a handle to `C:\\a\\b\\store` is held WITHOUT `FILE_SHARE_DELETE`, renaming `C:\\a\\b` and `C:\\a` fails (sharing violation), and so does replacing either with a junction.
 
 ## 5. Mutation proof (one throwaway PR each; named test must redden)
 
@@ -251,13 +268,15 @@ test file; any probe needing Win32 waits for the maintainer's `unsafe` decision.
 | M4 `Prefix` whitelist accepts UNC | W-T7 |
 | M5 task-store privacy predicate returns `true` (today's `has_mode`) | W-T4 (task record, lease) |
 | M6 owner check removed | W-T11 |
-| M7 `try_acquire` skips `try_lock` | W-T9 |
+| M7 `try_acquire` skips `try_lock` | W-T9 (the contender now opens the shared sidecar, so only the lock can stop it) |
 | M8 `initialize` back on `write_config_text` | W-T1 on `authority.json` |
 | M9 NULL-DACL check removed | W-T8 |
 | M10 read+write requirement removed | W-T8b |
 | M11 `volume_is_local` returns `true` | W-T12 |
 | M12 P5 not required on read | W-T13 |
-| M13 `create_file_private` falls back to std `create_new` (inherited DACL) | W-T1, W-T14 |
+| M14 `FILE_PERSISTENT_ACLS` leg of `volume_is_local` removed | W-T15 |
+| M15 store directory handle opened with `FILE_SHARE_DELETE` | W-T16 |
+| M13 `create_file_private` falls back to std `create_new` (inherited DACL) | W-T1 (protected bit and single ACE) |
 
 ## 6. Risks
 
@@ -268,12 +287,17 @@ test file; any probe needing Win32 waits for the maintainer's `unsafe` decision.
 - Admin bypass is by design (as root on unix); documented in SECURITY.md.
 - `MoveFileExW` write-through replaces std `fs::rename` on Windows only; unix keeps
   `rename` + directory `fsync` unchanged.
+- Crash durability is argued from the Win32 contracts, not demonstrated by a power cut
+  (not possible on hosted runners).
 - W-T14 creates a local user on the CI runner (ephemeral VM); never run on a developer host.
 
 ## 7. Docs
 
 UPGRADING-4.0 item 68: Windows now runs both stores; an
-existing store directory with inherited ACLs is refused, with the fix. CHANGELOG under
+existing store directory with inherited ACLs is refused, with the fix. It and
+DEPLOYMENT.md also state that a store path containing ANY reparse point (junction,
+volume mount point, OneDrive-redirected profile folder) or a network drive is refused,
+and recommend `%LOCALAPPDATA%\\mcp-gateway`. CHANGELOG under
 Unreleased. SECURITY.md "Windows file permissions" rewritten for the two stores.
 DEPLOYMENT.md Windows notes. ADR-016.
 
@@ -296,3 +320,20 @@ DEPLOYMENT.md Windows notes. ADR-016.
 | K-I3 | lead with write-through, not the no-op | Adopted (same as G2) |
 | K-I4 | `%USERDOMAIN%\%USERNAME%` | Adopted (§2.4) |
 | K-I5 | test the moved-in file claim | Adopted: W-T13, M12 |
+
+
+## 9. Review round 2 dispositions
+
+| Id | Finding | Disposition |
+|---|---|---|
+| R2-1 CRITICAL | a writable ancestor swapped for a junction after validation redirects writes | Fixed: store directory handle held without delete-sharing for the store lifetime, final-path check before holding (§2.2); E6, W-T16, M15 |
+| R2-2 HIGH (both seats) | sidecar share-0 blocks contenders; `READ_CONTROL` alone cannot `LockFileEx` | Fixed: `Share::LockSidecar`, read+write+`READ_CONTROL` on both create and reopen (§2.1 item 4, §2.3 R8); M7 now reachable |
+| R2-3 HIGH | ADR treats every zero return as failure; misses `INVALID_HANDLE_VALUE` | Fixed: ADR-016 §6 now gives each API's own return contract |
+| R2-4 MEDIUM | M9, M12, M13 masked by other checks | Fixed: W-T8 asserts the refusal reason; W-T13 fixture fails only P5; M13 assigned to W-T1 |
+| R2-5 MEDIUM | `icacls /remove:g` needs `*` before a numeric SID; W-T10b too weak | Fixed (§2.4); W-T10b adds a foreign grant and foreign owner |
+| R2-6 MEDIUM | M7 toothless under share-0 | Fixed by R2-2 |
+| R2-I1 | M14 for the persistent-ACL leg; W-T15 unconditional | Adopted: M14; W-T15 mounts a FAT32 VHD with `diskpart` |
+| R2-I2 | document reparse-point / OneDrive refusal | Adopted (§7) |
+| R2-I3 | W1 residue list with expiry | Adopted: the PR lists every remaining Windows failure by test name with its owning issue; none may be attributable to store open |
+| R2-I4 | crash-recovery validation | Partly adopted: hosted runners cannot cut power, so durability rests on the documented `MOVEFILE_WRITE_THROUGH` and `FlushFileBuffers` contracts plus E1/E2; stated as a residual risk in §6 |
+| R2-I5 | per-function memory invariants in the ADR | Adopted: ADR-016 §Per-function contract |
