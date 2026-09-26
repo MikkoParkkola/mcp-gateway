@@ -350,7 +350,7 @@ impl TransparencyLogger {
         }
         fields.insert("route".into(), target.route.as_str().into());
         fields.insert("server".into(), target.server.into());
-        let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
+        let fp = (key.source == CorrelationSource::SessionId).then(|| key.id.to_string());
         let session_id: String = fp.unwrap_or_else(|| key.id.into());
         fields.insert("session_id".into(), session_id.into());
         fields.insert("timestamp".into(), timestamp.into());
