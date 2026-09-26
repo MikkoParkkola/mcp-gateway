@@ -365,6 +365,19 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
             )
         })
         .collect();
+    // Counted before the map is built from them: a duplicate question for one
+    // call would otherwise collapse into its tag's single entry.
+    assert_eq!(
+        frames
+            .iter()
+            .filter(
+                |frame| frame.get("method").and_then(Value::as_str) == Some("elicitation/create")
+            )
+            .count(),
+        2,
+        "row 324: exactly one outbound request per concurrent call. {}",
+        census_of(&lines)
+    );
     assert_eq!(
         questions.keys().map(String::as_str).collect::<Vec<_>>(),
         ["call-2", "call-3"],
@@ -398,28 +411,34 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
         })
         .await;
     for id in [2_i64, 3] {
-        let answer = tail
-            .iter()
-            .map(|line| {
-                serde_json::from_str::<Value>(line)
-                    .unwrap_or_else(|e| panic!("row 324: a reply line is not whole JSON ({e})"))
-            })
-            .find(|frame| frame.get("id").and_then(Value::as_i64) == Some(id))
-            .unwrap_or_else(|| panic!("row 324: no final result for call {id}: {tail:?}"));
-        let envelope = answer
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str)
-            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-            .unwrap_or_else(|| panic!("row 324: no invoke envelope for call {id}: {answer}"));
-        let expected = format!("answered:call-{id}:call-{id}");
-        assert_eq!(
-            envelope.pointer("/content/0/text").and_then(Value::as_str),
-            Some(expected.as_str()),
-            "row 324: call {id} did not receive the answer to its own request: {answer}"
-        );
+        assert_own_answer(&tail, id);
     }
 
     session.shutdown().await;
+}
+
+/// Row 324's correlation check: call `id`'s final result echoes its own tag
+/// twice, once from its arguments and once from the answer it was given.
+fn assert_own_answer(tail: &[String], id: i64) {
+    let answer = tail
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|e| panic!("row 324: a reply line is not whole JSON ({e})"))
+        })
+        .find(|frame| frame.get("id").and_then(Value::as_i64) == Some(id))
+        .unwrap_or_else(|| panic!("row 324: no final result for call {id}: {tail:?}"));
+    let envelope = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or_else(|| panic!("row 324: no invoke envelope for call {id}: {answer}"));
+    let expected = format!("answered:call-{id}:call-{id}");
+    assert_eq!(
+        envelope.pointer("/content/0/text").and_then(Value::as_str),
+        Some(expected.as_str()),
+        "row 324: call {id} did not receive the answer to its own request: {answer}"
+    );
 }
 
 /// Design §6 — a request the loop accepted still gets its response when stdin

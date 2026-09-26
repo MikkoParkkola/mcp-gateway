@@ -252,8 +252,10 @@ async fn stdio_2_held_writer_emits_initialize_before_a_ready_question() {
     send(&mut client, &initialize(1)).await;
     send(&mut client, &asking_call(2)).await;
 
-    // Control: the question exists only once the backend has been asked.
-    let asked = timeout(ARRIVAL, async {
+    // Control: the question exists only once the backend has been asked. The
+    // bound also covers gateway startup, which this row cannot observe while
+    // stdout is held, so it is wider than the other waits.
+    let asked = timeout(ARRIVAL * 3, async {
         while !saw(&seen, "tools/call") {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
