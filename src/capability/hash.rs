@@ -36,13 +36,17 @@
 //!
 //! CRLF line endings are hashed as LF (the `sed` above), so a pin survives a
 //! checkout or an editor that converts them. A lone CR is content and stays.
+//! The recipe assumes the pin line holds only the pin: text after a CR, NEL,
+//! LS or PS on it is hashed by the gateway and dropped by `grep -v`.
 
 use sha2::{Digest, Sha256};
 
 /// Strip the top-level `sha256:` line from a YAML document.
 ///
-/// Only lines that begin at column 0 with `sha256:` are removed — a nested
-/// `sha256:` field inside a provider block is left untouched.
+/// Only lines that begin at column 0 with `sha256:` are affected — a nested
+/// `sha256:` field inside a provider block is left untouched — and of such a
+/// line only the pin itself is removed: anything after a YAML line break
+/// inside it (CR, NEL, LS, PS) is kept and hashed.
 #[must_use]
 pub fn strip_sha256_line(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
@@ -50,11 +54,18 @@ pub fn strip_sha256_line(content: &str) -> String {
         // Only strip top-level `sha256:` — anything indented is a nested
         // field (e.g. some future provider key) and must stay in the hash.
         if line.starts_with("sha256:") {
-            // Only the pin itself is excluded. A lone CR ends a YAML line too,
-            // so text after one is another line, and it is hashed like any
-            // other: otherwise it would parse as YAML and escape the pin.
-            if let Some(cr) = line.find('\r') {
-                out.push_str(&line[cr + 1..]);
+            // Only the pin itself is excluded. libyaml also ends a line at CR,
+            // NEL, LS and PS, so text after one of those is another line, and
+            // it is hashed like any other: otherwise it would parse as YAML and
+            // escape the pin. The line's own CRLF terminator is not such a line.
+            let brk = line
+                .char_indices()
+                .find(|(_, c)| matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'));
+            if let Some((at, c)) = brk {
+                let rest = &line[at + c.len_utf8()..];
+                if !(c == '\r' && rest == "\n") {
+                    out.push_str(rest);
+                }
             }
             continue;
         }
