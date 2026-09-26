@@ -76,7 +76,12 @@ pub async fn run_cap_command(cmd: CapCommand) -> ExitCode {
 }
 
 async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
-    match parse_capability_file(&file).await {
+    // MUTANT: load without the sha256 pin check.
+    let loaded = match tokio::fs::read_to_string(&file).await {
+        Ok(c) => mcp_gateway::capability::parse_capability(&c),
+        Err(e) => Err(mcp_gateway::Error::Config(e.to_string())),
+    };
+    match loaded {
         Ok(cap) => {
             if let Err(e) = validate_capability(&cap) {
                 eprintln!("❌ Validation failed: {e}");
