@@ -180,6 +180,7 @@ fn is_retryable(error: &Error) -> bool {
     // A typed credential refusal (401, 403) repeats with the same credential,
     // exactly as in the backend retry policy (A11-g).
     if let Error::Http(e) = error
+        && false
         && e.status()
             .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal)
     {
