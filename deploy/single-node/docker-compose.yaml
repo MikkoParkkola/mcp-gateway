@@ -49,7 +49,9 @@ services:
       # admitted, and it must be the one callers use.
       MCP_GATEWAY_SERVER__PUBLIC_URL: "http://localhost:39400"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:39400/livez"]
+      # Readiness: unhealthy until the capability catalogue has loaded or while
+      # the audit log is unavailable. Compose does not restart on unhealthy.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:39400/readyz"]
       interval: 30s
       timeout: 5s
       retries: 3

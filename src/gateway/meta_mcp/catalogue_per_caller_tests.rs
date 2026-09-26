@@ -238,7 +238,7 @@ async fn per_identity_gateway_logging_to(
                 enabled: true,
                 path,
                 key_id: "catalogue-isolation".to_string(),
-                shared_secret: String::new(),
+                ..crate::security::TransparencyLogConfig::default()
             },
         ))
         .expect("transparency logger opens"),

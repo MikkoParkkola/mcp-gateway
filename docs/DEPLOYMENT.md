@@ -561,9 +561,9 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and container healthchecks |
-| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, UPGRADING-4.0 item 43). Readiness and startup probes |
-| `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
+| `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and the image healthcheck |
+| `/readyz` | GET | Same as `/health` | 200 once config is loaded, the listener is up and the startup capability scan has finished; never reads backend health. 503 `capabilities loading` during the scan (UPGRADING-4.0 item 65), and 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, item 43). Readiness, startup probes and the compose healthcheck |
+| `/health` | GET | No (public by default) | 503 `degraded` while a backend is down or the startup capability scan is running. Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).
@@ -913,6 +913,44 @@ an address it cannot predict, so the name cannot be checked, but rebinding
 always needs a hostname while a network client dials an address. Set
 `public_url` if clients legitimately reach the gateway by name.
 
+### What triggers a config reload
+
+The gateway watches the config file and reloads when it changes. A config named
+through symlinks is followed along its whole link chain, and the chain is
+re-read on every change in a directory it runs through:
+
+- a deploy that points the link at a release in another directory is picked up,
+  and later writes to the new target reload too;
+- a Kubernetes ConfigMap mounted as a directory (`gateway.yaml ->
+  ..data/gateway.yaml`, `..data -> ..<timestamp>`) reloads when kubelet swaps
+  `..data` to the new generation;
+- a release directory link that is the config's own parent directory
+  (Capistrano's `--config /srv/app/current/gateway.yaml`, `current ->
+  releases/vN`) is followed: retargeting `current`, by rename or by `rm` and
+  `ln -s`, reloads the new release, and the reload reads the new release's file;
+- a directory the chain no longer runs through stops being watched.
+
+Limits:
+
+- only a directory link that is a file's immediate parent is watched. With the
+  config one level further down (`current/conf/gateway.yaml`), retargeting
+  `current` is not heard: name the config through a path whose parent is the
+  release link, or through a file symlink;
+- a directory link higher in the path (`/srv/app` itself a link, macOS `/var`)
+  is resolved but not watched;
+- renaming a real (not linked) parent directory is not heard;
+- env files keep their startup path: an env file under `current/` stays on the
+  old release after a retarget (#1286);
+- a chain longer than 40 links is treated as a loop: the watcher keeps its last
+  good watches and logs the error.
+
+If the chain cannot be resolved (a target missing mid-update, at startup or
+later), the gateway keeps its last watches, or at startup watches the config's
+own directory, and tries again every 2 seconds and on every change until the
+chain resolves. It also re-reads the config once as soon as the
+watches are in place, so a retarget between loading the config and starting the
+watcher is not missed.
+
 ### What a config reload applies
 
 Most settings are read once at startup. A reload reports which changed fields
@@ -1191,6 +1229,8 @@ Two things worth knowing before you shrink it:
 | TLS certs | `/etc/mcp-gateway/tls/` |
 
 The gateway uses no database. Its state is per process (see "Replica Count and per-process state"): key-server tokens, sessions and continuations are lost on restart, and task records survive only as long as their volume. Cost-governance spend for the current UTC day is reloaded from `costs.json`; spend recorded since the last save (at most 5 minutes) is lost on a crash. A `costs.json` that cannot be read or parsed is logged at WARN and the budgets start at zero. Redeploy the binary with the same config to restore the service. Startup takes ~8ms; backends reconnect automatically; tool caches repopulate on first request.
+
+What to back up, how to restore it and how to rotate keys: [Backup, restore and key rotation](runbooks/backup-restore-and-keys.md).
 
 ## Scaling
 

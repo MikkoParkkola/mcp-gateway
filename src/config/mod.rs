@@ -782,9 +782,7 @@ impl Config {
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
-        self.security
-            .transparency_log
-            .validate_required_by_auth(self.auth.enabled)?;
+        self.security.transparency_log.validate(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
