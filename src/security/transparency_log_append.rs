@@ -31,6 +31,24 @@ fn guard<'a>(
     Ok(slot.as_ref().expect("filled above"))
 }
 
+/// Truncate a torn tail back to `good` bytes. An append-only handle cannot
+/// truncate on Windows (it lacks write-data access), so fall back to a write
+/// handle on the path, but only while the path is still this same file.
+fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
+    let Err(e) = file.set_len(good) else {
+        return Ok(());
+    };
+    let ours = file.metadata()?;
+    let at_path = std::fs::metadata(path)?;
+    if file_id(&at_path) != file_id(&ours) || at_path.len() != ours.len() {
+        return Err(e);
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_len(good)
+}
+
 impl TransparencyLogger {
     #[cfg_attr(not(test), allow(clippy::unused_self))] // the clock offset is a test seam
     fn now(&self) -> u64 {
@@ -162,8 +180,10 @@ impl TransparencyLogger {
                     Ok(())
                 }
             });
-        if written.is_err() {
-            let _ = inner.file.set_len(good);
+        if written.is_err()
+            && let Err(e) = cut_back(&inner.file, &self.path(), good)
+        {
+            tracing::warn!(error = %e, "audit log: torn tail not cut back");
         }
         written
     }
