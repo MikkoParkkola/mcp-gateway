@@ -533,6 +533,19 @@ impl CostTracker {
             .collect()
     }
 
+    /// [`Self::all_sessions`] with each id replaced by its fingerprint, for a
+    /// view that only displays sessions (F9): a raw legacy session id works like
+    /// a bearer handle, so it has no place in a UI. The admin APIs that inspect
+    /// a session by id keep the raw id, which is their input.
+    #[must_use]
+    pub(crate) fn all_sessions_fingerprinted(&self) -> Vec<SessionCostSnapshot> {
+        let mut sessions = self.all_sessions();
+        for session in &mut sessions {
+            session.session_id = crate::gateway::session_id::session_fp(&session.session_id);
+        }
+        sessions
+    }
+
     /// Snapshot the cost for a single API key.
     #[must_use]
     pub fn key_snapshot(&self, key_name: &str) -> Option<KeyCostSnapshot> {

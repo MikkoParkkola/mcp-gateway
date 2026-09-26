@@ -45,14 +45,14 @@ use tokio::sync::broadcast::Receiver;
 /// The returned `Receiver` MUST be held for the lifetime of the test:
 /// `send_to_session` reports failure when a session has no live subscriber,
 /// and that failure is exactly the `NoSession` arm these tests must avoid.
-fn proxy_with_live_session(session_id: &str) -> (Arc<ProxyManager>, Receiver<TaggedNotification>) {
+fn proxy_with_live_session() -> (Arc<ProxyManager>, Receiver<TaggedNotification>, String) {
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
         Config::default().streaming,
     ));
-    let (id, rx) = multiplexer.get_or_create_session_for(Some(session_id), "confirm-1a-test");
-    assert_eq!(id, session_id, "the multiplexer must hand back our own id");
-    (Arc::new(ProxyManager::new(multiplexer)), rx)
+    // The gateway mints the id (F9); the test uses the one it hands back.
+    let (id, rx) = multiplexer.get_or_create_session(None);
+    (Arc::new(ProxyManager::new(multiplexer)), rx, id)
 }
 
 /// Assert the frame is the confirmation prompt, and return its request id.
@@ -76,14 +76,14 @@ fn elicitation_id(frame: &TaggedNotification) -> String {
 /// Pins `src/gateway/destructive_confirmation.rs` `Err(SamplingError::Timeout(d))`.
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_confirmation_prompt_is_unconfirmable() {
-    let (proxy, mut rx) = proxy_with_live_session("sess-timeout");
+    let (proxy, mut rx, session) = proxy_with_live_session();
     let started = tokio::time::Instant::now();
 
     // Joined rather than spawned: on the paused clock the runtime advances
     // time only once every task is idle, and the receiving half must have
     // taken the frame before that happens.
     let (outcome, frame) = tokio::join!(
-        require_destructive_confirmation(&proxy, "sess-timeout", "kill server 'payments'"),
+        require_destructive_confirmation(&proxy, &session, "kill server 'payments'"),
         async {
             rx.recv()
                 .await
@@ -111,12 +111,12 @@ async fn an_unanswered_confirmation_prompt_is_unconfirmable() {
 /// through `SamplingError::Cancelled`.
 #[tokio::test]
 async fn a_confirmation_channel_that_dies_is_unconfirmable() {
-    let (proxy, mut rx) = proxy_with_live_session("sess-cancelled");
+    let (proxy, mut rx, session) = proxy_with_live_session();
 
     let asking = tokio::spawn({
         let proxy = Arc::clone(&proxy);
         async move {
-            require_destructive_confirmation(&proxy, "sess-cancelled", "kill server 'payments'")
+            require_destructive_confirmation(&proxy, &session, "kill server 'payments'")
                 .await
         }
     });

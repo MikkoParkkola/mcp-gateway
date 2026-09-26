@@ -30,22 +30,22 @@ async fn a_session_created_by_the_mcp_handler_receives_in_scope_webhook_events()
         .uri("/mcp")
         .header("content-type", "application/json")
         .header("authorization", "Bearer key-webhook-scope")
-        .header("mcp-session-id", "gw-webhook-scope")
         .body(axum::body::Body::from(
             json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string(),
         ))
         .unwrap();
-    let _ = router.oneshot(request).await.unwrap();
-    assert!(state.multiplexer.has_session("gw-webhook-scope"));
+    let response = router.oneshot(request).await.unwrap();
+    // The id the gateway minted for this caller (F9: never one it chose).
+    let session = response.headers()["mcp-session-id"].to_str().unwrap().to_string();
+    assert!(state.multiplexer.has_session(&session));
 
     // The owner resuming its own session: the stream the handler created.
-    let owner = format!(
-        "credential:{}",
-        crate::gateway::auth::principal_of("key-webhook-scope")
+    let owner = crate::gateway::session_id::SessionOwner::Credential(
+        crate::gateway::auth::principal_of("key-webhook-scope"),
     );
     let (_, mut rx) = state
         .multiplexer
-        .get_or_create_session_for(Some("gw-webhook-scope"), &owner);
+        .get_or_create_session_for(Some(&session), &owner);
     let notification = TaggedNotification {
         source: "webhook".to_string(),
         event_type: "webhook.cap.hook".to_string(),

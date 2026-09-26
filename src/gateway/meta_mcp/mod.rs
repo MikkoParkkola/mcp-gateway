@@ -35,6 +35,7 @@ use crate::cost_accounting::enforcer::BudgetEnforcer;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::registry::CostRegistry;
 use crate::gateway::router::CallerStanding;
+use crate::gateway::session_id::session_fp;
 use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
@@ -1533,7 +1534,7 @@ impl MetaMcp {
     pub fn clear_session_promoted(&self, session_id: &str) {
         self.session_promoted.remove(session_id);
         debug!(
-            session_id,
+            session_id = %session_fp(session_id),
             "Cleared spec-preview promoted tools for session"
         );
     }
@@ -1702,13 +1703,13 @@ impl MetaMcp {
             if self.profile_registry.contains(name) {
                 self.session_profiles.set_profile(sid, name);
                 debug!(
-                    session_id = sid,
+                    session_id = %session_fp(sid),
                     profile = name,
                     "Session bound to routing profile at initialize"
                 );
             } else {
                 warn!(
-                    session_id = sid,
+                    session_id = %session_fp(sid),
                     requested = name,
                     "Requested profile not found at initialize; using registry default"
                 );
@@ -2512,7 +2513,7 @@ impl MetaMcp {
         });
 
         debug!(
-            session_id = sid,
+            session_id = %session_fp(sid),
             previous = %previous,
             current = new_state,
             visible_tools = visible_tools,
