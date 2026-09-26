@@ -9,8 +9,8 @@
 //! The child's stderr never reaches an MCP client: it is another program's
 //! output and can hold secrets, and a transport error travels to the client
 //! verbatim. The returned error names the exit status and points at the
-//! gateway log; the bounded, redacted tail goes to that log and to
-//! `doctor --start-stdio`, through [`StdioTransport::start_failure_excerpt`].
+//! gateway log; the bounded, redacted tail goes to that log record, as its
+//! `stderr` field, which is where `doctor --start-stdio` reads it too.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -150,12 +150,13 @@ fn mask_secret_head(line: &mut String, secret: &str) {
 }
 
 /// Per-start state: the stdout-closed latch (fresh each start, so a previous
-/// generation's exit cannot answer this one), whether the race saw it, and the
-/// excerpt of the last early exit.
+/// generation's exit cannot answer this one) and whether the race saw it. Tests
+/// also keep the excerpt of the last early exit.
 #[derive(Default)]
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     exited: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
     failure: parking_lot::Mutex<Option<String>>,
 }
 
@@ -163,7 +164,10 @@ impl StartState {
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
         // An excerpt describes the last start only.
-        *self.failure.lock() = None;
+        #[cfg(test)]
+        {
+            *self.failure.lock() = None;
+        }
         self.exited
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
@@ -174,11 +178,10 @@ impl StartState {
 }
 
 impl StdioTransport {
-    /// The redacted stderr tail of the last start that ended in an early exit.
-    ///
-    /// For the gateway log and `doctor`, never for an MCP client.
-    #[must_use]
-    pub fn start_failure_excerpt(&self) -> Option<String> {
+    /// The redacted stderr tail of the last start that ended in an early exit,
+    /// as the log record carried it.
+    #[cfg(test)]
+    pub(super) fn start_failure_excerpt(&self) -> Option<String> {
         self.start.failure.lock().clone()
     }
 
@@ -254,8 +257,12 @@ impl StdioTransport {
             Some(status) => format!("exited before initialize ({status})"),
             None => "closed its stdout before initialize".to_string(),
         };
+        // `doctor --start-stdio` reads this record's `stderr` field.
         warn!(command = %command, stderr = %excerpt, "stdio backend {what}");
-        *self.start.failure.lock() = Some(excerpt);
+        #[cfg(test)]
+        {
+            *self.start.failure.lock() = Some(excerpt);
+        }
         Error::Transport(format!(
             "stdio backend {command} {what}; its stderr is in the gateway log"
         ))

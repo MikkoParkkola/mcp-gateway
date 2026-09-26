@@ -11,6 +11,9 @@ use std::time::Duration;
 use mcp_gateway::config::{BackendConfig, TransportConfig};
 use mcp_gateway::transport::{StdioTransport, Transport as _, isolated_package_manager_env};
 
+use tracing::instrument::WithSubscriber as _;
+use tracing_subscriber::layer::SubscriberExt as _;
+
 use super::CheckResult;
 
 /// Longest a single start may take here, whatever the backend's own timeout.
@@ -75,14 +78,19 @@ pub(super) async fn start_stdio_backend(
         timeout,
         protocol_version.clone(),
     );
-    let started = tokio::time::timeout(timeout, transport.start()).await;
+    // The transport logs an early exit's redacted stderr tail as the `stderr`
+    // field of one record; doctor reads it from there rather than through a
+    // second API (#526).
+    let capture = ExcerptCapture::default();
+    let log = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
+    let started = tokio::time::timeout(timeout, transport.start().with_subscriber(log)).await;
     let _ = transport.close().await;
     Some(match started {
         Ok(Ok(())) => {
             CheckResult::pass(&label, "initialize completed").with_category("backend_stdio")
         }
         Ok(Err(error)) => {
-            let detail = match transport.start_failure_excerpt() {
+            let detail = match capture.0.lock().take() {
                 Some(excerpt) if !excerpt.is_empty() => format!("{error}\nstderr:\n{excerpt}"),
                 _ => error.to_string(),
             };
@@ -97,6 +105,28 @@ pub(super) async fn start_stdio_backend(
         )
         .with_category("backend_stdio"),
     })
+}
+
+/// Keeps the `stderr` field of the last log record that carries one.
+#[derive(Clone, Default)]
+struct ExcerptCapture(std::sync::Arc<parking_lot::Mutex<Option<String>>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ExcerptCapture {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Stderr(Option<String>);
+        impl tracing::field::Visit for Stderr {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "stderr" {
+                    self.0 = Some(format!("{value:?}"));
+                }
+            }
+        }
+        let mut stderr = Stderr(None);
+        event.record(&mut stderr);
+        if let Some(text) = stderr.0 {
+            *self.0.lock() = Some(text);
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
