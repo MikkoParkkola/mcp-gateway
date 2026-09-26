@@ -82,6 +82,7 @@ upgrading a running deployment.
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
+| 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1618,6 +1619,24 @@ and an audit record with outcome `error`. It is now refused like an admin-only t
 
 **Action:** only a client, alert or log query that matched the old 400/-32603 answer or the
 "Configuration error" text for this refusal needs to match 403/-32600 instead.
+
+## 67. Task calls on per-backend routes are refused
+
+`POST /mcp/{name}` forwarded `tasks/get`, `tasks/update`, `tasks/cancel` and every other
+`tasks/*` method to the backend unchanged, with no owner check. Callers allowed on the same
+backend share its credential, so the backend could not tell them apart: one caller holding
+another's task id could read that task's result or cancel it.
+
+In 4.0, task calls on per-backend routes are refused until they carry an owner check:
+
+- Every `tasks/*` method on `POST /mcp/{name}`, in any letter case, and `subscriptions/listen`
+  naming `taskIds`, is answered with JSON-RPC -32601 (HTTP 200). Nothing reaches the backend.
+- `POST /mcp` still serves tasks, with each task visible only to the caller that created it.
+- Every other method on `POST /mcp/{name}` forwards as before, including a `tools/call`
+  carrying `task`, and `subscriptions/listen` without `taskIds`.
+
+**Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
+gets -32601. Create and follow tasks through `POST /mcp` instead.
 
 ## After upgrading
 
