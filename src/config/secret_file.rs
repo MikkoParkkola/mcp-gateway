@@ -90,7 +90,7 @@ impl SecretFile {
 pub(crate) enum GuardedRead {
     /// Opening or reading failed; `NotFound` stays visible to the caller.
     Io(std::io::Error),
-    /// The file was opened and refused: its type, mode, size or encoding. The text
+    /// The file was opened and refused: its mode, size or encoding. The text
     /// names the file and the fix, never the content.
     Refused(String),
 }
@@ -166,8 +166,8 @@ pub(crate) fn integrity_file_refusal(mode: u32) -> Option<Refusal> {
 /// # Errors
 ///
 /// [`GuardedRead::Io`] when the file cannot be opened or read, and
-/// [`GuardedRead::Refused`] for a file that is not a regular file (Unix), a
-/// refused mode, an oversized `Reference`, or text that is not UTF-8.
+/// [`GuardedRead::Refused`] for a refused mode, an oversized `Reference`, or
+/// text that is not UTF-8.
 pub(crate) fn read_guarded_file(
     path: &Path,
     what: SecretFile,
@@ -175,7 +175,7 @@ pub(crate) fn read_guarded_file(
     use std::io::Read as _;
 
     let noun = what.noun();
-    let mut file = open_without_blocking(path).map_err(GuardedRead::Io)?;
+    let mut file = std::fs::File::open(path).map_err(GuardedRead::Io)?;
     #[cfg(unix)]
     check_mode(&file, path, what)?;
     let mut bytes = Vec::new();
@@ -207,46 +207,7 @@ pub(crate) fn read_guarded_file(
     })
 }
 
-/// Opens `path` for reading without waiting on it (F18 A2). A plain open of a
-/// FIFO blocks until a writer appears, so it would hang before `check_mode`
-/// could refuse it. `O_NONBLOCK` has no effect on reading a regular file, the
-/// only kind that is ever read; `O_NOCTTY` keeps a terminal from becoming ours.
-#[cfg(unix)]
-fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let flags = rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags.bits().cast_signed())
-        .open(path)
-}
-
-/// Windows: no file types or modes are checked (UPGRADING item 35).
-#[cfg(not(unix))]
-fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
-
-/// What a non-regular file is, for the refusal text.
-#[cfg(unix)]
-fn file_kind(kind: std::fs::FileType) -> &'static str {
-    use std::os::unix::fs::FileTypeExt as _;
-    if kind.is_dir() {
-        "directory"
-    } else if kind.is_fifo() {
-        "FIFO"
-    } else if kind.is_char_device() {
-        "character device"
-    } else if kind.is_block_device() {
-        "block device"
-    } else if kind.is_socket() {
-        "socket"
-    } else {
-        "non-regular file"
-    }
-}
-
-/// The type and mode verdict on an open handle, as a refusal naming the fix.
+/// The mode verdict on an open handle, as a refusal naming the fix.
 #[cfg(unix)]
 fn check_mode(
     file: &std::fs::File,
@@ -256,15 +217,6 @@ fn check_mode(
     use std::os::unix::fs::MetadataExt as _;
 
     let meta = file.metadata().map_err(GuardedRead::Io)?;
-    // Type before mode, on the same handle: nothing but a regular file is read.
-    if !meta.file_type().is_file() {
-        return Err(GuardedRead::Refused(format!(
-            "Refusing to load {} {}: it is a {}, not a regular file.",
-            what.noun(),
-            path.display(),
-            file_kind(meta.file_type())
-        )));
-    }
     let euid = rustix::process::geteuid().as_raw();
     let owned = meta.uid() == euid;
     let (refusal, why) = match what.protects() {
