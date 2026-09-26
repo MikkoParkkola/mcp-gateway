@@ -1119,48 +1119,8 @@ schema:
         std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
 
-    fn spawn_loopback_fixture_server() -> (String, std::sync::mpsc::Receiver<String>) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let addr = listener.local_addr().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            loop {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let mut buf = [0_u8; 1024];
-                        let n = stream.read(&mut buf).unwrap_or(0);
-                        let request = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let body = r#"{"forecast":"sunny","raw_fixture_payload":"do-not-store"}"#;
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
-                        );
-                        let _ = stream.write_all(response.as_bytes());
-                        let _ = stream.flush();
-                        let _ = tx.send(request);
-                        break;
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        if std::time::Instant::now() >= deadline {
-                            let _ = tx.send("timeout waiting for fixture request".to_string());
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                    Err(err) => {
-                        let _ = tx.send(format!("fixture server accept error: {err}"));
-                        break;
-                    }
-                }
-            }
-        });
-
-        (format!("http://{addr}"), rx)
-    }
+    mod fixture_server;
+    use fixture_server::spawn_loopback_fixture_server;
 
     #[tokio::test]
     async fn generate_cards_from_capabilities_sorts_and_validates() {
