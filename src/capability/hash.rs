@@ -58,9 +58,7 @@ pub fn strip_sha256_line(content: &str) -> String {
             // NEL, LS and PS, so text after one of those is another line, and
             // it is hashed like any other: otherwise it would parse as YAML and
             // escape the pin. The line's own CRLF terminator is not such a line.
-            let brk = line
-                .char_indices()
-                .find(|(_, c)| matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'));
+            let brk = line.char_indices().find(|(_, c)| matches!(c, '\r'));
             if let Some((at, c)) = brk {
                 let rest = &line[at + c.len_utf8()..];
                 if !(c == '\r' && rest == "\n") {
