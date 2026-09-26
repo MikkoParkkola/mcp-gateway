@@ -356,6 +356,7 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 #[allow(clippy::struct_excessive_bools)]
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
+    pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
@@ -631,6 +632,7 @@ impl MetaMcp {
     ) -> Self {
         Self {
             backends,
+            change_feed: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
@@ -1610,14 +1612,13 @@ impl MetaMcp {
     /// story from the handshake and another from discovery.
     #[must_use]
     pub fn discover_document(&self, modern_enabled: bool) -> serde_json::Value {
-        // Modern, because this document IS the 2026 surface. Only identity and
-        // the version list are taken from it -- capabilities are rebuilt below
-        // -- so the era passed here is a statement of what surface this is,
-        // not a second source for the extension list.
+        // Modern: this document IS the 2026 surface. Only identity and the version
+        // list are taken from it; capabilities are rebuilt below.
         let handshake = crate::gateway::meta_mcp_helpers::build_initialize_result(
             crate::protocol::PROTOCOL_VERSION,
             "",
             crate::protocol::meta::Era::Modern,
+            self.change_feed(),
         );
 
         // Field names and placement are the specification's, transcribed from
@@ -1656,6 +1657,7 @@ impl MetaMcp {
         // the drift this guards against stays guarded.
         let capabilities = crate::gateway::meta_mcp_helpers::build_server_capabilities(
             crate::gateway::meta_mcp_helpers::discovery_extensions(),
+            self.change_feed(),
         );
 
         serde_json::json!({
@@ -1718,7 +1720,8 @@ impl MetaMcp {
         // `params` here: the dispatcher reads the mirrored header as well as
         // `_meta`, and a second derivation is the two-predicate defect
         // `protocol::meta::classify_request` records.
-        let result = build_initialize_result(negotiated_version, &instructions, era);
+        let result =
+            build_initialize_result(negotiated_version, &instructions, era, self.change_feed());
         JsonRpcResponse::success_serialized(id, result)
     }
 

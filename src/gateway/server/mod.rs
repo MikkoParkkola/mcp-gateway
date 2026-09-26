@@ -27,6 +27,7 @@ mod stdio_channel;
 mod stdio_nonce;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
+mod tools_changed;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
 // would be IN FORCE, so it goes through the overlay. A restart-only edit asks
@@ -1284,6 +1285,10 @@ impl Gateway {
             data_dir,
             transparency_log,
         } = self.build_meta_mcp().await?;
+        // F24: this mode delivers tools/list_changed, so it may advertise it.
+        meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
+        let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.backends.set_change_feed(tools_changed_tx.clone());
 
         // Log policy and feature states now that the shared builder has run.
         if self.config.security.tool_policy.enabled {
@@ -1466,7 +1471,11 @@ impl Gateway {
             }
 
             // Start file watcher for hot-reload
-            match CapabilityWatcher::start(Arc::clone(&cap_backend), shutdown_tx.subscribe()) {
+            match CapabilityWatcher::start(
+                Arc::clone(&cap_backend),
+                shutdown_tx.subscribe(),
+                Some(tools_changed_tx.clone()),
+            ) {
                 Ok(w) => {
                     info!("Capability hot-reload enabled");
                     Some(w)
@@ -1955,6 +1964,8 @@ impl Gateway {
         } else {
             None
         };
+
+        tools_changed::spawn_drain(Arc::clone(&state), tools_changed_rx);
 
         // Captured before the router takes ownership: the startup banner prints
         // the dashboard link and runs after the bind.
