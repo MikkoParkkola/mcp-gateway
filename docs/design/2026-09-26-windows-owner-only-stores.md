@@ -1,6 +1,6 @@
 # Windows owner-only stores: task store and personal-account store
 
-Status: REVIEWED. Round 4: two independent reviews SHIP (dispositions in §8-§11). No code until the maintainer decides ADR-016.
+Status: REVIEWED. Round 4: two independent reviews SHIP (dispositions in §8-§11). ADR-016 accepted 2026-09-27 (maintainer decision).
 Linked: W1 (#1142) holds the Windows failure class; probe run 36197759127 / PR #1355.
 Maintainer decision (2026-09-26): 4.0 on Windows supports the long-running task
 store and the personal-account store, with security equivalent to the unix path.
@@ -96,7 +96,7 @@ record: the module path (`src/win_acl.rs`, `cfg(windows)` only, never compiled o
 its entire FFI surface (below), that every call is handle-based, and that no other
 module may `allow(unsafe_code)`. A CI grep gate asserts `allow(unsafe_code)` appears in
 `src/` only in that file plus the existing test-only `alloc_meter.rs:65`.
-**This needs explicit maintainer approval before implementation.**
+**Accepted by maintainer decision on 2026-09-27; vetoable until the implementing PR merges.**
 
 FFI surface of `win_acl` (safe `pub(crate)` functions; the full memory-safety
 contract of each is in ADR-016):

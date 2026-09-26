@@ -1,6 +1,8 @@
 # ADR-016: One scoped `unsafe` module for Windows owner-only file security
 
-- **Status**: Proposed, 2026-09-26. Awaiting maintainer decision; no code lands before it.
+- **Status**: Accepted, 2026-09-27 (maintainer decision: option A, one Windows-only file of
+  `unsafe` code). Vetoable until the implementing PR merges; that PR states the exception
+  at the top of its summary.
 - **Relates to**: `#![deny(unsafe_code)]` (`src/lib.rs:24`), `SECURITY.md` "Windows file
   permissions", design `docs/design/2026-09-26-windows-owner-only-stores.md`.
 
