@@ -120,6 +120,8 @@ HTTP 429 and its equivalents are excluded from the error budgets and from the ci
 (GH #475). In 3.x a backend that was merely busy could be tripped open and taken out of
 rotation — the gateway punished a backend for applying backpressure correctly.
 
+The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item 53.
+
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 

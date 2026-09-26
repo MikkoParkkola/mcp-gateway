@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend's own rate limiter was reported as "Circuit breaker open" and counted as a
   backend failure, so a burst past the limit could auto-disable the capability or kill
   the backend for all tenants. It is now `Rate limit exceeded for backend 'x'` (code
-  still -32000), is not sampled by the error budgets, and leaves
+  still -32000, recovery hint `RATE_LIMITED`), is not sampled by the error budgets, and leaves
   `mcp_backend_circuit_state` alone. See `docs/UPGRADING-4.0.md` item 53 (F23).
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
