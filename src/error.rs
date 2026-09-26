@@ -322,7 +322,7 @@ impl Error {
         matches!(
             self,
             Self::CircuitOpen { .. }
-                | Self::RateLimited(_)
+                // MUTANT M3: RateLimited removed from the pre-dispatch allowlist.
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
