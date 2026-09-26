@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 3. Two review rounds (four reviews, all SHIP-WITH-FIXES); every finding is
-dispositioned in §7 (round 1) and §8 (round 2). Revision 3 needs a delta review before code.
+Status: REVISION 4. Three review rounds; round 3: one SHIP, one SHIP-WITH-FIXES. Every finding is
+dispositioned in §7-§9. Revision 4 needs a delta review before code.
 
 ## 1. Problem
 
@@ -135,18 +135,32 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 3. **Resume needs a new worker entry.** `tasks/update` is an acknowledgement today
    (`src/gateway/task_service/service.rs:197`) and the only spawn is create-only
    (`commit_and_run`, `worker.rs:29-56`, from `execution.rs:188`). A second entry,
-   `resume_and_run`, takes the stored record (tool, arguments, owner, continuation) and
-   dispatches the SAME tools/call (stored tool name and arguments) with an `OutboundRetry
-   { request_state, input_responses }`, the shape the meta path already sends
-   (`src/gateway/meta_mcp/invoke.rs:960-972`). `Bridge::retry_params` supplies only the
-   continuation fragment. The resume runs the live guard chain of §3 A.2.
+   `resume_and_run`, is admitted exactly like `begin()` (`execution.rs:195-202`):
+   `Handoff::accept` BEFORE the spawn, a permit from the same worker pool, and `cancel_rx`
+   threaded into the same dispatch `select!` as the first dispatch, so cancel during a resume
+   aborts the backend call and a drain sees the work. It is spawned from the `tasks/update`
+   arm with an `OwnedCallerContext` built from THAT request (same `route_task_owner`), plus
+   the stored tool name, arguments and continuation. It dispatches the SAME tools/call with an
+   `OutboundRetry { request_state, input_responses }`, the shape the meta path already sends
+   (`src/gateway/meta_mcp/invoke.rs:960-972`); `Bridge::retry_params` supplies only the
+   continuation fragment. Per route: a direct-route (`DirectJob`) task runs
+   `DirectRouteGuards::run` live on every dispatch; a `/mcp` task resumes through the existing
+   `accounted_dispatch` + `OutboundRetry` tail. `resume_and_run` never re-evaluates
+   `UpstreamSubmission` arming (armed jobs never reach an input round, §3 A.2b).
 3a. **Exactly one resume.** The `input_required -> working` step is a revision
    compare-and-set in the store transaction. Only the update whose transition performed it
    spawns `resume_and_run`; a concurrent update sees a revision conflict or a `working` task
-   and is refused. Same rule for replicas sharing the store.
+   and gets `-32602` ("no input round is outstanding"). Same rule for replicas sharing the
+   store. The window between that commit and the spawn is the same one-write window `begin()`
+   has at create: a crash there leaves a `working` row that startup settles as interrupted.
+3b. **State-only rounds** (§4.1 b) go through `resume_and_run` too, so they run the live guard
+   chain. The counter lives on the record, increments on each state-only round, and resets on
+   any round that asks the client for input.
 4. **Cancel and expiry.** Cancel from `input_required` settles `cancelled` and drops the stored
-   continuation. Expiry reaps an `input_required` row through the same TTL path as `working`
-   (`expired_candidates`, `store.rs:1031-1046`).
+   continuation. When the TTL elapses on an `input_required` row, the expiry pass settles it
+   `cancelled` the same way (continuation dropped); deletion is left to the existing terminal
+   sweep after retention (`expired_candidates`, `store.rs:1031-1046`, which only deletes
+   terminal rows).
 5. **Restart: no resume.** Startup recovery keeps the reviewed I3 treatment for `input_required`
    rows (`src/gateway/task_service/execution/recovery.rs:41-44`): they settle as interrupted.
    The input round is resumable only in the process that stored the continuation. Skipping
@@ -179,7 +193,9 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | rejected round shape | claims input but shape rejected: abandoned result as today | new arm swallows it |
 | armed upstream unchanged | adapter-claimed backend: dispatch identical to before | input arm applied to armed path |
 | resume carries the call | resume dispatch has the stored tool name and arguments plus requestState | resume sends the fragment only |
-| expiry during input | TTL passes while `input_required`: row reaped, update refused | expiry skips `input_required` |
+| expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
+| cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
+| resume uses the caller of the update | policy for the updating caller denies the tool: resume refused | resume built from stored caller context |
 
 ## 6. Answers to the review questions
 
@@ -226,3 +242,16 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | expiry cite and expiry-during-input test | improvement | store.rs:1031 expired_candidates | ADOPTED: §4.4 plus test row |
 | name the extracted guard function | improvement | - | ADOPTED: `DirectRouteGuards::run`; visibility flagged as an owner question |
 | idempotent handle after task expiry | improvement | - | ADOPTED: §3 A.2a, same answer as `/mcp` |
+
+## 9. Round 3 dispositions (one SHIP, one SHIP-WITH-FIXES)
+
+| finding | sev | check at source | disposition |
+|---|---|---|---|
+| resume spawned without Handoff, permit or cancel | HIGH | begin() accepts the handoff before spawning (execution.rs:195-202) | ADOPTED: §4.3 admitted like begin(); cancel-during-resume test |
+| expiry cite only deletes terminal rows | HIGH | store.rs:1031-1046 filters Completed/Failed/Cancelled | ADOPTED: §4.4 TTL settles `cancelled`, sweep deletes after retention |
+| resume inputs cannot satisfy live guards | HIGH | guards need a live caller | ADOPTED: §4.3 caller context from the update request; test row |
+| per-route resume path | improvement | - | ADOPTED: §4.3 |
+| resume never re-arms upstream | improvement | worker.rs:126-178 | ADOPTED: §4.3 |
+| state-only rounds through the guard chain; counter location | improvement | - | ADOPTED: §4.3b |
+| name the CAS-loser error | improvement | - | ADOPTED: `-32602` |
+| crash window between CAS and spawn | improvement | same window as create | ADOPTED: §4.3a acknowledged, settles interrupted |
