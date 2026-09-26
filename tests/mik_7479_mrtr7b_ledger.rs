@@ -16,10 +16,13 @@
 //! for X is its terminal; any later one is a **duplicate**, a protocol
 //! violation of its own, never a second terminal.
 //!
-//! Both bursts run per PR. Their deadlines are upper bounds sized for a burst
-//! in which every accepted call asks (sixteen 30s waves for the full one); the
-//! per-backend rate limiter refuses most of a burst at once, so each finishes
-//! in about one ask timeout.
+//! Deadlines are sized for a burst in which every accepted call asks
+//! (`ceil(n/64)` waves of one ask timeout). How much of a burst the rate
+//! limiter refuses at once depends on the host: a fast one finishes in about
+//! one ask timeout, a CI runner drains the full burst in about eight minutes.
+//! So the full burst runs in `mrtr7b-full-burst.yml` (nightly, dispatch, and
+//! a PR labelled `mrtr7b-full-burst`) and the per-PR job skips it. Locally:
+//! `cargo test --test mik_7479_mrtr7b_ledger -- --skip mik_7479_full_burst`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::RangeInclusive;
