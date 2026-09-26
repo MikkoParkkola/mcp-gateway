@@ -33,6 +33,8 @@
 //! logs, error messages, or MCP responses.
 
 mod backend;
+#[cfg(test)]
+mod cache_error_tests;
 pub mod definition;
 #[cfg(feature = "discovery")]
 pub mod discovery;

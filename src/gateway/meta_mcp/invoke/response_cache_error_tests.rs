@@ -126,8 +126,19 @@ async fn a_rate_limited_refusal_is_not_replayed_from_the_cache() {
         "B never reached the backend"
     );
 
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
-    let again = meta.invoke_tool(&call(2), None, &caller).await;
+    // Poll rather than sleep a fixed refill: before the bucket refills the
+    // limiter refuses afresh, and those refusals are not cached either after
+    // F26. At base the first refusal is replayed for the whole 60 s TTL, so
+    // the deadline passes with every attempt answered from the cache.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let again = loop {
+        let attempt = meta.invoke_tool(&call(2), None, &caller).await;
+        if !is_error(&attempt) || tokio::time::Instant::now() >= deadline {
+            break attempt;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     assert!(
         !is_error(&again),
         "a refilled bucket must admit B; a cached refusal answered instead: {again:?}"
@@ -150,6 +161,11 @@ async fn a_backend_tool_error_is_not_replayed_from_the_cache() {
 
     let first = meta.invoke_tool(&call(7), None, &caller).await;
     assert!(is_error(&first), "the backend errs first: {first:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the first call reached the backend"
+    );
     let second = meta.invoke_tool(&call(7), None, &caller).await;
     assert!(
         !is_error(&second),
