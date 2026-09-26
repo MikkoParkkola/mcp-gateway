@@ -44,6 +44,9 @@ def counted_lines(text: str) -> int:
     lines = text.split("\n")
     free = 0
     for i, line in enumerate(lines):
+        if INERT_ATTRIBUTE.match(line):
+            free += 1
+            continue
         if not DECLARATION.match(line):
             continue
         free += 1
