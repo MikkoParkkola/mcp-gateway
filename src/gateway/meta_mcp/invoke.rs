@@ -1131,12 +1131,13 @@ impl MetaMcp {
                 status: e.status.as_u16(),
                 message: e.message,
             })
-            .and_then(|()| self.admin_capability_rule(server, tool, caller.is_admin));
+;
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
             crate::gateway::authz::audit_refusal(transport, name, server, tool, &e.to_string());
             return Err(e);
         }
+        self.admin_capability_rule(server, tool, caller.is_admin)?;
         // Identity grants are the same decision as the authorizer above, taken
         // here with every other refusal because the response cache and the
         // idempotency short-circuit both return below this point: a gate under
