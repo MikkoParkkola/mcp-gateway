@@ -193,7 +193,9 @@ impl super::MetaMcp {
         fields.insert("response_hash_encoding".into(), "sorted-json-v1".into());
         fields.insert("response_hash".into(), hash.into());
         fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
-        fields.insert("session_id".into(), correlation.session_id.into());
+        // A fingerprint: the id is its anonymous holder's credential (F9).
+        let session_id = crate::gateway::session_id::session_fp(correlation.session_id);
+        fields.insert("session_id".into(), session_id.into());
         fields.insert("caller".into(), correlation.caller.into());
         fields.insert("server".into(), correlation.external_server.into());
         fields.insert("tool".into(), correlation.external_tool.into());

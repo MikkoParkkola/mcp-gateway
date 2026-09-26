@@ -58,15 +58,24 @@ impl Failsafe {
     ///
     /// Also sets `mcp_backend_circuit_state` from the breaker's decision alone,
     /// so the request and notification paths cannot drift and a rate-limit
-    /// refusal never reports an open circuit.
+    /// refusal never reports an open circuit, and counts each limiter refusal
+    /// in `mcp_backend_rate_limited_total{backend}`.
     pub fn admit(&self, backend: &str) -> crate::Result<()> {
         let closed = self.circuit_breaker.can_proceed();
         telemetry_metrics::gauge!("mcp_backend_circuit_state", "backend" => backend.to_string())
             .set(if closed { 1.0_f64 } else { 0.0_f64 });
         if !closed {
-            return Err(crate::Error::CircuitOpen(backend.to_string()));
+            return Err(crate::Error::circuit_open(backend, &self.circuit_breaker));
         }
         if !self.rate_limiter.try_acquire() {
+            // The operator's view of limiter refusals: they are excluded from
+            // the error budgets and from the circuit gauge, so this counter is
+            // the only place they show (F23b, MIK-7579).
+            telemetry_metrics::counter!(
+                "mcp_backend_rate_limited_total",
+                "backend" => backend.to_string()
+            )
+            .increment(1);
             return Err(crate::Error::RateLimited(backend.to_string()));
         }
         Ok(())
@@ -150,7 +159,7 @@ mod tests {
         failsafe.record_failure("boom", latency);
 
         assert!(
-            matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen(_))),
+            matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen { .. })),
             "the circuit must be open: a throttle is not evidence the backend recovered"
         );
     }

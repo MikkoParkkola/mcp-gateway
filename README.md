@@ -62,7 +62,7 @@ flowchart LR
   - On stdio, `server/discover` lists only the older revisions.
 - **Each caller sees and reaches only what it was granted.** Every discovery surface (tool lists, search, server lists, the direct per-backend route) shows a caller only the backends and tools it could invoke. A newly added backend is unreachable until a key is granted it, and a key with no `backends` reaches nothing. Cached results, idempotent results, backend change notifications and `subscriptions/listen` streams are kept per caller. Caller identity headers count only when they arrive from a source you configured: listed proxy addresses or Cloudflare Access.
 - **Admins from your identity provider.** A `control_plane.role_mapping` rule with `role: admin` makes a single sign-on (SSO) group or user a full gateway admin. The mapping is read on every request, so removing the rule revokes admin at once, and an admin rule that names only an email domain is refused. Identities from trusted-proxy or Cloudflare Access headers, and mTLS certificates, never confer admin. Key-server rules for OIDC (OpenID Connect, the sign-in protocol most identity providers speak) must name the issuer, and email and domain rules match only an email the provider has verified.
-- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2.
+- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2. Also landed after beta.2: admin actions (admin meta-tool calls and admin-panel changes, control-plane edits included) are recorded with who made them, and refused while the log is down.
 - **Keys and secrets handled as secrets.** API keys are stored as SHA-256 digests (`mcp-gateway hash-key` makes one) with an optional expiry that is enforced. A secret reference that resolves to nothing stops the load instead of sending an empty credential, and `/metrics` needs its own scrape token. Landed after beta.2: `file:/absolute/path` reads a secret from a file wherever `env:NAME` is accepted.
 - **A config that refuses to start instead of running unsafely.** An unknown config key, a config or env file other users can read, and plain HTTP on a network address with auth on each stop the start with an error that names the problem. `server.cleartext_http` declares that the traffic is protected some other way (TLS terminated upstream, host-local publish, or cluster-internal).
 - **A Helm chart that starts.** The Kubernetes chart now installs and serves with its default values, runs as the image's own non-root user, and defaults to one replica.
@@ -178,6 +178,12 @@ backends:
   sentry:
     http_url: "https://mcp.sentry.dev/mcp"
     description: "Sentry issues"
+
+  realtime:
+    # WebSocket backend: headers ride the upgrade request once (UPGRADING-4.0 §47).
+    ws_url: "wss://rt.example.com/mcp"
+    headers:
+      Authorization: "Bearer ${RT_TOKEN}"
 ```
 
 ### Run and verify
@@ -376,8 +382,8 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 ### Protocol and transport
 
 - **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` lists only the handshake revisions, but a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call
-- **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), and A2A (`a2a` feature, on by default)
-- **Client transports**: clients connect via stdio or HTTP (`POST /mcp`). WebSocket is not a supported transport in either direction
+- **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), WebSocket (`ws_url`, legacy `initialize` handshake, one shared socket per backend), and A2A (`a2a` feature, on by default)
+- **Client transports**: clients connect via stdio or HTTP (`POST /mcp`); there is no inbound WebSocket listener
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
 - **Config discovery**: auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/`

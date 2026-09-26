@@ -11,10 +11,10 @@ mod config_file;
 mod env_overlay;
 mod features;
 mod input_schema;
-#[cfg(unix)]
 mod secret_file;
 mod secret_ref;
 mod strict_keys;
+mod ws_backend;
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -38,6 +38,10 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
+
+// New items (F18), not widened ones: the one mode-checked read for files
+// outside `config`.
+pub(crate) use secret_file::{CheckedFile, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
@@ -1114,6 +1118,10 @@ impl Config {
                     })?;
                     Self::reject_cleartext_credentials(name, backend, &url)?;
                 }
+                TransportConfig::WebSocket {
+                    ws_url,
+                    protocol_version,
+                } => Self::validate_ws_backend(name, backend, ws_url, protocol_version.as_deref())?,
                 TransportConfig::Stdio { .. } => {}
             }
         }
@@ -1135,7 +1143,10 @@ impl Config {
         backend: &BackendConfig,
         url: &url::Url,
     ) -> Result<()> {
-        if !backend.enabled || backend.allow_cleartext_credentials || url.scheme() != "http" {
+        if !backend.enabled
+            || backend.allow_cleartext_credentials
+            || !matches!(url.scheme(), "http" | "ws")
+        {
             return Ok(());
         }
         // Loopback never leaves the machine. Decided by the classifier the
@@ -1245,6 +1256,7 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
         TransportConfig::Http { http_url, .. } => Some((transport.transport_type(), http_url)),
         #[cfg(feature = "a2a")]
         TransportConfig::A2a { a2a_url, .. } => Some((transport.transport_type(), a2a_url)),
+        TransportConfig::WebSocket { ws_url, .. } => Some((transport.transport_type(), ws_url)),
         TransportConfig::Stdio { .. } => None,
     }
 }
@@ -1621,7 +1633,8 @@ pub struct BackendConfig {
     pub timeout: Duration,
     /// Environment variables (for stdio).
     pub env: HashMap<String, String>,
-    /// HTTP headers (for http/sse).
+    /// HTTP headers (for http/sse). On a `ws_url` backend they go only on the
+    /// upgrade request, once per connect, never per message.
     pub headers: HashMap<String, String>,
     /// OAuth configuration (optional).
     #[serde(default)]
@@ -1642,8 +1655,8 @@ pub struct BackendConfig {
     pub passthrough: bool,
     /// Undeclared tool-call argument keys: `closed` (default), `standard`, `off`.
     pub input_schema_enforcement: InputSchemaEnforcement,
-    /// Permit this backend to carry credentials over cleartext `http://` to a
-    /// non-loopback host.
+    /// Permit this backend to carry credentials over cleartext `http://` or
+    /// `ws://` to a non-loopback host.
     ///
     /// **Security warning**: a credential sent to a non-loopback `http://`
     /// endpoint is readable by every host on the path and is replayable
@@ -1837,6 +1850,15 @@ pub enum TransportConfig {
         #[serde(default)]
         protocol_version: Option<String>,
     },
+    /// WebSocket transport: one persistent socket per backend, legacy
+    /// `initialize` handshake only. `headers` go on the upgrade request once.
+    WebSocket {
+        /// WebSocket URL (`ws://` or `wss://`).
+        ws_url: String,
+        /// Override protocol version (a pre-2026-07-28 revision).
+        #[serde(default)]
+        protocol_version: Option<String>,
+    },
     /// A2A (`Agent2Agent`) transport.
     ///
     /// The gateway fetches the Agent Card from `<a2a_url>/.well-known/agent.json`
@@ -1891,6 +1913,7 @@ impl TransportConfig {
                 ..
             } => "streamable-http",
             Self::Http { .. } => "http",
+            Self::WebSocket { .. } => "websocket",
             #[cfg(feature = "a2a")]
             Self::A2a { .. } => "a2a",
         }
@@ -1911,7 +1934,7 @@ impl TransportConfig {
     pub fn carries_identity_headers(&self) -> bool {
         match self {
             Self::Http { .. } => true,
-            Self::Stdio { .. } => false,
+            Self::Stdio { .. } | Self::WebSocket { .. } => false,
             #[cfg(feature = "a2a")]
             Self::A2a { .. } => false,
         }

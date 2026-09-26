@@ -200,7 +200,10 @@ fn assert_attempt(event: &Value, response: &JsonRpcResponse) {
     assert_eq!(event["response_stage"], "transport_finalized");
     assert_eq!(event["response_hash_encoding"], "sorted-json-v1");
     assert_eq!(event["response_hash"], independent_hash(&wire));
-    assert_eq!(event["session_id"], "delivery-session");
+    assert_eq!(
+        event["session_id"],
+        crate::gateway::session_id::session_fp("delivery-session")
+    );
     assert_eq!(event["caller"], "known-caller");
     assert_eq!(event["server"], "gateway");
     assert_eq!(event["tool"], "gateway_invoke");
