@@ -496,6 +496,10 @@ fn read_ca_files(
     ca_cert: &std::path::Path,
     ca_key: &std::path::Path,
 ) -> Result<(String, String), ExitCode> {
+    mcp_gateway::mtls::cert_manager::load_certs(ca_cert.to_str().unwrap_or_default()).map_err(|e| {
+        eprintln!("Error: {e}");
+        ExitCode::FAILURE
+    })?;
     let cert = std::fs::read_to_string(ca_cert).map_err(|e| {
         eprintln!("Error: Cannot read CA cert '{}': {e}", ca_cert.display());
         ExitCode::FAILURE
