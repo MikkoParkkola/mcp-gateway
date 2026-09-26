@@ -519,7 +519,7 @@ impl CapabilityBackend {
         // site still holds the managed lease when a 401 comes back (A11-e′). The
         // isolation guard stays multi-user only; the context it consented to is
         // the one the inner cache key and the egress are keyed on.
-        let context = if descriptor_bound {
+        let context = if multi_user && descriptor_bound {
             let context = self
                 .executor
                 .prepare_account_context(&capability, context)
