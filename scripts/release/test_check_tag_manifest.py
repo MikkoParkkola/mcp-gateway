@@ -725,6 +725,21 @@ def unwrapped(operand):
     return operand
 
 
+TAG_GATE = re.compile(
+    r"(?:python3?|uv run)\s+scripts/release/check_tag_manifest\.py(?=\s|$)"
+)
+
+
+def gate_steps(workflow, job):
+    """`job`'s own steps that run the tag gate under `id: meta`."""
+    return [
+        block
+        for block in steps(workflow, job=job)
+        if any(line.strip() in ("id: meta", "- id: meta") for line in block)
+        and any(runs(command, TAG_GATE) for command in joined(block))
+    ]
+
+
 class WorkflowWiring(unittest.TestCase):
     """The gate is only worth what the workflows calling it are wired to do.
 
@@ -913,18 +928,15 @@ class WorkflowWiring(unittest.TestCase):
         # the gate is the step that binds it. docker-build running its own
         # copy answers a different job's question: echo the invocation here
         # and the publisher creates a tag whose version is the empty string.
-        body = jobs("ci.yml")["docker-manifest"]
-        invocation = re.compile(
-            r"(?:python3?|uv run)\s+scripts/release/check_tag_manifest\.py(?=\s|$)"
+        #
+        # Attributed by structure, not by text. docker-build carries a gate
+        # step whose executable lines are identical to the publisher's, so
+        # "this text appears in the job" cannot tell whose step it is (#570).
+        # The step must run the gate AND be `meta`, the id the tags read.
+        self.assertTrue(
+            gate_steps("ci.yml", "docker-manifest"),
+            "ci.yml docker-manifest: no step with id meta runs the tag gate",
         )
-        running = [
-            command
-            for block in steps("ci.yml")
-            if "\n".join(block) in body
-            for command in joined(block)
-            if runs(command, invocation)
-        ]
-        self.assertTrue(running, "ci.yml docker-manifest: nothing runs the tag gate")
 
     def test_the_prerelease_classification_is_computed(self):
         # Every guard above reads `needs.<job>.outputs.is_prerelease` from
@@ -1069,7 +1081,7 @@ class WorkflowWiring(unittest.TestCase):
             digests = [
                 re.compile(
                     rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+"
-                    rf"\.outputs\.{name.lower()}\s*\}}\}}[\"']?$"
+                    rf"\.outputs\.\w+\s*\}}\}}[\"']?$"
                 )
                 for name in (
                     "LIST",
@@ -2141,6 +2153,51 @@ SMOKE = pathlib.Path(
 # `releases/latest` resolves at run time, so the bytes a release runs are not
 # the bytes anyone reviewed.
 PINNED_RELEASE = re.compile(r"/releases/download/v\d+\.\d+\.\d+/")
+
+
+class StepAttribution(unittest.TestCase):
+    """A step belongs to the job it sits in, even when another job has its twin (#570).
+
+    Two jobs carrying a byte-identical step is the real shape here: docker-build
+    and docker-manifest run the same tag-gate step. Attribution by text gives
+    the step to whichever job's body happens to contain the text, so the fixture
+    moves the only `id: meta` gate between two jobs and checks it follows.
+    """
+
+    TWIN = (
+        "      - name: Extract tag\n"
+        "        id: meta\n"
+        "        run: python3 scripts/release/check_tag_manifest.py\n"
+    )
+
+    def workflow(self, first, second):
+        text = (
+            "on: push\njobs:\n"
+            f"  first:\n    runs-on: x\n    steps:\n{first}"
+            "      - run: echo first\n"
+            f"  second:\n    runs-on: x\n    steps:\n{second}"
+            "      - run: echo second\n"
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        (pathlib.Path(tmp.name) / "fixture.yml").write_text(text, encoding="utf-8")
+        patch = mock.patch.dict(globals(), {"WORKFLOWS": pathlib.Path(tmp.name)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_identical_steps_are_each_their_own_jobs(self):
+        self.workflow(self.TWIN, self.TWIN)
+        self.assertEqual(len(gate_steps("fixture.yml", "first")), 1)
+        self.assertEqual(len(gate_steps("fixture.yml", "second")), 1)
+
+    def test_a_gate_in_another_job_does_not_answer_for_this_one(self):
+        self.workflow(self.TWIN, "")
+        self.assertEqual(len(gate_steps("fixture.yml", "first")), 1)
+        self.assertEqual(gate_steps("fixture.yml", "second"), [])
+
+    def test_a_gate_step_without_the_meta_id_does_not_count(self):
+        self.workflow(self.TWIN.replace("        id: meta\n", ""), "")
+        self.assertEqual(gate_steps("fixture.yml", "first"), [])
 
 
 class SupplyChain(unittest.TestCase):
