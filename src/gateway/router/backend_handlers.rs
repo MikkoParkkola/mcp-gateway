@@ -1021,7 +1021,12 @@ async fn backend_handler_inner(
                     }
                     // Settled as terminal unless raised before dispatch
                     // (ADR-012 consequence 1; see `settle_direct_failure`).
-                    Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
+                    Err(e) => {
+                        let response =
+                            JsonRpcResponse::error(Some(id.clone()), e.to_rpc_code(), e.to_string());
+                        settle_direct_failure(idem_reservation.as_mut(), &e, &response);
+                        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+                    }
                 };
             }
             Err(rejection) => return rejection,
