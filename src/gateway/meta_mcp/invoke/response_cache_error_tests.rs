@@ -114,6 +114,11 @@ async fn a_rate_limited_refusal_is_not_replayed_from_the_cache() {
     assert!(!is_error(&a), "A takes the only token: {a:?}");
     let b = meta.invoke_tool(&call(2), None, &caller).await;
     let refusal = b.expect("the refusal is a tool result");
+    assert_eq!(
+        refusal.get("isError"),
+        Some(&json!(true)),
+        "the refusal must be an error result, the shape the cache refuses: {refusal}"
+    );
     assert!(
         refusal
             .to_string()
