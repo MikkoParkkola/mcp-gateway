@@ -904,6 +904,19 @@ an address it cannot predict, so the name cannot be checked, but rebinding
 always needs a hostname while a network client dials an address. Set
 `public_url` if clients legitimately reach the gateway by name.
 
+### What triggers a config reload
+
+The gateway watches the config file and reloads when it changes. A config named
+through symlinks is followed along its whole link chain, and the chain is
+re-read on every change in a directory it runs through:
+
+- a deploy that points the link at a release in another directory is picked up,
+  and later writes to the new target reload too;
+- a Kubernetes ConfigMap mounted as a directory (`gateway.yaml ->
+  ..data/gateway.yaml`, `..data -> ..<timestamp>`) reloads when kubelet swaps
+  `..data` to the new generation;
+- a directory the chain no longer runs through stops being watched.
+
 ### What a config reload applies
 
 Most settings are read once at startup. A reload reports which changed fields
