@@ -561,9 +561,9 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and container healthchecks |
-| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, UPGRADING-4.0 item 43). Readiness and startup probes |
-| `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
+| `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and the image healthcheck |
+| `/readyz` | GET | Same as `/health` | 200 once config is loaded, the listener is up and the startup capability scan has finished; never reads backend health. 503 `capabilities loading` during the scan (UPGRADING-4.0 item 65), and 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, item 43). Readiness, startup probes and the compose healthcheck |
+| `/health` | GET | No (public by default) | 503 `degraded` while a backend is down or the startup capability scan is running. Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).

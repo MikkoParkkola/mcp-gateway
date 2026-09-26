@@ -234,10 +234,13 @@ async fn probe_ok() -> &'static str {
     "ok"
 }
 
-/// `/readyz`: `/livez` plus the audit log (D1-f). While the log is degraded
-/// the probe itself attempts one bounded append, so a pod the Service has
-/// drained still recovers without call traffic (Revision 3). `/livez` stays
-/// constant, so the kubelet unreadies the pod but never restarts it.
+/// `/readyz`: `/livez` plus the audit log (D1-f) and the capability catalogue
+/// (MIK-7268). While the log is degraded the probe itself attempts one bounded
+/// append, so a pod the Service has drained still recovers without call
+/// traffic (Revision 3). A backend still in its startup scan answers every
+/// call with an empty or partial catalogue; no backend means none configured,
+/// which is ready. `/livez` stays constant, so the kubelet unreadies the pod
+/// but never restarts it.
 async fn readyz(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> (axum::http::StatusCode, String) {
@@ -250,6 +253,16 @@ async fn readyz(
                 log.last_failure_cause().unwrap_or("io_error")
             ),
         ),
+        _ if state
+            .meta_mcp
+            .get_capabilities()
+            .is_some_and(|c| !c.initial_scan_complete()) =>
+        {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "capabilities loading".to_string(),
+            )
+        }
         _ => (axum::http::StatusCode::OK, "ok".to_string()),
     }
 }
@@ -378,7 +391,8 @@ pub(crate) fn create_router_with_accounts(
         // Orchestrator probes answer from the process alone. `/health` fails
         // when any backend is down, and probing it restarted every replica for
         // one flapping upstream. Reaching this handler means the config loaded
-        // and the listener is up; readiness adds only the audit log (D1-f).
+        // and the listener is up; readiness adds the audit log (D1-f) and the
+        // startup capability scan (MIK-7268).
         // Graceful shutdown closes the listener, which is how both turn red.
         .route("/livez", get(probe_ok))
         .route("/readyz", get(readyz))

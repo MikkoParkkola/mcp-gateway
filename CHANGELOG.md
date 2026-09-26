@@ -49,6 +49,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
+  the startup capability scan has read every directory, so a pod or container is no longer
+  sent traffic while its catalogue is empty; the admin `/health` view adds
+  `capability_backend.loaded`. The compose healthcheck probes `/readyz`, and the example
+  `Gateway` runtime profile probes `/readyz` and `/livez`. UPGRADING-4.0 §65.
+
 - **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
   12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
   `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,

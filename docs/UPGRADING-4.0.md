@@ -79,6 +79,7 @@ upgrading a running deployment.
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
+| 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 
 Numbers 18-20 are intentionally unused.
@@ -1549,6 +1550,30 @@ line is hashed like the rest of the file.
 now fails verification until re-pinned. No shipped capability contains one. Inspect such a
 file before re-pinning it, since the text after the break is content that was not covered by
 the old pin: `mcp-gateway cap pin path/to/capability.yaml`.
+
+## 65. Readiness waits for the capability catalogue
+
+The capability catalogue loads in the background after the listener binds, so a large
+capability directory does not delay startup. Until now, `/readyz` and `/health` answered 200
+during that load, and a pod or container was sent traffic while its catalogue was empty or
+partial; capability calls in that window failed with `Not found`.
+
+Now both wait for the startup scan. `/readyz` answers 503 with the body `capabilities
+loading`, and `/health` answers 503 `degraded`, until every configured capability directory
+has been read. The admin `/health` view adds `capability_backend.loaded`. A gateway with
+capabilities disabled has nothing to wait for and is ready at once. `/livez` is unchanged,
+so a slow scan never restarts a pod. Hot reloads after startup do not affect readiness.
+
+The shipped manifests follow: the compose healthcheck probes `/readyz` instead of `/livez`,
+and the example `RuntimeProfile` the `Gateway` references probes readiness on `/readyz` and
+liveness on `/livez` instead of `/health`. The container image healthcheck stays on `/livez`.
+The CRD's `RuntimeProfile` defaults stay `/health`, because `MCPServer` resources use the same
+profile type and an MCP server has no `/readyz`.
+
+**Action:** a startup probe on `/readyz` must allow for the scan. The shipped Kubernetes
+and Helm startup probe allows 60 seconds; the bundled catalogue loads in well under one.
+A monitor that alerts on the first `/health` 503 after a start should allow for the same
+window.
 
 ## 66. A callback-registration admin denial is a refusal, not a configuration error
 
