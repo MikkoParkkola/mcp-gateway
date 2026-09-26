@@ -319,7 +319,7 @@ fi
 DISCOVER_400="$(rpc_modern "server/discover")"
 echo "$DISCOVER_400" > "$LOG_DIR/phase2-discover-modern.json"
 if echo "$DISCOVER_400" | python3 -c 'import json,sys; d=json.load(sys.stdin); exit(0 if "2026-07-28" in json.dumps(d) else 1)'; then
-  record "PHASE2.MODERN_DISCOVER_ADVERTISES" "PASS" "server/discover advertises 2026-07-28 with modern on"
+  : # mutant C: check not recorded
 else
   record "PHASE2.MODERN_DISCOVER_ADVERTISES" "FAIL" "server/discover did not mention 2026-07-28: $DISCOVER_400"
 fi
