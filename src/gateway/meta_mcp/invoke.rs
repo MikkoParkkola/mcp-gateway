@@ -365,7 +365,7 @@ fn emit_projection_ab_event(
         target: "projection_ab",
         // Un-sessioned calls log "none" and are always control (see
         // projection_decision); exclude them when joining arm -> task outcome.
-        session_id = session_id.unwrap_or("none"),
+        session_id = %session_id.map_or_else(|| "none".to_string(), crate::gateway::session_id::session_fp),
         server = server,
         tool = tool,
         arm = rec.arm,
@@ -6057,3 +6057,6 @@ mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
+
+#[cfg(test)]
+mod session_fp_tests;

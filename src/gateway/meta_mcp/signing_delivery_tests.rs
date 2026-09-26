@@ -292,7 +292,10 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
         event["response_hash"],
         independent_attempt_hash(&serde_json::to_value(response).unwrap())
     );
-    assert_eq!(event["session_id"], "signing-delivery-session");
+    assert_eq!(
+        event["session_id"],
+        crate::gateway::session_id::session_fp("signing-delivery-session")
+    );
     assert_eq!(event["caller"], "known-caller");
     assert_eq!(event["server"], "gateway");
     assert_eq!(event["tool"], "gateway_invoke");

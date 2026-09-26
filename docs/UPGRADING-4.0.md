@@ -1343,6 +1343,46 @@ caller.
 - A breaker that is really open is unchanged: same message, and it still counts as a
   failure.
 
+## 58. Session ids are always minted by the gateway
+
+A legacy HTTP session id is the only thing that proves a session is yours when
+the caller has no credential, so the gateway now treats it as a secret.
+
+- **A client-supplied `Mcp-Session-Id` that names no live session is replaced.**
+  The new id comes back in the `Mcp-Session-Id` response header. A client that
+  keeps sending its own id instead of the one it was given gets a new session on
+  every request and receives no server-to-client prompts (elicitation, sampling,
+  roots). Before this release the gateway adopted the id the client chose, which
+  let any caller pick an id before another caller and share its stream.
+- **An empty or whitespace-only `Mcp-Session-Id` counts as absent.** On `DELETE`
+  it is a 400, the same as a missing header (it was a 404, "no owned session").
+- **Every unauthenticated caller is one class.** With auth off that is every
+  caller; with auth on it is callers on public paths. Whatever name they carry,
+  the session id is the only thing that tells them apart, so anyone who holds an
+  id owns that session. To separate users, turn auth on and keep `/mcp` off the
+  public paths.
+- **Logs carry an 8-hex fingerprint, not the id.** So do the firewall audit log
+  and the transparency log when they are on. `mcp-gateway audit show --session`,
+  which reads the transparency log, accepts the raw id or its fingerprint; entries
+  written before the upgrade hold the raw id and are found by the raw id only. A fingerprint is for correlation only:
+  two sessions can share one, so a lookup can return another session's entries. The `session_id` field keeps its
+  name in the firewall audit NDJSON and the transparency log; tools that parse it
+  get an 8-hex value from this release on. Ids in files written before the upgrade
+  stay raw, but they name no live session: sessions do not survive the restart.
+  The dashboard's cost view (`/ui/api/costs`, `by_session[].session_id`) shows the
+  fingerprint too; the admin API `/api/costs` keeps raw ids, since inspecting a
+  session by id needs one.
+- **Header-logging middleware brings the leak back.** A layer you add that logs
+  request headers (for example a tower-http trace layer configured to log
+  headers) prints the raw `Mcp-Session-Id` whatever the gateway's own log fields
+  do.
+- A legacy destructive call with no usable session, an empty id included, is
+  unchanged: it runs with a warning that nobody could be asked.
+- Library users: `NotificationMultiplexer::first_session_id` and
+  `ProxyManager::first_session_id` are removed, `get_or_create_session_for` is
+  no longer public, and `get_or_create_session(Some(id))` returns `id` only when
+  that session is already live.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

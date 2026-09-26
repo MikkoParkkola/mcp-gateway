@@ -605,7 +605,7 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
 }
 
 /// Authenticated fixture whose executor capacity comes from the supplied config.
-async fn test_router_app_state_with_auth_and_config(
+pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,
     config: crate::config::Config,
 ) -> (Arc<AppState>, tempfile::TempDir) {
@@ -671,7 +671,7 @@ async fn test_router_app_state_with_auth_and_config(
     (state, store_dir)
 }
 
-fn scoped_auth_config(admin: bool) -> AuthConfig {
+pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
     AuthConfig {
         enabled: true,
         bearer_token: None,
@@ -3409,7 +3409,7 @@ async fn sampling_prompt_is_delivered_to_the_requesting_session() {
     let (state, _store) = test_router_app_state().await;
     let (session_id, mut rx) = state
         .multiplexer
-        .get_or_create_session_for(Some("gw-caller"), "unauthenticated:anonymous");
+        .get_or_create_session_for(None, &crate::gateway::session_id::SessionOwner::Anonymous);
     let router = create_router(Arc::clone(&state));
 
     // WHEN: that session asks the gateway for a sampling round trip

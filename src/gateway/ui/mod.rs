@@ -719,7 +719,7 @@ async fn costs(
     Json(serde_json::json!({
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
-        "by_session": serde_json::to_value(tracker.all_sessions()).unwrap_or(serde_json::json!([])),
+        "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
     }))
     .into_response()
 }
