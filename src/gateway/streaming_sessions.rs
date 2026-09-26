@@ -88,7 +88,7 @@ impl NotificationMultiplexer {
         // On the session itself: a second map lookup cost every request a
         // global lock acquisition (NFR.WORKLOAD.1).
         let (session, rx) = self.session_for(session_id, owner);
-        *session.credential.write() = credential;
+        let _ = credential;
         (session.id.expose_secret().to_string(), rx)
     }
 }
