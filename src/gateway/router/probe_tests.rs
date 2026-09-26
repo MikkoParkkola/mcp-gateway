@@ -210,3 +210,35 @@ fn metrics_gauge_reads_zero_while_breaker_open() {
     backend.trip_circuit_breaker_for_test();
     assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("0"));
 }
+
+/// F23: a request the backend's own rate limiter refuses is not an open
+/// circuit, so the gauge stays 1 while the breaker is closed.
+#[cfg(feature = "metrics")]
+#[test]
+fn metrics_gauge_stays_one_on_a_rate_limit_refusal() {
+    let mut failsafe = crate::config::FailsafeConfig::default();
+    failsafe.rate_limit.enabled = true;
+    failsafe.rate_limit.requests_per_second = 1;
+    failsafe.rate_limit.burst_size = 1;
+    // No retry: a retry would spend the bucket, or wait for a refill, inside
+    // the first request and blur which request met the empty bucket.
+    failsafe.retry.enabled = false;
+    let config = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "http://127.0.0.1:9/mcp".to_string(),
+            streamable_http: false,
+            protocol_version: None,
+        },
+        enabled: true,
+        ..crate::config::BackendConfig::default()
+    };
+    let backend = crate::backend::Backend::new(
+        "limited",
+        config,
+        &failsafe,
+        std::time::Duration::from_secs(60),
+    );
+    // The burst token admits the first request; the second finds the bucket empty.
+    assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("1"));
+    assert_eq!(gauge_after_one_request(&backend).as_deref(), Some("1"));
+}

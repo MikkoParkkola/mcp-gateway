@@ -89,5 +89,4 @@
 820 src/capability/executor/mod.rs
 817 tests/gh462_config_preservation.rs
 807 src/gateway/ui/mod.rs
-806 src/backend/ops.rs
 804 src/cli/subcommands.rs
