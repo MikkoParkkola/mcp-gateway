@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 8. Seven review rounds; round 7: one SHIP-WITH-FIXES (LOW only), one seat produced no verdict. Every finding is
-dispositioned in §7-§13. Revision 8 needs a delta review before code.
+Status: REVISION 9, DESIGN FINAL for implementation. Eight review rounds; round 8: SHIP and SHIP-WITH-FIXES (one LOW, adopted). Every finding is
+dispositioned in §7-§14. Open before code: the owner visibility question in §3 A.2.
 
 ## 1. Problem
 
@@ -160,7 +160,11 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    completing update finds an owner and gets `-32602`, touching nothing of the winner's; if the
    owner found is the PRODUCING worker still unwinding after it committed `input_required`,
    `try_accept` waits on the registry's existing `released` signal (`observe.rs:105`) for at
-   most 1 s before refusing, so an update arriving the instant the row becomes visible succeeds), then
+   most 1 s before refusing, so an update arriving the instant the row becomes visible succeeds.
+   The wait is a subscribe-first loop that drops the registry mutex before awaiting and
+   re-checks its own id on every wake, the pattern `join()` already uses, because `released` is
+   one global generation channel. On timeout the refusal is `-32603` "task busy, retry"
+   (transient), not the `-32602` used when no round is outstanding), then
    ONE store write that takes the permit through the same try-acquire closure create uses
    (`execution.rs:370-390`) and performs the `input_required -> working` CAS together, then the
    spawn. If that write loses (a cancel already settled the row) the handoff and any permit are
@@ -354,3 +358,14 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | delete the overwriting `insert` | improvement | observe.rs:73 | ADOPTED: `try_accept` is the only constructor |
 | produce-seam test row | improvement | - | ADOPTED |
 | reconcile pool-full naming | improvement | - | ADOPTED: `Capacity` maps to `-32603` with the stated text |
+
+## 14. Round 8 (one SHIP, one SHIP-WITH-FIXES with one LOW finding): final dispositions
+
+| finding | sev | disposition |
+|---|---|---|
+| produce-seam timeout refusal unspecified | LOW | ADOPTED: `-32603` "task busy, retry" |
+| subscribe-first wait loop, re-check own id | improvement | ADOPTED |
+| task state during a state-only loop | improvement | ADOPTED: the row stays `working` throughout; `input_required` is written only for a round that asks the client |
+| armed funnel byte-identical | improvement | ADOPTED: `DirectRouteGuards::run` never wraps the armed `UpstreamSubmission` funnel; it stays as today |
+| settlement when live guards refuse an admitted dispatch | improvement | ADOPTED: settles `failed` carrying the guard error through the existing `classify_dispatch` Fail arm |
+| §4.5 overstated the expiry consequence | improvement | ADOPTED: read §4.5's expiry sentence as "would need a new expiry rule"; the reason for no restart resume is the missing continuation contract |
