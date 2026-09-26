@@ -1823,6 +1823,7 @@ class WorkflowWiring(unittest.TestCase):
         tag_guarded_verifies = 0
         for label, guard, block in found:
             self.assertTrue(guard, f"ci.yml: {label} publishes with no condition")
+            self.assertEqual(len(guard), 1, f"ci.yml: {label} has more than one if:")
             condition = " ".join(guard[0].split())
             # E1 (design 2026-09-26): a read-only verify of a pinned, already
             # signed release may run on a rehearsal alone. Nothing that writes
@@ -2606,6 +2607,27 @@ def readonly_verify_refusals(block):
     for piece in pieces:
         if re.match(rf"^(?:export\s+|local\s+|readonly\s+)?(?:{'|'.join(DIGEST_KEYS)}|IDENTITY)=", piece):
             refusals.append(f"body reassigns a pinned key: {piece}")
+    # An allowlist, not a blocklist: every command the body runs is one the
+    # release verify runs. `cosign attach`, `docker push` or a new pusher are
+    # refused without anyone having to name them first.
+    body = pieces[pieces.index("run:") + 1 :] if "run:" in pieces else []
+    if not body:
+        refusals.append("no run body")
+    issuer = r"--certificate-oidc-issuer 'https://token\.actions\.githubusercontent\.com'"
+    allowed = (
+        re.compile(r"^set -euo pipefail$"),
+        re.compile(r"^IMAGE=ghcr\.io/mikkoparkkola/mcp-gateway$"),
+        re.compile(rf"^for d in {re.escape(words)}$"),
+        re.compile(r"^(?:do|done)$"),
+        re.compile(
+            r"^cosign (?:verify|verify-attestation --type spdxjson) "
+            rf'--certificate-identity "\$\{{IDENTITY\}}" {issuer} '
+            r'"\$\{IMAGE\}@\$\{d\}" > /dev/null$'
+        ),
+    )
+    for piece in body:
+        if "${{" in piece or not any(a.match(piece) for a in allowed):
+            refusals.append(f"runs a command the release verify does not: {piece}")
     return refusals
 
 
@@ -2645,8 +2667,11 @@ class RehearsalVerify(unittest.TestCase):
             "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@refs/tags/v4.0.0-beta.2",
             "        run: |",
             "          set -euo pipefail",
+            "          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway",
             '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do',
-            '            cosign verify --certificate-identity "${IDENTITY}" "${IMAGE}@${d}" > /dev/null',
+            '            cosign verify --certificate-identity "${IDENTITY}" '
+            "--certificate-oidc-issuer 'https://token.actions.githubusercontent.com' "
+            '"${IMAGE}@${d}" > /dev/null',
             "          done",
         ]
         self.assertEqual(readonly_verify_refusals(base), [])
@@ -2656,6 +2681,11 @@ class RehearsalVerify(unittest.TestCase):
             '            syft "${IMAGE}@${d}" -o spdx-json > sbom.json',
             '            docker buildx imagetools create --tag "${IMAGE}:${VERSION}" "${IMAGE}@${d}"',
             '            LIST="$(cat digests/amd64)"',
+            '            cosign attach sbom --sbom x "${IMAGE}@${d}"',
+            '            cosign copy "${IMAGE}@${d}" "${IMAGE}:4.0.0"',
+            '            docker push "${IMAGE}:rehearsal"',
+            '            oras push "${IMAGE}:x" f',
+            '            echo "${{ github.ref }}"',
         ):
             block = base[:-1] + [extra, base[-1]]
             self.assertTrue(readonly_verify_refusals(block), f"admitted: {extra}")
