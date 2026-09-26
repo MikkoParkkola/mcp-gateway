@@ -1393,6 +1393,20 @@ held to item 35.
 - `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
 
+## 55. Answers without the gateway's `requestState` are refused
+
+A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+refused with `-32602` ("inputResponses are not accepted without the requestState this
+gateway issued") instead of being forwarded to the backend.
+
+- **Why.** Every interim the gateway relays carries a `requestState` it minted, so an honest
+  retry always presents one. Forwarded without it, the answers reached the backend as a fresh
+  call, and a backend that ignores the field ran the call again.
+- **Who is affected.** Only a client that sends answers it was never asked for. A retry that
+  echoes the `requestState` it received is unchanged, and `inputResponses: {}` still runs.
+- **Idempotency.** The refusal happens before dispatch and releases the idempotency key, so
+  the same key can be used for a corrected call.
+
 ## 58. Session ids are always minted by the gateway
 
 A legacy HTTP session id is the only thing that proves a session is yours when

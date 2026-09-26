@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+  refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
+  idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
+
 - **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
   token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
   read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
@@ -957,12 +961,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   than handed to the client, bound to the caller and the original request, and
   redeemable once.
 
-  **Retry forwarding is not implemented in this release.** The minting,
-  sealing and single-use ledger exist and are tested; unsealing a continuation
-  and forwarding the retry to the backend does not. A well-formed retry is
-  refused with `-32602` and "retry forwarding is not available on this build"
-  rather than being run as a fresh call, because running it fresh would repeat
-  whatever the first attempt already did. MIK-7325 owns the forwarding path.
+  **A retry is forwarded through the sealed continuation.** The gateway opens
+  the `requestState` it minted, checks that it is bound to this caller and this
+  request, spends it once, and sends the backend's own state and the client's
+  answers upstream beside `arguments`. Answers without that `requestState` are
+  refused with `-32602` rather than run as a fresh call, because running it
+  fresh would repeat whatever the first attempt already did.
 
 - **`tools/call` no longer drops a retry's `inputResponses` and
   `requestState`.** Both were silently discarded, so an elicitation could never
