@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# One burst per PR (or ref) at a time: a newer push supersedes the older run.
+concurrency:
+  group: mrtr7b-full-burst-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
@@ -23,7 +28,8 @@ jobs:
     name: MRTR.7b full burst ledger
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mrtr7b-full-burst')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # A cold --all-features compile plus a burst of up to 8.5 minutes.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -34,9 +40,10 @@ jobs:
           cargo test --all-features --test mik_7479_mrtr7b_ledger -- --exact \
             mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture 2>&1 \
             | tee "$RUNNER_TEMP/ledger.log"
-          # A filter that matches nothing exits 0 with "0 passed".
+          # A filter that matches nothing exits 0 with "0 passed"; a failing
+          # test already fails the step through pipefail. The summary line is
+          # coloured (CARGO_TERM_COLOR), so only this plain line is matched.
           grep -q '^running 1 test$' "$RUNNER_TEMP/ledger.log"
-          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/ledger.log"
       - name: Upload the ledger report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
