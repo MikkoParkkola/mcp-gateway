@@ -40,8 +40,6 @@ const FALLBACK_EXEC_PATH: &str = r"C:\Windows\System32;C:\Windows";
 const FALLBACK_EXEC_PATH: &str = "";
 
 fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, String>) {
-    cmd.env_clear();
-
     let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(FALLBACK_EXEC_PATH));
     cmd.env("PATH", path);
 
