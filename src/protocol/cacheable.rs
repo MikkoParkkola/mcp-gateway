@@ -144,7 +144,7 @@ pub fn is_final(result: &Value) -> bool {
 /// meta route) and the capability executor's cache. A new cache of tool
 /// results must call it too.
 #[must_use]
-pub fn is_error(result: &Value) -> bool {
+pub(crate) fn is_error(result: &Value) -> bool {
     result.get("isError").and_then(Value::as_bool) == Some(true)
 }
 
