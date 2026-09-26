@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Enforce the 800-line ceiling on Rust source files.
 
-The ceiling governs a file, not a change. 91 files already exceed it, so the
-gate ratchets instead of failing the tree: every offender is recorded in
+The ceiling governs a file, not a change. The files already over it do not
+fail the tree; the gate ratchets instead: every offender is recorded in
 ``file-size-baseline.txt`` with the line count it had when recorded. A file may
 shrink freely; it may not grow, and no file may newly cross the ceiling.
 
@@ -32,9 +32,9 @@ SCANNED = ("src", "tests")
 
 DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$")
 # Built-in attributes that carry no code. A macro attribute above a `mod` could
-# expand to anything, so it counts.
+# expand to anything, so it counts, and so does `cfg_attr`, which can apply one.
 INERT_ATTRIBUTE = re.compile(
-    r"^\s*#\[\s*(cfg|cfg_attr|path|allow|expect|warn|deny|doc|deprecated|rustfmt::skip)"
+    r"^\s*#\[\s*(cfg|path|allow|expect|warn|deny|doc|deprecated|rustfmt::skip)"
     r"\b.*\]\s*$"
 )
 
