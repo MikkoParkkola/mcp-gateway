@@ -27,7 +27,7 @@ class OwaspCitations(unittest.TestCase):
             root = Path(tmp)
             (root / "src" / "security").mkdir(parents=True)
             (root / "src" / "security" / "policy.rs").write_text(
-                "#[test]\nfn deny_pattern_blocks_exec() {}\nfn helper_only() {}\n// #[test]\n// fn commented_out_test() {}\n", encoding="utf-8"
+                "#[test]\nfn deny_pattern_blocks_exec() {}\nfn helper_only() {}\n// #[test]\n// fn commented_out_test() {}\n/* outer /* #[test] fn nested_comment_test() {} */ still */\nconst S: &str = \"/*\";\n#[test]\nfn after_string_test() {}\n", encoding="utf-8"
             )
             (root / "tests").mkdir()
             path = root / "doc.md"
@@ -57,6 +57,17 @@ class OwaspCitations(unittest.TestCase):
 
     def test_an_unsupported_flag_is_reported(self):
         found = self.problems_in("```bash\ncargo test --release deny_pattern_blocks\n```\n")
+        self.assertTrue(found and found[0].startswith("validation command form not checkable"), found)
+
+    def test_a_test_inside_a_nested_block_comment_does_not_count(self):
+        found = self.problems_in("```bash\ncargo test nested_comment_test\n```\n")
+        self.assertEqual(found, ["validation command matches no test: cargo test nested_comment_test"])
+
+    def test_a_string_containing_a_comment_opener_hides_no_test(self):
+        self.assertEqual(self.problems_in("```bash\ncargo test after_string_test\n```\n"), [])
+
+    def test_a_tab_separated_command_is_reported(self):
+        found = self.problems_in("```bash\ncargo\ttest\t--release deny_pattern_blocks\n```\n")
         self.assertTrue(found and found[0].startswith("validation command form not checkable"), found)
 
     def test_existing_citations_pass(self):

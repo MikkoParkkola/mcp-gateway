@@ -7,11 +7,15 @@ The self-assessment cites source paths as evidence and lists the tests that pin
 each control. A path that no longer exists, or a test name that matches no test,
 is a claim nobody can check any more; this fails on either.
 
+Validation commands must have the shape `cargo test [--lib] <name>`; any other
+`cargo test` line is reported rather than skipped.
+
     python3 scripts/dev/check-owasp-citations.py [path/to/doc.md]
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -27,10 +31,18 @@ CITED_PATH = re.compile(r"`((?:src|tests|docs|scripts|\.github)/[^`\s]*)`")
 CARGO_LINE = re.compile(r"^\s*cargo\s+test\b.*$", re.M)
 # `--lib` is the only flag it reads; any other shape is reported, not skipped.
 CARGO_TEST = re.compile(r"^\s*cargo\s+test(?:\s+--lib)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
-LINE_COMMENT = re.compile(r"//[^\n]*")
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 # A test function: `#[test]` or `#[tokio::test(...)]`, then attributes, then `fn`.
 TEST_FN = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _rust_lexer():
+    """The orphan-module gate, for its comment- and string-aware `blank`."""
+    spec = importlib.util.spec_from_file_location(
+        "orphan_gate", Path(__file__).resolve().parent / "check-orphan-test-modules.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_names_defined(root: Path) -> set[str]:
@@ -38,9 +50,9 @@ def test_names_defined(root: Path) -> set[str]:
     names: set[str] = set()
     for sub in ("src", "tests"):
         for path in (root / sub).rglob("*.rs"):
-            text = path.read_text(encoding="utf-8", errors="replace")
-            # A commented-out test is not a test.
-            text = BLOCK_COMMENT.sub("", LINE_COMMENT.sub("", text))
+            # A commented-out test is not a test. The orphan gate's lexer
+            # blanks nested block comments and string contents correctly.
+            text, _ = _rust_lexer().blank(path.read_text(encoding="utf-8", errors="replace"))
             names.update(TEST_FN.findall(text))
     return names
 
