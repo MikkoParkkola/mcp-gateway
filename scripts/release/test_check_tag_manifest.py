@@ -735,8 +735,7 @@ def gate_steps(workflow, job):
     return [
         block
         for block in steps(workflow, job=job)
-        if any(line.strip() in ("id: meta", "- id: meta") for line in block)
-        and any(runs(command, TAG_GATE) for command in joined(block))
+        if any(runs(command, TAG_GATE) for command in joined(block))
     ]
 
 
