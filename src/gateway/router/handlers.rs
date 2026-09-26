@@ -29,6 +29,7 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::session_id::{SessionOwner, session_fp};
 #[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
@@ -52,21 +53,26 @@ mod tasks;
 /// share one, which would let them attach to each other's sessions. The key
 /// records whether a credential was actually validated, so an API key named
 /// "anonymous" cannot claim the unauthenticated identity's sessions.
-fn session_owner(client: Option<&AuthenticatedClient>) -> String {
-    client.map_or_else(
-        || "unauthenticated:anonymous".to_string(),
-        |c| {
-            if c.authenticated && !c.principal.is_empty() {
-                // A digest of the validated secret. Two API keys configured
-                // with the same display name are different principals, and
-                // keying on the name would let either attach to the other's
-                // sessions.
-                format!("credential:{}", c.principal)
-            } else {
-                format!("unauthenticated:{}", c.name)
-            }
-        },
-    )
+fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
+    match client {
+        // The validated principal, a digest of the secret: two API keys
+        // configured with the same display name are different owners.
+        Some(c) if c.authenticated && !c.principal.is_empty() => {
+            SessionOwner::Credential(c.principal.clone())
+        }
+        // Every other caller, named or not, is one class: an unvalidated name is
+        // not a credential. Only the minted session id separates them (F9).
+        _ => SessionOwner::Anonymous,
+    }
+}
+
+/// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
+/// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
+fn session_id_header(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|id| !id.trim().is_empty())
 }
 
 /// The extension a task-augmented request must declare.
@@ -260,11 +266,7 @@ pub(super) async fn mcp_sse_handler(
         .into_response();
     }
 
-    // Get or create session - convert to owned strings for Rust 2024 lifetime rules
-    let existing_session_id = headers
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
+    let existing_session_id = session_id_header(&headers).map(String::from);
 
     let last_event_id = headers
         .get("last-event-id")
@@ -280,7 +282,7 @@ pub(super) async fn mcp_sse_handler(
         crate::gateway::auth::live::held_credential(&headers),
     );
 
-    info!(session_id = %session_id, "Client connected to SSE stream");
+    info!(session_id = %session_fp(&session_id), "Client connected to SSE stream");
 
     // Auto-subscribe to configured backends
     let multiplexer = Arc::clone(&state.multiplexer);
@@ -336,16 +338,16 @@ pub(super) async fn mcp_delete_handler(
             "Session termination requires an authenticated credential.",
         );
     }
-    let session_id = headers.get("mcp-session-id").and_then(|v| v.to_str().ok());
+    let session_id = session_id_header(&headers);
     let owner = session_owner(client.as_ref());
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
-            info!(session_id = %id, "Session terminated by client");
+            info!(session_id = %session_fp(id), "Session terminated by client");
             StatusCode::NO_CONTENT
         }
         Some(id) => {
-            debug!(session_id = %id, "No owned session for DELETE");
+            debug!(session_id = %session_fp(id), "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
@@ -620,10 +622,7 @@ async fn meta_mcp_dispatch(
         declared_version.is_some_and(crate::protocol::meta::declares_modern_era);
 
     // Get or create session for this client
-    let existing_session_id = headers
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
+    let existing_session_id = session_id_header(&headers).map(String::from);
 
     let (session_id, session_rx) = if declares_modern_by_header {
         // No session, and none minted. Minting one per request grew a table of
@@ -811,7 +810,7 @@ async fn meta_mcp_dispatch(
     // still declared what it declared.
     crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
-    debug!(method = %method, session_id = %session_id, "Meta-MCP request");
+    debug!(method = %method, session_id = %session_fp(&session_id), "Meta-MCP request");
 
     // The same refusal, reached by a request that declared no era. The check
     // below is inside the `Modern` arm, so a header naming a revision this

@@ -3407,7 +3407,7 @@ async fn sampling_prompt_is_delivered_to_the_requesting_session() {
     let (state, _store) = test_router_app_state().await;
     let (session_id, mut rx) = state
         .multiplexer
-        .get_or_create_session_for(Some("gw-caller"), "unauthenticated:anonymous");
+        .get_or_create_session_for(None, &crate::gateway::session_id::SessionOwner::Anonymous);
     let router = create_router(Arc::clone(&state));
 
     // WHEN: that session asks the gateway for a sampling round trip

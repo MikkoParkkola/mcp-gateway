@@ -29,6 +29,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::gateway::session_id::{SessionId, session_fp};
 use crate::protocol::{ElicitationCreateParams, Root, SamplingCreateMessageParams};
 
 use super::input_bridge::{ClientChannel, DeliveryError};
@@ -102,7 +103,7 @@ pub struct ProxyManager {
 
 /// A waiting sampling/elicitation call, bound to the session that was prompted.
 struct PendingSample {
-    session_id: String,
+    session_id: SessionId,
     tx: oneshot::Sender<Value>,
 }
 
@@ -158,7 +159,7 @@ impl ProxyManager {
         self.pending_sampling.write().insert(
             id,
             PendingSample {
-                session_id: session_id.into(),
+                session_id: SessionId::new(&Into::<String>::into(session_id)),
                 tx,
             },
         );
@@ -176,10 +177,10 @@ impl ProxyManager {
         let mut pending = self.pending_sampling.write();
         match pending.get(id) {
             None => false,
-            Some(entry) if entry.session_id != session_id => {
+            Some(entry) if entry.session_id.expose_secret() != session_id => {
                 warn!(
                     %id,
-                    attempted_session = %session_id,
+                    attempted_session = %session_fp(session_id),
                     owner_session = %entry.session_id,
                     "Refused sampling/elicitation POST-back from a session that was not prompted"
                 );
@@ -204,11 +205,6 @@ impl ProxyManager {
     // ========================================================================
     // Sampling request-response flow
     // ========================================================================
-
-    /// Return the first connected session ID, if any.
-    pub fn first_session_id(&self) -> Option<String> {
-        self.multiplexer.first_session_id()
-    }
 
     /// Forward a `sampling/createMessage` request and wait for the client response.
     ///
@@ -268,7 +264,7 @@ impl ProxyManager {
             self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
         }
-        debug!(%id, %session_id, "Sent sampling/createMessage to the originating session");
+        debug!(%id, session_id = %session_fp(session_id), "Sent sampling/createMessage to the originating session");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
@@ -333,7 +329,7 @@ impl ProxyManager {
             self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
         }
-        debug!(%id, %session_id, "Sent elicitation/create to the originating session");
+        debug!(%id, session_id = %session_fp(session_id), "Sent elicitation/create to the originating session");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
@@ -373,9 +369,9 @@ impl ProxyManager {
 
         let sent = self.multiplexer.send_to_session(session_id, notification);
         if sent {
-            debug!(session_id = %session_id, "Forwarded elicitation/create to client");
+            debug!(session_id = %session_fp(session_id), "Forwarded elicitation/create to client");
         } else {
-            warn!(session_id = %session_id, "Failed to forward elicitation/create");
+            warn!(session_id = %session_fp(session_id), "Failed to forward elicitation/create");
         }
         sent
     }
@@ -403,9 +399,9 @@ impl ProxyManager {
 
         let sent = self.multiplexer.send_to_session(session_id, notification);
         if sent {
-            debug!(session_id = %session_id, "Forwarded sampling/createMessage to client");
+            debug!(session_id = %session_fp(session_id), "Forwarded sampling/createMessage to client");
         } else {
-            warn!(session_id = %session_id, "Failed to forward sampling/createMessage");
+            warn!(session_id = %session_fp(session_id), "Failed to forward sampling/createMessage");
         }
         sent
     }
@@ -459,7 +455,7 @@ impl ProxyManager {
             self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
         }
-        debug!(%id, %session_id, "Sent roots/list to the originating session");
+        debug!(%id, session_id = %session_fp(session_id), "Sent roots/list to the originating session");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
@@ -563,7 +559,7 @@ impl ClientChannel for ProxyManager {
         if !self.multiplexer.send_to_session(session_id, notification) {
             return Err(DeliveryError::NoSession);
         }
-        debug!(%id, %session_id, %method, "Sent bridged request to the originating session");
+        debug!(%id, session_id = %session_fp(session_id), %method, "Sent bridged request to the originating session");
 
         // A dropped sender means the entry went away without an answer, which
         // is what the bridge's own timeout arm means by `TimedOut`.
@@ -733,27 +729,6 @@ mod tests {
         wait.await
             .expect("forward task join")
             .expect("originating session answered");
-    }
-
-    #[test]
-    fn first_session_id_none_when_no_sessions() {
-        // GIVEN: a multiplexer with no sessions
-        let mux = make_multiplexer();
-        let proxy = ProxyManager::new(mux);
-
-        // THEN: first_session_id returns None
-        assert!(proxy.first_session_id().is_none());
-    }
-
-    #[test]
-    fn first_session_id_returns_session_when_connected() {
-        // GIVEN: a multiplexer with one session
-        let mux = make_multiplexer();
-        let (session_id, _rx) = mux.get_or_create_session(Some("my-session"));
-        let proxy = ProxyManager::new(mux);
-
-        // THEN: first_session_id returns that session
-        assert_eq!(proxy.first_session_id(), Some(session_id));
     }
 
     // ── Roots caching ──────────────────────────────────────────────────

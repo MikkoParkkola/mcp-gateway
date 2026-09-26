@@ -77,6 +77,7 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 #[path = "transparency_log_degraded.rs"]
 mod degraded;
 
+use crate::gateway::session_id::session_fp;
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -349,7 +350,9 @@ impl TransparencyLogger {
         }
         fields.insert("route".into(), target.route.as_str().into());
         fields.insert("server".into(), target.server.into());
-        fields.insert("session_id".into(), key.id.into());
+        let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
+        let session_id: String = fp.unwrap_or_else(|| key.id.into());
+        fields.insert("session_id".into(), session_id.into());
         fields.insert("timestamp".into(), timestamp.into());
         if let Some(tool) = target.tool {
             fields.insert("tool".into(), tool.into());
@@ -717,7 +720,7 @@ fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResu
     })
 }
 
-/// Read `path` and return all entries whose `session_id` matches `session`.
+/// Entries in `path` whose `session_id` is `session` or, since F9, its fingerprint.
 ///
 /// # Errors
 ///
@@ -738,7 +741,8 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_
                 continue;
             }
         };
-        if entry.get("session_id").and_then(|v| v.as_str()) == Some(session) {
+        let stored = entry.get("session_id").and_then(|v| v.as_str());
+        if stored.is_some_and(|s| s == session || s == session_fp(session)) {
             results.push(entry);
         }
     }
@@ -1085,10 +1089,9 @@ mod tests {
 
         // WHEN: show is called for session "alpha"
         let entries = show_session_entries(tmp.path(), "alpha").unwrap();
-
         // THEN: only "alpha" entries are returned, stored as its fingerprint
         assert_eq!(entries.len(), 2);
-        let fp = crate::gateway::session_id::session_fp("alpha");
+        let fp = session_fp("alpha");
         assert!(entries.iter().all(|e| e["session_id"] == fp));
     }
 

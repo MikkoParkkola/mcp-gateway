@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Legacy HTTP session ids are minted by the gateway and never adopted** (F9, MIK-7585,
+  #1140). A client-chosen `Mcp-Session-Id` that names no live session gets a fresh `gw-` id
+  instead of becoming the session's id, so an unauthenticated caller can no longer pick an id
+  ahead of another caller and receive or answer its elicitation prompts. Every
+  unauthenticated caller is one owner class, separated only by holding the minted id. An
+  empty or whitespace id is treated as absent (DELETE answers 400). Session ids in logs, the
+  firewall audit log and the transparency log are 8-hex fingerprints; `audit show --session` still finds
+  entries by the raw id. Breaking for library users: `first_session_id` is removed from
+  `NotificationMultiplexer` and `ProxyManager`, and `get_or_create_session_for` is no
+  longer public. See UPGRADING-4.0 item 58.
 - **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
   (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
   now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
