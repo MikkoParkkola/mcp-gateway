@@ -799,6 +799,11 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
 
+The file itself must be a regular file (a symlink to one is fine, which is how Kubernetes projects a
+Secret or ConfigMap). A FIFO, device, directory, `/dev/stdin`, `/dev/fd/N` or shell process substitution
+`<(...)` given as a config, env file, `file:` secret, key, token, credential or trust file is refused on
+Unix, naming what it is; write the content to a file instead. Before 4.0 a FIFO there hung the start.
+
 Item 54 applies this rule to TLS keys, OAuth token files, capability credential files and the
 CA key, and a write-only form of it to certificates, CRLs and grant and policy files.
 
