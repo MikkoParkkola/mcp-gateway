@@ -103,7 +103,8 @@ impl Backend {
             // fast-fail answers as the failure it stands in for. `standard`
             // forwards, and the dispatch then fails on its own.
             Err(e)
-                if mode == InputSchemaEnforcement::Closed
+                if mode == InputSchemaEnforcement::Standard
+                    && mode == InputSchemaEnforcement::Closed
                     && is_transport_failure(&e)
                     && !self.cooling_after_unreadable_list(identity_key) =>
             {
