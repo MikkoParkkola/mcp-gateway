@@ -40,6 +40,7 @@ async fn main() -> ExitCode {
 /// Run `body` on a thread with [`MAIN_STACK_BYTES`] of stack and return its
 /// value. A panic in `body` is re-raised on the caller (the thread already
 /// printed it), so the exit status stays a panic's.
+#[allow(dead_code)] // mutant: the helper is unused
 fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
         .name("main".into())
