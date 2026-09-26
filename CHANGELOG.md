@@ -137,6 +137,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
+- **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
+  `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
+  so callers sharing a backend could read or cancel each other's tasks. These methods now
+  answer JSON-RPC -32601 and never reach the backend; `POST /mcp` still serves tasks.
+  See UPGRADING-4.0 item 67 (#1442).
+
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
   JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by

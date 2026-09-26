@@ -1592,6 +1592,24 @@ and an audit record with outcome `error`. It is now refused like an admin-only t
 **Action:** only a client, alert or log query that matched the old 400/-32603 answer or the
 "Configuration error" text for this refusal needs to match 403/-32600 instead.
 
+## 67. Task calls on per-backend routes are refused
+
+`POST /mcp/{name}` forwarded `tasks/get`, `tasks/update`, `tasks/cancel` and every other
+`tasks/*` method to the backend unchanged, with no owner check. Callers allowed on the same
+backend share its credential, so the backend could not tell them apart: one caller holding
+another's task id could read that task's result or cancel it.
+
+In 4.0, task calls on per-backend routes are refused until they carry an owner check:
+
+- Every `tasks/*` method on `POST /mcp/{name}`, in any letter case, and `subscriptions/listen`
+  naming `taskIds`, is answered with JSON-RPC -32601 (HTTP 200). Nothing reaches the backend.
+- `POST /mcp` still serves tasks, with each task visible only to the caller that created it.
+- Every other method on `POST /mcp/{name}` forwards as before, including a `tools/call`
+  carrying `task`, and `subscriptions/listen` without `taskIds`.
+
+**Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
+gets -32601. Create and follow tasks through `POST /mcp` instead.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
