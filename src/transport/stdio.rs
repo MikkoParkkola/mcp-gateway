@@ -821,6 +821,9 @@ impl Transport for StdioTransport {
     }
 }
 
+#[path = "stdio_early_exit.rs"]
+mod early_exit;
+
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;
