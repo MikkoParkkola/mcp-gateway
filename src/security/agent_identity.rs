@@ -752,7 +752,6 @@ pub(crate) fn log_agent_identity(
             agent_proof = proof.as_deref(),
             agent_secondary_proof = secondary,
             agent_secondary_proof_source = secondary_proof.as_deref(),
-            agent_declared = declared,
             agent_declared_source = declared_source.as_deref(),
             declared_label_mismatch = true,
             "agent declared a label that differs from its proven principal"
