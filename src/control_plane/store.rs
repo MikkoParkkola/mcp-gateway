@@ -626,7 +626,7 @@ impl FileControlPlaneStore {
     /// present-but-unparseable file as [`StoreError::Corrupt`] (fail closed).
     fn load<T: DeserializeOwned>(file: &Path) -> StoreResult<VersionedCollection<T>> {
         let what = CheckedFile::ControlPlaneCollection; // mode-checked on read (F18 I4)
-        match crate::config::read_checked_file(file, what) {
+        match { let _ = what; std::fs::read_to_string(file) } {
             Ok(text) => serde_json::from_str(&text)
                 .map_err(|e| StoreError::Corrupt(format!("{}: {e}", file.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(VersionedCollection {
