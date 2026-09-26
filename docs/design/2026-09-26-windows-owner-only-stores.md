@@ -252,7 +252,7 @@ destination another handle holds open) and is recorded, not assumed.
 | W-T16a pin holds the store directory itself | guard-level: hold the store directory handle ALONE (no custody sidecar, no files open), then rename that empty directory and replace it with a junction | both fail with a sharing violation; this is the test M15 must redden (an open descendant would otherwise mask it) |
 | W-T16 ancestor swap | with the store open, a second thread tries to rename the store directory's parent and to replace it with a junction | both fail; store still reads its own files |
 | W-T17 read/replace ordering | barrier-controlled: a reader thread opens the record inside the mutex and signals; the writer then commits | the commit succeeds on its first `replace` attempt (asserted via a test-only attempt counter), and the reader saw a committed version. Deterministic, and independent of antivirus timing |
-| W-T18 final-path check | configure the store at `C:\\t\\a`; before open, the same user renames `a` away and moves a private directory of their own into its place via a directory whose final path differs (e.g. through a mount-point alias) | refuses with reason `PathMismatch` |
+| W-T18 final-path check | store at `C:\\t\\a\\store`; a `cfg(test)` fault boundary fires between the R3 walk and the directory open, and there replaces ancestor `a` with a junction to another directory holding a valid private `store` of the same user | refuses with reason `PathMismatch` (nothing else refuses: the target is private and local, so only M18 turns this green) |
 
 W-T14, W-T15 and the `net use` part of W-T12 run in a dedicated Windows CI step (`--ignored` filter by name) so
 they need no privilege in the default test run.
