@@ -59,7 +59,6 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
     for key in [
         "USERPROFILE",
         "APPDATA",
-        "LOCALAPPDATA",
         "TEMP",
         "TMP",
         "SYSTEMROOT",
