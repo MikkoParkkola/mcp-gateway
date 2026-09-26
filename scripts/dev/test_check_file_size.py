@@ -83,6 +83,10 @@ class FileSizeGate(unittest.TestCase):
         # A macro attribute expands to arbitrary code; only inert ones ride free.
         self.assert_grew("#[my_macro(a, b)]\nmod child;\n", {"src/child.rs": ""})
 
+    def test_t3c_a_cfg_attr_above_a_declaration_counts(self):
+        # `cfg_attr` can apply any attribute, a macro included, so it is not inert.
+        self.assert_grew("#[cfg_attr(test, my_macro)]\nmod child;\n", {"src/child.rs": ""})
+
     def test_t4_an_inline_module_is_code_not_a_declaration(self):
         self.assert_grew("mod x { fn a() {} }\n")
 
@@ -91,6 +95,9 @@ class FileSizeGate(unittest.TestCase):
 
     def test_t5b_a_public_declaration_is_exempt(self):
         self.assert_passes("pub mod child;\n", {"src/child.rs": ""})
+
+    def test_t5c_a_path_restricted_declaration_is_exempt(self):
+        self.assert_passes("pub(in crate::x) mod child;\n", {"src/child.rs": ""})
 
     def test_t6_the_attached_file_is_held_to_the_ceiling(self):
         status, out = self.run_gate("mod child;\n", {"src/child.rs": body(801)})
