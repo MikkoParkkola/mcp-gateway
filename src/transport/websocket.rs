@@ -235,6 +235,9 @@ impl Inner {
 ///
 /// [`connect`]: WebSocketTransport::connect
 /// [`reconnect`]: WebSocketTransport::reconnect
+// Throwaway red tree only: the stub stores these fields but the unimplemented
+// transport never reads them, and CI builds with -Dwarnings.
+#[allow(dead_code)]
 pub struct WebSocketTransport {
     /// WebSocket endpoint URL (`ws://` or `wss://`).
     url: String,
