@@ -400,7 +400,7 @@ async fn test_router_app_state_minting_without_route_audit(
         enabled: true,
         path,
         key_id: "test".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     });
     meta.enable_transparency_log(Arc::new(
         TransparencyLogger::open(cfg).expect("logger opens"),

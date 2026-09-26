@@ -71,7 +71,7 @@ fn meta(reply: Result<Value, String>, dir: &tempfile::TempDir) -> MetaMcp {
             .to_string_lossy()
             .into_owned(),
         key_id: "d1".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     }))
     .expect("open log");
     let mut meta = MetaMcp::new(registry);
