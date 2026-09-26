@@ -49,6 +49,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
 - **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
   the startup capability scan has read every directory, so a pod or container is no longer
   sent traffic while its catalogue is empty; the admin `/health` view adds
