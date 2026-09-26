@@ -53,6 +53,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
 - **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
   the startup capability scan has read every directory, so a pod or container is no longer
   sent traffic while its catalogue is empty; the admin `/health` view adds
@@ -98,6 +102,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   discarded. The error now names the exit status and points at the gateway log, where one record
   carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
   text redacted. The stderr never goes to MCP clients. (#526)
+- **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
+  about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
+  thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
+  Release builds were not affected.
 - **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
   durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
   non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
@@ -149,6 +157,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   it ran `cargo check` only. (#524)
 
 ### Security
+
+- **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
+  `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
+  so callers sharing a backend could read or cancel each other's tasks. These methods now
+  answer JSON-RPC -32601 and never reach the backend; `POST /mcp` still serves tasks.
+  See UPGRADING-4.0 item 67 (#1442).
 
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,

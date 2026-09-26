@@ -242,3 +242,190 @@ async fn readyz_alone_recovers_after_storage_heals() {
     );
     assert!(!fx.log.is_degraded());
 }
+
+// ── F20: a stalled audit disk ───────────────────────────────────────────────
+
+const F20_BOUND: Duration = Duration::from_millis(200);
+
+async fn readyz_body(fx: &Fixture) -> (StatusCode, String) {
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/readyz")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// F20 T1 + `/readyz`. `FailClosed`: the stuck append answers 503 within the
+/// bound, and `/readyz` names the stall.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stalled_append_times_out_with_503_and_readyz_reports_stalled() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let release = fx.log.stall_next_write_for_test(F20_BOUND);
+    let start = std::time::Instant::now();
+    let first = invoke(&fx, 1).await;
+    assert!(
+        start.elapsed() < F20_BOUND * 5,
+        "bounded: {:?}",
+        start.elapsed()
+    );
+    assert_audit_unavailable(&first, "stalled call");
+    assert!(fx.log.is_stalled());
+    let (status, body) = readyz_body(&fx).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body, "audit log unavailable: stalled");
+    release.release();
+}
+
+/// F20 T1 `BestEffort`: results are delivered during a stall, the second call
+/// at once, and `/readyz` stays 200.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn best_effort_stall_delivers_result_and_stays_ready() {
+    let fx = fixture(AuditFailurePolicy::BestEffort).await;
+    let release = fx.log.stall_next_write_for_test(F20_BOUND);
+    let first = invoke(&fx, 1).await;
+    assert!(first.error.is_none(), "{:?}", first.error);
+    assert!(fx.log.is_stalled());
+    let start = std::time::Instant::now();
+    let second = invoke(&fx, 2).await;
+    assert!(second.error.is_none(), "{:?}", second.error);
+    assert!(start.elapsed() < F20_BOUND, "no wait while stalled");
+    assert_eq!(readyz(&fx).await, StatusCode::OK);
+    release.release();
+}
+
+/// F20 T6. The delivery-attempt append is bounded too: a stall answers 503
+/// within the bound instead of pinning a worker (`FailClosed`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delivery_attempt_append_is_bounded() {
+    use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
+    use crate::security::response_policy::{
+        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
+    };
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let release = fx.log.stall_next_write_for_test(F20_BOUND);
+    let start = std::time::Instant::now();
+    let response = fx
+        .state
+        .meta_mcp
+        .finalize_response_for_delivery(
+            JsonRpcResponse::success(RequestId::Number(1), json!({"content": []})),
+            &ResponseDeliveryContext {
+                method: "tools/call",
+                targets: &[ResponsePolicyTarget {
+                    server: "alpha".into(),
+                    tool: "read".into(),
+                }],
+                correlation: ResponseCorrelation {
+                    session_id: "s",
+                    caller: "c",
+                    external_server: "gateway",
+                    external_tool: "gateway_invoke",
+                },
+                mutation: ResponseMutationPolicy::Redact,
+                signing: None,
+            },
+        )
+        .await;
+    assert!(
+        start.elapsed() < F20_BOUND * 5,
+        "bounded: {:?}",
+        start.elapsed()
+    );
+    assert_audit_unavailable(&response, "stalled delivery");
+    assert!(fx.log.is_stalled());
+    release.release();
+}
+
+/// F20 T3 / #1133 fail-fast. The invocation append stalls and the call is
+/// withheld with 503. Delivering that 503 writes no delivery-attempt row:
+/// the log is stalled, so the append refuses at once. When the stuck write
+/// lands, the log holds an invocation record with no delivery attempt,
+/// which is how a withheld result reads (UPGRADING item 50).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn withheld_call_leaves_no_delivery_attempt_row() {
+    use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
+    use crate::security::response_policy::{
+        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
+    };
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let release = fx.log.stall_next_write_for_test(F20_BOUND);
+    let start = std::time::Instant::now();
+    let withheld = invoke(&fx, 1).await;
+    assert_audit_unavailable(&withheld, "stalled call");
+    assert!(fx.log.is_stalled());
+    // Refused at once: a delivery append that queued for the permit instead
+    // would take a full bound before failing, and write nothing either way.
+    let delivering = std::time::Instant::now();
+    let delivered = fx
+        .state
+        .meta_mcp
+        .finalize_response_for_delivery(
+            withheld,
+            &ResponseDeliveryContext {
+                method: "tools/call",
+                targets: &[ResponsePolicyTarget {
+                    server: "alpha".into(),
+                    tool: "read".into(),
+                }],
+                correlation: ResponseCorrelation {
+                    session_id: "s",
+                    caller: "c",
+                    external_server: "gateway",
+                    external_tool: "gateway_invoke",
+                },
+                mutation: ResponseMutationPolicy::Redact,
+                signing: None,
+            },
+        )
+        .await;
+    assert_audit_unavailable(&delivered, "delivering the withheld call");
+    assert!(
+        delivering.elapsed() < F20_BOUND,
+        "the delivery append waited: {:?}",
+        delivering.elapsed()
+    );
+    assert!(
+        start.elapsed() < F20_BOUND * 5,
+        "bounded: {:?}",
+        start.elapsed()
+    );
+    release.release();
+    let rows = || -> Vec<Value> {
+        std::fs::read_to_string(fx.log.path())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    };
+    for _ in 0..200 {
+        if rows().iter().any(|r| r.get("request_hash").is_some()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Let anything queued behind the released write land before reading.
+    for _ in 0..200 {
+        if !fx.log.is_stalled() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(F20_BOUND * 2).await;
+    let rows = rows();
+    assert!(
+        rows.iter().any(|r| r.get("request_hash").is_some()),
+        "the late invocation record landed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r["event"] == "response_delivery_attempt"),
+        "no delivery-attempt row for a withheld call: {rows:?}"
+    );
+}
