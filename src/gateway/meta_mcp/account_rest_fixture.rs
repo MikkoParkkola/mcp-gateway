@@ -161,7 +161,7 @@ fn leaked_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
             enabled: true,
             path,
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("logger opens"),
     )

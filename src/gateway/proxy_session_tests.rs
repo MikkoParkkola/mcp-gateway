@@ -214,7 +214,7 @@ fn the_transparency_log_stores_a_session_fingerprint() {
         enabled: true,
         path: tmp.path().to_string_lossy().to_string(),
         key_id: "test".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     }))
     .unwrap();
     let id = "gw-7e000000-audited-session";

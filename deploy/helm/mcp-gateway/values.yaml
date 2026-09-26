@@ -59,16 +59,20 @@ podSecurityContext:
 # PersistentVolumeClaim to keep it, or ship it out with control_plane.export
 # (SIEM). Each replica writes its own chain. Mesh mode renders no audit volume.
 #
-# THE LOG IS NOT ROTATED YET (rotation is a separate item due before 4.0.0
-# final). When the volume fills, every append fails with `storage_full`: the
-# gateway answers tool calls with 503 and /readyz goes 503, until space is
-# freed. Size it for your traffic: a tool call writes one or two records of
-# roughly 1 KiB, so 1Gi holds on the order of half a million calls. Watch
-# mcp_audit_degraded and
-# mcp_audit_append_failures_total{cause="storage_full"}.
+# The audit log rotates (UPGRADING-4.0 item 49). Disk use is at most
+# (rotation.retainSegments + 1) x rotation.maxSegmentBytes + a 1Mi reserve,
+# which must stay below 90% of sizeLimit (the chart refuses to render
+# otherwise). Defaults: 13 x 64Mi + 1Mi = 833Mi inside 1Gi, the last
+# 400k-800k calls. Do not rotate it externally (logrotate breaks the chain).
+# Watch mcp_audit_degraded and mcp_audit_segments_expired_total.
 audit:
   existingClaim: ""
   sizeLimit: 1Gi
+  rotation:
+    maxSegmentBytes: 67108864   # 64Mi; 1048576..134217728
+    retainSegments: 12
+    onDiskFull: expire_oldest   # or: refuse
+    # maxSegmentAgeSecs: 0      # optional, rendered only when set
 
 configVolume:
   # Decimal, because `--set` and some YAML readers do not take octal: 288 is

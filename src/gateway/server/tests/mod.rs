@@ -25,3 +25,5 @@ mod stdout_death_admission;
 
 mod r2_stdio_keys;
 mod stdio_listing_scope;
+
+mod stdio_initialize_order;

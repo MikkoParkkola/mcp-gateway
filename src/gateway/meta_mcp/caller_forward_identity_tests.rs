@@ -133,7 +133,7 @@ fn audit_log() -> (
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
         key_id: "caller-forward".to_string(),
-        shared_secret: String::new(),
+        ..crate::security::TransparencyLogConfig::default()
     };
     let logger = crate::security::TransparencyLogger::open(Arc::new(config))
         .expect("transparency logger opens");

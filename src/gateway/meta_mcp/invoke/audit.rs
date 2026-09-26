@@ -65,7 +65,7 @@ impl MetaMcp {
     /// included; `response_hash` covers the value returned to the caller
     /// (D1-d.1). A failed call has no response hash. `dispatch_failure` is
     /// the code of a backend failure the call converted to a tool result.
-    pub(super) fn audit_invocation(
+    pub(super) async fn audit_invocation(
         &self,
         args: &Value,
         session_id: Option<&str>,
@@ -118,13 +118,24 @@ impl MetaMcp {
             outcome,
             who: AuditWho::from_caller(caller),
         };
-        let written = log.log_invocation_correlated(
-            key,
-            &envelope,
-            InvocationTarget::meta(server, tool),
-            &sha256_of(args),
-            response_hash.as_deref(),
-        );
+        // F20: on the blocking pool, bounded; a stalled disk answers 503
+        // instead of pinning a runtime worker.
+        let (key_id, key_source) = (key.id.to_string(), key.source);
+        let (srv, tl, request_hash) = (server.to_string(), tool.to_string(), sha256_of(args));
+        let written = log
+            .append_bounded(move |log| {
+                log.log_invocation_correlated(
+                    CorrelationKey {
+                        id: &key_id,
+                        source: key_source,
+                    },
+                    &envelope,
+                    InvocationTarget::meta(&srv, &tl),
+                    &request_hash,
+                    response_hash.as_deref(),
+                )
+            })
+            .await;
         match written {
             Ok(()) => result,
             Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
@@ -135,6 +146,33 @@ impl MetaMcp {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
                 result
             }
+        }
+    }
+
+    /// Record an `idp_refuse`. The request is refused on identity-propagation
+    /// grounds either way, so a failed write is logged, never dropped.
+    pub(super) async fn audit_refused_credential(
+        audit_logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+        subject_id: &str,
+        server: &str,
+        audience: &str,
+        msg: &str,
+    ) {
+        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
+            audit_logger,
+            "idp_refuse",
+            subject_id,
+            server,
+            Some(audience),
+            Some(msg),
+        )
+        .await
+        {
+            tracing::warn!(
+                server,
+                error = %audit_err,
+                "identity-propagation refuse audit write failed"
+            );
         }
     }
 }

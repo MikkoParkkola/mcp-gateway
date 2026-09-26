@@ -4,6 +4,8 @@ use super::*;
 use mcp_gateway::cli::{Cli, InitProfile};
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
+#[path = "main_stack_tests.rs"]
+mod stack;
 
 fn make_discovered_server(name: &str) -> DiscoveredServer {
     DiscoveredServer {
