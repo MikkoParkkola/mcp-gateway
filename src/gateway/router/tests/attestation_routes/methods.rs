@@ -392,35 +392,63 @@ async fn direct_route_attested_subscribe_relays_no_resource_update() {
     );
 }
 
-/// `logging/setLevel` needs an authentic token, but only an admin reaches the
-/// attestation check: the admin gate refuses everyone else first (-32600).
+/// `logging/setLevel` needs an authentic token, not a matching capability.
+/// Only an admin reaches the attestation check (the admin gate refuses
+/// everyone else first with -32600), so this row runs as an admin API key.
 #[tokio::test]
 async fn direct_route_enforce_set_level_needs_only_an_authentic_token() {
-    let (router, _transport, _store) = enforced().await;
-    let admin = AuthenticatedClient {
-        admin: true,
-        ..scoped_client("ops", vec!["demo".to_string()], None)
+    const API_KEY: &str = "attestation-admin-key";
+    let auth = crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![crate::config::ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(API_KEY.as_bytes())),
+            expires_at: None,
+            name: "ops".to_string(),
+            rate_limit: 0,
+            backends: vec!["demo".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: true,
+        }],
+        ..Default::default()
     };
+    let (state, store) = test_router_app_state_with_auth(&auth).await;
+    let (router, transport, _store) =
+        router_on(state, store, Some(AttestationMode::Enforce), false);
     let set_level = |token: &str| {
         let body = json!({"jsonrpc": "2.0", "id": 7, "method": "logging/setLevel",
             "params": {"level": "info", "_meta": {(ATTESTATION_META): token}}});
-        let mut request = axum::http::Request::builder()
+        axum::http::Request::builder()
             .method("POST")
             .uri("/mcp/demo")
+            .header("authorization", format!("Bearer {API_KEY}"))
             .header("content-type", "application/json")
             .body(axum::body::Body::from(body.to_string()))
-            .unwrap();
-        request.extensions_mut().insert(admin.clone());
-        request
+            .unwrap()
     };
-    for (token, admitted) in [(token_for(TOOL), true), ("forged.token".to_string(), false)] {
-        let response = router.clone().oneshot(set_level(&token)).await.unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        if admitted {
-            assert_admitted("admin setLevel with a tool token", &json);
-        } else {
-            assert_attestation_refused("admin setLevel with a forged token", &json);
+    let send = |token: String| {
+        let router = router.clone();
+        async move {
+            let response = router.oneshot(set_level(&token)).await.unwrap();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null)
         }
-    }
+    };
+    let json = send("forged.token".to_string()).await;
+    assert_attestation_refused("admin setLevel with a forged token", &json);
+    assert!(transport.all.lock().unwrap().is_empty(), "no dispatch");
+    let json = send(token_for(TOOL)).await;
+    assert!(
+        json.get("result").is_some(),
+        "admin setLevel with a tool token: {json}"
+    );
+    let forwarded: Vec<String> = transport
+        .all
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(m, _)| m.clone())
+        .collect();
+    assert_eq!(forwarded, vec!["logging/setLevel".to_string()]);
 }

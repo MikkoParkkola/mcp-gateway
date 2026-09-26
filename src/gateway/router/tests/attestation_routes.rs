@@ -102,7 +102,17 @@ async fn router_with(
     mode: Option<AttestationMode>,
     passthrough: bool,
 ) -> (axum::Router, Arc<RecordingTransport>, tempfile::TempDir) {
-    let (mut state, store) = test_router_app_state().await;
+    let (state, store) = test_router_app_state().await;
+    router_on(state, store, mode, passthrough)
+}
+
+/// [`router_with`] on a caller-supplied state, e.g. one with auth on.
+fn router_on(
+    mut state: Arc<AppState>,
+    store: tempfile::TempDir,
+    mode: Option<AttestationMode>,
+    passthrough: bool,
+) -> (axum::Router, Arc<RecordingTransport>, tempfile::TempDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig {
