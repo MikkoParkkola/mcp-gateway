@@ -120,6 +120,8 @@ HTTP 429 and its equivalents are excluded from the error budgets and from the ci
 (GH #475). In 3.x a backend that was merely busy could be tripped open and taken out of
 rotation — the gateway punished a backend for applying backpressure correctly.
 
+The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item 53.
+
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 
@@ -1277,6 +1279,25 @@ not relay. Poll there too.
 
 The legacy `initialize` result differs from 3.5.0 in exactly those three flags (and, over
 stdio, `tools.listChanged`).
+
+## 53. A gateway rate-limit refusal is no longer reported as an open circuit breaker
+
+When a backend's own `failsafe.rate_limit` ran out of tokens, the gateway refused the
+call with "Circuit breaker open for backend 'x'", although the breaker was closed, and
+counted each refusal as a backend failure in the error budgets. One caller's burst past
+the limit could therefore auto-disable a capability, or kill the backend, for every
+caller.
+
+- **The refusal now reads `Rate limit exceeded for backend 'x'`.** The JSON-RPC code is
+  still `-32000`. The recovery hint is `RATE_LIMITED` (back off and retry), not
+  `CIRCUIT_OPEN`. Clients or alerts that matched "Circuit breaker open" to detect
+  throttling must match the new text.
+- **Rate-limit refusals are not sampled by the error budgets**, so they can no longer
+  disable a capability or kill a backend.
+- **`mcp_backend_circuit_state` follows the breaker only.** A rate-limit refusal no
+  longer drops it to 0.
+- A breaker that is really open is unchanged: same message, and it still counts as a
+  failure.
 
 ## After upgrading
 

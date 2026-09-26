@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Ratchet on the DoD "Files <= 800 LOC" gate.
 #
-# 56 production files in src/ breach the ceiling today. Splitting them is not in
+# CEILING production files in src/ may breach the ceiling. Splitting them is not in
 # 4.0.0 (MIK-7478), so the deviation is bounded here instead of left open: the
 # count may fall, never rise. When it falls, lower CEILING in the same commit --
 # failing on an improvement is what makes this a ratchet rather than a
@@ -13,7 +13,7 @@
 # exclusion is the same one MIK-7478's fail-fast check uses.
 set -euo pipefail
 
-CEILING=52
+CEILING=51
 LIMIT=800
 
 # Count .rs files under $1 whose length exceeds LIMIT, skipping test sources.
