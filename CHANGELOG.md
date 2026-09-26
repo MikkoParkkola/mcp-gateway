@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`
+  dropped every inbound notification. It now delivers `notifications/progress` to the call whose
+  request carried that `progressToken`, under the stdio transport's rules: progress only, the
+  token must belong to a live call, and a frame it cannot attribute is dropped. The caller gets
+  its own token back through the request-scoped translation, as on stdio.
 - **One caller's burst no longer disables a tool for every caller.** A refusal by a
   backend's own rate limiter was reported as "Circuit breaker open" and counted as a
   backend failure, so a burst past the limit could auto-disable the capability or kill
