@@ -717,59 +717,7 @@ pub(crate) fn log_agent_identity(
     audit: IdentityAudit,
     refusal: Option<&str>,
 ) {
-    let proven = identity.proven_id();
-    let proof = identity.proven.as_ref().map(|p| p.proof().to_string());
-    let secondary = identity.secondary_proof.as_ref().map(ProvenPrincipal::id);
-    let secondary_proof = identity
-        .secondary_proof
-        .as_ref()
-        .map(|p| p.proof().to_string());
-    let declared = identity.declared_id();
-    let declared_source = identity.declared.as_ref().map(|d| d.source.to_string());
-
-    if let Some(reason) = refusal {
-        tracing::warn!(
-            agent_proven = proven,
-            agent_proof = proof.as_deref(),
-            agent_secondary_proof = secondary,
-            agent_secondary_proof_source = secondary_proof.as_deref(),
-            agent_declared = declared,
-            agent_declared_source = declared_source.as_deref(),
-            refused = true,
-            reason = reason,
-            "agent identity refused"
-        );
-        return;
-    }
-
-    let mismatch = audit == IdentityAudit::DeclaredLabelMismatch;
-    if mismatch {
-        // The ruling's "turning the vulnerability into detection": a proven
-        // principal and a label that differ, in a namespace the operator has
-        // been told is incomparable. Accepted, and alertable.
-        tracing::warn!(
-            agent_proven = proven,
-            agent_proof = proof.as_deref(),
-            agent_secondary_proof = secondary,
-            agent_secondary_proof_source = secondary_proof.as_deref(),
-            agent_declared = declared,
-            agent_declared_source = declared_source.as_deref(),
-            declared_label_mismatch = true,
-            "agent declared a label that differs from its proven principal"
-        );
-        return;
-    }
-
-    tracing::debug!(
-        agent_proven = proven,
-        agent_proof = proof.as_deref(),
-        agent_secondary_proof = secondary,
-        agent_secondary_proof_source = secondary_proof.as_deref(),
-        agent_declared = declared,
-        agent_declared_source = declared_source.as_deref(),
-        declared_label_mismatch = false,
-        "agent identity resolved"
-    );
+    let _ = (identity, audit, refusal);
 }
 
 mod principal;
