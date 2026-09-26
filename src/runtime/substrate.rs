@@ -67,6 +67,9 @@ mod tests {
         let s = Substrate::detect();
         #[cfg(target_os = "linux")]
         assert_eq!(s, Substrate::GVisor);
+        // Any other platform takes the unsupported-platform fallback.
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        assert_eq!(s, Substrate::GVisor);
         #[cfg(target_os = "macos")]
         assert_eq!(s, Substrate::AppleVm);
     }

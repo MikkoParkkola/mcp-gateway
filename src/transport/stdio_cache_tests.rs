@@ -61,15 +61,25 @@ fn a_name_cannot_escape_the_state_directory() {
         .join("pkg-cache")
         .to_string_lossy()
         .into_owned();
-    for hostile in ["../evil", "a/b", "..", "", "with space", "/etc/passwd"] {
+    for hostile in [
+        "../evil",
+        "a/b",
+        "..",
+        "",
+        "with space",
+        "/etc/passwd",
+        r"..\evil",
+        r"a\b",
+        r"C:\evil",
+    ] {
         let out = isolated_package_manager_env(hostile, "npx -y pkg", HashMap::new());
         let path = &out["npm_config_cache"];
         let component = path
             .strip_prefix(&root)
-            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|rest| rest.strip_prefix(std::path::MAIN_SEPARATOR))
             .unwrap_or_else(|| panic!("{hostile:?} escaped {root}: {path}"));
         assert!(
-            !component.is_empty() && !component.contains('/'),
+            !component.is_empty() && !component.contains(['/', '\\']),
             "{hostile:?} became a nested path: {path}"
         );
         assert!(
