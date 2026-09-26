@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Rows 13 to 15c of `docs/design/2026-09-11-outbound-era-gated-health-probe.md`
-//! — the three outbound call sites section 4 gates, alongside the health probe.
+//! Row 13 of `docs/design/2026-09-11-outbound-era-gated-health-probe.md`. Rows
+//! 14 to 15c pinned the `resources/*` verbs, which F24 refuses at dispatch.
 //!
 //! These rows live here rather than in `src/backend/tests.rs` because the send
 //! they pin is the gateway's, not the probe's: `logging/setLevel` fans out over
@@ -156,94 +156,5 @@ async fn row_13_logging_set_level_skips_a_modern_backend_and_forwards_to_a_legac
     assert!(
         legacy_mock.saw("logging/setLevel"),
         "a legacy peer still serves logging/setLevel and must still be forwarded"
-    );
-}
-
-/// Row 14 — `resources/subscribe` against a modern backend is refused by the
-/// gateway with `-32601` and never reaches the transport.
-#[tokio::test]
-async fn row_14_resources_subscribe_to_a_modern_backend_is_refused_in_the_gateway() {
-    let (modern, mock) = backend_with_era("modern", true).await;
-    let meta = meta(vec![modern]);
-
-    let params = json!({"uri": OWNED_URI});
-    let response = meta
-        .handle_resources_subscribe(RequestId::Number(1), Some(&params), None, None)
-        .await;
-
-    let error = response
-        .error
-        .as_ref()
-        .unwrap_or_else(|| panic!("a removed method must be refused, got: {response:?}"));
-    assert_eq!(
-        error.code,
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
-        "the gateway's refusal carries the code the peer would have sent"
-    );
-    assert!(
-        !mock.saw("resources/subscribe"),
-        "the refusal must happen before the wire, saw: {:?}",
-        mock.methods()
-    );
-}
-
-/// Row 15 — `resources/unsubscribe`, the same two assertions. Split from row 14
-/// rather than looped, because the two call sites are two separate forwards and
-/// a gate applied to one of them is the defect this pair exists to catch.
-#[tokio::test]
-async fn row_15_resources_unsubscribe_to_a_modern_backend_is_refused_in_the_gateway() {
-    let (modern, mock) = backend_with_era("modern", true).await;
-    let meta = meta(vec![modern]);
-
-    let params = json!({"uri": OWNED_URI});
-    let response = meta
-        .handle_resources_unsubscribe(RequestId::Number(1), Some(&params), None, None)
-        .await;
-
-    let error = response
-        .error
-        .as_ref()
-        .unwrap_or_else(|| panic!("a removed method must be refused, got: {response:?}"));
-    assert_eq!(
-        error.code,
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
-        "the gateway's refusal carries the code the peer would have sent"
-    );
-    assert!(
-        !mock.saw("resources/unsubscribe"),
-        "the refusal must happen before the wire, saw: {:?}",
-        mock.methods()
-    );
-}
-
-/// Row 15c — the mirror half, and a regression guard: a **legacy** backend still
-/// receives both `resources/*` verbs, before and after. It passes at HEAD, which
-/// forwards everything, and it is what keeps the gate from being implemented as
-/// a blanket refusal.
-#[tokio::test]
-async fn row_15c_a_legacy_backend_still_receives_both_resource_verbs() {
-    let (legacy, mock) = backend_with_era("legacy", false).await;
-    let meta = meta(vec![legacy]);
-
-    let params = json!({"uri": OWNED_URI});
-    let subscribe = meta
-        .handle_resources_subscribe(RequestId::Number(1), Some(&params), None, None)
-        .await;
-    let unsubscribe = meta
-        .handle_resources_unsubscribe(RequestId::Number(2), Some(&params), None, None)
-        .await;
-
-    assert!(
-        subscribe.error.is_none(),
-        "a legacy peer serves resources/subscribe: {subscribe:?}"
-    );
-    assert!(
-        unsubscribe.error.is_none(),
-        "a legacy peer serves resources/unsubscribe: {unsubscribe:?}"
-    );
-    assert!(
-        mock.saw("resources/subscribe") && mock.saw("resources/unsubscribe"),
-        "both verbs must still reach a legacy peer, saw: {:?}",
-        mock.methods()
     );
 }
