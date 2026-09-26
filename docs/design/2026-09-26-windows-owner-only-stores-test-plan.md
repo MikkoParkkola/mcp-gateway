@@ -14,13 +14,13 @@ The oracle is the design's rule set, never the implementation's own predicate:
 - Independent evidence where the predicate could be wrong in the same way twice:
   - planted conditions come from `icacls` / PowerShell `Set-Acl` SDDL, never from
     `win_acl`, so construction and inspection are not the same code;
+  - W-T1 reads the created object's SDDL with PowerShell `(Get-Acl).Sddl` and compares
+    it to the literal expected string, not to `inspect`;
+  - W-T14 asks the kernel (a second user's read) rather than any gateway code.
 - Every refusal is asserted twice: the store-level error CATEGORY the caller sees
   (`InvalidConfiguration`, `StorageUnavailable`, `UnsafeStore`, `NotPrivate`), and the
   `PrivacyRefusal` reason from calling `private_fs::judge_*` on the same path directly.
   Only the second can tell two refusals apart, so mutants are assigned to it.
-  - W-T1 reads the created object's SDDL with PowerShell `(Get-Acl).Sddl` and compares
-    it to the literal expected string, not to `inspect`;
-  - W-T14 asks the kernel (a second user's read) rather than any gateway code.
 
 Placement: `src/private_fs_tests.rs` (`#[cfg(all(test, windows))]`, a child of
 `private_fs` so it reaches private items with no visibility widening), and the store
@@ -66,7 +66,6 @@ item 2 is complete).
 | W-T8 | `null_dacl_refuses` | `Set-Acl` SDDL `D:NO_ACCESS_CONTROL` on `authority.json` | reason `NullDacl` | accepts |
 | W-T8b | `read_only_ace_refuses` | SDDL `O:<sid>D:P(A;;FR;;;<sid>)` | reason `NoReadWrite` (P1, P2, P4, P5 pass by construction) | accepts |
 | W-T9 | `custody_across_processes` | test re-execs its own binary (`--exact` child entry, env flag) that opens the store and waits on stdin | parent open: `AlreadyOwned` (task) / `StorageUnavailable` (accounts), NOT `Unsupported`; kill child; parent reacquires within 2 s | stub never locks: parent open succeeds while the child holds it |
-
 | W-T10 | `legacy_token_inherited_acl_refuses` | 3.x token written the 3.x way (`fs::write`, inherited DACL) | migration refuses `NotPrivate`; message names `NotProtected` | stub `inspect` all-pass: migration accepts |
 | W-T10b | `legacy_token_remediation_works` | W-T10 file plus `icacls /grant *S-1-1-0:R` and `/setowner *S-1-5-32-544`; run the §2.4 sequence the refusal message printed, parsed from the message itself | migration then accepts; before it, refusal lists `ForeignSid(S-1-1-0)` and `ForeignOwner(S-1-5-32-544)` | accepts before remediation |
 | W-T11 | `foreign_owner_refuses` | `icacls f /setowner *S-1-5-32-544` on `authority.json` | reason `ForeignOwner` | accepts |
