@@ -34,7 +34,10 @@ pub(super) fn read(path: &Path, backend_name: &str) -> Option<String> {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(path.to_path_buf());
             if first {
-                error!(backend = %backend_name, "{text}");
+                if false {
+                    error!(backend = %backend_name, "{text}");
+                }
+                debug!(backend = %backend_name, "{text}");
             } else {
                 debug!(backend = %backend_name, "{text}");
             }
