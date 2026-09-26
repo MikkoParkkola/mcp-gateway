@@ -158,11 +158,11 @@ do not have to be read together.
 
 | issue | disposition |
 |---|---|
-| 463, 462, 453 | 4.0.0 batch 1 — the reload path, alongside MIK-7256 |
-| 452, 451 | 4.0.0 batch 3 — session ownership on terminate, sampling and elicitation. 451 is MIK-7251's defect reported independently |
-| 440 | 4.0.0 batch 6 — `surfaced_tools` is parsed and then ignored |
+| 463, 462, 453 | 4.0.0 batch 1 — the reload path, alongside MIK-7256. **Status 2026-09-26:** 462 closed COMPLETED (2026-09-18); 463 closed NOT_PLANNED (2026-09-24), its requested wording rejected in-tree with the rationale pinned at `src/config_reload/tests.rs:1282-1287` (commit 5ef8d05f); 453 open, in review as #1234 |
+| 452, 451 | 4.0.0 batch 3 — session ownership on terminate, sampling and elicitation. 451 is MIK-7251's defect reported independently. Both closed COMPLETED on 2026-09-18 |
+| 440 | 4.0.0 batch 6 — `surfaced_tools` is parsed and then ignored. Closed COMPLETED on 2026-09-24 |
 | 437 | 4.0.0 batch 2 — and a constraint on MIK-7245, below |
-| 449 | 4.1 — it is MIK-7084 |
+| 449 | 4.1 — it is MIK-7084. **Superseded:** closed COMPLETED on 2026-09-18 in 4.0.0; `meta_mcp.exposed_meta_tools` filters the served meta-tool set (closing comment on #449) |
 | 119 | post-release — directory submissions describe a protocol revision, so they follow the release rather than precede it |
 
 **437 changes what MIK-7245 has to do.** MIK-7245 asks for configuration files
@@ -200,16 +200,17 @@ held disposition as a comment, plus #528, this release's own branch.
 
 | issue | filed | disposition |
 |---|---|---|
-| 475 | 2026-09-04 | **In 4.0.0.** Fully represented in the criteria ledger as 50 `GH475.*` rows; the issue stays open until the release ships rather than because work is outstanding |
-| 481 | 2026-09-05 | **Needs a scope decision.** The body asserts "blocking 4.0.0", and the criteria ledger carries no `GH481.*` row — so nothing in the release's own accounting blocks on it. The ledger is the authority on what blocks, and it records exactly one blocking criterion (NFR.SEC.7). Either the issue's claim is stale or a criterion is missing; that is a decision, not a defect, and it is recorded here rather than resolved silently |
-| 482 | 2026-09-05 | **Explicitly deferred, and already documented.** The over-broad `is_rate_limited` substring match is stated as a known boundary in `docs/UPGRADING-4.0.md` §4: narrowing it needs a rate-limit co-signal and is not in 4.0.0. Narrowing it would move `GH475.RL.6`, an agreed acceptance criterion |
-| 523 | 2026-09-11 | **Post-release.** POSIX `shlex::split` mangles Windows backslash paths in stdio `command` strings. Filed in the course of #522 and fixed by #527 |
-| 524 | 2026-09-11 | **Post-release.** Windows CI compiles and never runs a test (`ci.yml:182-189`). A gap in the gate, not in 4.0.0 behaviour |
-| 525 | 2026-09-11 | **Post-release.** The Windows arm of the stdio environment allowlist has no test; the only test over that function is `#[cfg(unix)]` |
-| 526 | 2026-09-11 | **Post-release.** A stdio child that dies before `initialize` reports a request timeout while the cause sits unread in its stderr |
-| 527 | 2026-09-11 | **Post-release.** One parser for a configured stdio command, used by spawn and doctor alike. Fixes 523 |
+| 475 | 2026-09-04 | **In 4.0.0.** Fully represented in the criteria ledger as 50 `GH475.*` rows. Closed COMPLETED on 2026-09-18 with the fix evidence in its closing comment |
+| 481 | 2026-09-05 | **In 4.0.0.** Closed COMPLETED on 2026-09-24: fixed on the release line (`docs/ranking-1-release-line` @ 6fac7e91), criteria GH475.RL.9, RL.10 and RL.11 MET in `docs/requirements/RELEASE-4.0.0-criteria-status.md:458-460`, end-to-end test `tests/gh475_rl9_429_only_neither_opens_circuit_nor_exhausts_budget.rs` |
+| 482 | 2026-09-05 | **In 4.0.0.** Closed COMPLETED on 2026-09-24: decided and fixed on the release line (@ 6fac7e91) under GH475.RL.5 (`docs/requirements/RELEASE-4.0.0-criteria-status.md:454`); the decided scope is pinned by tests |
+| 523 | 2026-09-11 | **In 4.0.0.** POSIX `shlex::split` mangled Windows backslash paths in stdio `command` strings. Closed COMPLETED on 2026-09-16 by #564 (commit 6d033b428, on the release line), which implements 527 |
+| 524 | 2026-09-11 | **In 4.0.0.** Windows CI compiled and never ran a test. Fixed by #1190 (merge commit 966b6b8c3): the `Windows check` job compiles every test target and runs the lib and bin unit tests. Closed COMPLETED on 2026-09-26. The residual (the skipped `gateway::` and `personal_accounts::` trees, integration targets, Windows clippy) is W1, #1142, 4.0-gating |
+| 525 | 2026-09-11 | **In 4.0.0, open.** The Windows arm of the stdio environment allowlist has no test; the only test over that function is `#[cfg(unix)]`. Test-only fix in review as #1240, which runs on the `Windows check` job #1190 added |
+| 526 | 2026-09-11 | **In 4.0.0, open.** A stdio child that dies before `initialize` reports a request timeout while the cause sits unread in its stderr. No pull request yet |
+| 527 | 2026-09-11 | **In 4.0.0.** One parser for a configured stdio command, used by spawn and doctor alike. Closed COMPLETED on 2026-09-18: implemented by #564 (merged 2026-09-16, commit 6d033b428, on the release line) |
 
-None of 481, 482 or 523–527 carries a criterion row in the release ledger, so none of them is in
-4.0.0 scope by the release's own accounting. The five Windows issues are one cluster from a single
-investigation and are best sequenced together after the release, with 524 first — a gate that never
-runs a test is what let the other four stay invisible.
+**Status on 2026-09-26.** The paragraph that stood here placed 481, 482 and 523–527 after the
+release because none carried a criterion row. That no longer holds: 481 and 482 closed on the
+release line with GH475.RL.* criteria MET; 523 and 527 closed with #564; 524 closed with #1190. No
+follow-up is deferred out of 4.0.0, so 525 (#1240) and 526 are 4.0.0 work, and W1 (#1142, the rest
+of the Windows test coverage) is 4.0-gating.
