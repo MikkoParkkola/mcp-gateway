@@ -23,7 +23,10 @@ fn pre_dispatch_failure_frees_the_key_for_a_retry() {
     // GIVEN a reserved key whose call the circuit breaker refused outright.
     let cache = Arc::new(IdempotencyCache::new());
     let mut reservation = reserve(&cache);
-    let error = Error::CircuitOpen("backend".to_string());
+    let error = Error::CircuitOpen {
+        backend: "backend".into(),
+        last_failure: None,
+    };
     let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
 
     // WHEN the failure is settled.

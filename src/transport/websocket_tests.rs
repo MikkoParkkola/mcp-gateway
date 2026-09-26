@@ -264,19 +264,19 @@ fn session_default_counters_are_zero() {
 
 #[test]
 fn new_transport_is_not_connected() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     assert!(!t.is_connected());
 }
 
 #[test]
 fn new_transport_stores_url() {
-    let t = WebSocketTransport::new("ws://example.com/mcp");
+    let t = test_transport("ws://example.com/mcp");
     assert_eq!(t.url, "ws://example.com/mcp");
 }
 
 #[test]
 fn request_id_increments_sequentially() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     assert_eq!(t.next_id(), RequestId::Number(1));
     assert_eq!(t.next_id(), RequestId::Number(2));
     assert_eq!(t.next_id(), RequestId::Number(3));
@@ -288,7 +288,7 @@ fn request_id_increments_sequentially() {
 
 #[tokio::test]
 async fn dispatch_routes_response_to_pending_sender() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     let (tx, mut rx) = oneshot::channel::<JsonRpcResponse>();
     t.inner.pending.insert("1".to_string(), tx);
 
@@ -301,7 +301,7 @@ async fn dispatch_routes_response_to_pending_sender() {
 
 #[tokio::test]
 async fn dispatch_handles_notification_without_panic() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     let text = r#"{"jsonrpc":"2.0","method":"notifications/progress"}"#;
     // Must not error even with no pending entry.
     WebSocketTransport::dispatch_inbound(&t.inner, text).unwrap();
@@ -309,14 +309,14 @@ async fn dispatch_handles_notification_without_panic() {
 
 #[tokio::test]
 async fn dispatch_returns_error_on_bad_json() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     let result = WebSocketTransport::dispatch_inbound(&t.inner, "!!not-json");
     assert!(result.is_err());
 }
 
 #[tokio::test]
 async fn dispatch_silently_ignores_unknown_response_id() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     // No pending entry — should not panic or error.
     let text = r#"{"jsonrpc":"2.0","id":999,"result":{}}"#;
     WebSocketTransport::dispatch_inbound(&t.inner, text).unwrap();
@@ -328,7 +328,7 @@ async fn dispatch_silently_ignores_unknown_response_id() {
 
 #[tokio::test]
 async fn close_marks_transport_disconnected() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     t.inner.connected.store(true, Ordering::Relaxed);
     t.close().await.unwrap();
     assert!(!t.is_connected());
@@ -336,14 +336,14 @@ async fn close_marks_transport_disconnected() {
 
 #[tokio::test]
 async fn close_is_idempotent() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     t.close().await.unwrap();
     t.close().await.unwrap(); // Must not panic on second call.
 }
 
 #[tokio::test]
 async fn connected_flag_toggles_correctly() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     assert!(!t.is_connected());
     t.inner.connected.store(true, Ordering::Relaxed);
     assert!(t.is_connected());
@@ -357,7 +357,7 @@ async fn connected_flag_toggles_correctly() {
 
 #[tokio::test]
 async fn send_message_errors_when_not_connected() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     // outbound_tx slot is None — simulates pre-connect state.
     let result = t.send_message(Message::Text("hello".into())).await;
     assert!(result.is_err());
@@ -367,7 +367,7 @@ async fn send_message_errors_when_not_connected() {
 
 #[tokio::test]
 async fn send_message_succeeds_with_live_channel() {
-    let t = WebSocketTransport::new("ws://localhost:9999");
+    let t = test_transport("ws://localhost:9999");
     let (tx, mut rx) = channel::<Message>(8);
     *t.inner.outbound_tx.lock().await = Some(tx);
 
@@ -375,4 +375,13 @@ async fn send_message_succeeds_with_live_channel() {
 
     let msg = rx.try_recv().unwrap();
     assert_eq!(msg, Message::Text("hello".into()));
+}
+
+fn test_transport(url: &str) -> Arc<WebSocketTransport> {
+    WebSocketTransport::new(
+        url,
+        HashMap::new(),
+        std::time::Duration::from_secs(30),
+        None,
+    )
 }

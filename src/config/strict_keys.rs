@@ -69,12 +69,13 @@ const KNOWN_BACKEND_KEYS: &[&str] = &[
     "runtime_profile",
     "identity_propagation",
     "account",
-    // TransportConfig::Stdio and ::Http
+    // TransportConfig::Stdio, ::Http and ::WebSocket
     "command",
     "cwd",
     "protocol_version",
     "http_url",
     "streamable_http",
+    "ws_url",
 ];
 
 /// `TransportConfig::A2a` fields, which exist only with the `a2a` feature.
@@ -90,6 +91,7 @@ const TRANSPORTS: &[(&str, &str, &[&str])] = &[
         "http",
         &["http_url", "streamable_http", "protocol_version"],
     ),
+    ("ws_url", "websocket", &["ws_url", "protocol_version"]),
     ("a2a_url", "a2a", A2A_BACKEND_KEYS),
 ];
 
@@ -307,6 +309,10 @@ mod tests {
             TransportConfig::Http {
                 http_url: "h".into(),
                 streamable_http: true,
+                protocol_version: Some("v".into()),
+            },
+            TransportConfig::WebSocket {
+                ws_url: "w".into(),
                 protocol_version: Some("v".into()),
             },
         ];

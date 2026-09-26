@@ -120,9 +120,7 @@ async fn test_discovered_server_to_backend_config() {
         TransportConfig::Http { http_url, .. } => {
             assert_eq!(http_url, "http://localhost:3000");
         }
-        TransportConfig::Stdio { .. } => panic!("Expected HTTP transport"),
-        #[cfg(feature = "a2a")]
-        TransportConfig::A2a { .. } => panic!("Expected HTTP transport"),
+        other => panic!("Expected HTTP transport, got {other:?}"),
     }
 }
 
