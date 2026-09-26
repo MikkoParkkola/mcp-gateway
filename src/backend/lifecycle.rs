@@ -1060,7 +1060,7 @@ impl Backend {
     /// `backend.request("ping")` health check could not:
     ///
     /// 1. **It bypasses the circuit breaker.** A probe routed through
-    ///    [`request`](Self::request) short-circuits on `can_proceed()` and
+    ///    [`request`](Self::request) short-circuits on `Failsafe::admit` and
     ///    returns `CircuitOpen` *without touching the backend* -- so it could
     ///    never discover that an `Open` backend had recovered. This probe talks
     ///    to the transport directly.
