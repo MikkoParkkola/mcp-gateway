@@ -23,12 +23,14 @@ jobs:
   # base-image OS/library CVEs (osv-scanner reads lockfiles, not image layers).
   # Exceptions are time-boxed in .github/osv-scanner.toml.
   #
-  # Skipped for a pull request from a `throwaway/` branch: those carry red-first
-  # and mutation runs that only need the Tests job, and each image build holds a
-  # scarce runner. Skipping the two root jobs skips `build` through `needs:`.
+  # Skipped for a pull request from a `throwaway/` branch of THIS repository:
+  # those carry red-first and mutation runs that only need the Tests job, and
+  # each image build holds a scarce runner. A fork chooses its own branch name,
+  # so a fork PR is never skipped. Skipping the two root jobs skips `build`
+  # through `needs:` (so `build` must keep no `if:` of its own).
   security-gate:
     name: Security gate (block image on known vulns)
-    if: ${{ !startsWith(github.head_ref, 'throwaway/') }}
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,7 +51,7 @@ jobs:
   # anyway. Duplicated deliberately — a workflow cannot depend on another workflow's job.
   release-criteria:
     name: Release criteria ledger (header matches rows)
-    if: ${{ !startsWith(github.head_ref, 'throwaway/') }}
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -317,8 +319,9 @@ jobs:
   build-gate:
     name: build
     needs: [build]
-    # A throwaway branch skipped the build on purpose; do not report it red.
-    if: ${{ always() && !startsWith(github.head_ref, 'throwaway/') }}
+    # `always()` still reds a skipped or cancelled matrix on every other run; a
+    # same-repo throwaway PR skipped the build on purpose and skips this too.
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
