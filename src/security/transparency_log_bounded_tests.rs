@@ -71,7 +71,14 @@ async fn stall_parks_one_blocking_thread() {
         let l = Arc::clone(&l);
         async move { invocation(&l).await }
     });
-    while !l.write_in_flight_for_test() {
+    for spins in 0.. {
+        if l.write_in_flight_for_test() {
+            break;
+        }
+        assert!(
+            spins < 1_000,
+            "the first write never reached the blocking pool"
+        );
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
     // Twenty callers queue while the first write is still in the kernel.
