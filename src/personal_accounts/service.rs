@@ -314,9 +314,6 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         let _rotating = flight.lock().await;
 
         let current = self.connected(account)?;
-        if lease_of(account, &current) != *lease {
-            return Ok(RejectionOutcome::Stale);
-        }
         let expected = version_of(&current);
         match self.store.claim_forced_refresh(account, &expected)? {
             ForceClaim::Claimed => {}
