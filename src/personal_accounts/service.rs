@@ -323,7 +323,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
             ForceClaim::AlreadyForced => return Ok(RejectionOutcome::AlreadyForced),
             ForceClaim::Superseded => return Ok(RejectionOutcome::Stale),
         }
-        match self.provider.refresh(account, &current).await {
+        match Err::<TokenRefresh, _>(ProviderRefreshError::InvalidGrant) {
             Ok(rotated) => {
                 let next = self.apply(account, &current, &expected, rotated)?;
                 // The rotated revision is force-tried too, or a backend that
