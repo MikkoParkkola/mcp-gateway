@@ -2279,6 +2279,9 @@ impl MetaMcp {
                 trace_id,
             ))
             .await;
+            // Taken once, here: a guard held into a match arm would be held
+            // across that arm's awaits and make this future non-Send.
+            let mut parked = account_refusal.into_inner();
             match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
@@ -2365,7 +2368,8 @@ impl MetaMcp {
                 // A11-c: a round's 401 on a managed account answers with the
                 // reconnect refusal or the rejection, not the generic refusal.
                 // Settled like any round that reached the backend.
-                Err(_) if let Some(refused) = account_refusal.lock().take() => {
+                Err(_) if parked.is_some() => {
+                    let refused = parked.take().expect("the arm's guard checked it");
                     if let Some(reservation) = idem_reservation.as_mut() {
                         reservation.commit(&uncertain_side_effect());
                     }
