@@ -228,8 +228,19 @@ mod tests {
     fn text_after_any_yaml_break_on_the_pin_line_is_hashed_as_body() {
         let body = compute_capability_hash("injected: y\nname: foo\n");
         for brk in ['\r', '\u{85}', '\u{2028}', '\u{2029}'] {
-            let smuggled = format!("sha256: x{brk}injected: y\nname: foo\n");
-            assert_eq!(compute_capability_hash(&smuggled), body, "break {brk:?}");
+            // After the value, and straight after the colon, before any value.
+            for pin in ["sha256: x", "sha256:"] {
+                let smuggled = format!("{pin}{brk}injected: y\nname: foo\n");
+                assert_eq!(compute_capability_hash(&smuggled), body, "{pin:?} {brk:?}");
+            }
+            // Stacked breaks: every line after the first break is body.
+            let stacked = format!("sha256: x{brk}injected: y{brk}more: z\nname: foo\n");
+            let stacked_body = format!("injected: y{brk}more: z\nname: foo\n");
+            assert_eq!(
+                compute_capability_hash(&stacked),
+                compute_capability_hash(&stacked_body),
+                "stacked {brk:?}"
+            );
         }
     }
 

@@ -1270,7 +1270,9 @@ mcp-gateway cap pin path/to/capability.yaml
 ```
 
 To reproduce a pin from a shell, strip the CR of each CRLF first:
-`sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`.
+`sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`. The recipe assumes the
+pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by the gateway
+and dropped by `grep -v` (item 64).
 
 ## 64. Text after a line break inside a pin line is hashed
 
@@ -1282,7 +1284,7 @@ line is hashed like the rest of the file.
 
 **Action:** only a pinned file whose `sha256:` line contains one of those breaks is affected, and it
 now fails verification until re-pinned. No shipped capability contains one. Inspect such a
-file before re-pinning it, since the text after the CR is content that was not covered by
+file before re-pinning it, since the text after the break is content that was not covered by
 the old pin: `mcp-gateway cap pin path/to/capability.yaml`.
 
 ## After upgrading
