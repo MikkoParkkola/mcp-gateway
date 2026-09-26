@@ -1266,6 +1266,21 @@ user could not be a gateway admin at all.
 - Header identities (`trusted_proxy`, `cloudflare_access`) and mTLS certificates
   never confer admin. The static bearer and `api_keys[].admin: true` are
   unchanged.
+- **Every admin action is audited, and refused while the audit log is down.** An
+  admin meta-tool call (kill, revive, reload, stats, webhook status), allowed or
+  refused, writes an `admin_action` record with `surface: "meta_tool"` and the
+  `tool`. Its `outcome` is the admin decision (`ok` or `denied`), written before
+  the tool runs, not the tool's result. Every request to `/ui/api/*` other than
+  `GET` or `HEAD` (reload, backends, capabilities, import, and the control-plane
+  grant, policy and decision POSTs) writes one with `surface: "admin_ui"`, the
+  matched `route` template, `method` and `http_status`. The body and the query
+  are never logged. Each record's `who` names the caller: the credential and,
+  for an SSO admin, the issuer and subject, never an email. With auth on, while
+  the log is known to be down these requests answer 503 (`AuditUnavailable`) and
+  the action does not run; a control-plane POST then answers 503, not 409. If
+  the log fails on the record for a UI request that has already run, the answer
+  is also 503: the action may have happened, so check before retrying. An admin
+  meta-tool call is recorded before it runs, so a 503 there means it did not.
 
 To make SSO users admins, add:
 

@@ -9,6 +9,7 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
@@ -68,7 +69,6 @@ pub fn api_router() -> Router<Arc<AppState>> {
 
     #[cfg(feature = "cost-governance")]
     let router = router.route("/ui/api/costs", get(costs));
-
     router
 }
 
