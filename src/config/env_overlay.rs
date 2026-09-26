@@ -411,6 +411,16 @@ impl EnvOverlay {
         &self.owned
     }
 
+    /// Whether `path` on disk now differs from what this overlay loaded from
+    /// it (#1286).
+    #[expect(
+        clippy::unused_self,
+        reason = "red-first stub; the fix reads the overlay"
+    )]
+    pub(crate) fn differs_on_disk(&self, _path: &Path) -> bool {
+        false
+    }
+
     /// Everything the overlay contributes, for consumers that need a map rather
     /// than point lookups.
     #[must_use]

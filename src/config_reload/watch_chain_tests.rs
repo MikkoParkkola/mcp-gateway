@@ -253,6 +253,8 @@ mod real_watcher {
             tx,
             shutdown.subscribe(),
             retry_every,
+            Arc::new(crate::config::LiveEnv::default()),
+            Duration::from_secs(3600),
         );
         Harness {
             chain,
@@ -641,6 +643,8 @@ mod real_watcher {
             tx,
             shutdown.subscribe(),
             super::super::CHAIN_RETRY,
+            Arc::new(crate::config::LiveEnv::default()),
+            Duration::from_secs(3600),
         );
         assert!(
             matches!(

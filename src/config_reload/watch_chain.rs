@@ -230,6 +230,7 @@ impl ChainWatch {
 /// watched: a write to the new target in between is then read by that reload.
 /// The first resolve always triggers one: the config was read before the
 /// watches existed, and a retarget in between would otherwise go unheard.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_rewatch_task(
     named: PathBuf,
     chain: Arc<ChainWatch>,
@@ -237,6 +238,8 @@ pub(super) fn spawn_rewatch_task(
     reload: tokio::sync::mpsc::Sender<ReloadTrigger>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     retry_every: std::time::Duration,
+    _env: std::sync::Arc<crate::config::LiveEnv>,
+    _env_poll_every: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_end: Option<PathBuf> = None;

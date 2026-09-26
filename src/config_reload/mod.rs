@@ -1047,6 +1047,9 @@ pub struct ConfigWatcher {
     /// it watches. The rewatch task holds it too, and drops the watcher when
     /// the gateway shuts down.
     _chain: Arc<watch_chain::ChainWatch>,
+    /// What the reload task did with `EnvFile` triggers.
+    #[cfg(test)]
+    env_reloads: Arc<env_poll::EnvReloadCounts>,
 }
 
 impl ConfigWatcher {
@@ -1059,6 +1062,12 @@ impl ConfigWatcher {
     )]
     fn chain(&self) -> &Arc<watch_chain::ChainWatch> {
         &self._chain
+    }
+
+    /// What the reload task did with `EnvFile` triggers so far.
+    #[cfg(test)]
+    fn env_reloads(&self) -> &env_poll::EnvReloadCounts {
+        &self.env_reloads
     }
 
     /// Start watching `config_path` and any env files listed in the initial
@@ -1078,6 +1087,30 @@ impl ConfigWatcher {
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<Self> {
+        Self::start_polling_every(
+            config_path,
+            live_config,
+            registry,
+            initial_config,
+            env,
+            identity_grants,
+            shutdown_rx,
+            env_poll::ENV_POLL,
+        )
+    }
+
+    /// [`ConfigWatcher::start`] with the env-file poll at `env_poll_every`.
+    #[allow(clippy::too_many_arguments)]
+    fn start_polling_every(
+        config_path: PathBuf,
+        live_config: Arc<LiveConfig>,
+        registry: Arc<BackendRegistry>,
+        initial_config: &Config,
+        env: Arc<LiveEnv>,
+        identity_grants: Option<Arc<IdentityGrantSink>>,
+        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        env_poll_every: Duration,
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
@@ -1106,10 +1139,13 @@ impl ConfigWatcher {
             event_tx,
             shutdown_rx.resubscribe(),
             watch_chain::CHAIN_RETRY,
+            Arc::clone(&env),
+            env_poll_every,
         );
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
+        let env_reloads = Arc::new(env_poll::EnvReloadCounts::default());
 
         Self::spawn_reload_task(
             config_path,
@@ -1121,9 +1157,14 @@ impl ConfigWatcher {
             identity_grants,
             event_rx,
             shutdown_rx,
+            Arc::clone(&env_reloads),
         );
 
-        Ok(Self { _chain: chain })
+        Ok(Self {
+            _chain: chain,
+            #[cfg(test)]
+            env_reloads,
+        })
     }
 
     /// Create the low-level `notify` watcher and register all watch paths.
@@ -1195,12 +1236,13 @@ impl ConfigWatcher {
         identity_grants: Option<Arc<IdentityGrantSink>>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        env_reloads: Arc<env_poll::EnvReloadCounts>,
     ) {
+        use env_poll::{DEBOUNCE, RELOAD_TICK};
         tokio::spawn(async move {
-            const DEBOUNCE: Duration = Duration::from_millis(500);
             let mut last_event: Option<Instant> = None;
             let mut pending_trigger: Option<ReloadTrigger> = None;
-            let mut ticker = tokio::time::interval(Duration::from_millis(100));
+            let mut ticker = tokio::time::interval(RELOAD_TICK);
 
             // The watcher runs the same reload transaction as the meta-tool and
             // the admin UI, through the same function (#397). It used to have a
@@ -1230,6 +1272,11 @@ impl ConfigWatcher {
                             let trigger = pending_trigger.take().unwrap();
                             last_event = None;
                             log_reload_trigger(&trigger);
+                            if matches!(trigger, ReloadTrigger::EnvFile(_)) {
+                                env_reloads
+                                    .attempts
+                                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
                             match ctx.reload_outcome().await {
                                 Ok(outcome) if outcome.changes == NO_CHANGES_SUMMARY => {
                                     tracing::debug!("Config reload: no changes detected");
@@ -2280,6 +2327,9 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
     }
 }
 
+mod env_poll;
+#[cfg(all(test, target_os = "linux"))]
+mod env_poll_e2e_tests;
 mod grant_delta;
 mod watch_chain;
 
