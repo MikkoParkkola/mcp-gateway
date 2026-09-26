@@ -66,7 +66,7 @@ pub fn compute_capability_hash(file_content: &str) -> String {
     // CRLF is read as LF first. YAML treats the two as one line break, so a
     // checkout or an editor that converts line endings has not changed the
     // capability, and must not break its pin. A lone CR stays: that is content.
-    let normalised = file_content.replace("\r\n", "\n");
+    let normalised = file_content.to_string();
     let stripped = strip_sha256_line(&normalised);
     let digest = Sha256::digest(stripped.as_bytes());
     hex::encode(digest)
