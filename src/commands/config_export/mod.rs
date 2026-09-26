@@ -370,7 +370,7 @@ pub fn rollback_client_config(backup_path: &Path) -> Result<PathBuf, String> {
             backup_path.display()
         )
     })?;
-    mcp_gateway::config_persistence::write_text_atomic(&original_path, &text)?;
+    std::fs::write(&original_path, &text).map_err(|e| e.to_string())?;
 
     Ok(original_path)
 }
