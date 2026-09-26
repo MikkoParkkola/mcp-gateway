@@ -35,15 +35,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Run the full-burst ledger
+        # Plain output, so the log file can be matched line by line.
+        env:
+          CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
           cargo test --all-features --test mik_7479_mrtr7b_ledger -- --exact \
             mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture 2>&1 \
             | tee "$RUNNER_TEMP/ledger.log"
-          # A filter that matches nothing exits 0 with "0 passed"; a failing
-          # test already fails the step through pipefail. The summary line is
-          # coloured (CARGO_TERM_COLOR), so only this plain line is matched.
+          # Read from the saved file, not a pipe, so an early grep exit cannot
+          # SIGPIPE the writer. A filter that matches nothing exits 0 with
+          # "0 passed", so the pass is asserted positively, not only by exit code.
           grep -q '^running 1 test$' "$RUNNER_TEMP/ledger.log"
+          grep -q '^test result: ok\. 1 passed' "$RUNNER_TEMP/ledger.log"
       - name: Upload the ledger report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
