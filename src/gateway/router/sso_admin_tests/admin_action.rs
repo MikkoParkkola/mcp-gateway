@@ -425,7 +425,9 @@ async fn ui_admin_mutation_refused_while_degraded() {
 async fn control_plane_post_refused_while_degraded() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
     fx.degrade();
-    let (status, body) = fx.send(ui("POST", GRANTS, &fx.alice(), &grant_body())).await;
+    let (status, body) = fx
+        .send(ui("POST", GRANTS, &fx.alice(), &grant_body()))
+        .await;
     assert_audit_unavailable_ui(status, &body);
 }
 
@@ -440,7 +442,10 @@ async fn failed_admin_record_withholds_ui_result() {
     let (status, body) = fx.send(ui("POST", uri, &fx.alice(), &json!({}))).await;
     assert_audit_unavailable_ui(status, &body);
     assert!(body.get("backend").is_none(), "{body}");
-    assert!(!fx.alpha.is_circuit_tripped(), "the handler was refused, not withheld");
+    assert!(
+        !fx.alpha.is_circuit_tripped(),
+        "the handler was refused, not withheld"
+    );
 }
 
 /// E1-T13d: under `BestEffort` a failed record append is counted and both
