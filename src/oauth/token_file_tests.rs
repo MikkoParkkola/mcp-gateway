@@ -71,6 +71,7 @@ fn oauth_token_world_readable_not_loaded() {
     assert!(
         log.lines().any(|l| l.contains("ERROR")
             && l.contains("OAuth token file")
+            && l.contains(path.to_str().unwrap())
             && l.contains("mode 0644")),
         "the refusal must be an ERROR naming the file and mode: {log}"
     );
