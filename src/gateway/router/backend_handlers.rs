@@ -732,23 +732,6 @@ async fn backend_handler_inner(
     let isolation_guarded =
         !matches!(method.as_str(), "initialize" | "ping") && !method.starts_with("notifications/");
 
-    // MIK-7570.ATTEST.1: every method that reaches the backend is attested, on
-    // the same predicate as identity propagation, and BEFORE it: an unattested
-    // call must not mint a per-user credential or write a mint audit row. Also
-    // ahead of the idempotency guard, so a replay needs a token too.
-    if isolation_guarded {
-        let scope = direct_route_attestation_scope(&method, params.as_ref());
-        let agent = client.as_ref().map(|c| c.name.as_str());
-        if let Err(e) = state.meta_mcp.check_attestation_scoped(
-            attestation.as_deref(),
-            scope,
-            agent,
-            "direct_route",
-        ) {
-            let (code, message) = (e.to_rpc_code(), e.to_string());
-            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
-        }
-    }
     // Caller's stable identity binding (MIK-6784) for per-identity upstream
     // session partitioning on this direct route. Set only when a minting
     // strategy resolves a binding; passthrough / no-identity keep `None` (shared
@@ -913,6 +896,24 @@ async fn backend_handler_inner(
             e.to_string(),
             StatusCode::FORBIDDEN,
         );
+    }
+
+    // MIK-7570.ATTEST.1: every method that reaches the backend is attested, on
+    // the same predicate as identity propagation, and BEFORE it: an unattested
+    // call must not mint a per-user credential or write a mint audit row. Also
+    // ahead of the idempotency guard, so a replay needs a token too.
+    if isolation_guarded {
+        let scope = direct_route_attestation_scope(&method, params.as_ref());
+        let agent = client.as_ref().map(|c| c.name.as_str());
+        if let Err(e) = state.meta_mcp.check_attestation_scoped(
+            attestation.as_deref(),
+            scope,
+            agent,
+            "direct_route",
+        ) {
+            let (code, message) = (e.to_rpc_code(), e.to_string());
+            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
+        }
     }
 
     // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the
