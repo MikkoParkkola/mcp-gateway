@@ -97,9 +97,7 @@ where
 /// 429 and every other typed status keep their retry.
 fn is_retryable(error: &Error) -> bool {
     match error {
-        Error::Http(e) => !e
-            .status()
-            .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal),
+        Error::Http(_) => true,
         other => matches!(
             other,
             Error::Transport(_)
