@@ -117,6 +117,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
+- **A non-admin call to a callback-registering capability is refused as a denial.** It was
+  answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
+  JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by
+  authorization" warning. See UPGRADING-4.0 item 66 for when the invocation audit log
+  records it.
+
 - **Capability pins cover text after a line break inside the pin line.** The pin hash
   excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
   so text after one was parsed yet not hashed. Only the pin value is excluded now; re-pinning
