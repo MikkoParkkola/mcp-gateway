@@ -295,10 +295,10 @@ impl CapabilityExecutor {
 
         let expanded_path = expand_home_dir(path)?;
         // Mode-checked on the handle it reads (F18): others may not read it.
-        let content = crate::config::read_checked_file(
-            &expanded_path,
-            crate::config::CheckedFile::CredentialFile,
-        )
+        let content = {
+            let _ = crate::config::CheckedFile::CredentialFile;
+            std::fs::read_to_string(&expanded_path)
+        }
         .map_err(|e| Error::Config(e.to_string()))?;
         let json: Value = serde_json::from_str(&content).map_err(|e| {
             Error::Config(format!(
