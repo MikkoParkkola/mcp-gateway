@@ -93,12 +93,14 @@ persistent storage, so point those settings at a volume you mount yourself.
 
 Restoring onto a different host is the same procedure. Only one gateway process may use an
 accounts store at a time: opening it takes a lock in each directory, and a second process is
-refused. The governance store takes no lock, so make sure only one process points at it.
+refused. The governance store has no lease (UPGRADING-4.0 item 22): its file locks serialize
+single writes, not two gateways, so run one gateway process per `control_plane.store_dir`.
 
 ## Rotating keys and secrets
 
 Every setting below is read at startup. A config reload reports the change as needing a
-restart and does not apply it, so each rotation ends with a restart.
+restart and does not apply it, so each rotation below ends with a restart unless its row says
+otherwise.
 
 ### Accounts encryption keys
 
@@ -144,7 +146,7 @@ if step 3 slips.
 |---|---|
 | `server.metrics_token` | Change it and restart; update the scrape job at the same time (UPGRADING-4.0 item 33) |
 | `file:` secret references | Replace the file with the same mode and restart; a reload reports `restart required for: file:<path>` (item 44). A `client_secret_ref` picks up the new file on its next use without a restart |
-| OAuth backend tokens | Delete the backend's file under `<data dir>/oauth/` and let the backend authorize again |
+| OAuth backend tokens | Delete the backend's file under `~/.mcp-gateway/oauth/` and let the backend authorize again |
 | Key-server tokens | Restart; every issued token is dropped with the process |
 | mTLS certificates and CRL | Replace the files and restart; there is no live reload |
 | Audit log HMAC (`security.transparency_log` `key_id` and `shared_secret`) | A log is verified with one secret, so one log cannot hold entries signed with two. Stop the gateway, archive the current log file together with its old `key_id` and `shared_secret`, point `security.transparency_log.path` at a new file (or move the old one away), set the new `key_id` and `shared_secret`, and restart |
