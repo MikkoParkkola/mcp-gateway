@@ -45,8 +45,9 @@ const WINDOWS_ALLOWLIST: [&str; 8] = [
 /// Set on every platform, from the parent or a fallback.
 const ALWAYS_SET: [&str; 3] = ["PATH", "HOME", "TMPDIR"];
 /// An allowlisted key the backend's own `env:` overrides.
-const OVERRIDDEN_KEY: &str = "APPDATA";
-const OVERRIDE_VALUE: &str = r"C:\mcp-gateway-test\backend-configured-appdata";
+// Not APPDATA: that is the key #522 lost, so it must be checked as a pass-through.
+const OVERRIDDEN_KEY: &str = "TEMP";
+const OVERRIDE_VALUE: &str = r"C:\mcp-gateway-test\backend-configured-temp";
 
 /// Bounds each nested run, so a hung child is a red test rather than a CI job
 /// that sits until its own timeout.
@@ -60,7 +61,8 @@ async fn windows_backend_receives_the_allowlist_and_nothing_else() {
         .env(SCENARIO_ENV, "1")
         .env(PARENT_SECRET_ENV, PARENT_SECRET)
         .kill_on_drop(true);
-    let output = tokio::time::timeout(NESTED_RUN_LIMIT, nested.output())
+    // Above the inner run's own limit, so a hung backend fails the inner run.
+    let output = tokio::time::timeout(NESTED_RUN_LIMIT * 2, nested.output())
         .await
         .expect("the scenario finished within the limit")
         .expect("run the Windows child-environment scenario");
@@ -70,6 +72,10 @@ async fn windows_backend_receives_the_allowlist_and_nothing_else() {
     assert!(
         stdout.contains(SCENARIO),
         "the nested filter did not run the scenario; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the nested run did not pass exactly the scenario; stdout={stdout:?}"
     );
     assert!(
         output.status.success(),
@@ -87,9 +93,10 @@ async fn windows_child_environment_scenario() {
         Ok(PARENT_SECRET),
         "the scenario must start with the parent secret in its own environment"
     );
-    let parent_appdata = std::env::var(OVERRIDDEN_KEY).expect("the runner defines APPDATA");
+    let parent_value = std::env::var(OVERRIDDEN_KEY)
+        .unwrap_or_else(|_| panic!("premise: the runner defines {OVERRIDDEN_KEY}"));
     assert_ne!(
-        parent_appdata, OVERRIDE_VALUE,
+        parent_value, OVERRIDE_VALUE,
         "the override must be observable"
     );
 
@@ -115,6 +122,10 @@ async fn windows_child_environment_scenario() {
         .find_map(|line| line.strip_prefix(DUMP_PREFIX))
         .map(|json| serde_json::from_str(json).expect("environment dump is JSON"))
         .unwrap_or_else(|| panic!("the backend printed no environment; stdout={stdout:?}"));
+    assert!(
+        output.status.success(),
+        "the backend stand-in failed; stdout={stdout:?}"
+    );
 
     // Negative half: nothing reaches the child that is not named here.
     assert!(
@@ -153,7 +164,11 @@ async fn windows_child_environment_scenario() {
     }
     assert_eq!(
         child.get("PATH").map(String::as_str),
-        std::env::var("PATH").ok().as_deref(),
+        Some(
+            std::env::var("PATH")
+                .expect("premise: the runner defines PATH")
+                .as_str()
+        ),
         "PATH did not reach the backend with the gateway's value"
     );
     // HOME and TMPDIR come from the parent when it has them, and otherwise
