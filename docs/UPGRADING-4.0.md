@@ -1205,8 +1205,9 @@ other users can **change** is refused (group- or world-write bit set). Fix: `chm
 | the identity-grants file | at startup, on grant reload, and by `mcp-gateway identity` | at startup it stops the gateway if `fail_on_error` is set, otherwise no grants load and personal capabilities fail closed; on reload it is logged and the live grants stay; the CLI exits 1 |
 | control-plane `grants.json` / `policies.json` | on each control-plane read | that operation fails, and nothing is overwritten |
 
-Files the gateway writes itself (grants, control-plane collections, keys from `tls init-ca`, OAuth
-tokens) are created `0600` and pass. `file:` secret references in the config (item 44) were already
+Files the gateway writes itself pass, whatever the umask: grants, control-plane collections, OAuth
+tokens and the keys from `tls init-ca` / `issue-*` are created `0600`, and the certificates those
+commands write are set to `0644`. `file:` secret references in the config (item 44) were already
 held to item 35.
 
 - A key or token that was readable by others may already have been copied. Rotate the key, or revoke
