@@ -278,9 +278,13 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 - Q1. Capability injection is additive and only on modern requests; legacy responses stay
   byte-identical. Recorded as an UPGRADING-4.0 item together with the F1 behaviour change.
 - Q2. No restart resume (§4.5).
-- Q3. F1 lands first as its own small change: `tasks/*` on `/mcp/{name}` answer from the
-  gateway store (an id the store does not hold gets `-32602`) instead of being forwarded.
-  Both reviews called F1 real; this design builds on that change.
+- Q3. F1 landed first as its own change (#1453, 46161901e; design
+  `docs/design/2026-09-26-f1-direct-route-tasks-refusal.md`; UPGRADING-4.0 item 67): `tasks/*`
+  on `/mcp/{name}` (any letter case) and `subscriptions/listen` naming `taskIds` now answer
+  `-32601` and never reach the backend. This design REPLACES that refusal with the owner-checked
+  gateway arms of §3 A.3 (an id the store does not hold gets `-32602`); the F1 tests that assert
+  "never reaches the backend" stay and must keep passing, and the ones asserting `-32601` are
+  updated in the same PR, with UPGRADING item 67 amended.
 - Q4. Visibility of `DirectRouteGuards::run`: maintainer decision 2026-09-26, `pub(crate)`
   is approved. No other visibility widening is covered by this decision.
 
