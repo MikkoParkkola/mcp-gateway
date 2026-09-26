@@ -133,4 +133,8 @@ async fn non_admin_callback_registration_is_audited_as_a_denial() {
         .find(|l| l.contains("Tool invocation refused by authorization"))
         .unwrap_or_else(|| panic!("no authorization-refusal warning logged:\n{logged}"));
     assert!(line.contains("register_webhook"), "{line}");
+    assert!(
+        line.contains("admin credential"),
+        "the reason must be the rule's: {line}"
+    );
 }

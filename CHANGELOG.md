@@ -93,8 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603) and recorded as `error`. It
-  is now HTTP 403, JSON-RPC -32600, the shape admin-only tools answer with, recorded as
-  `denied` with the "refused by authorization" warning. See UPGRADING-4.0 item 66.
+  is now HTTP 403, JSON-RPC -32600, the shape admin-only tools answer with, and logs the
+  "refused by authorization" warning; an audit-log record for it reads `denied`. See UPGRADING-4.0 item 66.
 
 - **Capability pins cover text after a line break inside the pin line.** The pin hash
   excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,

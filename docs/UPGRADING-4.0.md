@@ -78,7 +78,7 @@ upgrading a running deployment.
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
-| 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600, audited as `denied` | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
+| 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1503,8 +1503,10 @@ configuration error: HTTP 400, JSON-RPC -32603, a message starting "Configuratio
 and an audit record with outcome `error`. It is now refused like an admin-only tool:
 
 - HTTP 403, JSON-RPC -32600, the same message without the "Configuration error:" prefix.
-- The audit record's outcome is `denied` with error code -32600, and the gateway logs the
-  "Tool invocation refused by authorization" warning naming the tool.
+- The gateway logs the "Tool invocation refused by authorization" warning naming the tool.
+- Where the refusal reaches the invocation audit log, its outcome is `denied` with error code
+  -32600. An HTTP `tools/call` is refused at admission, before that log is written, so it
+  leaves the warning only, like every other admission refusal.
 - Playbook steps were already refused as a denial and are unchanged.
 
 **Action:** only a client, alert or log query that matched the old 400/-32603 answer or the

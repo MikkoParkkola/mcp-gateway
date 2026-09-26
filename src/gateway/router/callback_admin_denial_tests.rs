@@ -86,4 +86,8 @@ async fn non_admin_callback_registration_is_http_403() {
         StatusCode::FORBIDDEN,
         "an admin must not be refused: {body}"
     );
+    assert!(
+        !body.to_string().contains("admin credential"),
+        "the admin-capability rule must not refuse an admin: {body}"
+    );
 }
