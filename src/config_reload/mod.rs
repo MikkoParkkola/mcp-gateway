@@ -1153,6 +1153,7 @@ impl ConfigWatcher {
                 if !matches!(event.kind, EventKind::Access(_)) {
                     wake_tx.send_replace(());
                 }
+                let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
