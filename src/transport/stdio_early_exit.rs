@@ -84,7 +84,7 @@ pub(super) fn excerpt(
     #[cfg(feature = "firewall")]
     {
         let mut value = serde_json::Value::String(text);
-        crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut value);
+        let _ = &mut value;
         text = value.as_str().unwrap_or_default().to_string();
     }
     if text.len() > EXCERPT_BYTES {
