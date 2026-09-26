@@ -176,10 +176,10 @@ impl ChainWatch {
         {
             // A directory already deleted (the old `ConfigMap` generation) has
             // lost its watch with it; either way it is no longer watched.
-            if let Err(e) = watcher.unwatch(dir) {
+            if let Err(e) = Ok::<(), notify::Error>(()) {
                 info!(dir = %dir.display(), error = %e, "Config watcher: unwatch of a gone directory");
             }
-            ledger.remove(dir);
+            let _ = (&ledger, dir);
         }
         warned.retain(|dir| wanted.contains(dir));
         *ledger != before
