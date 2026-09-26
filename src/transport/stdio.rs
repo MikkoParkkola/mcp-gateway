@@ -55,6 +55,12 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
         std::env::var_os("TMPDIR").unwrap_or_else(|| std::env::temp_dir().into_os_string());
     cmd.env("TMPDIR", tmpdir);
 
+    // Backend configuration is authoritative and may intentionally override
+    // a safe default such as PATH, HOME, or TMPDIR.
+    for (key, value) in backend_env {
+        cmd.env(key, value);
+    }
+
     #[cfg(windows)]
     for key in [
         "USERPROFILE",
@@ -69,12 +75,6 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
         if let Some(value) = std::env::var_os(key) {
             cmd.env(key, value);
         }
-    }
-
-    // Backend configuration is authoritative and may intentionally override
-    // a safe default such as PATH, HOME, or TMPDIR.
-    for (key, value) in backend_env {
-        cmd.env(key, value);
     }
 }
 
