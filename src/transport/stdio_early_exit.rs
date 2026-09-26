@@ -250,6 +250,7 @@ impl StdioTransport {
         if tokio::time::timeout(DRAIN, reader).await.is_err() {
             // Something still holds the pipe; keep what was read so far.
             abort.abort();
+            tail.lock().clear();
         }
         let excerpt = excerpt(&tail.lock(), argv, &self.env);
         let command = self.diagnostic_command();
