@@ -421,7 +421,7 @@ impl EnvOverlay {
     pub(crate) fn differs_on_disk(&self, path: &Path) -> bool {
         // `exists` follows links, as `apply_file`'s absence check does.
         if !path.exists() {
-            return !self.absent.iter().any(|p| p == path);
+            return true;
         }
         match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
             Ok(text) => !self.sources.iter().any(|(p, t)| p == path && *t == text),
