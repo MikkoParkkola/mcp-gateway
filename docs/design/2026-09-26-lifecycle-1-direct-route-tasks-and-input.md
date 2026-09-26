@@ -369,3 +369,13 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | armed funnel byte-identical | improvement | ADOPTED: `DirectRouteGuards::run` never wraps the armed `UpstreamSubmission` funnel; it stays as today |
 | settlement when live guards refuse an admitted dispatch | improvement | ADOPTED: settles `failed` carrying the guard error through the existing `classify_dispatch` Fail arm |
 | §4.5 overstated the expiry consequence | improvement | ADOPTED: read §4.5's expiry sentence as "would need a new expiry rule"; the reason for no restart resume is the missing continuation contract |
+
+## 15. Round 8 re-run (second grok pass on revision 8; findings checked against revision 9)
+
+| finding | sev | disposition |
+|---|---|---|
+| live-guard refusal has no settlement, leaving an ownerless `working` row | HIGH | ALREADY ADOPTED in revision 9 (§14): settles `failed` carrying the guard error, and the worker drops its handoff and permit after settling; both live-guard test rows assert that terminal status |
+| single wait on the global `released` channel | MEDIUM | ALREADY ADOPTED in revision 9: subscribe-first loop re-checking its own id until vacant or 1 s; the produce-seam test runs with a second live task |
+| no room left for answers under the byte cap | improvement | ADOPTED: at produce time a round whose record leaves no room for any answer settles abandoned |
+| name the TTL selector for `input_required` | improvement | ADOPTED: a new `expired_input_rounds(now)` selector beside `expired_candidates` (store.rs:1031) |
+| record the visibility in the design | improvement | NOT ADOPTED: widening visibility is an owner decision; it stays an open question, asked before code |
