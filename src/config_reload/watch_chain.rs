@@ -226,6 +226,8 @@ pub(super) fn spawn_rewatch_task(
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 continue; // keep the last good set; the next event retries
             };
+            let wanted: BTreeSet<PathBuf> =
+                wanted.intersection(&chain.watched_now()).cloned().collect();
             let rewatched = chain.reconcile(&wanted);
             #[cfg(test)]
             chain
