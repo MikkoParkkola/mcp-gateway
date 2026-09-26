@@ -395,10 +395,20 @@ jobs:
     # re-measures the counts printed in docs/release/v4.0.0-supported-matrix.md,
     # which NFR.BUILD.1 C2 is graded against — a count nobody recomputes reads
     # as evidence while being a memory of what was once true.
+    # The shell check runs first and stays the fast signal. The later steps
+    # build the shipped binary and verify the same pins with
+    # `mcp-gateway cap validate`, including a tampered copy that must be
+    # refused, so the command operators run is exercised on real files.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check capability pins against the catalogue and the matrix
         run: bash scripts/ci/check-capability-pin-counts.sh
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Build the shipped binary
+        run: cargo build --locked --bin mcp-gateway
+      - name: Verify pins with cap validate (real files accepted, tampered copy refused)
+        run: bash scripts/ci/check-cap-validate-pins.sh target/debug/mcp-gateway
 
   secrets-scan:
     name: Secrets scan
