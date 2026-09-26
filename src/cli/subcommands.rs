@@ -783,10 +783,12 @@ pub enum AuditCommand {
     /// Verify the tamper-evidence hash chain of the transparency log
     #[command(about = "Verify the transparency log hash chain")]
     Verify {
-        /// Path to the transparency log file
-        /// (default: ~/.mcp-gateway/transparency/transparency.jsonl)
+        /// Path to the log (default: ~/.mcp-gateway/transparency/transparency.jsonl)
         #[arg(long)]
         path: Option<PathBuf>,
+        /// A copied set: a missing `.hwm` only warns (tail completeness unchecked)
+        #[arg(long)]
+        archive: bool,
     },
 
     /// Show log entries for a specific session
@@ -795,9 +797,7 @@ pub enum AuditCommand {
         /// Session ID to filter by
         #[arg(long, required = true)]
         session: String,
-
-        /// Path to the transparency log file
-        /// (default: ~/.mcp-gateway/transparency/transparency.jsonl)
+        /// Path to the log (default: ~/.mcp-gateway/transparency/transparency.jsonl)
         #[arg(long)]
         path: Option<PathBuf>,
     },

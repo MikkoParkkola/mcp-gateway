@@ -17,6 +17,7 @@ fn store(dir: &Path) -> FileControlPlaneStore {
         path: dir.join("audit.jsonl").to_string_lossy().to_string(),
         key_id: "gov".to_string(),
         shared_secret: "governance-secret-at-least-32-bytes-long!".to_string(),
+        ..TransparencyLogConfig::default()
     });
     let audit = Arc::new(TransparencyLogger::open(cfg).expect("open governance log"));
     FileControlPlaneStore::open(dir.join("store"), audit).expect("open store")

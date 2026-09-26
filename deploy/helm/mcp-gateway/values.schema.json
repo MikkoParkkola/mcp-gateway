@@ -142,6 +142,16 @@
         "sizeLimit": {
           "type": "string",
           "description": "sizeLimit of the audit emptyDir."
+        },
+        "rotation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxSegmentBytes": {"type": "integer", "minimum": 1048576, "maximum": 134217728},
+            "retainSegments": {"type": "integer", "minimum": 1},
+            "onDiskFull": {"type": "string", "enum": ["expire_oldest", "refuse"]},
+            "maxSegmentAgeSecs": {"type": "integer", "minimum": 0}
+          }
         }
       }
     },
