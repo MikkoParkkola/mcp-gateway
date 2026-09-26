@@ -38,7 +38,9 @@ use super::{
     BackendDescriptor, CallerProof, IdentityPropagation, PropagationError,
     audit_identity_propagation, audit_subject,
 };
-use crate::personal_accounts::{config::DescriptorMode, identity::Principal, refusal::mark};
+use crate::personal_accounts::{
+    ManagedLease, config::DescriptorMode, identity::Principal, refusal::mark,
+};
 use crate::security::TransparencyLogger;
 use crate::{Error, Result};
 
@@ -157,14 +159,18 @@ pub(crate) struct PreparedAccountCredential {
     headers: Vec<(String, String)>,
 }
 
-/// One managed credential's custody handle: the concrete strategy that released
-/// it and the lease it was released under.
-struct ManagedLease {
-    strategy: Arc<crate::personal_accounts::VaultStrategy>,
-    lease: crate::personal_accounts::CredentialLease,
-}
-
 impl PreparedAccountCredential {
+    /// A11-c, the capability route's 401 site: force at most one refresh of
+    /// the managed grant this credential came from and return the caller's
+    /// answer. A credential with no managed custody (external) keeps
+    /// `refused` unchanged, so only a vault-minted credential forces anything.
+    pub(crate) async fn after_upstream_401(&self, refused: Error) -> Error {
+        match self.managed.as_ref() {
+            Some(managed) => managed.after_upstream_401(refused).await,
+            None => refused,
+        }
+    }
+
     /// The headers to put on the wire, verbatim.
     pub(crate) fn headers(&self) -> &[(String, String)] {
         &self.headers
@@ -596,21 +602,16 @@ impl AccountStrategyRegistry {
         // one takes the store's authority lock; first in importance, because it
         // is the only one that can see a revocation committed since the mint.
         if let Some(managed) = prepared.managed.as_ref() {
-            // The installed managed strategy must still be the one that
-            // released this lease. The pointer check above compares the trait
-            // object; this compares the concrete instance the lease belongs to,
-            // so a descriptor re-installed against different custody cannot be
-            // rechecked with the previous one.
-            match installed.managed.as_ref() {
-                Some(current) if Arc::ptr_eq(current, &managed.strategy) => {}
-                _ => {
-                    return refuse(
-                        "the managed custody backing it was replaced after the credential was \
-                         minted",
-                    );
-                }
-            }
-            if let Err(error) = managed.strategy.recheck(&managed.lease).await {
+            // `recheck` also refuses when the installed vault is not the very
+            // instance that released this lease: a descriptor re-installed
+            // against different custody cannot be rechecked with the previous
+            // one. That refusal names itself, so it is passed through as is.
+            let Some(current) = installed.managed.as_ref() else {
+                return refuse(
+                    "the managed custody backing it was replaced after the credential was minted",
+                );
+            };
+            if let Err(error) = managed.recheck(current).await {
                 // The custody refusal text names the account state (revoked,
                 // reconnect required, retired lease), never a token.
                 return refuse(&format!("durable custody refused its lease: {error}"));
@@ -632,17 +633,9 @@ impl AccountStrategyRegistry {
     {
         match installed.managed.as_ref() {
             Some(vault) => vault
-                .prepare(principal, backend)
+                .prepare_held(principal, backend)
                 .await
-                .map(|(credential, lease)| {
-                    (
-                        credential,
-                        Some(ManagedLease {
-                            strategy: Arc::clone(vault),
-                            lease,
-                        }),
-                    )
-                }),
+                .map(|(credential, managed)| (credential, Some(managed))),
             // An external strategy exchanges the CALLER'S OWN token, so it has
             // nothing to mint from but a proof. `Self::principal` offers the
             // sole-operator assertion only for a managed descriptor, so this is

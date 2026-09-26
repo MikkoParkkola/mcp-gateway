@@ -177,6 +177,7 @@ fn authority_naming(config: &StoreConfig, basename: &str, state: GrantState) -> 
                 record_sha256: Some("0".repeat(64)),
                 state,
                 legacy_migration: None,
+                forced_revision: None,
             },
         )]),
     }

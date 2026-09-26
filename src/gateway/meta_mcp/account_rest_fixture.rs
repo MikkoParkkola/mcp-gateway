@@ -76,6 +76,9 @@ pub(super) const TOOL: &str = "drive_read";
 #[derive(Default)]
 pub(super) struct Captured {
     seen: Mutex<Vec<Option<String>>>,
+    /// A11: statuses answered one per request, in order. When empty, every
+    /// request gets today's 200 echo, which is what every pre-A11 case relies on.
+    answers: Mutex<std::collections::VecDeque<u16>>,
 }
 
 impl Captured {
@@ -102,23 +105,36 @@ impl Captured {
 async fn capture_handler(
     axum::extract::State(state): axum::extract::State<Arc<Captured>>,
     headers: axum::http::HeaderMap,
-) -> axum::Json<Value> {
+) -> (axum::http::StatusCode, axum::Json<Value>) {
     let authorization = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     let mut seen = state.seen.lock();
     seen.push(authorization.clone());
+    if let Some(status) = state.answers.lock().pop_front() {
+        let status = axum::http::StatusCode::from_u16(status).expect("fixture status is valid");
+        // The body always says "401 invalid_token", whatever the status: A11-b
+        // types the STATUS, never the text, so a 200 carrying this body (T6)
+        // must pass through and a 500 carrying it must stay a 500.
+        return (
+            status,
+            axum::Json(json!({"error": "401 invalid_token", "status": status.as_u16()})),
+        );
+    }
     // The body ECHOES the credential and a per-request sequence number, so a
     // cache assertion can be made on the RESPONSE and not only on a counter: two
     // dispatches can never produce the same body, and a body carrying another
     // principal's credential is a crossed entry stated outright rather than
     // inferred from a count.
-    axum::Json(json!({
-        "ok": true,
-        "seq": seen.len(),
-        "authorization": authorization,
-    }))
+    (
+        axum::http::StatusCode::OK,
+        axum::Json(json!({
+            "ok": true,
+            "seq": seen.len(),
+            "authorization": authorization,
+        })),
+    )
 }
 
 /// Bind a real HTTP endpoint on an ephemeral loopback port and start serving.
@@ -126,7 +142,16 @@ async fn capture_handler(
 /// Returns the port so the capability's `base_url` names the endpoint that was
 /// actually bound — no fixed port, so parallel tests cannot collide.
 pub(super) async fn capture_endpoint() -> (u16, Arc<Captured>) {
-    let captured = Arc::new(Captured::default());
+    capture_endpoint_answering(&[]).await
+}
+
+/// As [`capture_endpoint`], answering the first requests with `statuses`, in
+/// order, and today's 200 echo after that (A11 cells).
+pub(super) async fn capture_endpoint_answering(statuses: &[u16]) -> (u16, Arc<Captured>) {
+    let captured = Arc::new(Captured {
+        answers: Mutex::new(statuses.iter().copied().collect()),
+        ..Captured::default()
+    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("the capture endpoint must bind a loopback port");
@@ -651,3 +676,7 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
     meta.code_mode_execute(&args, Some("rest-fixture-session"), &context)
         .await
 }
+
+/// A11: the rejected-upstream-token cells, which drive this fixture.
+#[path = "upstream_401_tests.rs"]
+mod upstream_401;

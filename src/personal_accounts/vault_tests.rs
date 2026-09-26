@@ -542,3 +542,57 @@ fn absence_is_distinguishable_from_revocation_at_the_propagation_boundary() {
         "{revoked}"
     );
 }
+
+/// A11 T13: a held lease rechecks only against the very vault that released
+/// it. Two vaults over ONE custody differ only by instance, so the refusal
+/// can come from nothing but the instance check moved into `ManagedLease`.
+#[test]
+fn a_held_lease_rechecks_only_against_the_vault_that_released_it() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    let alice = identity();
+    seed(
+        tmp.path(),
+        &[(
+            key_for(Principal::Verified(&alice)),
+            unexpired_grant(ALICE_TOKEN),
+        )],
+    );
+
+    block_on(async {
+        let handle = CustodyHandle::start(
+            store_config(tmp.path()),
+            CountingProvider {
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            SilentObserver,
+            4,
+        )
+        .expect("custody starts against a seeded store");
+        let custody: Arc<dyn AccountCustody> = Arc::new(handle);
+        let released = Arc::new(VaultStrategy::new(
+            Arc::clone(&custody),
+            descriptor(),
+            false,
+        ));
+        let reinstalled = Arc::new(VaultStrategy::new(custody, descriptor(), false));
+
+        let (_credential, held) = released
+            .prepare_held(Principal::Verified(&alice), &backend())
+            .await
+            .expect("alice's grant leases");
+
+        held.recheck(&released)
+            .await
+            .expect("the releasing vault rechecks its own lease");
+        let refused = held
+            .recheck(&reinstalled)
+            .await
+            .expect_err("a different vault instance must not recheck this lease");
+        assert!(
+            refused
+                .to_string()
+                .contains("managed custody backing it was replaced"),
+            "{refused}"
+        );
+    });
+}
