@@ -37,7 +37,7 @@ pub(super) async fn key_refusal(
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
     let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
-    match Box::pin(checked).await {
+    match checked.await {
         Ok(None) => None,
         Ok(Some(text)) => {
             let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });

@@ -954,11 +954,15 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             self.headers,
             (self.scope, self.session_id),
         );
-        let refusal = match Box::pin(refusal).await {
+        let refusal = match refusal.await {
             Ok(refusal) => refusal,
             Err(e) => {
-                // Accounted as `accounted_dispatch` accounts a refused round.
-                let bridged = classify_bridged_dispatch_error(&e);
+                // Accounted as `accounted_dispatch` accounts a refused round,
+                // but always NotAdmitted: no `tools/call` left the gateway, so
+                // the idempotency key must stay retryable.
+                let bridged = crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                    message: e.to_string(),
+                };
                 self.meta
                     .account_refused_fill(self.server, self.tool, e, checked_at);
                 return Err(bridged);
@@ -1913,7 +1917,7 @@ impl MetaMcp {
             &caller_credential.headers,
             (caller.scope(), session_id),
         );
-        let refusal = match Box::pin(refusal).await {
+        let refusal = match refusal.await {
             Ok(refusal) => refusal,
             Err(e) => Some(self.account_refused_fill(server, tool, e, checked_at)),
         };

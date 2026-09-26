@@ -59,7 +59,21 @@ impl Backend {
     /// refused the fill, and under `closed` the fill's transport error when
     /// the backend could not be reached (A3): the call gets the error a
     /// refused or failed dispatch gets.
-    pub(crate) async fn undeclared_key_refusal(
+    ///
+    /// Returns a type-erased future: the fill underneath is deep, and naming
+    /// its type in every caller's state machine pushed the stdio dispatch
+    /// task past the trait solver's recursion limit (E0275 on Windows/Kani).
+    pub(crate) fn undeclared_key_refusal<'a>(
+        &'a self,
+        identity_key: Option<&'a str>,
+        headers: &'a [(String, String)],
+        tool: &'a str,
+        arguments: &'a Value,
+    ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
+        Box::pin(self.undeclared_key_refusal_inner(identity_key, headers, tool, arguments))
+    }
+
+    async fn undeclared_key_refusal_inner(
         &self,
         identity_key: Option<&str>,
         headers: &[(String, String)],

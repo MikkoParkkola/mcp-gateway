@@ -84,7 +84,8 @@ impl MetaMcp {
         let Some(backend) = self.backends.get(server) else {
             return Ok(None);
         };
-        let text = Box::pin(backend.undeclared_key_refusal(identity_key, headers, tool, arguments))
+        let text = backend
+            .undeclared_key_refusal(identity_key, headers, tool, arguments)
             .await?;
         // F13 text A (the backend's complete list lacks the tool) is a miss.
         // It keeps the design's exact wording on both routes; on this route
