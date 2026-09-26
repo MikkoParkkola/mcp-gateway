@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
+  `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
+  `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
+  extracted out of an over-ceiling file is not scored as growth. An inline `mod x { ... }`,
+  a macro attribute and a `cfg_attr` still count. The baseline is re-recorded under the new count, with
+  every row lower or equal. (#609)
 - **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
   token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
   read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
@@ -76,8 +82,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
   stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
   item 52.
+- **Capability pins survive CRLF line endings.** The `sha256:` pin now reads CRLF as LF, so
+  a pinned capability that a Windows checkout or editor converted to CRLF is no longer
+  refused as tampered. A lone CR still changes the hash. Capability YAML is checked out
+  with LF on every platform (`capabilities/.gitattributes`), so the Windows binary embeds
+  the same starter capabilities as the others. A pin made over CRLF bytes must be re-made: see
+  UPGRADING-4.0 item 60. (#524)
+- **`doctor` finds stdio commands on Windows.** It split `PATH` on `:`, which takes
+  `C:\...` apart, so it reported every stdio backend's command missing. It now uses the
+  platform separator and, on Windows, also the `.exe` name a spawn resolves a bare
+  command to. (#524)
+- **The `Windows check` CI job runs tests.** It compiles every test target for Windows
+  and runs the library and binary unit tests, except `gateway::` and
+  `personal_accounts::`, whose fixtures open stores that refuse on non-unix (#1142). Before,
+  it ran `cargo check` only. (#524)
 
 ### Security
+
+- **Capability pins cover text after a line break inside the pin line.** The pin hash
+  excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
+  so text after one was parsed yet not hashed. Only the pin value is excluded now; re-pinning
+  a pinned CRLF file still verifies. See UPGRADING-4.0 item 64. (#1212)
 
 - **Legacy HTTP session ids are minted by the gateway and never adopted** (F9, MIK-7585,
   #1140). A client-chosen `Mcp-Session-Id` that names no live session gets a fresh `gw-` id

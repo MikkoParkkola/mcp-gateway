@@ -189,6 +189,9 @@ fn ac_2_mik_new_runtime_d_2_compiler_descriptor_gviso() {
     let substrate = descriptor.effective_substrate();
     #[cfg(target_os = "linux")]
     assert_eq!(substrate, Substrate::GVisor);
+    // Any other platform takes the unsupported-platform fallback.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert_eq!(substrate, Substrate::GVisor);
     #[cfg(target_os = "macos")]
     assert_eq!(substrate, Substrate::AppleVm);
 
@@ -440,6 +443,9 @@ fn ac_5_mik_new_runtime_d_5_override_hook_operator_can() {
     assert!(auto.substrate_override.is_none());
     let effective = auto.effective_substrate();
     #[cfg(target_os = "linux")]
+    assert_eq!(effective, Substrate::GVisor);
+    // Any other platform takes the unsupported-platform fallback.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert_eq!(effective, Substrate::GVisor);
     #[cfg(target_os = "macos")]
     assert_eq!(effective, Substrate::AppleVm);
