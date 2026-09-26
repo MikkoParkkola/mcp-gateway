@@ -541,7 +541,7 @@ impl CapabilityBackend {
         {
             // A11-c: a 401 on a managed credential forces at most one refresh.
             Err(e) if crate::security::http_diagnostics::is_upstream_unauthorized(&e) => {
-                return Err(match held {
+                return Err(match held.filter(|_| false) {
                     Some(held) => held.after_upstream_401(e).await,
                     None => e,
                 });
