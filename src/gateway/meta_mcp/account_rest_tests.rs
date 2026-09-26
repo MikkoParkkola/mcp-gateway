@@ -118,7 +118,7 @@ async fn alice_and_bob_receive_their_own_account_credentials_from_one_rest_capab
     assert_eq!(
         custody.releases(),
         6,
-        "A11: backend resolve, executor recheck, egress recheck per dispatch, as multi-user"
+        "A11: +1 per dispatch is the extra executor recheck, not a new mint (as multi-user)"
     );
 }
 
@@ -382,7 +382,7 @@ async fn an_external_descriptor_and_a_managed_one_coexist_without_substitution()
     assert_eq!(
         custody.releases(),
         3,
-        "A11: only the managed descriptor releases: backend resolve, then two executor rechecks"
+        "A11: the managed descriptor alone; +1 is the extra recheck, not a new mint"
     );
 }
 
@@ -432,7 +432,7 @@ async fn meta_mcp_capability_dispatch_carries_the_verified_identity_to_the_accou
     assert_eq!(
         custody.releases(),
         4,
-        "A11: Code Mode mints, the backend rechecks, then cache and egress rechecks, as multi-user"
+        "A11: Code Mode mints once; +1 is the extra backend recheck, not a new mint (as multi-user)"
     );
     assert_eq!(
         custody.refreshes(),
