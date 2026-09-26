@@ -507,8 +507,14 @@ mod real_watcher {
     #[tokio::test]
     async fn t15_start_reloads_the_new_release_after_a_retarget() {
         let (_root, r) = capistrano();
-        std::fs::write(r.join("rel1").join("cfg.yaml"), profile_config("rel1")).unwrap();
-        std::fs::write(r.join("rel2").join("cfg.yaml"), profile_config("rel2")).unwrap();
+        // Owner-only, as a config the loader accepts must be.
+        for rel in ["rel1", "rel2"] {
+            crate::gateway::test_helpers::write_owner_only(
+                &r.join(rel).join("cfg.yaml"),
+                profile_config(rel),
+            )
+            .unwrap();
+        }
         let g = start_gateway_watcher(&r.join("current").join("cfg.yaml"));
         let chain = g.watcher.chain();
         tokio::time::timeout(Duration::from_secs(10), async {
