@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 2, after two independent design reviews (both SHIP-WITH-FIXES). Every finding
-is dispositioned in §7. Revision 2 needs a delta review before code.
+Status: REVISION 3. Two review rounds (four reviews, all SHIP-WITH-FIXES); every finding is
+dispositioned in §7 (round 1) and §8 (round 2). Revision 3 needs a delta review before code.
 
 ## 1. Problem
 
@@ -80,10 +80,20 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    that both the request thread and the worker call, and the worker runs it live on EVERY
    dispatch (first dispatch and each input resume): isolation, tool policy, sanitisation,
    per-user identity headers resolved at dispatch time, and the response scan. A policy or
-   isolation change during an input wait therefore refuses the resume.
+   isolation change during an input wait therefore refuses the resume. The extracted chain
+   keeps the per-backend passthrough opt-out (`backend_handlers.rs:957-959`) exactly as today.
+   Named function: `DirectRouteGuards::run`, in the router. The worker lives in `task_service`,
+   so calling it may need a visibility change (for example `pub(super)` to `pub(crate)`); that
+   is an owner decision, asked before code, not assumed.
+1b. **Upstream-armed jobs keep today's path.** When a trusted recovery adapter claims the
+   backend, the worker arms `UpstreamSubmission` (`worker.rs:113-178`) and the backend owns
+   the task; its `input_required` is the backend's own task state and stays under the reviewed
+   I3 treatment. The input round of §4 applies only to the un-armed path. A test pins that an
+   armed job's dispatch is unchanged.
 2a. **Idempotency.** The direct route's idempotency reservation (`:918-954`) completes with
    the `CreateTaskResult` at admission, keyed exactly as today, so a retry with the same key
-   returns the same task handle and never admits a second task.
+   returns the same task handle and never admits a second task. After the task expires, a
+   replayed handle answers `-32602` from `tasks/get`, the same as a `/mcp` task today.
 3. **`tasks/*` on `/mcp/{name}`** are answered by the same arms as `/mcp`
    (`handlers.rs:1858-1894`), gated by the same `reaches_tasks_extension` (`handlers.rs:93`).
    A task id is owner-scoped, not route-scoped: a task created on either route is visible
@@ -99,8 +109,14 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 
 ## 4. Design for P2: the input round, one continuation mechanism
 
-1. **Produce.** `classify_dispatch` gains a third outcome: an `InputRequired` result becomes
-   `TaskTransition::RequireInput(InputRequired)` instead of `abandoned_input_round`. The
+1. **Produce.** `classify_dispatch` gains a third outcome built from
+   `InputRequired::from_result` (`src/protocol/mrtr.rs:241-276`). Three cases:
+   (a) requests present: `TaskTransition::RequireInput(InputRequired)`;
+   (b) no requests but a `requestState` (a state-only round): no client round; the worker
+   immediately resumes with that state, bounded to 4 consecutive state-only rounds, after which
+   it settles as today's abandoned result;
+   (c) `claims_input_required` is true but `from_result` rejects the shape: settles as today's
+   abandoned result (`settlement.rs:21-22`), unchanged. The
    backend's `requestState` is persisted on the record as an optional field with serde default
    and skip-if-none, the way the upstream handle was added (`src/gateway/task_service/record.rs:103`),
    never in `wire()`, bounded by the store byte cap; over the cap settles as today's abandoned
@@ -110,17 +126,27 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 2. **Consume.** `tasks/update` stops refusing non-empty `inputResponses` when the task is
    `input_required` and applies `ProvideInput`. The model treats an answer to a key that is not
    outstanding as a silent no-op (`src/protocol/tasks.rs:350`, pinned by
-   `src/gateway/task_service/store_tests.rs:297`), so the HANDLER refuses with the existing
-   `-32602` when `ProvideInput` accepts no key or any submitted key is not outstanding. The
-   model stays as it is. The refusal at `tasks.rs:378-382` remains for a task with no round.
-3. **Resume needs a worker re-entry.** `tasks/update` is an acknowledgement today
-   (`src/gateway/task_service/service.rs:197`) and the only spawn is begin-at-create
-   (`src/gateway/task_service/execution.rs:188`). When `ProvideInput` returns the task to
-   `working`, the handler spawns the existing worker against the stored job with the tools/call
-   params built by `Bridge::retry_params` (`src/protocol/mrtr.rs:539`), which echoes
-   `requestState` verbatim. The resume dispatch runs the live guard chain of §3 A.2.
+   `src/gateway/task_service/store_tests.rs:297`). The refusal therefore lives INSIDE the store
+   transaction, before any key is accepted: if any submitted key is not outstanding, the whole
+   update is refused with `-32602` and nothing is written (no subset is accepted). A valid
+   subset of the outstanding keys is accepted; the task stays `input_required` until every key
+   is answered. The model's no-op behaviour is kept for its existing callers. The refusal at
+   `tasks.rs:378-382` remains for a task with no outstanding round.
+3. **Resume needs a new worker entry.** `tasks/update` is an acknowledgement today
+   (`src/gateway/task_service/service.rs:197`) and the only spawn is create-only
+   (`commit_and_run`, `worker.rs:29-56`, from `execution.rs:188`). A second entry,
+   `resume_and_run`, takes the stored record (tool, arguments, owner, continuation) and
+   dispatches the SAME tools/call (stored tool name and arguments) with an `OutboundRetry
+   { request_state, input_responses }`, the shape the meta path already sends
+   (`src/gateway/meta_mcp/invoke.rs:960-972`). `Bridge::retry_params` supplies only the
+   continuation fragment. The resume runs the live guard chain of §3 A.2.
+3a. **Exactly one resume.** The `input_required -> working` step is a revision
+   compare-and-set in the store transaction. Only the update whose transition performed it
+   spawns `resume_and_run`; a concurrent update sees a revision conflict or a `working` task
+   and is refused. Same rule for replicas sharing the store.
 4. **Cancel and expiry.** Cancel from `input_required` settles `cancelled` and drops the stored
-   continuation. Expiry reaps `input_required` exactly as `working` (`store.rs:1001`).
+   continuation. Expiry reaps an `input_required` row through the same TTL path as `working`
+   (`expired_candidates`, `store.rs:1031-1046`).
 5. **Restart: no resume.** Startup recovery keeps the reviewed I3 treatment for `input_required`
    rows (`src/gateway/task_service/execution/recovery.rs:41-44`): they settle as interrupted.
    The input round is resumable only in the process that stored the continuation. Skipping
@@ -145,6 +171,15 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | malformed round | backend returns an InputRequired with a reused key: task `failed`, not `working` | model error swallowed |
 | continuation over cap | `requestState` over the byte cap: abandoned result, not a stuck task | cap check removed |
 | restart keeps I3 | restart while `input_required`: row settles interrupted, update refused | recovery skips `input_required` rows |
+| live guards on FIRST dispatch | policy revoked between admission and the worker's first dispatch: refused, zero backend calls | worker first dispatch skips the guard chain |
+| one resume under concurrency | two concurrent full-answer updates: exactly one resume dispatch, one update refused | CAS removed from the transition |
+| mixed answer refused atomically | one outstanding key plus one foreign key: refused, outstanding key still outstanding | subset accepted before the check |
+| partial answer | one of two outstanding keys: accepted, task still `input_required`, no dispatch | resume on first answer |
+| state-only round | backend returns requestState with no requests: resumed without a client round; 5th consecutive settles abandoned | bound removed |
+| rejected round shape | claims input but shape rejected: abandoned result as today | new arm swallows it |
+| armed upstream unchanged | adapter-claimed backend: dispatch identical to before | input arm applied to armed path |
+| resume carries the call | resume dispatch has the stored tool name and arguments plus requestState | resume sends the fragment only |
+| expiry during input | TTL passes while `input_required`: row reaped, update refused | expiry skips `input_required` |
 
 ## 6. Answers to the review questions
 
@@ -173,3 +208,21 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | byte-cap overflow test | improvement | - | ADOPTED: test row |
 | UPGRADING entry for capability injection | improvement | - | ADOPTED: Q1 |
 | single dispatch table behind `reaches_tasks_extension` | improvement | handlers.rs:88-97 names the drift | DEFERRED to its own change: not needed for this criterion |
+
+## 8. Delta review dispositions (round 2, two independent reviews, both SHIP-WITH-FIXES)
+
+| finding | sev | check at source | disposition |
+|---|---|---|---|
+| resume named the create-only worker | HIGH | `commit_and_run` worker.rs:29-56 commits a Create first | ADOPTED: §4.3 new `resume_and_run` entry |
+| resume params were only the continuation fragment | HIGH | mrtr.rs:539-551; meta path builds OutboundRetry with tool and arguments at invoke.rs:960-972 | ADOPTED: §4.3 dispatches stored tool and arguments with OutboundRetry |
+| armed UpstreamSubmission bypasses classify_dispatch | HIGH | worker.rs:113-178 | ADOPTED: §3 A.1b, input round only on the un-armed path; test row |
+| concurrent updates could spawn two resumes | HIGH | update ignores revision today (service.rs:201 `_revision`) | ADOPTED: §4.3a revision CAS; test row |
+| no settlement for a rejected claimed round | MEDIUM | settlement.rs:16-23; mrtr.rs:241-276 | ADOPTED: §4.1 case (c) |
+| first-dispatch guard bypass had no mutant | MEDIUM | plan tested resume only | ADOPTED: test row |
+| mixed answers must be refused atomically | improvement | tasks.rs:330-361 accepts subsets | ADOPTED: §4.2 in-transaction refusal |
+| partial answer sets unspecified | improvement | - | ADOPTED: §4.2 plus test row |
+| state-only InputRequired treated as malformed | improvement | mrtr.rs:265-276 accepts it | ADOPTED: §4.1 case (b), bounded |
+| keep passthrough opt-out in the extracted chain | improvement | backend_handlers.rs:957-959 | ADOPTED: §3 A.2 |
+| expiry cite and expiry-during-input test | improvement | store.rs:1031 expired_candidates | ADOPTED: §4.4 plus test row |
+| name the extracted guard function | improvement | - | ADOPTED: `DirectRouteGuards::run`; visibility flagged as an owner question |
+| idempotent handle after task expiry | improvement | - | ADOPTED: §3 A.2a, same answer as `/mcp` |
