@@ -110,6 +110,8 @@ if "${WORKLOAD_FIXTURE}" not in text:
     raise SystemExit(f"void: {src} has no ${{WORKLOAD_FIXTURE}} placeholder")
 open(dst, "w").write(text.replace("${WORKLOAD_FIXTURE}", fixture))
 PY
+    # The umask covers a new file only; a re-render keeps an old file's mode.
+    chmod 600 "$CONFIG_DIR/$name"
     sha256_of "$HERE/$name" "$CONFIG_DIR/$name" >> "$run/config.sha256"
   done
 }
