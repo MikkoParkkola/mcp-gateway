@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 4. Three review rounds; round 3: one SHIP, one SHIP-WITH-FIXES. Every finding is
-dispositioned in §7-§9. Revision 4 needs a delta review before code.
+Status: REVISION 5. Four review rounds; rounds 3 and 4: one SHIP, one SHIP-WITH-FIXES each. Every finding is
+dispositioned in §7-§10. Revision 5 needs a delta review before code.
 
 ## 1. Problem
 
@@ -135,11 +135,18 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 3. **Resume needs a new worker entry.** `tasks/update` is an acknowledgement today
    (`src/gateway/task_service/service.rs:197`) and the only spawn is create-only
    (`commit_and_run`, `worker.rs:29-56`, from `execution.rs:188`). A second entry,
-   `resume_and_run`, is admitted exactly like `begin()` (`execution.rs:195-202`):
-   `Handoff::accept` BEFORE the spawn, a permit from the same worker pool, and `cancel_rx`
-   threaded into the same dispatch `select!` as the first dispatch, so cancel during a resume
-   aborts the backend call and a drain sees the work. It is spawned from the `tasks/update`
-   arm with an `OwnedCallerContext` built from THAT request (same `route_task_owner`), plus
+   `resume_and_run`, follows the create protocol (`execution.rs:370-390`): a worker permit is
+   TRY-acquired (`workers.try_acquire_owned`) BEFORE the `input_required -> working` CAS; with
+   no permit the update is refused with the same `Capacity` outcome create returns
+   (`execution.rs:62`, `:86`) and the task stays `input_required` with its answers unapplied.
+   With the permit held, the CAS commits, then `Handoff::accept` and the spawn follow as in
+   `begin()` (`execution.rs:195-202`), with `cancel_rx` threaded into the same dispatch
+   `select!` as the first dispatch, so cancel during a resume aborts the backend call and a
+   drain sees the work. The update answers after the CAS commits (the ack means "input
+   accepted, task working"), not after the dispatch starts. It is spawned from the `tasks/update`
+   arm with an `OwnedCallerContext` built from THAT request's live identity bundle, the same
+   `RecoveryCaller` bundle `tasks/get` threads (`handlers.rs:1868`), and the same
+   `route_task_owner`, plus
    the stored tool name, arguments and continuation. It dispatches the SAME tools/call with an
    `OutboundRetry { request_state, input_responses }`, the shape the meta path already sends
    (`src/gateway/meta_mcp/invoke.rs:960-972`); `Bridge::retry_params` supplies only the
@@ -153,13 +160,24 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    and gets `-32602` ("no input round is outstanding"). Same rule for replicas sharing the
    store. The window between that commit and the spawn is the same one-write window `begin()`
    has at create: a crash there leaves a `working` row that startup settles as interrupted.
-3b. **State-only rounds** (§4.1 b) go through `resume_and_run` too, so they run the live guard
-   chain. The counter lives on the record, increments on each state-only round, and resets on
-   any round that asks the client for input.
+3b. **State-only rounds** (§4.1 b) never leave the worker that received them: the same worker
+   (same Handoff, same permit, same `cancel_rx`) loops and re-dispatches with the new
+   `requestState`, running the live guard chain each time; no second `Handoff::accept` for a
+   task id a worker already owns (`observe.rs:73` would overwrite the owner's cancel sender).
+   The counter lives on the record, increments on each state-only round, and resets on any
+   round that asks the client for input.
+3c. **Transport.** After the guard chain, a `DirectJob` dispatch uses the same backend
+   transport call the request thread uses (`backend.request` / `request_with_headers` with the
+   per-user headers resolved by the guard chain), not `dispatch_below_gate_native_result`.
+3d. **Which layer rejects a malformed round.** `from_result` rejects the wire shape (missing
+   or non-object `inputRequests`, malformed `requestState`): settles abandoned (§4.1 c).
+   `require_input` rejects semantic errors in a well-formed shape (empty set, reused or
+   duplicate key, non-object value): settles `failed` (§4.1). The two test rows target these
+   two layers with separate mutants.
 4. **Cancel and expiry.** Cancel from `input_required` settles `cancelled` and drops the stored
    continuation. When the TTL elapses on an `input_required` row, the expiry pass settles it
-   `cancelled` the same way (continuation dropped); deletion is left to the existing terminal
-   sweep after retention (`expired_candidates`, `store.rs:1031-1046`, which only deletes
+   `cancelled` the same way (continuation dropped) in its first snapshot; deletion is a second,
+   later snapshot of the existing terminal sweep after retention (`expired_candidates`, `store.rs:1031-1046`, which only deletes
    terminal rows).
 5. **Restart: no resume.** Startup recovery keeps the reviewed I3 treatment for `input_required`
    rows (`src/gateway/task_service/execution/recovery.rs:41-44`): they settle as interrupted.
@@ -196,6 +214,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
 | cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
 | resume uses the caller of the update | policy for the updating caller denies the tool: resume refused | resume built from stored caller context |
+| resume refused when the pool is full | full worker pool: update refused with `Capacity`, task still `input_required`, answers unapplied | CAS before permit acquisition |
+| state-only loop keeps one owner | a state-only round while cancel is raised: the one worker aborts; no second Handoff | state-only round spawns a new worker |
 
 ## 6. Answers to the review questions
 
@@ -255,3 +275,16 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | state-only rounds through the guard chain; counter location | improvement | - | ADOPTED: §4.3b |
 | name the CAS-loser error | improvement | - | ADOPTED: `-32602` |
 | crash window between CAS and spawn | improvement | same window as create | ADOPTED: §4.3a acknowledged, settles interrupted |
+
+## 10. Round 4 dispositions (one SHIP, one SHIP-WITH-FIXES)
+
+| finding | sev | check at source | disposition |
+|---|---|---|---|
+| state-only round would take a second Handoff for an owned id | HIGH | observe.rs:73 inserts a new cancel sender over the owner's | ADOPTED: §4.3b same worker loops |
+| resume CAS before a permit; no capacity path | HIGH | create try-acquires inside the store create (execution.rs:370-390) | ADOPTED: §4.3 try-acquire before CAS, `Capacity` refusal; test row |
+| permit claim unsupported by the begin() excerpt | improvement | the permit is taken in create, not begin() | ADOPTED: §4.3 cites the create path |
+| which layer rejects a malformed round | improvement | - | ADOPTED: §4.3d |
+| what the update acknowledges | improvement | - | ADOPTED: §4.3, ack after CAS |
+| name the DirectJob transport | improvement | worker.rs:183 | ADOPTED: §4.3c |
+| expiry as two snapshots | improvement | store.rs:1031 | ADOPTED: §4.4 |
+| live identity bundle for update | improvement | handlers.rs:1868 RecoveryCaller | ADOPTED: §4.3 |
