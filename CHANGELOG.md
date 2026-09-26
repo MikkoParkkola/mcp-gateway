@@ -106,6 +106,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   the backend for all tenants. It is now `Rate limit exceeded for backend 'x'` (code
   still -32000, recovery hint `RATE_LIMITED`), is not sampled by the error budgets, and leaves
   `mcp_backend_circuit_state` alone. See `docs/UPGRADING-4.0.md` item 53 (F23).
+- **Config reload follows a symlinked config across directories.** A link retargeted to a
+  file in a directory the gateway was not watching reloaded once and then missed every later
+  write, serving the old config silently; a directory the link left stayed watched forever. The
+  watcher now follows the whole link chain on every change, including a Kubernetes ConfigMap's
+  `..data` swap, a Capistrano-style `current` directory link retargeted by rename or by
+  `rm` and `ln -s`, and reads the new release on reload. Limits are listed in DEPLOYMENT
+  under "What triggers a config reload". (#453)
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.

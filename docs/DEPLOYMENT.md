@@ -913,6 +913,44 @@ an address it cannot predict, so the name cannot be checked, but rebinding
 always needs a hostname while a network client dials an address. Set
 `public_url` if clients legitimately reach the gateway by name.
 
+### What triggers a config reload
+
+The gateway watches the config file and reloads when it changes. A config named
+through symlinks is followed along its whole link chain, and the chain is
+re-read on every change in a directory it runs through:
+
+- a deploy that points the link at a release in another directory is picked up,
+  and later writes to the new target reload too;
+- a Kubernetes ConfigMap mounted as a directory (`gateway.yaml ->
+  ..data/gateway.yaml`, `..data -> ..<timestamp>`) reloads when kubelet swaps
+  `..data` to the new generation;
+- a release directory link that is the config's own parent directory
+  (Capistrano's `--config /srv/app/current/gateway.yaml`, `current ->
+  releases/vN`) is followed: retargeting `current`, by rename or by `rm` and
+  `ln -s`, reloads the new release, and the reload reads the new release's file;
+- a directory the chain no longer runs through stops being watched.
+
+Limits:
+
+- only a directory link that is a file's immediate parent is watched. With the
+  config one level further down (`current/conf/gateway.yaml`), retargeting
+  `current` is not heard: name the config through a path whose parent is the
+  release link, or through a file symlink;
+- a directory link higher in the path (`/srv/app` itself a link, macOS `/var`)
+  is resolved but not watched;
+- renaming a real (not linked) parent directory is not heard;
+- env files keep their startup path: an env file under `current/` stays on the
+  old release after a retarget (#1286);
+- a chain longer than 40 links is treated as a loop: the watcher keeps its last
+  good watches and logs the error.
+
+If the chain cannot be resolved (a target missing mid-update, at startup or
+later), the gateway keeps its last watches, or at startup watches the config's
+own directory, and tries again every 2 seconds and on every change until the
+chain resolves. It also re-reads the config once as soon as the
+watches are in place, so a retarget between loading the config and starting the
+watcher is not missed.
+
 ### What a config reload applies
 
 Most settings are read once at startup. A reload reports which changed fields

@@ -49,10 +49,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use notify::{
-    Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-};
-use parking_lot::{Mutex, RwLock};
+use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, Watcher};
+use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::{error, info, warn};
@@ -1045,11 +1043,24 @@ fn matching_env_file(event: &Event, env_paths: &[PathBuf]) -> Option<PathBuf> {
 /// Mirrors the structure of [`crate::capability::CapabilityWatcher`].
 /// Holds the underlying `notify` watcher alive for the lifetime of the struct.
 pub struct ConfigWatcher {
-    /// Kept alive to prevent the OS watcher from being dropped.
-    _watcher: Mutex<Option<RecommendedWatcher>>,
+    /// Kept alive with the struct: the OS watcher and the config directories
+    /// it watches. The rewatch task holds it too, and drops the watcher when
+    /// the gateway shuts down.
+    _chain: Arc<watch_chain::ChainWatch>,
 }
 
 impl ConfigWatcher {
+    /// The chain watch, for tests that wait on its ledger and counters.
+    // Only the unix-gated watcher tests read it.
+    #[cfg(all(test, unix))]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the field is named for keeping the watch alive; only tests read it"
+    )]
+    fn chain(&self) -> &Arc<watch_chain::ChainWatch> {
+        &self._chain
+    }
+
     /// Start watching `config_path` and any env files listed in the initial
     /// config for changes.
     ///
@@ -1070,7 +1081,7 @@ impl ConfigWatcher {
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
-        let config_path = absolute_watch_path(config_path);
+        let config_path = watch_chain::named_config_path(config_path);
         // The paths startup recorded, never `initial_config.env_files`: a `~`
         // entry resolved once, and resolving the spelling again could watch a
         // different file than the one the gateway reads.
@@ -1082,7 +1093,20 @@ impl ConfigWatcher {
             .map(absolute_watch_path)
             .collect();
 
-        let watcher = Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
+        let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
+        let chain =
+            Self::create_notify_watcher(event_tx.clone(), wake_tx, &config_path, &env_file_paths)?;
+        // One resolve as soon as the watches are live: a retarget that landed
+        // between resolving the chain and installing them is followed.
+        wake_rx.mark_changed();
+        watch_chain::spawn_rewatch_task(
+            config_path.clone(),
+            Arc::clone(&chain),
+            wake_rx,
+            event_tx,
+            shutdown_rx.resubscribe(),
+            watch_chain::CHAIN_RETRY,
+        );
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
@@ -1099,22 +1123,21 @@ impl ConfigWatcher {
             shutdown_rx,
         );
 
-        Ok(Self {
-            _watcher: Mutex::new(Some(watcher)),
-        })
+        Ok(Self { _chain: chain })
     }
 
     /// Create the low-level `notify` watcher and register all watch paths.
     ///
-    /// The config file's parent directory and each env file's parent directory
-    /// are registered with `NonRecursive` watching.  Duplicate parent
-    /// directories are watched only once.
+    /// The config's link chain is watched through [`watch_chain::ChainWatch`],
+    /// which the rewatch task keeps following; each env file's parent directory
+    /// is watched once, `NonRecursive`, as before.
     fn create_notify_watcher(
         event_tx: tokio::sync::mpsc::Sender<ReloadTrigger>,
+        wake_tx: tokio::sync::watch::Sender<()>,
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
-    ) -> Result<RecommendedWatcher> {
-        let named_config_path = absolute_watch_path(config_path.to_path_buf());
+    ) -> Result<Arc<watch_chain::ChainWatch>> {
+        let named_config_path = config_path.to_path_buf();
         let closure_config_path = named_config_path.clone();
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
@@ -1122,6 +1145,14 @@ impl ConfigWatcher {
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
+                // Every event that changes a directory may have moved the
+                // chain: a link unlinked and re-created is an event on the
+                // named path itself. An access (open, read, close) cannot, and
+                // the reload's own read must not wake the task again. The task decides;
+                // this thread must not block or call `watch`.
+                if !matches!(event.kind, EventKind::Access(_)) {
+                    wake_tx.send_replace(());
+                }
                 if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
@@ -1134,60 +1165,22 @@ impl ConfigWatcher {
             crate::Error::ConfigWatcher(format!("Failed to create config watcher: {e}"))
         })?;
 
-        // Watch the parent directory of every path the config can arrive as.
-        // A symlinked config has two: the link the operator named and the
-        // target an in-place write actually touches.
-        // Retargeting the link to a file in one of these directories is picked
-        // up, because the match resolves the link per event. A retarget to a
-        // directory that was not watched at startup is not: closing that needs
-        // the watcher to add directories from inside its own callback (#453).
-        let mut watched_dirs = std::collections::HashSet::new();
-        for path in &config_watch_paths(named_config_path.clone()) {
-            let dir = watch_dir_of(path);
-            if !watched_dirs.insert(dir.clone()) {
-                continue;
-            }
-            watcher
-                .watch(&dir, RecursiveMode::NonRecursive)
-                .map_err(|e| {
-                    crate::Error::ConfigWatcher(format!("Failed to watch config path: {e}"))
-                })?;
+        let env_dirs = watch_chain::watch_env_dirs(&mut watcher, env_file_paths);
+
+        let wanted = watch_chain::startup_dirs(&named_config_path);
+        let chain = watch_chain::ChainWatch::new(watcher, env_dirs.clone());
+        chain.reconcile(&wanted);
+        let in_ledger = chain.watched_now();
+        if let Some(missing) = wanted
+            .iter()
+            .find(|dir| !in_ledger.contains(*dir) && !env_dirs.contains(*dir))
+        {
+            return Err(crate::Error::ConfigWatcher(format!(
+                "Failed to watch config path: {}",
+                missing.display()
+            )));
         }
-
-        for env_path in env_file_paths {
-            let dir = watch_dir_of(env_path);
-
-            if watched_dirs.contains(&dir) {
-                continue;
-            }
-
-            if dir.exists() {
-                match watcher.watch(&dir, RecursiveMode::NonRecursive) {
-                    Ok(()) => {
-                        info!(
-                            dir = %dir.display(),
-                            "Config watcher: watching env-file directory"
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            dir = %dir.display(),
-                            error = %e,
-                            "Config watcher: failed to watch env-file directory"
-                        );
-                    }
-                }
-            } else {
-                warn!(
-                    dir = %dir.display(),
-                    "Config watcher: env-file directory does not exist, skipping"
-                );
-            }
-
-            watched_dirs.insert(dir);
-        }
-
-        Ok(watcher)
+        Ok(chain)
     }
 
     /// Spawn the debounced reload task.
@@ -2288,6 +2281,7 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 }
 
 mod grant_delta;
+mod watch_chain;
 
 #[cfg(test)]
 mod c4_enable_tests;
