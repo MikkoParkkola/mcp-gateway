@@ -122,6 +122,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "append-only audit log; no secret",
     ),
     (
+        "src/security/transparency_log_append.rs",
+        "audit log writer; reopens only to cut back a torn tail; no secret",
+    ),
+    (
         "src/security/transparency_log_rotation.rs",
         "rotates the audit log: seal, rename, open record, reserve; no secret",
     ),
