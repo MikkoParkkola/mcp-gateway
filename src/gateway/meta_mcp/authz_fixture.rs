@@ -58,7 +58,12 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         name,
-        BackendConfig::default(),
+        BackendConfig {
+            // F13: this fixture serves no parseable `tools/list` and R2 is not under
+            // test here, so `off` keeps the base behaviour (no fill, forwarded).
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
+            ..BackendConfig::default()
+        },
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

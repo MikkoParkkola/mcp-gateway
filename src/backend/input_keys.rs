@@ -7,41 +7,116 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::fill_check::{Completeness, TEXT_UNAVAILABLE, text_absent, text_partial};
 use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
+use crate::trust::closed_keys::count;
+
+/// A miss the check cannot judge: `closed` refuses with `text`, counted by
+/// `labels[0]`; `standard` forwards, counted by `labels[1]`.
+fn miss(
+    mode: InputSchemaEnforcement,
+    labels: [&'static str; 2],
+    text: impl FnOnce() -> String,
+) -> Option<String> {
+    if mode == InputSchemaEnforcement::Closed {
+        count(labels[0]);
+        Some(text())
+    } else {
+        count(labels[1]);
+        None
+    }
+}
+
+/// The schema could not be read (design §2 step 4, first column).
+fn unavailable(mode: InputSchemaEnforcement) -> Option<String> {
+    miss(
+        mode,
+        ["input_schema_refused_unavailable", "input_schema_unknown"],
+        || TEXT_UNAVAILABLE.to_owned(),
+    )
+}
 
 impl Backend {
     /// Refusal text for a `tools/call` whose arguments carry keys the tool's
     /// `inputSchema` does not declare, or `None` when the call may proceed.
     ///
     /// The schema comes from THIS caller's slot only: a "valid parameters"
-    /// list built from another caller's catalogue would disclose it. A tool
-    /// the slot does not hold is forwarded unchecked and counted, because the
-    /// gateway cannot enforce a contract it has not been shown, and fetching
-    /// `tools/list` under a request is ruled out (`ops.rs`).
-    #[must_use]
-    pub(crate) fn undeclared_key_refusal(
+    /// list built from another caller's catalogue would disclose it. When the
+    /// slot does not hold the tool, F13 fetches the caller's own catalogue
+    /// once, as the caller, through the slot's single-flight fill
+    /// ([`Self::tools_for_check`]), then applies the mode table: `closed`
+    /// refuses what it cannot vouch for (texts U, P, A), `standard` forwards
+    /// and counts, `off` returns before any fetch. A3: a `Shared` slot is
+    /// fetched only for a caller that sent no credential, since the shared
+    /// fill runs under the gateway's own login.
+    ///
+    /// # Errors
+    ///
+    /// The slot's own `CircuitOpen` or `RateLimited` when its failsafe
+    /// refused the fill: the call gets the error a refused dispatch gets.
+    pub(crate) async fn undeclared_key_refusal(
         &self,
         identity_key: Option<&str>,
+        headers: &[(String, String)],
         tool: &str,
         arguments: &Value,
-    ) -> Option<String> {
+    ) -> crate::Result<Option<String>> {
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
-            return None;
+            return Ok(None);
         }
-        let Some(cached) = self.get_cached_tool_for(identity_key, tool) else {
-            crate::trust::closed_keys::count("input_schema_unknown");
-            return None;
+        if let Some(cached) = self.get_cached_tool_for(identity_key, tool) {
+            return Ok(self.judge_keys(&cached.input_schema, tool, arguments, mode));
+        }
+        if !self.fetch_carries_caller_identity(identity_key) && !headers.is_empty() {
+            count("input_schema_fetch_skipped_a3");
+            return Ok(unavailable(mode));
+        }
+        let (tools, completeness) = match self.tools_for_check(identity_key, headers).await {
+            Ok(fetched) => fetched,
+            // Raised only by the fill's own failsafe gate: no transport
+            // constructs either variant.
+            Err(e @ (crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_))) => {
+                return Err(e);
+            }
+            Err(_) => return Ok(unavailable(mode)),
         };
+        if let Some(found) = tools.iter().find(|t| t.name == tool) {
+            return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
+        }
+        Ok(match completeness {
+            Completeness::Complete => miss(
+                mode,
+                ["input_schema_refused_absent", "input_schema_absent_forward"],
+                || text_absent(tool),
+            ),
+            Completeness::Truncated => miss(
+                mode,
+                [
+                    "input_schema_refused_truncated",
+                    "input_schema_truncated_forward",
+                ],
+                text_partial,
+            ),
+            Completeness::Unknown => unavailable(mode),
+        })
+    }
+
+    fn judge_keys(
+        &self,
+        schema: &Value,
+        tool: &str,
+        arguments: &Value,
+        mode: InputSchemaEnforcement,
+    ) -> Option<String> {
         let empty = Value::Object(serde_json::Map::new());
         let arguments = if arguments.is_null() {
             &empty
         } else {
             arguments
         };
-        let refusal =
-            crate::capability::undeclared_key_refusal(arguments, &cached.input_schema, mode)?;
+        let refusal = crate::capability::undeclared_key_refusal(arguments, schema, mode)?;
         tracing::warn!(
             backend = %self.name,
             tool = %tool,
@@ -117,8 +192,21 @@ mod tests {
                 "properties": {"a": {"type": "string"}}}}),
         ];
         backend.remember_listed_tools(None, false, &listed).await;
-        let refusal = backend.undeclared_key_refusal(None, "edit", &json!({"b": 1}));
-        assert!(refusal.is_some(), "the valid tool was not remembered");
+        let refusal = backend
+            .undeclared_key_refusal(None, &[], "edit", &json!({"b": 1}))
+            .await;
+        assert!(
+            refusal.expect("no failsafe refusal").is_some(),
+            "the valid tool was not remembered"
+        );
+    }
+
+    /// The check on `edit` with one argument `key`, on a warm shared slot.
+    async fn judged(backend: &Backend, key: &str) -> Option<String> {
+        backend
+            .undeclared_key_refusal(None, &[], "edit", &json!({key: 1}))
+            .await
+            .expect("no failsafe refusal")
     }
 
     fn edit_declaring(key: &str) -> serde_json::Value {
@@ -154,21 +242,23 @@ mod tests {
         backend
             .remember_listed_tools(None, true, &[edit_declaring("b")])
             .await;
-        let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
         assert!(
-            judged("a").is_none(),
+            judged(&backend, "a").await.is_none(),
             "a credentialed page reached the shared slot"
         );
-        assert!(judged("b").is_some(), "the discovery fill still stands");
+        assert!(
+            judged(&backend, "b").await.is_some(),
+            "the discovery fill still stands"
+        );
 
         backend
             .remember_listed_tools(None, false, &[edit_declaring("b")])
             .await;
         assert!(
-            judged("b").is_none(),
+            judged(&backend, "b").await.is_none(),
             "the drained list must replace the fresh discovery fill"
         );
-        assert!(judged("a").is_some());
+        assert!(judged(&backend, "a").await.is_some());
         assert!(
             !backend.cached_tools_snapshot_and_truncated().1,
             "a drained list is complete; the truncated mark must not survive it"
@@ -220,8 +310,10 @@ mod tests {
         release.notify_one();
         fill.await.expect("join").expect("the discovery fill");
 
-        let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
-        assert!(judged("b").is_none(), "the later-landing fill overwrote it");
-        assert!(judged("a").is_some());
+        assert!(
+            judged(&backend, "b").await.is_none(),
+            "the later-landing fill overwrote it"
+        );
+        assert!(judged(&backend, "a").await.is_some());
     }
 }

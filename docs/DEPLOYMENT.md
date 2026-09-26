@@ -628,6 +628,19 @@ prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
   `mcp_backend_requests_total{status="rate_limited"}`. At most one series per configured
   backend; a backend's series appears on its first refusal, so an absent series means zero.
 - `mcp_circuit_breaker_opened_total` -- breaker trips
+- `mcp_input_schema_events_total` -- undeclared-argument-key check (R2) events by
+  `kind`, a fixed label, never a tool or key name:
+  - check outcomes: `input_schema_refused_unavailable`, `input_schema_refused_truncated`,
+    `input_schema_refused_absent` (refused under `closed`), and `input_schema_unknown`,
+    `input_schema_truncated_forward`, `input_schema_absent_forward` (forwarded under
+    `standard`); `input_schema_fetch_skipped_a3` when a shared catalogue is not listed for a
+    credentialed caller;
+  - catalogue fills (one per `tools/list` drain, whatever started it): `input_schema_fetched`,
+    `input_schema_fetch_failed`, `input_schema_fill_cancelled` (the caller disconnected),
+    `input_schema_fill_cooldown` (refused inside the 10 s window after a failure);
+  - `input_schema_fill_refused` with `reason="circuit"` or `reason="rate"`: the slot's breaker
+    or its `failsafe.rate_limit` refused a cold call's list. These are fill-origin refusals;
+    a limiter refusal here is also counted in `mcp_backend_rate_limited_total`.
 - `mcp_tool_invocations_total`, `mcp_tool_invocation_duration_seconds` -- per-tool calls and latency
 - `mcp_cache_hits_total` -- response cache hits
 - `mcp_jsonrpc_requests_total` -- JSON-RPC requests by method

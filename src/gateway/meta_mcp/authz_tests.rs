@@ -913,7 +913,12 @@ async fn authz_cache_4b_read_and_write_keys_share_the_pre_dispatch_epoch() {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
-        BackendConfig::default(),
+        BackendConfig {
+            // F13: this fixture serves no parseable `tools/list` and R2 is not under
+            // test here, so `off` keeps the base behaviour (no fill, forwarded).
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
+            ..BackendConfig::default()
+        },
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

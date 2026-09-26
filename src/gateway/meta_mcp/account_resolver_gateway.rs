@@ -381,7 +381,8 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
         "the backend result must be returned to the caller: {result}"
     );
 
-    assert_eq!(dispatches.count(), 1, "exactly one backend call");
+    // One `tools/call`; F13's cold-slot `tools/list` precedes it on the wire.
+    assert_eq!(dispatches.calls().len(), 1, "exactly one backend call");
     let call = dispatches.only();
     assert!(
         call.identity_key.is_none(),

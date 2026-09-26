@@ -944,12 +944,26 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // the first one. A round that skipped the accounting would let a
         // backend that keeps asking spend an unmetered budget.
         // The same key rule as the first round, against the slot as it is now.
-        if let Some(refusal) = self.meta.undeclared_key_refusal(
+        let checked_at = std::time::Instant::now();
+        let refusal = self.meta.undeclared_key_refusal(
             self.server,
             self.tool,
             self.arguments,
             self.cache_binding,
-        ) {
+            self.headers,
+            (self.scope, self.session_id),
+        );
+        let refusal = match refusal.await {
+            Ok(refusal) => refusal,
+            Err(e) => {
+                // Accounted as `accounted_dispatch` accounts a refused round.
+                let bridged = classify_bridged_dispatch_error(&e);
+                self.meta
+                    .account_refused_fill(self.server, self.tool, e, checked_at);
+                return Err(bridged);
+            }
+        };
+        if let Some(refusal) = refusal {
             return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: refusal["content"][0]["text"]
                     .as_str()
@@ -989,6 +1003,46 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             .await
             .map_err(|e| classify_bridged_dispatch_error(&e))
     }
+}
+
+/// A miss on `tool`, with a "did you mean?" hint drawn from `candidates`
+/// (names this caller could invoke, A3) when one is close enough. Shared by
+/// the dispatch miss and R2's text A (F13), so both answer a miss alike.
+fn miss_with_hint(server: &str, tool: &str, candidates: &[&str], fallback: &str) -> String {
+    match did_you_mean(tool, candidates, 3, 3) {
+        Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
+        None => format!("Tool '{tool}' not found on server '{server}'. {fallback}"),
+    }
+}
+
+/// The tool result a failed dispatch answers with, and its audit note.
+///
+/// The caller gets a tool result, but the audit record says `error` with this
+/// code (D1-d.2: a backend failure). The error is classified into a
+/// structured tool-level error, keeping `isError + content + recovery` in the
+/// result body rather than promoting it to a JSON-RPC protocol error, which
+/// gives the LLM actionable recovery guidance without breaking the MCP
+/// framing. The error budget failure is recorded by `record_error_budget`.
+/// Shared with R2's check, whose fill refusal (F13) answers the same way.
+fn dispatch_failure_value(e: &Error, server: &str, tool: &str) -> Value {
+    audit::note_dispatch_failure(e);
+    let (category, detail) = classify_dispatch_error(e);
+    let hint = recovery_for(
+        category,
+        RecoveryContext {
+            tool: Some(tool),
+            backend: Some(server),
+            detail: Some(&detail),
+            ..Default::default()
+        },
+    );
+    attach_recovery(
+        json!({
+            "isError": true,
+            "content": [{"type": "text", "text": e.to_string()}],
+        }),
+        hint,
+    )
 }
 
 /// Decides whether a failed bridged dispatch releases the idempotency key.
@@ -1888,9 +1942,22 @@ impl MetaMcp {
         // rule refuses, and before `mark_dispatched`, so a refusal is never
         // dispatched, charged or counted as an invocation. Nothing ran, so the
         // idempotency key is released for an honest retry.
-        if let Some(refusal) =
-            self.undeclared_key_refusal(server, tool, &arguments, dispatch_binding.as_deref())
-        {
+        // F13: a cold slot is listed first, as this caller; the slot's
+        // failsafe refusing that list answers as a refused dispatch does.
+        let checked_at = std::time::Instant::now();
+        let refusal = self.undeclared_key_refusal(
+            server,
+            tool,
+            &arguments,
+            dispatch_binding.as_deref(),
+            &caller_credential.headers,
+            (caller.scope(), session_id),
+        );
+        let refusal = match refusal.await {
+            Ok(refusal) => refusal,
+            Err(e) => Some(self.account_refused_fill(server, tool, e, checked_at)),
+        };
+        if let Some(refusal) = refusal {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.release();
             }
@@ -2128,34 +2195,9 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // The caller gets a tool result, but the audit record says
-                // `error` with this code (D1-d.2: a backend failure).
-                audit::note_dispatch_failure(&e);
-                // Classify the error and convert to a structured tool-level
-                // error response.  This keeps `isError + content + recovery`
-                // in the tool result body rather than promoting to a JSON-RPC
-                // protocol error, which gives the LLM actionable recovery
-                // guidance without breaking the MCP framing.
-                let (category, detail) = classify_dispatch_error(&e);
-                let hint = recovery_for(
-                    category,
-                    RecoveryContext {
-                        tool: Some(tool),
-                        backend: Some(server),
-                        detail: Some(&detail),
-                        ..Default::default()
-                    },
-                );
-                // Still record the error budget failure (already done above via
-                // `record_error_budget`).  The idempotency reservation is left
-                // for the commit below unless the refusal was pre-dispatch.
-                attach_recovery(
-                    json!({
-                        "isError": true,
-                        "content": [{"type": "text", "text": e.to_string()}],
-                    }),
-                    hint,
-                )
+                // The idempotency reservation is left for the commit below
+                // unless the refusal was pre-dispatch.
+                dispatch_failure_value(&e, server, tool)
             }
         };
 
@@ -3193,24 +3235,73 @@ impl MetaMcp {
     /// Runs on the arguments as the caller sent them, before secret injection,
     /// so a gateway-injected credential is never mistaken for an invented key.
     /// Capabilities are skipped: their executor validates after injection.
-    fn undeclared_key_refusal(
+    /// A cold slot is listed once as the caller, with `headers` (F13); `Err`
+    /// is the slot's failsafe refusing that list.
+    async fn undeclared_key_refusal(
         &self,
         server: &str,
         tool: &str,
         arguments: &Value,
         identity_key: Option<&str>,
-    ) -> Option<Value> {
+        headers: &[(String, String)],
+        (scope, session_id): (super::InvokeScope<'_>, Option<&str>),
+    ) -> Result<Option<Value>> {
         if self
             .get_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
         {
-            return None;
+            return Ok(None);
         }
-        let text =
-            self.backends
-                .get(server)?
-                .undeclared_key_refusal(identity_key, tool, arguments)?;
-        Some(json!({ "content": [{ "type": "text", "text": text }], "isError": true }))
+        let Some(backend) = self.backends.get(server) else {
+            return Ok(None);
+        };
+        let text = Box::pin(backend.undeclared_key_refusal(identity_key, headers, tool, arguments))
+            .await?;
+        // F13 text A (the backend's complete list lacks the tool) is a miss,
+        // so it carries the profile-scoped "did you mean?" hint the miss path
+        // after dispatch gave before (T14, MIK-7518).
+        let text = text.map(|text| {
+            if text != crate::backend::text_absent(tool) {
+                return text;
+            }
+            let names = backend.get_cached_tool_names_for(identity_key);
+            let candidates: Vec<&str> = names
+                .iter()
+                .map(String::as_str)
+                .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
+                .collect();
+            miss_with_hint(server, tool, &candidates, &text)
+        });
+        Ok(text
+            .map(|text| json!({ "content": [{ "type": "text", "text": text }], "isError": true })))
+    }
+
+    /// Account a check-site fill the slot's failsafe refused (F13) exactly as
+    /// `accounted_dispatch` accounts a dispatch refused the same way: the
+    /// invocation counter with `status="error"`, the latency histogram (the
+    /// check's own elapsed time) and the error budget. Returns the tool
+    /// result a refused dispatch answers with.
+    fn account_refused_fill(
+        &self,
+        server: &str,
+        tool: &str,
+        error: Error,
+        started: std::time::Instant,
+    ) -> Value {
+        telemetry_metrics::counter!(
+            "mcp_tool_invocations_total",
+            "server" => server.to_owned(),
+            "status" => "error"
+        )
+        .increment(1);
+        telemetry_metrics::histogram!(
+            "mcp_tool_invocation_duration_seconds",
+            "server" => server.to_owned()
+        )
+        .record(started.elapsed().as_secs_f64());
+        let value = dispatch_failure_value(&error, server, tool);
+        self.record_error_budget(server, tool, BudgetOutcome::of(&Err(error)));
+        value
     }
 
     /// Dispatch one round to the backend and meter it.
@@ -3575,13 +3666,7 @@ impl MetaMcp {
                     .map(String::as_str)
                     .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
                     .collect();
-                match did_you_mean(tool, &candidates, 3, 3) {
-                    Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
-                    None => format!(
-                        "Tool '{tool}' not found on server '{server}'. {}",
-                        error.message
-                    ),
-                }
+                miss_with_hint(server, tool, &candidates, &error.message)
             } else {
                 error.message
             };
@@ -5127,6 +5212,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
             ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
@@ -5268,6 +5354,7 @@ mod identity_propagation_enforcement_tests {
                 streamable_http: true,
                 protocol_version: None,
             },
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
             ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
@@ -5860,6 +5947,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
             ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
@@ -5901,6 +5989,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(false)),
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
             ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
@@ -6057,6 +6146,9 @@ mod error_budget_tests;
 
 #[cfg(test)]
 mod circuit_open_hint_tests;
+
+#[cfg(test)]
+mod f13_bridge_tests;
 
 #[cfg(test)]
 mod session_fp_tests;

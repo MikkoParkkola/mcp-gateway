@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **R2 checks a tool call even when the caller never listed the backend** (F13, MIK-7586,
+  #1141). A `tools/call` on a cold catalogue slot now lists that backend's tools once, as the
+  caller, before judging the call's argument keys, instead of forwarding it unchecked. Under
+  `closed`, a list that cannot be read, a tool outside a truncated list and a tool a complete
+  list lacks are refused; `standard` forwards and counts each case. The list is single-flight
+  per slot, bounded by the backend's `timeout`, held off for 10 s after a failure, and obeys
+  the slot's circuit breaker and rate limiter. New `mcp_input_schema_events_total` kinds; see
+  UPGRADING §59.
+
 - **Legacy HTTP session ids are minted by the gateway and never adopted** (F9, MIK-7585,
   #1140). A client-chosen `Mcp-Session-Id` that names no live session gets a fresh `gw-` id
   instead of becoming the session's id, so an unauthenticated caller can no longer pick an id

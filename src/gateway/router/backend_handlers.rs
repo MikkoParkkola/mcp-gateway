@@ -59,14 +59,14 @@ struct BackendAuthContext<'a> {
 /// 2. `tool_policy.check` — enforces global allow/deny rules.
 /// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
 #[allow(clippy::result_large_err)]
-fn apply_backend_tool_call_security(
+async fn apply_backend_tool_call_security(
     state: &AppState,
     backend_name: &str,
     auth: BackendAuthContext<'_>,
     params: Option<&Value>,
     id: &RequestId,
     backend: &crate::backend::Backend,
-    identity_key: Option<&str>,
+    slot: key_check::CallerSlot<'_>,
 ) -> BackendSecurityResult {
     let unnamed = || {
         let message = "tools/call requires params.name";
@@ -141,14 +141,10 @@ fn apply_backend_tool_call_security(
         }
     }
 
-    // MIK-7570.SCHEMA.1 (R2): above the passthrough return, so a passthrough
-    // backend is checked too. A tool result, not a 403, so a model can correct
-    // the call; the early return drops the idempotency reservation unsettled.
-    let call_arguments = params.get("arguments").unwrap_or(&Value::Null);
-    if let Some(text) = backend.undeclared_key_refusal(identity_key, tool_name, call_arguments) {
-        let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
-        let response = JsonRpcResponse::success(id.clone(), result);
-        return Err(build_http_response(&response, StatusCode::OK));
+    // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
+    // passthrough backend is checked too.
+    if let Some(rejection) = key_check::key_refusal(state, auth, backend, slot, params, id).await {
+        return Err(rejection);
     }
 
     if backend.passthrough() {
@@ -969,8 +965,10 @@ async fn backend_handler_inner(
             params.as_ref(),
             &id,
             &backend,
-            identity_key.as_deref(),
-        ) {
+            (identity_key.as_deref(), &propagated_headers),
+        )
+        .await
+        {
             Ok(Some(sanitized_params)) => {
                 // Forward the sanitized params to the backend
                 let forward = dispatch_in_scope(
@@ -1364,6 +1362,7 @@ pub(super) async fn costs_handler(
 
 mod direct_audit;
 mod direct_list;
+mod key_check;
 
 #[cfg(test)]
 mod tests;

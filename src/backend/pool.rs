@@ -104,6 +104,11 @@ pub(crate) struct PooledEntry {
     /// fill budget). Cleared by the next fill that drains to completion.
     /// Tools only — the other three families keep their pages either way.
     pub(crate) tools_truncated: AtomicBool,
+    /// When this slot's last tools fill ended without storing (F13): a drain,
+    /// parse or start error, a `CallTimeout` expiry, or a voided store. Fills
+    /// within `LIST_FILL_COOLDOWN` of it fail fast. Tokio's `Instant`, so a
+    /// paused test clock advances it with the timeouts. Tools only.
+    pub(crate) tools_fill_failed_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
@@ -190,6 +195,7 @@ impl PooledEntry {
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
+            tools_fill_failed_at: parking_lot::Mutex::new(None),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),

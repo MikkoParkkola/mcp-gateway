@@ -61,12 +61,34 @@ impl Failsafe {
     /// refusal never reports an open circuit, and counts each limiter refusal
     /// in `mcp_backend_rate_limited_total{backend}`.
     pub fn admit(&self, backend: &str) -> crate::Result<()> {
+        self.check_circuit(backend)?;
+        self.take_token(backend)
+    }
+
+    /// The breaker half of [`Self::admit`], with its gauge. Split out so a
+    /// check-site catalogue fill (F13) can put its cooldown between the two
+    /// halves: an open breaker still surfaces while a cooldown is active, and
+    /// a cooldown hit spends no token.
+    ///
+    /// # Errors
+    ///
+    /// `CircuitOpen` while the breaker refuses.
+    pub(crate) fn check_circuit(&self, backend: &str) -> crate::Result<()> {
         let closed = self.circuit_breaker.can_proceed();
         telemetry_metrics::gauge!("mcp_backend_circuit_state", "backend" => backend.to_string())
             .set(if closed { 1.0_f64 } else { 0.0_f64 });
         if !closed {
             return Err(crate::Error::circuit_open(backend, &self.circuit_breaker));
         }
+        Ok(())
+    }
+
+    /// The limiter half of [`Self::admit`], with its refusal counter.
+    ///
+    /// # Errors
+    ///
+    /// `RateLimited` when the limiter has no token.
+    pub(crate) fn take_token(&self, backend: &str) -> crate::Result<()> {
         if !self.rate_limiter.try_acquire() {
             // The operator's view of limiter refusals: they are excluded from
             // the error budgets and from the circuit gauge, so this counter is
@@ -180,5 +202,37 @@ mod tests {
             "an empty bucket is a rate-limit refusal, not an open circuit"
         );
         assert_eq!(failsafe.circuit_breaker.state(), CircuitState::Closed);
+    }
+
+    /// F13 T-admit-order, GUARD row (green on base): the breaker is asked
+    /// before the limiter, so an open breaker spends no token. Proven by
+    /// mutant M12 (take the token first in `admit`): the second `admit` then
+    /// finds the bucket empty and returns `RateLimited`.
+    #[test]
+    fn an_open_breaker_refuses_admit_without_spending_the_token() {
+        let mut config = FailsafeConfig {
+            circuit_breaker: CircuitBreakerConfig {
+                enabled: true,
+                failure_threshold: 1,
+                reset_timeout: Duration::from_secs(3600),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.rate_limit.enabled = true;
+        config.rate_limit.requests_per_second = 1;
+        config.rate_limit.burst_size = 1;
+        let failsafe = Failsafe::new("ordered-backend", &config);
+        failsafe.record_failure("boom", Duration::from_millis(1));
+        assert!(
+            matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen { .. })),
+            "an open breaker refuses first"
+        );
+        failsafe.circuit_breaker.reset();
+        assert_eq!(failsafe.circuit_breaker.state(), CircuitState::Closed);
+        assert!(
+            failsafe.admit("b").is_ok(),
+            "the open breaker spent the token"
+        );
     }
 }
