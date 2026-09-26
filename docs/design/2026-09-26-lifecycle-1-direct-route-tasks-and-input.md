@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
-Status: REVISION 5. Four review rounds; rounds 3 and 4: one SHIP, one SHIP-WITH-FIXES each. Every finding is
-dispositioned in §7-§10. Revision 5 needs a delta review before code.
+Status: REVISION 6. Five review rounds; rounds 3 to 5: one SHIP, one SHIP-WITH-FIXES each. Every finding is
+dispositioned in §7-§11. Revision 6 needs a delta review before code.
 
 ## 1. Problem
 
@@ -98,8 +98,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    (`handlers.rs:1858-1894`), gated by the same `reaches_tasks_extension` (`handlers.rs:93`).
    A task id is owner-scoped, not route-scoped: a task created on either route is visible
    from both to its owner and to nobody else.
-4. **Capability advertisement.** The route adds `io.modelcontextprotocol/tasks` to the
-   `extensions` of the relayed `server/discover` and `initialize` results only for a modern
+4. **Capability advertisement.** The route MERGES `io.modelcontextprotocol/tasks` into the
+   existing `extensions` set (no duplicate if the backend already declares it) of the relayed `server/discover` and `initialize` results only for a modern
    request. Legacy responses are relayed unchanged (byte-identical pass-through stays the
    default).
 5. **Backend-originated tasks** stay out of scope. A backend `CreateTaskResult` arriving on a
@@ -113,7 +113,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    `InputRequired::from_result` (`src/protocol/mrtr.rs:241-276`). Three cases:
    (a) requests present: `TaskTransition::RequireInput(InputRequired)`;
    (b) no requests but a `requestState` (a state-only round): no client round; the worker
-   immediately resumes with that state, bounded to 4 consecutive state-only rounds, after which
+   immediately resumes with that state, bounded to 4 consecutive state-only rounds (a fixed ceiling that stops a backend looping the
+   gateway forever; not configurable until a real backend needs more), after which
    it settles as today's abandoned result;
    (c) `claims_input_required` is true but `from_result` rejects the shape: settles as today's
    abandoned result (`settlement.rs:21-22`), unchanged. The
@@ -130,17 +131,23 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    transaction, before any key is accepted: if any submitted key is not outstanding, the whole
    update is refused with `-32602` and nothing is written (no subset is accepted). A valid
    subset of the outstanding keys is accepted; the task stays `input_required` until every key
-   is answered. The model's no-op behaviour is kept for its existing callers. The refusal at
+   is answered. Accepted answers are durable: `ProvideInput` returns them in
+   `TaskChange::accepted_inputs` (`src/protocol/tasks.rs:63-67`) and today nothing keeps them,
+   so the same store transaction appends them to an `accepted_inputs` map on the record
+   (optional, serde default, dropped with the continuation on cancel or settle). The completing
+   resume sends the full accumulated map as `inputResponses`. The model's no-op behaviour is kept for its existing callers. The refusal at
    `tasks.rs:378-382` remains for a task with no outstanding round.
 3. **Resume needs a new worker entry.** `tasks/update` is an acknowledgement today
    (`src/gateway/task_service/service.rs:197`) and the only spawn is create-only
    (`commit_and_run`, `worker.rs:29-56`, from `execution.rs:188`). A second entry,
    `resume_and_run`, follows the create protocol (`execution.rs:370-390`): a worker permit is
    TRY-acquired (`workers.try_acquire_owned`) BEFORE the `input_required -> working` CAS; with
-   no permit the update is refused with the same `Capacity` outcome create returns
-   (`execution.rs:62`, `:86`) and the task stays `input_required` with its answers unapplied.
-   With the permit held, the CAS commits, then `Handoff::accept` and the spawn follow as in
-   `begin()` (`execution.rs:195-202`), with `cancel_rx` threaded into the same dispatch
+   no permit the update is refused (`-32603`, message "task worker pool is full, retry",
+   distinct from the store-outage text create uses at `execution.rs:86`) and the task stays
+   `input_required` with its answers unapplied. With the permit held, `Handoff::accept`
+   registers the owner FIRST, then the CAS commits, then the spawn, so a concurrent cancel
+   always finds an owner to signal; if the CAS loses, the handoff is released and the permit
+   dropped (both RAII), so neither outlives a lost race or a failed spawn. `cancel_rx` is threaded into the same dispatch
    `select!` as the first dispatch, so cancel during a resume aborts the backend call and a
    drain sees the work. The update answers after the CAS commits (the ack means "input
    accepted, task working"), not after the dispatch starts. It is spawned from the `tasks/update`
@@ -150,7 +157,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    the stored tool name, arguments and continuation. It dispatches the SAME tools/call with an
    `OutboundRetry { request_state, input_responses }`, the shape the meta path already sends
    (`src/gateway/meta_mcp/invoke.rs:960-972`); `Bridge::retry_params` supplies only the
-   continuation fragment. Per route: a direct-route (`DirectJob`) task runs
+   continuation fragment. Per route: the stored job carries an explicit route tag
+   (`Meta` | `Direct`) set at admission; a `Direct` task runs
    `DirectRouteGuards::run` live on every dispatch; a `/mcp` task resumes through the existing
    `accounted_dispatch` + `OutboundRetry` tail. `resume_and_run` never re-evaluates
    `UpstreamSubmission` arming (armed jobs never reach an input round, §3 A.2b).
@@ -211,6 +219,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | rejected round shape | claims input but shape rejected: abandoned result as today | new arm swallows it |
 | armed upstream unchanged | adapter-claimed backend: dispatch identical to before | input arm applied to armed path |
 | resume carries the call | resume dispatch has the stored tool name and arguments plus requestState | resume sends the fragment only |
+| resume carries the answers | two partial updates, then resume: backend receives both answers in `inputResponses` | accepted answers not persisted, or resume omits `inputResponses` |
+| cancel races resume | cancel arrives between CAS and spawn: task `cancelled`, no backend call | handoff registered after the CAS |
 | expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
 | cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
 | resume uses the caller of the update | policy for the updating caller denies the tool: resume refused | resume built from stored caller context |
@@ -288,3 +298,16 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | name the DirectJob transport | improvement | worker.rs:183 | ADOPTED: §4.3c |
 | expiry as two snapshots | improvement | store.rs:1031 | ADOPTED: §4.4 |
 | live identity bundle for update | improvement | handlers.rs:1868 RecoveryCaller | ADOPTED: §4.3 |
+
+## 11. Round 5 dispositions (one SHIP, one SHIP-WITH-FIXES)
+
+| finding | sev | check at source | disposition |
+|---|---|---|---|
+| partial answers have no durable home | HIGH | `TaskChange::accepted_inputs` (tasks.rs:63-67) is returned and never stored | ADOPTED: §4.2 accumulate on the record; test row |
+| CAS before handoff lets cancel find no owner | MEDIUM | - | ADOPTED: §4.3 handoff, then CAS, then spawn; test row |
+| Capacity reported as store outage | LOW | execution.rs:86 maps both to one text | ADOPTED: distinct message for resume |
+| permit release on lost race or failed spawn | improvement | - | ADOPTED: RAII, stated |
+| route tag instead of DirectJob discriminator | improvement | upstream.rs:365 | ADOPTED |
+| mutant for inputResponses in the resume | improvement | - | ADOPTED: test row |
+| merge the tasks extension, do not append | improvement | - | ADOPTED: §3 A.4 |
+| rationale for the state-only bound | improvement | - | ADOPTED: §4.1 b |
