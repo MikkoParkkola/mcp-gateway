@@ -322,7 +322,7 @@ fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
             format!("Fix: clear the group- and world-write bits {see}.")
         }
         (Protects::Secrecy, true, _) => format!("Fix: chmod 600 {} {see}.", path.display()),
-        (Protects::Secrecy, false, SecretFile::Config | SecretFile::EnvFile) => format!(
+        (Protects::Secrecy, false, _) if true => format!(
             "Fix: clear the world and group-write bits; on Kubernetes give the pod an \
              fsGroup this process is in (the Helm chart pins podSecurityContext.fsGroup \
              to 1001, the image's group) and keep the config volume's defaultMode at \
