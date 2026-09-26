@@ -206,6 +206,9 @@ pub(super) async fn destructive_confirmation_gate(
         // that does exist.
         ConfirmationChannel::Unavailable => return GateOutcome::refuse(refused(&action_desc)),
         ConfirmationChannel::Elicit { proxy, policy } => {
+            if session_id.unwrap_or_default().is_empty() {
+                return GateOutcome::refuse(refused(&action_desc));
+            }
             let outcome = require_destructive_confirmation(
                 proxy,
                 session_id.unwrap_or_default(),
