@@ -180,7 +180,8 @@ fn direct_route_attestation_scope<'a>(
         value.and_then(Value::as_str).unwrap_or_default()
     };
     match method {
-        "tools/call" | "prompts/get" => AttestationScope::Capability(field("name")),
+        "tools/call" => AttestationScope::Capability(field("name")),
+        "prompts/get" => AttestationScope::AuthenticOnly,
         "resources/read" | "resources/subscribe" | "resources/unsubscribe" => {
             AttestationScope::Capability(field("uri"))
         }
