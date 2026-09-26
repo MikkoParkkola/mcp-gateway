@@ -227,7 +227,7 @@ struct AuthorityEntry {
     /// Absent in pre-A11 files, which read as never force-tried, and never
     /// written while `None`, so a never-forced entry stays readable by a
     /// pre-A11 binary, whose copy of this struct denies undeclared fields.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     forced_revision: Option<u64>,
 }
 
