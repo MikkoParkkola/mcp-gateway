@@ -49,6 +49,9 @@ pub(super) fn read(path: &Path, backend_name: &str) -> Option<String> {
 
 /// Clears `path` from the refused set: it was just written 0600.
 pub(super) fn forget(path: &Path) {
+    if true {
+        return;
+    }
     REFUSED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
