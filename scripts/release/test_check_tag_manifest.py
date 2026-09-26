@@ -5,6 +5,7 @@
 import contextlib
 import importlib.util
 import io
+import itertools
 import os
 import pathlib
 import re
@@ -1837,7 +1838,7 @@ class WorkflowWiring(unittest.TestCase):
             if condition == f"({' && '.join(TAG_CONJUNCTS)}) || ({REHEARSAL_CONDITION})":
                 self.assertTrue(
                     any(re.match(r"^\s*(?:- )?uses:\s*sigstore/cosign-installer@", l) for l in block)
-                    and len(block) <= 8,
+                    and not any(re.match(r"^\s*(?:- )?run:", l) for l in block),
                     f"ci.yml: {label} takes the installer's exemption without being it",
                 )
                 continue
@@ -2531,11 +2532,20 @@ def step_named(job, name):
 
 
 def condition_of(block):
-    """A step's `if:` value, unwrapped and whitespace-normalised."""
-    for line in block:
-        match = re.match(r"^\s*(?:- )?if:\s*(.*)$", line)
+    """A step's `if:` value, a folded `if: >-` joined, whitespace-normalised."""
+    for index, line in enumerate(block):
+        match = re.match(r"^(\s*)(?:- )?if:\s*(.*)$", line)
         if match:
-            return " ".join(match.group(1).split())
+            value = match.group(2)
+            if re.match(r"^[>|][-+]?$", value.strip()):
+                indent = len(match.group(1))
+                value = " ".join(
+                    l.strip()
+                    for l in itertools.takewhile(
+                        lambda l: len(l) - len(l.lstrip()) > indent, block[index + 1 :]
+                    )
+                )
+            return " ".join(value.split())
     return None
 
 
