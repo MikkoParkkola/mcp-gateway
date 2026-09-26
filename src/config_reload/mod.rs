@@ -1139,6 +1139,7 @@ impl ConfigWatcher {
                     // chain (a link retargeted, a `..data` swapped). The task
                     // decides; this thread must not block or call `watch`.
                     wake_tx.send_replace(());
+                    let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 }
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
