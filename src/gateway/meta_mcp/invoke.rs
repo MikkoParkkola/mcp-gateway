@@ -5826,7 +5826,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
-            ..BackendConfig::r2_off()
+            ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
             "stdio-mem",
@@ -5867,7 +5867,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(false)),
-            ..BackendConfig::r2_off()
+            ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
             "stdio-mem-optional",

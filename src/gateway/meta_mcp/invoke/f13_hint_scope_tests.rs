@@ -30,8 +30,8 @@ const NEAR_ALLOWED: &str = "invariance_alway5";
 const SERVER: &str = "probe";
 const NARROW: &str = "narrow";
 
-/// Lists both tools; a `tools/call` reaching it is a test failure (R2 must
-/// refuse first).
+/// Lists both tools and refuses every `tools/call` with -32601, naming
+/// neither tool, so a dispatch miss reaches the hint path.
 struct ListOnly;
 
 #[async_trait::async_trait]
@@ -41,7 +41,13 @@ impl crate::transport::Transport for ListOnly {
         method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
-        assert_eq!(method, "tools/list", "R2 must refuse before dispatch");
+        if method != "tools/list" {
+            return Ok(JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                -32601,
+                "declined",
+            ));
+        }
         let tools: Vec<Value> = [ALLOWED, DENIED]
             .iter()
             .map(|name| json!({"name": name, "inputSchema": {"type": "object"}}))
@@ -65,11 +71,11 @@ impl crate::transport::Transport for ListOnly {
     }
 }
 
-/// A gateway whose `probe` slot is COLD (never listed), in closed mode, with
+/// A gateway whose `probe` slot is COLD (never listed), in `mode`, with
 /// `session` bound to a profile denying exactly `DENIED`.
-fn cold_meta(session: &str) -> MetaMcp {
+fn cold_meta(session: &str, mode: InputSchemaEnforcement) -> (MetaMcp, Arc<Backend>) {
     let config = BackendConfig {
-        input_schema_enforcement: InputSchemaEnforcement::Closed,
+        input_schema_enforcement: mode,
         ..BackendConfig::default()
     };
     let ttl = std::time::Duration::from_secs(300);
@@ -82,7 +88,7 @@ fn cold_meta(session: &str) -> MetaMcp {
     backend.set_transport_for_test(Arc::new(ListOnly));
     assert!(!backend.has_cached_tools(), "premise: the slot starts cold");
     let registry = Arc::new(BackendRegistry::new());
-    assert!(registry.register(backend));
+    assert!(registry.register(Arc::clone(&backend)));
 
     let mut configs = std::collections::HashMap::new();
     configs.insert("open".to_string(), RoutingProfileConfig::default());
@@ -103,7 +109,7 @@ fn cold_meta(session: &str) -> MetaMcp {
         crate::protocol::meta::Era::Legacy,
         InvokeScope::allow_all(CallerStanding::Admin),
     );
-    meta
+    (meta, backend)
 }
 
 fn ctx() -> MetaMcpCallerContext<'static> {
@@ -137,7 +143,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
 /// is the one F13 appends.
 async fn text_a_body(tool: &str) -> String {
     let session = format!("f13-hint-{tool}");
-    let meta = cold_meta(&session);
+    let (meta, _) = cold_meta(&session, InputSchemaEnforcement::Closed);
     let args = json!({ "server": SERVER, "tool": tool, "arguments": {} });
     let body = match meta.invoke_tool(&args, Some(&session), &ctx()).await {
         Ok(value) => value.to_string(),
@@ -150,7 +156,7 @@ async fn text_a_body(tool: &str) -> String {
 
 /// F13 x MIK-7518: text A's hint answers to the caller's profile.
 /// New-API row: text A does not exist on base (the call is forwarded). The
-/// filter is proven on this site by mutant M14 (drop the `may_invoke` retain
+/// filter is proven on this site by mutant M14 (drop the `may_invoke` filter
 /// in `miss_hint_pool`).
 #[tokio::test]
 async fn f13_text_a_hint_is_scoped_to_the_callers_profile() {
@@ -163,5 +169,40 @@ async fn f13_text_a_hint_is_scoped_to_the_callers_profile() {
     assert!(
         !denied.contains(DENIED),
         "text A's hint named a tool the caller's profile denies: {denied}"
+    );
+}
+
+/// The whole body of a dispatch miss on `tool`: R2 `off`, the slot primed, so
+/// the call is dispatched, refused upstream, and enriched with the hint.
+async fn dispatch_miss_body(tool: &str) -> String {
+    let session = format!("f13-miss-{tool}");
+    let (meta, backend) = cold_meta(&session, InputSchemaEnforcement::Off);
+    backend.get_tools().await.expect("prime the slot");
+    let args = json!({ "server": SERVER, "tool": tool, "arguments": {} });
+    let body = match meta.invoke_tool(&args, Some(&session), &ctx()).await {
+        Ok(value) => value.to_string(),
+        Err(err) => err.to_string(),
+    };
+    assert!(
+        body.contains("not found on server"),
+        "premise: not a dispatch miss: {body}"
+    );
+    body
+}
+
+/// MIK-7518 on the dispatch-miss site, which F13 moved onto the same pool
+/// helper. Guard row (green on base, which filtered inline); proven by mutant
+/// M14b (pass the slot's names past `miss_hint_pool`).
+#[tokio::test]
+async fn dispatch_miss_hint_is_scoped_to_the_callers_profile() {
+    let allowed = dispatch_miss_body(NEAR_ALLOWED).await;
+    assert!(
+        allowed.contains(ALLOWED),
+        "premise: allowed tool suggested: {allowed}"
+    );
+    let denied = dispatch_miss_body(NEAR_DENIED).await;
+    assert!(
+        !denied.contains(DENIED),
+        "the miss hint named a denied tool: {denied}"
     );
 }
