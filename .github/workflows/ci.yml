@@ -91,6 +91,97 @@ jobs:
       - name: Validate noninteractive setup and routed first call
         run: scripts/dev/usability-smoke.sh
 
+  # NFR.UPGRADE.1: upgrade a real 3.5.1 deployment to this tree's build, flip
+  # modern-off, roll back, and check config, credentials, permissions, mounts
+  # and active callers survive. The script exits 1 on any FAIL check; the
+  # results step also fails on a missing results file or a skipped check.
+  upgrade-rehearsal:
+    name: Upgrade rehearsal (3.5.1 -> this build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The v3.5.1 release asset, pinned: SHA256SUMS.txt comes from the same
+      # release, so the inline hash is the check that does not trust it.
+      BIN_351_SHA256: 198b2d7a134286baeb4b42228436325fdf597c804a9d108fc83b1cb77fe7e157
+      # Every check the script records, in order. Pinned as ids rather than a
+      # count so a dropped check cannot be masked by a duplicate or a new one.
+      # Update together with the script when a check is added or removed.
+      EXPECTED_CHECKS: >-
+        PHASE1.BASELINE_INITIALIZE PHASE1.ACTIVE_CALLER_BASELINE
+        PHASE1.STAMP_WRITTEN PHASE2.STAMP_ADVANCED PHASE2.CONFIG_PRESERVED
+        PHASE2.CREDENTIALS_PRESERVED PHASE2.PERMISSIONS_AND_MOUNTS_PRESERVED
+        PHASE2.API_KEY_MIGRATED_TO_DIGEST PHASE2.MODERN_INITIALIZE_ON
+        PHASE2.MODERN_DISCOVER_ADVERTISES PHASE2.ACTIVE_CALLER_POST_UPGRADE
+        PHASE2.AUDIT_LOG_WRITTEN PHASE3.MODERN_OFF_INITIALIZE_REFUSED
+        PHASE3.MODERN_OFF_DISCOVER_HIDES PHASE4.STAMP_UNCHANGED
+        PHASE4.DOWNGRADE_WARNING_LOGGED PHASE4.GATEWAY_STARTS_NORMALLY
+        PHASE4.ACTIVE_CALLER_POST_ROLLBACK
+        PHASE4.CONFIG_AND_CREDENTIALS_STILL_INTACT
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # rg, PyYAML, lsof and shasum are all called by the script; a missing rg
+      # would read as a missing downgrade warning, not as a missing tool.
+      - name: Install and check the script's tools
+        run: |
+          set -euo pipefail
+          echo "RUN_DIR=$RUNNER_TEMP/nfr-upgrade-1" >> "$GITHUB_ENV"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep python3-yaml lsof
+          rg --version
+          command -v python3
+          python3 -c 'import yaml; print("pyyaml", yaml.__version__)'
+          command -v lsof shasum curl
+      - name: Download the v3.5.1 release binary
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_DIR/bin351"
+          cd "$RUN_DIR/bin351"
+          base=https://github.com/MikkoParkkola/mcp-gateway/releases/download/v3.5.1
+          curl -fsSL -o mcp-gateway-linux-x86_64 "$base/mcp-gateway-linux-x86_64"
+          curl -fsSL -o SHA256SUMS.txt "$base/SHA256SUMS.txt"
+          sha256sum -c --ignore-missing SHA256SUMS.txt
+          echo "$BIN_351_SHA256  mcp-gateway-linux-x86_64" | sha256sum -c -
+          chmod +x mcp-gateway-linux-x86_64
+      - name: Build this tree
+        run: cargo build --locked
+      - name: Run the rehearsal
+        run: |
+          set -euo pipefail
+          export BIN_351="$RUN_DIR/bin351/mcp-gateway-linux-x86_64"
+          export BIN_400="$GITHUB_WORKSPACE/target/debug/mcp-gateway"
+          export RESULTS_JSON="$RUN_DIR/results.json"
+          export RUN_DIR="$RUN_DIR/run"
+          bash scripts/release/nfr_upgrade_1_rehearsal.sh
+      - name: Check and report every result
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - "$RUN_DIR/results.json" "$EXPECTED_CHECKS" <<'PY'
+          import json, os, sys
+          path, expected = sys.argv[1], sys.argv[2].split()
+          rows = json.load(open(path))
+          ids = [r["id"] for r in rows]
+          lines = ["| check | status |", "|---|---|"]
+          lines += [f"| {r['id']} | {r['status']} |" for r in rows]
+          passed = sum(r["status"] == "PASS" for r in rows)
+          lines.append(f"\n{passed}/{len(rows)} PASS ({len(expected)} expected)")
+          if ids != expected:
+              lines.append(f"\nCheck ids differ from the pinned list: got {ids}")
+          print("\n".join(lines))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## NFR.UPGRADE.1 rehearsal\n\n" + "\n".join(lines) + "\n")
+          sys.exit(0 if ids == expected and passed == len(rows) else 1)
+          PY
+      - name: Upload rehearsal logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upgrade-rehearsal-logs
+          path: ${{ runner.temp }}/nfr-upgrade-1
+          if-no-files-found: ignore
+
   helm-chart-smoke:
     name: Helm chart lint + render
     runs-on: ubuntu-latest
