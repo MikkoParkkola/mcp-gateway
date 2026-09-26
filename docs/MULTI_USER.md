@@ -171,6 +171,11 @@ stats, webhook status), the `/ui/api/*` admin routes and the control plane.
   break-glass path.
 - Each `role: admin` rule logs one warning when the config loads, naming the
   rule index, the issuer and the kind of condition.
+- Every admin action is audited: an admin meta-tool call, allowed or refused,
+  and every `/ui/api/*` request other than `GET` or `HEAD` (control-plane
+  edits included) writes an `admin_action` record naming the issuer and
+  subject, never the email. While the audit log is down these requests answer
+  503. See UPGRADING-4.0 item 51.
 
 ## 3. Who the backend thinks is calling
 

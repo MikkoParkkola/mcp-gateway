@@ -19,16 +19,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
   header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §47.
 
+- `mcp_backend_rate_limited_total{backend}` counts requests and notifications refused by a
+  backend's own `failsafe.rate_limit` before dispatch. Those refusals are excluded from the
+  error budgets and the circuit gauge (F23), so this is where operators see them. See
+  `docs/UPGRADING-4.0.md` item 53 (F23b).
+
 - `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
   item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
   the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
   A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
   (C9, MIK-7570.SECRET.2)
+- A per-call-id ledger for stdio bursts against a client that never answers its asks: every call
+  must reach exactly one terminal response, and one client's silence must not disable the capability
+  for other callers. 194 calls run per PR; the ticket's 1026-call
+  burst (about 8 minutes) runs nightly and on a PR labelled `mrtr7b-full-burst`. (MIK-7479.STDIO.1)
 
 ### Changed
 
+- **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
+  token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
+  read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
+  collections may be read by others but not changed by them. `config export` writes the client
+  config it edits as `0600`. UPGRADING-4.0 item 54. (F18)
+
 ### Fixed
 
+- **An error result is never replayed from a cache.** The response cache and the capability
+  cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
+  refusals, and served them to every call with the same key for the whole TTL (60 s by default).
+  One throttle could answer hundreds of later calls with a stale refusal. Errors are now never
+  cached; successes are cached as before. See `docs/UPGRADING-4.0.md` item 63 (F26, GH #1158).
+
+- **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`
+  dropped every inbound notification. It now delivers `notifications/progress` to the call whose
+  request carried that `progressToken`, under the stdio transport's rules: progress only, the
+  token must belong to a live call, and a frame it cannot attribute is dropped. The caller gets
+  its own token back through the request-scoped translation, as on stdio.
 - **One caller's burst no longer disables a tool for every caller.** A refusal by a
   backend's own rate limiter was reported as "Circuit breaker open" and counted as a
   backend failure, so a burst past the limit could auto-disable the capability or kill
@@ -52,6 +78,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Legacy HTTP session ids are minted by the gateway and never adopted** (F9, MIK-7585,
+  #1140). A client-chosen `Mcp-Session-Id` that names no live session gets a fresh `gw-` id
+  instead of becoming the session's id, so an unauthenticated caller can no longer pick an id
+  ahead of another caller and receive or answer its elicitation prompts. Every
+  unauthenticated caller is one owner class, separated only by holding the minted id. An
+  empty or whitespace id is treated as absent (DELETE answers 400, was 404). Session ids in logs, the
+  firewall audit log and the transparency log are 8-hex fingerprints; `audit show --session` finds
+  entries by the raw id or its fingerprint (a fingerprint can collide). Breaking for library users: `first_session_id` is removed from
+  `NotificationMultiplexer` and `ProxyManager`, and `get_or_create_session_for` is no
+  longer public. See UPGRADING-4.0 item 58.
 - **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
   (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
   now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
@@ -61,6 +97,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
   forwarded without the per-tool authorization check.
   See UPGRADING-4.0 item 43.
+- **Attestation `enforce` covers every method on the direct route (breaking)**
+  (MIK-7570.ATTEST.1). `POST /mcp/{name}` now refuses, with -32002 and HTTP 403,
+  any forwarded method whose token is missing or does not grant its target:
+  `resources/read`, `resources/subscribe` and `resources/unsubscribe` match the
+  URI, `prompts/get` the prompt name, list methods need an authentic token, and
+  a method outside the table needs a `"*"` token. `initialize`, `ping` and
+  notifications are exempt. The check runs before identity minting, and the
+  token is stripped before telemetry. A surfaced tool run as a task carries its
+  `_meta` token to dispatch. See UPGRADING-4.0 item 46.
 
 ## [4.0.0-beta.2] - 2026-09-25
 
@@ -122,6 +167,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   admin at once. A `role: admin` rule whose only condition is `domain` fails to load,
   and each admin rule logs a warning at load. Header identities never confer admin.
   See `docs/UPGRADING-4.0.md` item 51 (E1, MIK-7570.ADMINSSO.1).
+- **Admin actions write an `admin_action` audit record and are refused while the
+  audit log is down.** Admin meta-tool calls, allowed or refused, and every
+  `/ui/api/*` request other than `GET` or `HEAD`, control-plane POSTs included,
+  record who acted (issuer and subject for an SSO admin), the tool or route
+  template, and the outcome; bodies and queries are never logged. With auth on
+  they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
+  item 51.
 
 ### Fixed
 

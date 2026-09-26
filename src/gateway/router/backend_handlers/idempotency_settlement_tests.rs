@@ -44,6 +44,30 @@ fn pre_dispatch_failure_frees_the_key_for_a_retry() {
     );
 }
 
+/// F26: a rate-limit refusal is pre-dispatch too, so it frees the key rather
+/// than settling it. Settled, a retry under the same key would be answered
+/// with the stale refusal until the entry expired: the F26 cache bug by the
+/// idempotency route. `RateLimited` joined the pre-dispatch allowlist in F23;
+/// until this row nothing pinned that membership.
+#[test]
+fn a_rate_limit_refusal_frees_the_key_for_a_retry() {
+    let cache = Arc::new(IdempotencyCache::new());
+    let mut reservation = reserve(&cache);
+    let error = Error::RateLimited("backend".into());
+    let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+    settle_direct_failure(Some(&mut reservation), &error, &response);
+
+    // Asserted while the reservation is alive, for the reason given above.
+    assert!(
+        matches!(
+            enforce(&cache, "key", "fingerprint"),
+            Ok(GuardOutcome::Proceed(_))
+        ),
+        "a rate-limit refusal never reached the backend and must not consume the key"
+    );
+}
+
 #[test]
 fn dispatched_failure_is_cached_as_terminal() {
     // GIVEN a reserved key whose call reached the backend and failed.

@@ -280,7 +280,7 @@ async fn load_identity_grants_file_reads_yaml_and_allows_matching_personal_reque
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("identity-grants.yaml");
     let body = serde_yaml::to_string(&IdentityGrantFile::new(vec![grant()])).unwrap();
-    tokio::fs::write(&path, body).await.unwrap();
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
 
     let store = load_identity_grants_file(&path).await.unwrap();
     let evaluation = store.evaluate(&personal_request(Some(alice())));
@@ -295,9 +295,11 @@ async fn load_identity_grants_file_reads_yaml_and_allows_matching_personal_reque
 async fn load_identity_grants_file_rejects_unknown_schema_version() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("identity-grants.yaml");
-    tokio::fs::write(&path, "schema_version: identity_grants.v0\ngrants: []\n")
-        .await
-        .unwrap();
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        "schema_version: identity_grants.v0\ngrants: []\n",
+    )
+    .unwrap();
 
     let err = load_identity_grants_file(&path).await.unwrap_err();
 
@@ -374,11 +376,10 @@ fn an_execute_grant_covers_a_read_and_a_read_grant_covers_only_reads() {
 async fn a_write_scope_is_refused_at_load_rather_than_accepted_and_never_matched() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("identity-grants.yaml");
-    tokio::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "schema_version: identity_grants.v1\ngrants:\n  - grant_id: g\n    subject:\n      authority: api_key\n      subject: alice\n    agent: any\n    capability: c\n    scope: write\n    provenance: p\n    reason: r\n",
     )
-    .await
     .unwrap();
 
     let err = load_identity_grants_file(&path).await.unwrap_err();
@@ -398,4 +399,45 @@ fn subjects_differing_only_in_label_hash_equal() {
 
     let set: std::collections::HashSet<GrantSubject> = [named, bare].into_iter().collect();
     assert_eq!(set.len(), 1, "one identity, however labelled");
+}
+
+// ── F18 I3: others may read the grants file, not change it ──────────────────
+
+#[cfg(unix)]
+fn grants_file(dir: &std::path::Path, mode: u32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join("identity-grants.yaml");
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        "schema_version: identity_grants.v1\ngrants: []\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn identity_grants_group_writable_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = grants_file(dir.path(), 0o664);
+    let err = read_identity_grants_file(&path).await.unwrap_err();
+    assert!(
+        err.contains("identity grants file") && err.contains("change it"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn identity_grants_readable_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = grants_file(dir.path(), 0o644);
+    assert!(
+        read_identity_grants_file(&path)
+            .await
+            .unwrap()
+            .grants
+            .is_empty()
+    );
 }
