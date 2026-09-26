@@ -1445,10 +1445,15 @@ The first time a caller uses a tool the gateway has not yet listed for it, the g
 backend's tools once, as that caller, before judging the call (§31). Before this release such a
 call was forwarded unchecked.
 
-- **If the list cannot be read within the backend's `timeout`**, `closed` refuses the call with
-  "the gateway could not read this tool's input schema for you; list the backend's tools and
-  retry", and `standard` forwards it and counts `input_schema_unknown`. `off` does neither: it
-  never lists.
+- **If the backend cannot be reached** (connection refused, no answer within its `timeout`, or
+  a transport error), the call gets the same error a failed tool call to that backend gets, and
+  under `closed` it counts toward the error budget as a failed call does. Nothing changes for a
+  dead backend except that the first call now fails at the list rather than at the call.
+- **If the backend answers but its tool list cannot be read** (it returns an error or a list the
+  gateway cannot parse), `closed` refuses the call with "the gateway could not read this tool's
+  input schema for you; list the backend's tools and retry". Such a refusal is not counted as a
+  backend failure. `standard` forwards the call in both cases and counts `input_schema_unknown`,
+  so the call itself then succeeds or fails. `off` never lists.
 - **A tool name the backend's fresh, complete list does not contain is now refused under
   `closed`**, where it used to be forwarded. A backend that serves tools it does not list can no
   longer have those tools called under `closed`; set that backend's `input_schema_enforcement:

@@ -24,8 +24,11 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Serve,
-    /// Yields once, then fails: concurrent callers park as waiters first.
+    /// Yields once, then answers with a JSON-RPC error (reachable, list
+    /// unreadable): concurrent callers park as waiters first.
     Fail,
+    /// As `Fail`, but a transport failure: the backend is unreachable (A3).
+    Down,
     Hang,
     /// Signals `started`, waits for `release`, then serves.
     Barrier,
@@ -124,7 +127,11 @@ impl crate::transport::Transport for Lister {
             Mode::Serve => {}
             Mode::Fail => {
                 tokio::task::yield_now().await;
-                return Err(crate::Error::BackendUnavailable("list fails".into()));
+                return Ok(JsonRpcResponse::error(Some(id), -32603, "list fails"));
+            }
+            Mode::Down => {
+                tokio::task::yield_now().await;
+                return Err(crate::Error::TransportConnect("list down".into()));
             }
             Mode::Hang => std::future::pending::<()>().await,
             Mode::Barrier => {
@@ -232,19 +239,17 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// F13-T5: a hanging list under a paused clock. The check returns at
 /// `timeout` + e with e < `LIST_FILL_WAIT_GRACE`, so the fill's inner bound
-/// fired, not the waiter's outer one. `closed` refuses with text U and
-/// `standard` forwards; each counts `input_schema_fetch_failed` once. Red on
+/// fired, not the waiter's outer one. `closed` returns the timeout as a failed
+/// dispatch would (A3) and `standard` forwards; each counts
+/// `input_schema_fetch_failed` once. Red on
 /// base: no fetch, so the check returns at once and `closed` forwards.
 /// Mutant M4 (drop the inner timeout) makes the outer bound fire at
 /// `timeout` + grace, which the upper-bound assertion catches.
 #[test]
 fn f13_t5_hanging_list_is_bounded_by_the_inner_timeout() {
     for (mode, expected) in [
-        (
-            InputSchemaEnforcement::Closed,
-            Some(TEXT_UNAVAILABLE.to_owned()),
-        ),
-        (InputSchemaEnforcement::Standard, None),
+        (InputSchemaEnforcement::Closed, Err(true)),
+        (InputSchemaEnforcement::Standard, Ok(None)),
     ] {
         let ((out, elapsed), rendered) = metered(true, async move {
             let lister = Lister::new(Mode::Hang);
@@ -254,7 +259,8 @@ fn f13_t5_hanging_list_is_bounded_by_the_inner_timeout() {
             let out = tokio::time::timeout(limit, check(&backend, "edit", &undeclared()))
                 .await
                 .expect("the check was not bounded");
-            (out.expect("no failsafe refusal"), started.elapsed())
+            let timed_out = |e| matches!(e, crate::Error::BackendTimeout(_));
+            (out.map_err(timed_out), started.elapsed())
         });
         assert_eq!(out, expected);
         assert!(elapsed >= CALL_TIMEOUT, "{elapsed:?}");
@@ -268,7 +274,7 @@ fn f13_t5_hanging_list_is_bounded_by_the_inner_timeout() {
 }
 
 /// F13-T5b: after a timed-out fill, a second cold call within the cooldown
-/// sends no `tools/list` and returns at once with text U. Counts one
+/// sends no `tools/list` and fails at once as the timeout did (A3). Counts one
 /// `fetch_failed` (call 1) and one `fill_cooldown` (call 2). Red on base: no
 /// fetch at all; without the inner timeout (M4) call 1 never stamps in time.
 #[test]
@@ -277,19 +283,16 @@ fn f13_t5b_a_timed_out_fill_makes_the_next_call_fail_fast() {
         let lister = Lister::new(Mode::Hang);
         let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
         let first = check(&backend, "edit", &undeclared()).await;
-        assert_eq!(
-            first.expect("no refusal"),
-            Some(TEXT_UNAVAILABLE.to_owned())
+        assert!(
+            matches!(first, Err(crate::Error::BackendTimeout(_))),
+            "{first:?}"
         );
         let started = tokio::time::Instant::now();
         let second = check(&backend, "edit", &undeclared()).await;
-        (
-            second.expect("no refusal"),
-            lister.lists(),
-            started.elapsed(),
-        )
+        let second = second.map_err(|e| crate::backend::fill_check::is_transport_failure(&e));
+        (second, lister.lists(), started.elapsed())
     });
-    assert_eq!(second, Some(TEXT_UNAVAILABLE.to_owned()));
+    assert_eq!(second, Err(true));
     assert_eq!(lists, 1, "call 2 sent a list inside the cooldown");
     assert_eq!(elapsed, Duration::ZERO, "call 2 waited");
     assert_eq!(
@@ -770,3 +773,6 @@ async fn f13_t12i_a_cooldown_hit_spends_no_token() {
     assert!(matches!(declared, Ok(None)), "{declared:?}");
     assert_eq!(lister.lists(), 2);
 }
+
+#[path = "f13_a3_tests.rs"]
+mod a3;

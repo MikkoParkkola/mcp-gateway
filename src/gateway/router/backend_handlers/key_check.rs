@@ -20,12 +20,12 @@ pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a [(String, String)]);
 ///
 /// A refusal is a tool result, not a 403, so a model can correct the call;
 /// the early return drops the idempotency reservation unsettled. When the
-/// slot's failsafe refuses the cold-slot list (F13), the call is accounted
-/// and answered exactly as a refused dispatch is in `backend_handler`: the
-/// client failure is recorded, the error logged, and the error returned as
-/// JSON-RPC with status 500. The error is pre-dispatch (`CircuitOpen` or
-/// `RateLimited`), so the dropped reservation releases, as
-/// `settle_direct_failure` would.
+/// slot's failsafe refuses the cold-slot list, or under `closed` the list
+/// fails on transport (F13, A3), the call is accounted and answered exactly
+/// as a failed dispatch is in `backend_handler`: the client failure is
+/// recorded, the error logged, and the error returned as JSON-RPC with
+/// status 500. No `tools/call` left the gateway, so the dropped reservation
+/// releases, as `settle_direct_failure` does for a pre-dispatch failure.
 pub(super) async fn key_refusal(
     state: &AppState,
     auth: BackendAuthContext<'_>,

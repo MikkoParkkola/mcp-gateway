@@ -123,8 +123,9 @@ impl MetaMcp {
             .collect()
     }
 
-    /// Account a check-site fill the slot's failsafe refused (F13) exactly as
-    /// `accounted_dispatch` accounts a dispatch refused the same way: the
+    /// Account a check-site fill the slot's failsafe refused, or that failed
+    /// on transport under `closed` (F13, A3), exactly as `accounted_dispatch`
+    /// accounts a dispatch refused or failed the same way: the
     /// invocation counter with `status="error"`, the latency histogram (the
     /// check's own elapsed time) and the error budget. Returns the tool
     /// result a refused dispatch answers with.

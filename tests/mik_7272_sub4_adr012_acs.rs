@@ -251,9 +251,9 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
         timeout: Duration::from_millis(300),
         env: HashMap::default(),
         headers: HashMap::default(),
+        oauth: None,
+        secrets: Vec::new(),
         passthrough: matches!(arm, ForwardArm::Fallback),
-        // Not about R2: a cold call to the unreachable backend must reach dispatch.
-        input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::Off,
         ..BackendConfig::default()
     };
     Backend::new(name, config, &failsafe(), Duration::from_secs(300))

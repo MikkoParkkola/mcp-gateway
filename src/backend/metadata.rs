@@ -37,6 +37,17 @@ impl Backend {
         self.pooled_entry(&self.pool_key_for(binding))
     }
 
+    /// Whether `binding`'s slot is in a fill cooldown whose failure was NOT a
+    /// transport one (A3): its fast-fail stands in for an unreadable list.
+    pub(super) fn cooling_after_unreadable_list(&self, binding: Option<&str>) -> bool {
+        self.tools_slot(binding)
+            .tools_fill_failed_at
+            .lock()
+            .is_some_and(|(at, transport)| {
+                !transport && at.elapsed() < super::fill_check::LIST_FILL_COOLDOWN
+            })
+    }
+
     /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
     #[must_use]
     pub fn has_cached_tools_for(&self, binding: Option<&str>) -> bool {
@@ -260,10 +271,11 @@ impl Backend {
                         Ok((items, truncated))
                     })
                     .await;
-                    let end = if drained.is_ok() {
-                        FillEnd::Drained
-                    } else {
-                        FillEnd::Failed
+                    let end = match &drained {
+                        Ok(_) => FillEnd::Drained,
+                        Err(e) => FillEnd::Failed {
+                            transport: super::fill_check::is_transport_failure(e),
+                        },
                     };
                     if let Some(guard) = guard.as_mut() {
                         guard.end(end);

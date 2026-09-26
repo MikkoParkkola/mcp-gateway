@@ -53,8 +53,9 @@ pub(crate) enum Completeness {
 pub(crate) enum FillEnd {
     /// Still draining: a drop here is a caller cancellation.
     Pending,
-    /// The drain, parse, start or inner timeout returned an error.
-    Failed,
+    /// The drain, parse, start or inner timeout returned an error;
+    /// `transport` is [`is_transport_failure`] of it (A3).
+    Failed { transport: bool },
     /// Drained; reaching drop in this state means the store was voided.
     Drained,
     /// The store was accepted.
@@ -89,12 +90,12 @@ impl Drop for FillGuard {
         let stamp = &self.entry.tools_fill_failed_at;
         match self.end {
             FillEnd::Pending => count("input_schema_fill_cancelled"),
-            FillEnd::Failed => {
-                *stamp.lock() = Some(tokio::time::Instant::now());
+            FillEnd::Failed { transport } => {
+                *stamp.lock() = Some((tokio::time::Instant::now(), transport));
                 count("input_schema_fetch_failed");
             }
             FillEnd::Drained => {
-                *stamp.lock() = Some(tokio::time::Instant::now());
+                *stamp.lock() = Some((tokio::time::Instant::now(), false));
                 count("input_schema_fetched");
             }
             FillEnd::Stored => {
@@ -125,7 +126,7 @@ pub(super) fn admit_fill(
         && entry
             .tools_fill_failed_at
             .lock()
-            .is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN);
+            .is_some_and(|(at, _)| at.elapsed() < LIST_FILL_COOLDOWN);
     if cooling {
         count("input_schema_fill_cooldown");
         return Err(Error::BackendUnavailable(format!(
@@ -168,6 +169,25 @@ pub(super) async fn run_bounded<T>(
         }
     }
     result
+}
+
+/// A fill error that says the backend could not be reached or did not answer
+/// in time, as opposed to one that answered with a list the gateway cannot
+/// read (A3). Under `closed` the call then gets the error a failed dispatch
+/// gets, not text U. `Http` is here because a dispatch to the same endpoint
+/// fails the same way.
+pub(crate) fn is_transport_failure(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::BackendUnavailable(_)
+            | Error::BackendTimeout(_)
+            | Error::Transport(_)
+            | Error::TransportPermanent(_)
+            | Error::TransportConnect(_)
+            | Error::Http(_)
+            | Error::Io(_)
+            | Error::Tls(_)
+    )
 }
 
 pub(super) fn list_timeout(backend: &str, limit: Duration) -> Error {
@@ -214,6 +234,9 @@ mod tests {
             format!("{LIST_MAX_PAGES}-page cap"),
             format!("{secs} s."),
             format!("The {LIST_MAX_PAGES} pages and the {secs} s above"),
+            // A3: both answers to a failed list are described.
+            "the same error a failed tool call to that backend gets".to_owned(),
+            "not counted as a\n  backend failure".to_owned(),
         ] {
             assert!(section.contains(&quoted), "UPGRADING §59 lacks {quoted:?}");
         }

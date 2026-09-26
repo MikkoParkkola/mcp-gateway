@@ -379,6 +379,11 @@ fn refused_with(body: &Value, fragment: &str) -> bool {
     is_error(body) && body.to_string().contains(fragment)
 }
 
+/// A JSON-RPC error as a failed dispatch answers, not text U (A3).
+fn as_dispatch(body: &Value) -> bool {
+    body["error"]["code"].is_i64() && !body.to_string().contains(TEXT_U)
+}
+
 /// Any refusal or error, whichever layer produced it.
 fn failed(status: StatusCode, body: &Value) -> bool {
     status != StatusCode::OK || !body["error"].is_null() || is_error(body)
@@ -481,8 +486,8 @@ async fn f13_t3_concurrent_cold_calls_share_one_list() {
 }
 
 /// Review-fold waiter cell: 16 concurrent cold calls on a hanging list all
-/// return within `timeout` + grace, with exactly one `tools/list`, refused
-/// with text U. Red on base: zero lists (each call is forwarded at once).
+/// return within `timeout` + grace, with exactly one `tools/list`, failed as
+/// a timed-out dispatch (A3). Red on base: zero lists (each is forwarded).
 #[tokio::test]
 async fn f13_waiters_on_a_hanging_list_share_one_bounded_fill() {
     let fx = build(Setup {
@@ -501,12 +506,11 @@ async fn f13_waiters_on_a_hanging_list_share_one_bounded_fill() {
         .expect("a waiter was not bounded by timeout + grace");
     assert_eq!(fx.rec.lists(), 1, "not single-flight");
     assert_eq!(fx.rec.calls(), 0, "a cold call reached the backend");
-    assert!(results.iter().all(|(_, b)| refused_with(b, TEXT_U)));
+    assert!(results.iter().all(|(_, b)| as_dispatch(b)));
 }
-/// F13-T4: the cold fetch fails. `closed`: text U, zero `tools/call`,
-/// `refused_unavailable` and `fetch_failed` counted. `standard`: forwarded,
-/// `unknown` counted. `off`: forwarded, zero `tools/list`. Red on base:
-/// `closed` forwards and neither `closed` label exists.
+
+/// F13-T4, transport failure: `closed` the dispatch's error (A3), no call,
+/// `fetch_failed`; `standard` forwards, `unknown`; `off` never lists.
 #[cfg(feature = "metrics")]
 #[test]
 fn f13_t4_failed_fetch_per_mode() {
@@ -519,14 +523,12 @@ fn f13_t4_failed_fetch_per_mode() {
         })
     };
     let ((body, lists, calls), rendered) = row(InputSchemaEnforcement::Closed);
-    assert!(refused_with(&body, TEXT_U), "closed: {body}");
+    assert!(as_dispatch(&body), "closed: {body}");
     assert_eq!((lists, calls), (1, 0), "closed");
-    for label in [
-        "input_schema_refused_unavailable",
-        "input_schema_fetch_failed",
-    ] {
-        assert!(kind_counted(&rendered, label), "{label}: {rendered}");
-    }
+    let label = "input_schema_fetch_failed";
+    assert!(kind_counted(&rendered, label), "{label}: {rendered}");
+    let label = "input_schema_refused_unavailable";
+    assert!(!kind_counted(&rendered, label), "{label}: {rendered}");
     let ((body, lists, calls), rendered) = row(InputSchemaEnforcement::Standard);
     assert!(!is_error(&body), "standard: {body}");
     assert_eq!((lists, calls), (1, 1), "standard");
@@ -732,10 +734,9 @@ async fn f13_t12b_one_token_is_spent_by_the_fill() {
     assert!(failed(status, &body), "{body}");
 }
 
-/// F13-T12c: a failing check-site fill counts toward the breaker. Threshold
-/// 1: one cold `closed` call with a failing list is refused with text U, sends
-/// zero `tools/call`, and leaves the breaker open. Red on base: the call is
-/// forwarded (one `tools/call`) and the list failure is never observed.
+/// F13-T12c: threshold 1, one cold `closed` call with a failing list fails as
+/// a dispatch (A3), sends no `tools/call` and opens the breaker. Red on base:
+/// the call is forwarded and the list failure is never observed.
 #[tokio::test]
 async fn f13_t12c_failed_fill_trips_the_breaker() {
     let fx = build(Setup {
@@ -745,7 +746,7 @@ async fn f13_t12c_failed_fill_trips_the_breaker() {
     })
     .await;
     let (_, body) = call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-    assert!(refused_with(&body, TEXT_U), "{body}");
+    assert!(as_dispatch(&body), "{body}");
     assert_eq!(fx.rec.calls(), 0, "the call was forwarded");
     assert!(
         fx.backend.is_circuit_tripped(),
@@ -753,8 +754,8 @@ async fn f13_t12c_failed_fill_trips_the_breaker() {
     );
 }
 
-/// F13-T12e: half-open breaker, cold, `closed`, failing list: refused with
-/// text U and zero `tools/call`; the breaker is open again. Red on base: the
+/// F13-T12e: half-open breaker, cold, `closed`, failing list: the dispatch's
+/// error (A3), zero `tools/call`; the breaker is open again. Red on base: the
 /// half-open dispatch is forwarded and succeeds.
 #[tokio::test]
 async fn f13_t12e_half_open_failed_fill_reopens_the_breaker() {
@@ -767,7 +768,7 @@ async fn f13_t12e_half_open_failed_fill_reopens_the_breaker() {
     fx.backend.trip_circuit_breaker_for_test();
     tokio::time::sleep(Duration::from_millis(600)).await;
     let (_, body) = call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-    assert!(refused_with(&body, TEXT_U), "{body}");
+    assert!(as_dispatch(&body), "{body}");
     assert_eq!(fx.rec.calls(), 0, "the half-open call was forwarded");
     assert_eq!(
         fx.backend.circuit_breaker_stats().state,
@@ -776,11 +777,10 @@ async fn f13_t12e_half_open_failed_fill_reopens_the_breaker() {
     );
 }
 
-/// F13-T12g: a backend whose start fails (no wire, empty URL), cold,
-/// `closed`: refused with text U; with threshold 1 the breaker is then open.
-/// Red on base: the call returns the dispatch's start error, not text U.
+/// F13-T12g: start fails (empty URL), cold, `closed`: the dispatch's start
+/// error (A3), and threshold 1 opens the breaker (M11 reddens it).
 #[tokio::test]
-async fn f13_t12g_start_failure_is_text_u_and_recorded() {
+async fn f13_t12g_start_failure_answers_as_dispatch_and_is_recorded() {
     let fx = build(Setup {
         config: BackendConfig {
             timeout: Duration::from_secs(2),
@@ -792,7 +792,7 @@ async fn f13_t12g_start_failure_is_text_u_and_recorded() {
     })
     .await;
     let (_, body) = call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-    assert!(refused_with(&body, TEXT_U), "{body}");
+    assert!(as_dispatch(&body), "{body}");
     assert!(
         fx.backend.is_circuit_tripped(),
         "the start failure was not recorded"

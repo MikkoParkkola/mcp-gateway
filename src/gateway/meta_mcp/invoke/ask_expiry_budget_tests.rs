@@ -25,7 +25,8 @@ use crate::transport::Transport;
 
 const CALLS: usize = 12;
 
-/// Answers every `tools/call` with `body`, or fails it when `fail` is set.
+/// Lists `book`, answers every `tools/call` with `body`, or fails every
+/// request when `fail` is set (so under `closed` the cold list fails too).
 struct Scripted {
     calls: Arc<AtomicUsize>,
     body: Value,
@@ -36,16 +37,22 @@ struct Scripted {
 impl Transport for Scripted {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             return Err(crate::Error::Transport("backend went away".into()));
         }
+        let body = if method == "tools/list" {
+            json!({"tools": [{"name": "book", "inputSchema": {"type": "object"}}]})
+        } else {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.body.clone()
+        };
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             RequestId::Number(1),
-            self.body.clone(),
+            body,
         ))
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
@@ -80,7 +87,7 @@ fn meta(body: Value, fail: bool) -> (MetaMcp, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "asker",
-        BackendConfig::r2_off(),
+        BackendConfig::default(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
@@ -168,10 +175,17 @@ async fn an_expired_ask_is_not_charged_to_the_capability() {
 
 /// P2, the positive control: twelve real backend failures do disable it, so a
 /// green P1 is the budget declining the expiries, not a harness that cannot see.
+/// Under the default `closed`, each call's cold list fails first and is
+/// charged as the failed dispatch it replaces (F13 A3); mutant M16 (skip that
+/// charge) reddens it.
 #[tokio::test(start_paused = true)]
 async fn control_real_backend_failures_do_disable_the_capability() {
     let (meta, _calls) = meta(json!({}), true);
-    let _ = run_calls(&meta).await;
+    let answers = format!("{:?}", run_calls(&meta).await);
+    // A3: the dead backend answers as a failed dispatch, with its recovery
+    // hint, never with the unreadable-list refusal.
+    assert!(!answers.contains("could not read this tool"), "{answers}");
+    assert!(answers.contains("recovery"), "{answers}");
     let (_, failed) = meta.kill_switch.capability_window_counts("asker", "book");
     assert!(
         failed >= 5,
