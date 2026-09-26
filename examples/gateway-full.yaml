@@ -148,6 +148,8 @@ error_budget:
 cache:
   enabled: true                   # Enable response caching
   default_ttl: 60s                # Default cache TTL
+                                  # Errors (isError: true) are never cached, so a
+                                  # transient refusal is not replayed for the TTL.
   max_entries: 10000              # Max cached responses before eviction
 
 # --- Capabilities (REST API integration) ---

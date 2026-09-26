@@ -14,7 +14,8 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 Items 38, 51 and 54 refuse the start with their own error, which names the setting or file, so a notice would
-only repeat it; item 51 also warns once per `role: admin` rule at every load.
+only repeat it; item 51 also warns once per `role: admin` rule at every load. Items 60 and 64 are decided per
+capability file, and a file they affect is refused at load with an error that names it.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
@@ -74,6 +75,9 @@ upgrading a running deployment.
 | 53 | A backend's own rate-limit refusal reads `Rate limit exceeded for backend 'x'` (hint `RATE_LIMITED`, code still -32000) and no longer counts against the error budgets or `mcp_backend_circuit_state` | Match the new text in clients and alerts that looked for "Circuit breaker open"; watch `mcp_backend_rate_limited_total` for throttling |
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
+| 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
+| 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
+| 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1446,6 +1450,63 @@ the caller has no credential, so the gateway now treats it as a secret.
   `ProxyManager::first_session_id` are removed, `get_or_create_session_for` is
   no longer public, and `get_or_create_session(Some(id))` returns `id` only when
   that session is already live.
+
+## 60. Capability pins read CRLF line endings as LF
+
+A capability's `sha256:` pin used to be computed over the file's raw bytes. A pinned file that
+Git checked out with CRLF line endings on Windows (`core.autocrlf`), or that an editor re-saved
+with them, hashed differently, and the capability was refused as tampered ("Capability hash
+mismatch (rug-pull protection)") although nothing in it had changed. Now the hash reads each
+CRLF pair as LF before it is computed. YAML reads the two as the same line break, so the two
+files are the same capability. A lone CR that is not part of a CRLF pair is still content, and
+it still changes the hash.
+
+Pins over LF files, which covers every capability this repository ships, are unchanged.
+
+**Action, Windows only:** a pin you made with `mcp-gateway cap pin` over a file that had CRLF
+line endings at the time was computed over those bytes, and it stops matching. Re-pin the file:
+
+```sh
+mcp-gateway cap pin path/to/capability.yaml
+```
+
+To reproduce a pin from a shell, strip the CR of each CRLF first:
+`sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`. The recipe assumes the
+pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by the gateway
+and dropped by `grep -v` (item 64).
+
+## 63. Error results are never served from a response cache
+
+In 3.x and in the 4.0 betas, the response cache stored an error result like any answer and
+served it to every later call with the same key until the TTL ran out (60 s by default). That
+included the gateway's own refusals: a rate-limit refusal, an open breaker, a failed connect.
+One 10 ms throttle could therefore answer hundreds of calls with a stale refusal after the
+bucket had refilled, and a backend that recovered kept being reported as failing.
+
+- **A result with `isError: true` is no longer cached**, whether the gateway produced it or the
+  backend returned it. The next call is dispatched again.
+- **The capability cache behaves the same way.** A 2xx upstream body carrying `isError: true`
+  is not stored (a non-2xx response never was).
+- Successful results are cached exactly as before, under the same keys and TTLs.
+- The idempotency store is unchanged: a caller retrying with the same idempotency key still
+  receives its own settled outcome, including a failure, as ADR-012 requires.
+
+What to check: a deployment that leaned on a cached error to shed load from a failing backend
+now reaches that backend on every call. Use the circuit breaker and `failsafe.rate_limit`
+for that; they are the load-shedding controls.
+
+## 64. Text after a line break inside a pin line is hashed
+
+The pin hash excludes a capability's top-level `sha256:` line. YAML also ends a line at a
+lone carriage return (CR not followed by LF), NEL (U+0085), LS (U+2028) and PS (U+2029), so
+text after one of those on that line is parsed as content, and it was excluded from the hash
+with the pin. Now only the pin itself is excluded: everything after such a break on the pin
+line is hashed like the rest of the file.
+
+**Action:** only a pinned file whose `sha256:` line contains one of those breaks is affected, and it
+now fails verification until re-pinned. No shipped capability contains one. Inspect such a
+file before re-pinning it, since the text after the break is content that was not covered by
+the old pin: `mcp-gateway cap pin path/to/capability.yaml`.
 
 ## After upgrading
 

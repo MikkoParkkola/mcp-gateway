@@ -273,7 +273,9 @@ fn t11_guard_expiry_is_live_without_any_reload() {
 // prefix. An atomic replace writes a scratch file, fsyncs it, and renames it
 // over the destination, so the inode CHANGES and every observer sees either
 // the whole old file or the whole new one. Deterministic: it goes red against
-// `tokio::fs::write` without needing a race to be lost.
+// `tokio::fs::write` without needing a race to be lost. Unix only: the
+// inode is the identity, and Windows' file index is not on stable Rust.
+#[cfg(unix)]
 #[tokio::test]
 async fn t3b_a_grant_file_write_is_never_observable_as_a_valid_prefix() {
     use std::os::unix::fs::MetadataExt as _;

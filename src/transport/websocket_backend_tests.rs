@@ -72,7 +72,7 @@ async fn t3_an_env_reference_in_a_header_reaches_the_upgrade_expanded() {
     crate::gateway::test_helpers::write_owner_only(
         &config_path,
         format!(
-            "env_files: [\"{}\"]\nbackends:\n  rt:\n    ws_url: \"{}\"\n    headers:\n      Authorization: \"Bearer ${{F17_RT_TOKEN}}\"\n",
+            "env_files: ['{}']\nbackends:\n  rt:\n    ws_url: \"{}\"\n    headers:\n      Authorization: \"Bearer ${{F17_RT_TOKEN}}\"\n",
             env_file.display(),
             peer.url
         ),

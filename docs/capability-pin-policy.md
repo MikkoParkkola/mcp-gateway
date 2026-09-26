@@ -114,10 +114,10 @@ poisoned upstream returns poisoned data through a perfectly valid pin.
 mcp-gateway cap pin capabilities/<category>/<name>.yaml
 ```
 
-Or reproduce the hash from a shell:
+Or reproduce the hash from a shell. CRLF line endings hash as LF, so strip the CR before each LF first:
 
 ```bash
-grep -v '^sha256:' capabilities/<category>/<name>.yaml | sha256sum
+sed 's/\r$//' capabilities/<category>/<name>.yaml | grep -v '^sha256:' | sha256sum
 ```
 
 CI fails on both halves: a high-privilege production file with no pin, and any

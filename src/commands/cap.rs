@@ -676,4 +676,31 @@ providers:
         assert_eq!(cap.name, "pin_cli_cap");
         assert_eq!(cap.sha256.as_deref(), Some(expected_hash.as_str()));
     }
+
+    /// `cap pin` never writes a file the loader then refuses. A pin line that
+    /// already hides a second `sha256:` after a YAML line break would
+    /// otherwise be rewritten into a file with two pins (#1212).
+    #[tokio::test]
+    async fn cap_pin_never_writes_a_file_the_loader_refuses() {
+        for brk in ['\r', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("malformed.yaml");
+            let original = format!("sha256: old{brk}sha256: older\n{PINNABLE_YAML}");
+            std::fs::write(&path, &original).unwrap();
+
+            let code = cap_pin(path.clone()).await;
+
+            if is_success(code) {
+                parse_capability_file(&path)
+                    .await
+                    .unwrap_or_else(|e| panic!("break {brk:?}: cap pin wrote a refused file: {e}"));
+            } else {
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    original,
+                    "break {brk:?}: a refused pin changed the file"
+                );
+            }
+        }
+    }
 }
