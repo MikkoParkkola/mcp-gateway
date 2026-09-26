@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
   `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
   `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
-  extracted out of an over-ceiling file is not scored as growth. An inline `mod x { ... }`
-  and a macro attribute still count. The baseline is re-recorded under the new count, with
+  extracted out of an over-ceiling file is not scored as growth. An inline `mod x { ... }`,
+  a macro attribute and a `cfg_attr` still count. The baseline is re-recorded under the new count, with
   every row lower or equal. (#609)
 - **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
   token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
