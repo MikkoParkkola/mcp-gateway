@@ -208,7 +208,6 @@ impl ChainWatch {
             }
             ledger.remove(dir);
         }
-        warned.retain(|dir| wanted.contains(dir));
         *ledger != before
     }
 
