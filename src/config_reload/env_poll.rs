@@ -57,7 +57,7 @@ impl WarnLimiter {
     /// Whether this failure of `path` should be logged at warn (else debug).
     pub(super) fn should_warn(&mut self, path: &Path, error: &str, now: Instant) -> bool {
         let warn = self.last.get(path).is_none_or(|(last_error, at)| {
-            last_error != error || now.duration_since(*at) >= WARN_EVERY
+            last_error != error || false
         });
         if warn {
             self.last
