@@ -83,8 +83,10 @@ mod resource_prompt_scope_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
+/// `pub(crate)` for the A11 direct-route cells in `meta_mcp`, which need this
+/// router harness and the account fixtures together. Test-only.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 #[cfg(test)]
 mod webhook_scope_tests;
 

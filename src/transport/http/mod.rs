@@ -36,8 +36,8 @@ use crate::protocol::{
     parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    RedirectEvidence, SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
-    safe_request_error_for,
+    RedirectEvidence, SESSION_EXPIRED_MARKER, safe_request_error, safe_request_error_for,
+    status_refusal,
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -148,7 +148,8 @@ const SESSION_NOT_FOUND_CODE: i32 = -32015;
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches the safe markers emitted at the HTTP boundary:
-/// - `session expired`, produced by [`safe_http_status_error`] after an untrusted
+/// - `session expired`, produced by
+///   [`crate::security::http_diagnostics::safe_http_status_error`] after an untrusted
 ///   body contained JSON-RPC `-32015` or a case-insensitive `session not found`.
 ///   The classifier reads that marker rather than the body, because the body no
 ///   longer reaches an error string — it may echo our own credentials back at us.
@@ -219,7 +220,8 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 /// restarting the transport tears down a connection that is working. The
 /// `id` test is what keeps that narrow. A proxy's error page, a gateway's own
 /// JSON, or an error correlated to some other call are none of them this call's
-/// answer, and each stays [`safe_http_status_error`]'s opaque transport fault.
+/// answer, and each stays
+/// [`crate::security::http_diagnostics::safe_http_status_error`]'s opaque transport fault.
 ///
 /// The peer's `message` does reach the caller here, which the surrounding
 /// status-error path deliberately avoids for untrusted bodies. The exposure is
@@ -1508,17 +1510,14 @@ impl HttpTransport {
 
         let status = response.status();
         if !status.is_success() {
+            // A11-b/g: a deterministic refusal is typed by its STATUS alone.
+            let typed = response.error_for_status_ref().err();
             let body = response.text().await.unwrap_or_default();
-            // Several deployed servers refuse a protocol version they do not
-            // speak with a status rather than a JSON-RPC error object.
-            // Flattening that to a transport string here is what made the
-            // negotiation below unreachable for them: the body carrying the
-            // supported-version list was dropped before anyone could read it.
-            // Three signals together, because this parser was written for
-            // JSON-RPC error payloads and now sees every non-2xx body: the
-            // status a version refusal actually uses, the phrasing the in-band
-            // branch keys on, and a parseable list. A proxy error page that
-            // merely contains a date must not provoke a second handshake.
+            // Some servers refuse a protocol version with a status, not a
+            // JSON-RPC error, so the body with the supported versions is read
+            // first. Three signals together, because this parser sees every
+            // non-2xx body: the status a version refusal uses, the in-band
+            // phrasing, and a parseable list; a proxy page with a date is none.
             if matches!(
                 status,
                 reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UPGRADE_REQUIRED
@@ -1530,7 +1529,7 @@ impl HttpTransport {
             if let Some(refusal) = peer_refusal(&body, &request.id, status) {
                 return Err(refusal);
             }
-            return Err(safe_http_status_error(status, &body));
+            return Err(status_refusal(typed, status, &body));
         }
 
         // Check Content-Type to determine response format

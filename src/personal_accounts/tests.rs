@@ -524,6 +524,9 @@ mod store;
 #[path = "bounds_tests.rs"]
 mod bounds;
 
+#[path = "authority_compat_tests.rs"]
+mod authority_compat;
+
 // Lookup authority-entry validation, kept separate from the frozen lookup
 // packet so each source binding stays clear.
 #[cfg(unix)]

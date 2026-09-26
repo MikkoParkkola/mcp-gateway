@@ -104,15 +104,53 @@ pub fn safe_http_status_error(status: StatusCode, body: &str) -> Error {
     Error::Transport(safe_status_text(status, body))
 }
 
+/// A11-g: a credential refusal the backend answers the same way however often
+/// it is asked, so it is typed and never retried. Not 400 or 404: the HTTP
+/// transport reads an expired MCP session from their `Error::Transport` text
+/// (`transport::http::is_session_expired_error`), and typing them would stop
+/// the session from being re-initialized.
+pub(crate) const fn is_deterministic_refusal(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// A non-2xx the HTTP transport answers with. A credential refusal keeps its
+/// typed status (A11-b), URL stripped; anything else keeps today's safe
+/// transport text, which MCP session-expiry detection reads.
+pub(crate) fn status_refusal(
+    typed: Option<reqwest::Error>,
+    status: StatusCode,
+    body: &str,
+) -> Error {
+    match typed {
+        // A 401/403 whose body says the session expired keeps the marker, so
+        // the transport re-initializes the session instead (as for 400/404).
+        Some(e) if is_deterministic_refusal(status) && !carries_session_expiry(body) => {
+            Error::Http(e.without_url())
+        }
+        _ => safe_http_status_error(status, body),
+    }
+}
+
+/// A11-b: the backend refused the presented credential. Read from the typed
+/// status only, never from body text (ADR-008, `personal_accounts/refusal.rs`).
+pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {
+    matches!(error, Error::Http(e) if e.status() == Some(StatusCode::UNAUTHORIZED))
+}
+
 /// OAuth token-endpoint / registration failure. Status stays; body does not.
 #[must_use]
 pub fn safe_oauth_http_error(context: &str, status: StatusCode, body: &str) -> String {
     format!("{context}: {}", safe_status_text(status, body))
 }
 
+/// Whether a non-2xx body says the MCP session expired (JSON-RPC `-32015` or
+/// "session not found"), which the transport answers by re-initializing.
+fn carries_session_expiry(body: &str) -> bool {
+    body.contains("-32015") || body.to_ascii_lowercase().contains("session not found")
+}
+
 fn safe_status_text(status: StatusCode, body: &str) -> String {
-    let lower = body.to_ascii_lowercase();
-    if body.contains("-32015") || lower.contains("session not found") {
+    if carries_session_expiry(body) {
         format!("HTTP {status}: {SESSION_EXPIRED_MARKER}")
     } else {
         format!("HTTP {status}")
@@ -143,6 +181,53 @@ mod tests {
     use super::*;
 
     const CANARY: &str = "SENTINEL_SWEEP_7222";
+
+    /// A typed `reqwest::Error` for `status`, as the transport captures it.
+    fn typed(status: u16) -> Option<reqwest::Error> {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        reqwest::Response::from(response).error_for_status().err()
+    }
+
+    /// A11 T19: a 401 or 403 is typed only when its body does NOT signal an
+    /// expired MCP session. With the signal it keeps the untyped marker form
+    /// the transport re-initializes on, as 400 and 404 always do.
+    #[test]
+    fn a_session_expiry_body_keeps_the_reinit_marker_on_401_and_403() {
+        for status in [401_u16, 403] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            for body in ["session not found", r#"{"error":{"code":-32015}}"#] {
+                match status_refusal(typed(status), code, body) {
+                    Error::Transport(text) => assert!(
+                        text.contains(SESSION_EXPIRED_MARKER),
+                        "{status} {body}: {text}"
+                    ),
+                    other => panic!("{status} {body} must stay re-initializable: {other:?}"),
+                }
+            }
+            assert!(
+                matches!(
+                    status_refusal(typed(status), code, "denied"),
+                    Error::Http(_)
+                ),
+                "{status} with no session-expiry signal is a typed credential refusal"
+            );
+        }
+        for status in [400_u16, 404] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            for body in ["denied", "session not found"] {
+                assert!(
+                    matches!(
+                        status_refusal(typed(status), code, body),
+                        Error::Transport(_)
+                    ),
+                    "{status} is never typed, with or without a session-expiry body"
+                );
+            }
+        }
+    }
 
     #[test]
     fn oauth_and_status_drop_body_canary() {
