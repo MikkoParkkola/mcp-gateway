@@ -81,9 +81,144 @@ fn t6_a_link_cycle_is_an_error_not_a_hang() {
     assert!(chain_dirs(&a).is_err());
 }
 
+/// `R/current -> <target>` beside `R/rel1/cfg.yaml`: the Capistrano layout.
+fn release_link(root: &Path, target: &Path) -> PathBuf {
+    let r = root.join("R");
+    std::fs::create_dir_all(r.join("rel1")).unwrap();
+    std::fs::write(r.join("rel1").join("cfg.yaml"), "a: 1\n").unwrap();
+    symlink(target, r.join("current")).unwrap();
+    r
+}
+
+/// T6d: a directory link that is the file's own parent is followed, and the
+/// directory holding it is in the set.
+#[test]
+fn t6d_a_release_directory_link_and_its_holder_are_in_the_set() {
+    let root = tempfile::tempdir().expect("root");
+    let r = release_link(root.path(), Path::new("rel1"));
+    let (dirs, end) = chain_dirs(&r.join("current").join("cfg.yaml")).expect("chain");
+    assert_eq!(dirs, set(&[&r, &r.join("rel1")]));
+    assert_eq!(end, canonical(&r.join("rel1").join("cfg.yaml")));
+}
+
+/// T6e: a relative directory-link target with `..`.
+#[test]
+fn t6e_a_relative_target_with_parent_components() {
+    let root = tempfile::tempdir().expect("root");
+    let other = root.path().join("other").join("rel1");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("cfg.yaml"), "a: 1\n").unwrap();
+    let r = root.path().join("R");
+    std::fs::create_dir_all(&r).unwrap();
+    symlink("../other/rel1", r.join("current")).unwrap();
+    let (dirs, _) = chain_dirs(&r.join("current").join("cfg.yaml")).expect("chain");
+    assert_eq!(dirs, set(&[&r, &other]));
+}
+
+/// T6f: an absolute directory-link target.
+#[test]
+fn t6f_an_absolute_target() {
+    let root = tempfile::tempdir().expect("root");
+    let abs = root.path().join("R").join("rel1");
+    let r = release_link(root.path(), &abs);
+    let (dirs, _) = chain_dirs(&r.join("current").join("cfg.yaml")).expect("chain");
+    assert_eq!(dirs, set(&[&r, &abs]));
+}
+
+/// T6g: a directory link to a directory link held in another directory.
+#[test]
+fn t6g_a_directory_link_chain_across_directories() {
+    let root = tempfile::tempdir().expect("root");
+    let (r, s) = (root.path().join("R"), root.path().join("S"));
+    std::fs::create_dir_all(s.join("rel1")).unwrap();
+    std::fs::create_dir_all(&r).unwrap();
+    std::fs::write(s.join("rel1").join("cfg.yaml"), "a: 1\n").unwrap();
+    symlink("rel1", s.join("mid")).unwrap();
+    symlink(s.join("mid"), r.join("current")).unwrap();
+    let (dirs, _) = chain_dirs(&r.join("current").join("cfg.yaml")).expect("chain");
+    assert_eq!(dirs, set(&[&r, &s, &s.join("rel1")]));
+}
+
+/// T6h: a directory link above the file's immediate parent is resolved, not
+/// watched: its holder is not in the set.
+#[test]
+fn t6h_a_high_directory_link_is_not_watched() {
+    let root = tempfile::tempdir().expect("root");
+    let sub = root.path().join("real").join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("cfg.yaml"), "a: 1\n").unwrap();
+    symlink(root.path().join("real"), root.path().join("hi")).unwrap();
+    let (dirs, _) =
+        chain_dirs(&root.path().join("hi").join("sub").join("cfg.yaml")).expect("chain");
+    assert_eq!(dirs, set(&[&sub]));
+}
+
+/// T6 (directory links): a directory-link cycle ends at the same bound.
+#[test]
+fn t6_a_directory_link_cycle_is_an_error_not_a_hang() {
+    let root = tempfile::tempdir().expect("root");
+    let r = root.path().join("R");
+    std::fs::create_dir_all(&r).unwrap();
+    symlink("b", r.join("a")).unwrap();
+    symlink("a", r.join("b")).unwrap();
+    assert!(chain_dirs(&r.join("a").join("cfg.yaml")).is_err());
+}
+
+/// T9: an env-file directory that is not watched is not protected, so the
+/// chain can still watch it when the config lives there too.
+#[test]
+fn t9_an_env_directory_that_was_not_watched_is_not_protected() {
+    let root = tempfile::tempdir().expect("root");
+    let mut watcher = notify::recommended_watcher(|_| {}).expect("watcher");
+    let missing = root.path().join("missing").join(".env");
+    assert!(super::watch_env_dirs(&mut watcher, &[missing]).is_empty());
+}
+
+/// T12: a directory that cannot be watched warns once until it leaves the
+/// wanted set, and again if it comes back and still fails.
+#[test]
+fn t12_a_repeated_watch_failure_warns_once() {
+    use std::sync::atomic::Ordering;
+    let root = tempfile::tempdir().expect("root");
+    let missing = root.path().join("missing");
+    let watcher = notify::recommended_watcher(|_| {}).expect("watcher");
+    let chain = super::ChainWatch::new(watcher, BTreeSet::new());
+    let wanted = BTreeSet::from([missing.clone()]);
+    chain.reconcile(&wanted);
+    chain.reconcile(&wanted);
+    assert_eq!(
+        chain.watch_warnings.load(Ordering::SeqCst),
+        1,
+        "warned per retry"
+    );
+    chain.reconcile(&BTreeSet::new());
+    chain.reconcile(&wanted);
+    assert_eq!(
+        chain.watch_warnings.load(Ordering::SeqCst),
+        2,
+        "a directory that left the chain was never forgotten"
+    );
+}
+
+/// T14: the config path keeps a directory link, where the parent-resolving
+/// form used for event matching erases it.
+#[test]
+fn t14_the_named_config_path_keeps_its_directory_link() {
+    let root = tempfile::tempdir().expect("root");
+    let r = release_link(root.path(), Path::new("rel1"));
+    let named = r.join("current").join("cfg.yaml");
+    let resolved = crate::config_reload::absolute_watch_path(named.clone());
+    assert_ne!(resolved, named, "premise: event matching resolves the link");
+    assert_eq!(
+        crate::config_reload::named_config_path(named.clone()),
+        named
+    );
+}
+
 #[cfg(target_os = "linux")]
 mod real_watcher {
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use super::super::{ChainWatch, spawn_rewatch_task};
@@ -99,17 +234,15 @@ mod real_watcher {
 
     fn start(named: &Path) -> Harness {
         let (tx, events) = tokio::sync::mpsc::channel(32);
-        let (wake_tx, wake_rx) = tokio::sync::watch::channel(());
+        let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
-        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, named, &[])
+        // As `ConfigWatcher::start` does: the operator's path, made absolute
+        // without resolving links, and one resolve once the watches are live.
+        let named = crate::config_reload::named_config_path(named.to_path_buf());
+        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named, &[])
             .expect("watcher starts");
-        let task = spawn_rewatch_task(
-            named.to_path_buf(),
-            Arc::clone(&chain),
-            wake_rx,
-            tx,
-            shutdown.subscribe(),
-        );
+        wake_rx.mark_changed();
+        let task = spawn_rewatch_task(named, Arc::clone(&chain), wake_rx, tx, shutdown.subscribe());
         Harness {
             chain,
             events,
@@ -119,19 +252,36 @@ mod real_watcher {
     }
 
     impl Harness {
-        /// Swallow triggers until a full second passes without one.
+        /// Swallow triggers until a full second passes without one. A closed
+        /// channel (every sender dropped, as after shutdown) is idle too.
         async fn drain_idle(&mut self) {
-            while tokio::time::timeout(Duration::from_secs(1), self.events.recv())
-                .await
-                .is_ok()
+            while let Ok(Some(_)) =
+                tokio::time::timeout(Duration::from_secs(1), self.events.recv()).await
             {}
         }
 
-        /// At least one trigger within `secs`.
+        /// At least one trigger within `secs`. A closed channel is none.
         async fn triggered_within(&mut self, secs: u64) -> bool {
-            tokio::time::timeout(Duration::from_secs(secs), self.events.recv())
-                .await
-                .is_ok()
+            matches!(
+                tokio::time::timeout(Duration::from_secs(secs), self.events.recv()).await,
+                Ok(Some(_))
+            )
+        }
+
+        /// Wakes the rewatch task has finished handling.
+        fn wakes(&self) -> usize {
+            self.chain.wakes_handled.load(Ordering::SeqCst)
+        }
+
+        /// Wait until the task has handled more than `seen` wakes.
+        async fn wait_wakes_above(&self, seen: usize) {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while self.wakes() <= seen {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("the rewatch task never handled wake {}", seen + 1));
         }
 
         /// Wait until the ledger holds `dir`: the watch is in place.
@@ -195,6 +345,206 @@ mod real_watcher {
         h.wait_watched(&b).await;
         assert_eq!(h.chain.watched(), set(&[&b, &c]), "A is still watched");
         let _ = h.shutdown.send(());
+    }
+
+    /// T8: a retarget by unlink and re-create is followed. The re-create is
+    /// an event on the named link itself.
+    #[tokio::test]
+    async fn t8_an_unlink_and_relink_retarget_is_followed() {
+        let (_root, a, b, c) = release_tree();
+        let mut h = start(&c.join("l"));
+        h.wait_wakes_above(0).await;
+        let seen = h.wakes();
+        std::fs::remove_file(c.join("l")).unwrap();
+        h.wait_wakes_above(seen).await;
+        assert_eq!(
+            h.chain.watched(),
+            set(&[&a, &c]),
+            "the last good set was dropped"
+        );
+        symlink(b.join("cfg.yaml"), c.join("l")).unwrap();
+        h.wait_watched(&b).await;
+        h.drain_idle().await;
+        std::fs::write(b.join("cfg.yaml"), "b: 2\n").unwrap();
+        assert!(
+            h.triggered_within(10).await,
+            "a write to the relinked target reloaded nothing"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// T10: a chain that cannot resolve (the target deleted mid-update) keeps
+    /// the last good watches.
+    #[tokio::test]
+    async fn t10_an_unresolvable_chain_keeps_the_last_good_watches() {
+        let (_root, a, _b, c) = release_tree();
+        let h = start(&c.join("l"));
+        h.wait_wakes_above(0).await;
+        let seen = h.wakes();
+        std::fs::remove_file(a.join("cfg.yaml")).unwrap();
+        std::fs::write(c.join("nudge.txt"), "x").unwrap();
+        h.wait_wakes_above(seen).await;
+        assert_eq!(
+            h.chain.watched(),
+            set(&[&a, &c]),
+            "the last good set was dropped"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// `R/current -> rel1`, with `R/rel2` holding the next release.
+    fn capistrano() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().expect("root");
+        let r = super::release_link(root.path(), Path::new("rel1"));
+        std::fs::create_dir_all(r.join("rel2")).unwrap();
+        std::fs::write(r.join("rel2").join("cfg.yaml"), "b: 1\n").unwrap();
+        (root, r)
+    }
+
+    /// T11: a Capistrano `current` retarget (by rename) is followed.
+    #[tokio::test]
+    async fn t11_a_release_directory_link_retarget_is_followed() {
+        let (_root, r) = capistrano();
+        let mut h = start(&r.join("current").join("cfg.yaml"));
+        h.wait_wakes_above(0).await;
+        assert!(
+            h.chain.watched().contains(&canonical(&r)),
+            "R is not watched"
+        );
+        retarget(&r.join("current"), Path::new("rel2"));
+        h.wait_watched(&r.join("rel2")).await;
+        h.drain_idle().await;
+        std::fs::write(r.join("rel2").join("cfg.yaml"), "b: 2\n").unwrap();
+        assert!(
+            h.triggered_within(10).await,
+            "a write to the new release reloaded nothing"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// T13: the same retarget done as unlink then re-create.
+    #[tokio::test]
+    async fn t13_a_non_atomic_release_link_retarget_is_followed() {
+        let (_root, r) = capistrano();
+        let mut h = start(&r.join("current").join("cfg.yaml"));
+        h.wait_wakes_above(0).await;
+        let seen = h.wakes();
+        std::fs::remove_file(r.join("current")).unwrap();
+        h.wait_wakes_above(seen).await;
+        assert_eq!(
+            h.chain.watched(),
+            set(&[&r, &r.join("rel1")]),
+            "the last good set was dropped"
+        );
+        symlink("rel2", r.join("current")).unwrap();
+        h.wait_watched(&r.join("rel2")).await;
+        h.drain_idle().await;
+        std::fs::write(r.join("rel2").join("cfg.yaml"), "b: 2\n").unwrap();
+        assert!(
+            h.triggered_within(10).await,
+            "a write to the new release reloaded nothing"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// T17: the watcher starts on the path as named, before any rewatch task
+    /// can repair it: the release link's holder is watched from the start.
+    #[tokio::test]
+    async fn t17_the_watcher_starts_on_the_named_path() {
+        let (_root, r) = capistrano();
+        let (tx, _events) = tokio::sync::mpsc::channel(32);
+        let (wake_tx, _wake_rx) = tokio::sync::watch::channel(());
+        let named = crate::config_reload::named_config_path(r.join("current").join("cfg.yaml"));
+        let chain =
+            ConfigWatcher::create_notify_watcher(tx, wake_tx, &named, &[]).expect("watcher starts");
+        assert_eq!(chain.watched(), set(&[&r, &r.join("rel1")]));
+    }
+
+    fn profile_config(description: &str) -> String {
+        format!("routing_profiles:\n  p:\n    description: \"{description}\"\n")
+    }
+
+    struct Started {
+        watcher: ConfigWatcher,
+        live: Arc<crate::config_reload::LiveConfig>,
+        _shutdown: tokio::sync::broadcast::Sender<()>,
+    }
+
+    fn start_gateway_watcher(named: &Path) -> Started {
+        use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
+        let live = Arc::new(crate::config_reload::LiveConfig::new(Config::default()));
+        let env = Arc::new(LiveEnv::new(
+            Arc::new(EnvOverlay::none()),
+            ResolvedEnvFiles::default(),
+        ));
+        let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let watcher = ConfigWatcher::start(
+            named.to_path_buf(),
+            Arc::clone(&live),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            &Config::default(),
+            env,
+            None,
+            shutdown_rx,
+        )
+        .expect("the watcher starts");
+        Started {
+            watcher,
+            live,
+            _shutdown: shutdown,
+        }
+    }
+
+    fn description(live: &crate::config_reload::LiveConfig) -> Option<String> {
+        live.get()
+            .routing_profiles
+            .get("p")
+            .map(|p| p.description.clone())
+    }
+
+    /// T15: through `ConfigWatcher::start`, a release retarget reloads the new
+    /// release's bytes, not the old release's.
+    #[tokio::test]
+    async fn t15_start_reloads_the_new_release_after_a_retarget() {
+        let (_root, r) = capistrano();
+        std::fs::write(r.join("rel1").join("cfg.yaml"), profile_config("rel1")).unwrap();
+        std::fs::write(r.join("rel2").join("cfg.yaml"), profile_config("rel2")).unwrap();
+        let g = start_gateway_watcher(&r.join("current").join("cfg.yaml"));
+        let chain = g.watcher.chain();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while chain.wakes_handled.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the initial resolve ran");
+        retarget(&r.join("current"), Path::new("rel2"));
+        let reached = tokio::time::timeout(Duration::from_secs(10), async {
+            while description(&g.live).as_deref() != Some("rel2") {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(
+            reached.is_ok(),
+            "the live config never showed the new release: {:?}",
+            description(&g.live)
+        );
+    }
+
+    /// T16: `start` resolves once as soon as its watches are live, and that
+    /// resolve changes nothing and reloads nothing.
+    #[tokio::test]
+    async fn t16_start_resolves_once_when_the_watches_are_live() {
+        let (_root, r) = capistrano();
+        let g = start_gateway_watcher(&r.join("current").join("cfg.yaml"));
+        let before = g.live.get();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(g.watcher.chain().wakes_handled.load(Ordering::SeqCst), 1);
+        assert!(
+            Arc::ptr_eq(&before, &g.live.get()),
+            "the initial resolve reloaded"
+        );
     }
 
     /// T4 (control): an in-place write through an unchanged link reloads.

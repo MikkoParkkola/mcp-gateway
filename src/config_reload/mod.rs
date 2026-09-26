@@ -1049,7 +1049,22 @@ pub struct ConfigWatcher {
     _chain: Arc<watch_chain::ChainWatch>,
 }
 
+/// The config path as the operator named it, made absolute.
+fn named_config_path(path: PathBuf) -> PathBuf {
+    absolute_watch_path(path)
+}
+
 impl ConfigWatcher {
+    /// The chain watch, for tests that wait on its ledger and counters.
+    #[cfg(test)]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the field is named for keeping the watch alive; only tests read it"
+    )]
+    fn chain(&self) -> &Arc<watch_chain::ChainWatch> {
+        &self._chain
+    }
+
     /// Start watching `config_path` and any env files listed in the initial
     /// config for changes.
     ///
@@ -1070,7 +1085,7 @@ impl ConfigWatcher {
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
-        let config_path = absolute_watch_path(config_path);
+        let config_path = named_config_path(config_path);
         // The paths startup recorded, never `initial_config.env_files`: a `~`
         // entry resolved once, and resolving the spelling again could watch a
         // different file than the one the gateway reads.

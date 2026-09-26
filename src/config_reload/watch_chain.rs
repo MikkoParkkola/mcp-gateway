@@ -80,6 +80,12 @@ pub(super) struct ChainWatch {
     pub(super) ledger: Mutex<BTreeSet<PathBuf>>,
     /// Env-file directories, watched outside the chain and never unwatched here.
     protected: BTreeSet<PathBuf>,
+    /// Wakes the rewatch task has finished handling (tests wait on it).
+    #[cfg(test)]
+    pub(super) wakes_handled: std::sync::atomic::AtomicUsize,
+    /// `watch()` failures that were logged.
+    #[cfg(test)]
+    pub(super) watch_warnings: std::sync::atomic::AtomicUsize,
 }
 
 impl ChainWatch {
@@ -88,6 +94,10 @@ impl ChainWatch {
             watcher: Mutex::new(Some(watcher)),
             ledger: Mutex::new(BTreeSet::new()),
             protected,
+            #[cfg(test)]
+            wakes_handled: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            watch_warnings: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -108,7 +118,12 @@ impl ChainWatch {
                 Ok(()) => {
                     ledger.insert(dir.clone());
                 }
-                Err(e) => warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch"),
+                Err(e) => {
+                    warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch");
+                    #[cfg(test)]
+                    self.watch_warnings
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         }
         for dir in before
@@ -160,9 +175,17 @@ pub(super) fn spawn_rewatch_task(
                 _ = shutdown.recv() => break,
             }
             let Ok((wanted, end)) = chain_dirs(&named) else {
+                #[cfg(test)]
+                chain
+                    .wakes_handled
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 continue; // keep the last good set; the next event retries
             };
             let rewatched = chain.reconcile(&wanted);
+            #[cfg(test)]
+            chain
+                .wakes_handled
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if rewatched || last_end.as_ref() != Some(&end) {
                 last_end = Some(end);
                 let _ = reload.try_send(ReloadTrigger::ConfigFile);
