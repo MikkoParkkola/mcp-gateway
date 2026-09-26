@@ -1098,7 +1098,6 @@ impl ConfigWatcher {
             Self::create_notify_watcher(event_tx.clone(), wake_tx, &config_path, &env_file_paths)?;
         // One resolve as soon as the watches are live: a retarget that landed
         // between resolving the chain and installing them is followed.
-        wake_rx.mark_changed();
         watch_chain::spawn_rewatch_task(
             config_path.clone(),
             Arc::clone(&chain),
