@@ -49,7 +49,7 @@ pub(super) fn spawn_stderr_tail(
                 Ok(n) => {
                     debug!(command = %command, line_len = n, "Received line from stderr");
                     if tail.len() == TAIL_LINES {
-                        tail.pop_front();
+                        tail.reserve(1);
                     }
                     tail.push_back(clean_line(&buf));
                 }
