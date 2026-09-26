@@ -48,7 +48,7 @@ pub(crate) struct Bound {
 impl Default for Bound {
     fn default() -> Self {
         Self {
-            permit: Arc::new(tokio::sync::Semaphore::new(1)),
+            permit: Arc::new(tokio::sync::Semaphore::new(64)),
             state: std::sync::Mutex::new(StallState::default()),
             #[cfg(test)]
             closures_entered: std::sync::atomic::AtomicUsize::new(0),
