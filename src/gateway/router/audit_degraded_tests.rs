@@ -359,6 +359,9 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
     let withheld = invoke(&fx, 1).await;
     assert_audit_unavailable(&withheld, "stalled call");
     assert!(fx.log.is_stalled());
+    // Refused at once: a delivery append that queued for the permit instead
+    // would take a full bound before failing, and write nothing either way.
+    let delivering = std::time::Instant::now();
     let delivered = fx
         .state
         .meta_mcp
@@ -383,6 +386,11 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
         .await;
     assert_audit_unavailable(&delivered, "delivering the withheld call");
     assert!(
+        delivering.elapsed() < F20_BOUND,
+        "the delivery append waited: {:?}",
+        delivering.elapsed()
+    );
+    assert!(
         start.elapsed() < F20_BOUND * 5,
         "bounded: {:?}",
         start.elapsed()
@@ -401,6 +409,14 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    // Let anything queued behind the released write land before reading.
+    for _ in 0..200 {
+        if !fx.log.is_stalled() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(F20_BOUND * 2).await;
     let rows = rows();
     assert!(
         rows.iter().any(|r| r.get("request_hash").is_some()),
