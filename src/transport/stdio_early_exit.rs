@@ -55,6 +55,7 @@ pub(super) fn spawn_stderr_tail(
             let limit = RAW_LINE_BYTES as u64;
             match (&mut reader).take(limit).read_until(b'\n', &mut buf).await {
                 Ok(0) | Err(_) => break,
+                Ok(_) if !buf.ends_with(b"\n") => break,
                 Ok(n) => {
                     debug!(command = %command, line_len = n, "Received line from stderr");
                     {
