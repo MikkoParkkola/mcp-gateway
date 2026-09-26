@@ -107,7 +107,7 @@ pub(super) fn excerpt(
         .iter()
         .map(|raw| {
             let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
-            let mut line = String::from_utf8_lossy(raw).into_owned();
+            let mut line: String = String::from_utf8_lossy(raw).chars().take(LINE_CHARS).collect();
             for secret in &secrets {
                 line = line.replace(secret.as_str(), "[REDACTED]");
                 if cut_on_read {
