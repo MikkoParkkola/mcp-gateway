@@ -147,7 +147,7 @@ impl TransparencyLogger {
             return if fail_closed {
                 Err(crate::Error::AuditUnavailable)
             } else {
-                Ok(())
+                Err(crate::Error::AuditUnavailable)
             };
         }
         if !self.is_degraded() {
