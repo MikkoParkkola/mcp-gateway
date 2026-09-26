@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Unit tests for the stdio transport.
-//!
-//! Split out of `stdio.rs` so the transport stays under the file-size
-//! ceiling `scripts/dev/check-file-size.py` gates. A `#[path]` child, not a
-//! sibling module: `use super::*` still resolves to the transport's own
-//! items, so nothing had to be widened to move it here.
+//! Unit tests for the stdio transport, split out of `stdio.rs` to keep it under the file-size
+//! ceiling. A `#[path]` child, not a sibling module: `use super::*` still resolves to the
+//! transport's own items, so nothing had to be widened to move it here.
 
 use super::*;
 use std::collections::HashMap;
+
+#[cfg(windows)]
+#[path = "stdio_windows_env_tests.rs"]
+mod windows_env;
 
 #[cfg(unix)]
 const CHILD_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_CHILD_ENV_SCENARIO";

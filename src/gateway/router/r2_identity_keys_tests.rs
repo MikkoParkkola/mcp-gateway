@@ -125,7 +125,7 @@ fn transparency_logger(file: &tempfile::NamedTempFile) -> Arc<crate::security::T
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
         key_id: "r2".to_string(),
-        shared_secret: String::new(),
+        ..crate::security::TransparencyLogConfig::default()
     };
     let logger = crate::security::TransparencyLogger::open(Arc::new(config));
     Arc::new(logger.expect("transparency logger opens"))
