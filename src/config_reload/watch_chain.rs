@@ -239,7 +239,7 @@ pub(super) fn spawn_rewatch_task(
     retry_every: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut last_end: Option<PathBuf> = None;
+        let mut last_end: Option<PathBuf> = chain_dirs(&named).ok().map(|(_, end)| end);
         // While the chain cannot be resolved, its missing part may appear in a
         // directory nobody watches yet, so the task also retries on a timer.
         // An interval's first tick completes at once: entering the broken
