@@ -1,7 +1,7 @@
 # MIK-7311.LIFECYCLE.1: tasks on the direct route, and the input round
 
 Status: REVISION 9, DESIGN FINAL for implementation. Eight review rounds; round 8: SHIP and SHIP-WITH-FIXES (one LOW, adopted). Every finding is
-dispositioned in §7-§15. Visibility settled by maintainer decision (§6 Q4).
+dispositioned in §7-§16. Visibility settled by maintainer decision (§6 Q4).
 
 ## 1. Problem
 
@@ -80,7 +80,11 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    that both the request thread and the worker call, and the worker runs it live on EVERY
    dispatch (first dispatch and each input resume): isolation, tool policy, sanitisation,
    per-user identity headers resolved at dispatch time, and the response scan. A policy or
-   isolation change during an input wait therefore refuses the resume. The extracted chain
+   isolation change during an input wait therefore refuses the resume. A guard refusal of an
+   admitted task is settled directly, not through `classify_dispatch` (which only reads a
+   backend response): the worker calls `settle_cas` with `TaskTransition::Fail(guard_error)`,
+   the same pre-dispatch Fail shape used at `worker.rs:327`, then drops its handoff and permit.
+   The task is `failed` carrying the guard's error, never an ownerless `working` row. The extracted chain
    keeps the per-backend passthrough opt-out (`backend_handlers.rs:957-959`) exactly as today.
    Named function: `DirectRouteGuards::run`, in the router, `pub(crate)` so the worker in
    `task_service` can call it (maintainer decision 2026-09-26, §6 Q4).
@@ -121,7 +125,8 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    backend's `requestState` is persisted on the record as an optional field with serde default
    and skip-if-none, the way the upstream handle was added (`src/gateway/task_service/record.rs:103`),
    never in `wire()`, bounded by the store byte cap; over the cap settles as today's abandoned
-   result. A malformed round (empty set, reused or duplicate key, non-object value) makes
+   result, and so does a round whose record, with the continuation stored, leaves no room under
+   the cap for any answer. A malformed round (empty set, reused or duplicate key, non-object value) makes
    `require_input` return `Err` (`src/protocol/tasks.rs:307-322`); that settles terminally as
    `failed` with the model error, never a stuck `working` row.
 2. **Consume.** `tasks/update` stops refusing non-empty `inputResponses` when the task is
@@ -162,8 +167,10 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    most 1 s before refusing, so an update arriving the instant the row becomes visible succeeds.
    The wait is a subscribe-first loop that drops the registry mutex before awaiting and
    re-checks its own id on every wake, the pattern `join()` already uses, because `released` is
-   one global generation channel. On timeout the refusal is `-32603` "task busy, retry"
-   (transient), not the `-32602` used when no round is outstanding), then
+   one global generation channel. It waits ONLY while the row is still `input_required` (the
+   occupant is the unwinding producer); if on any check the id is occupied and the row is no
+   longer `input_required` (a racing completing update won), it refuses `-32602` at once. On
+   timeout while still `input_required` the refusal is `-32603` "task busy, retry"), then
    ONE store write that takes the permit through the same try-acquire closure create uses
    (`execution.rs:370-390`) and performs the `input_required -> working` CAS together, then the
    spawn. If that write loses (a cancel already settled the row) the handoff and any permit are
@@ -194,8 +201,9 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    (same Handoff, same permit, same `cancel_rx`) loops and re-dispatches with the new
    `requestState`, running the live guard chain each time; no second `Handoff::accept` for a
    task id a worker already owns (`observe.rs:73` would overwrite the owner's cancel sender).
-   The counter lives on the record, increments on each state-only round, and resets on any
-   round that asks the client for input.
+   The row stays `working` throughout the loop; `input_required` is written only for a round
+   that asks the client. The counter lives on the record, increments on each state-only round,
+   and resets on any round that asks the client for input.
 3c. **Transport.** After the guard chain, a `DirectJob` dispatch uses the same backend
    transport call the request thread uses (`backend.request` / `request_with_headers` with the
    per-user headers resolved by the guard chain), not `dispatch_below_gate_native_result`.
@@ -206,14 +214,14 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    two layers with separate mutants.
 4. **Cancel and expiry.** Cancel from `input_required` settles `cancelled` and drops the stored
    continuation. When the TTL elapses on an `input_required` row, the expiry pass settles it
-   `cancelled` the same way (continuation dropped) in its first snapshot; deletion is a second,
+   `cancelled` the same way (continuation dropped) in its first snapshot, selected by a new `expired_input_rounds(now)` beside
+   `expired_candidates`; deletion is a second,
    later snapshot of the existing terminal sweep after retention (`expired_candidates`, `store.rs:1031-1046`, which only deletes
    terminal rows).
 5. **Restart: no resume.** Startup recovery keeps the reviewed I3 treatment for `input_required`
    rows (`src/gateway/task_service/execution/recovery.rs:41-44`): they settle as interrupted.
-   The input round is resumable only in the process that stored the continuation. Skipping
-   recovery would leave a live row the expiry sweep never deletes, and upstream recovery claims
-   no continuation contract for that state (`docs/design/2026-09-08-task-upstream-recovery.md:37`).
+   The input round is resumable only in the process that stored the continuation, because
+   upstream recovery claims no continuation contract for that state (`docs/design/2026-09-08-task-upstream-recovery.md:37`).
 
 ## 5. Test plan outline (red-first, each named test must fail on the stated mutant)
 
@@ -228,12 +236,12 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | cancel during input | cancel from `input_required` settles `cancelled`; a later update is refused | cancel arm ignoring input state |
 | JSON-RPC failure vs isError | backend error settles `failed`; `isError` result settles `completed` | classification swapped |
 | advertisement | modern discover on `/mcp/{name}` lists tasks; legacy initialize byte-identical | extension added unconditionally |
-| live guards on resume | policy or per-user isolation revoked during the input wait: resume refused, zero backend calls | resume dispatches without the guard chain |
+| live guards on resume | policy or per-user isolation revoked during the input wait: task `failed` with the guard error, handoff released, zero backend calls | resume dispatches without the guard chain |
 | idempotent admission | same idempotency key twice with `task`: one task, same handle | admission skips the idempotency store |
 | malformed round | backend returns an InputRequired with a reused key: task `failed`, not `working` | model error swallowed |
 | continuation over cap | `requestState` over the byte cap: abandoned result, not a stuck task | cap check removed |
 | restart keeps I3 | restart while `input_required`: row settles interrupted, update refused | recovery skips `input_required` rows |
-| live guards on FIRST dispatch | policy revoked between admission and the worker's first dispatch: refused, zero backend calls | worker first dispatch skips the guard chain |
+| live guards on FIRST dispatch | policy revoked between admission and the worker's first dispatch: task `failed` with the guard error, zero backend calls | worker first dispatch skips the guard chain |
 | one resume under concurrency | two concurrent full-answer updates: exactly one resume dispatch, one update refused | CAS removed from the transition |
 | mixed answer refused atomically | one outstanding key plus one foreign key: refused, outstanding key still outstanding | subset accepted before the check |
 | partial answer | one of two outstanding keys: accepted, task still `input_required`, no dispatch | resume on first answer |
@@ -244,7 +252,7 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | resume carries the answers | two partial updates, then resume: backend receives both answers in `inputResponses` | accepted answers not persisted, or resume omits `inputResponses` |
 | cancel races resume | cancel arrives between CAS and spawn: task `cancelled`, no backend call | handoff registered after the CAS |
 | racing completing updates | two concurrent completing updates: one resume, the other `-32602`, cancel still reaches the one worker | overwrite-on-insert handoff |
-| produce-seam update | a completing update sent the instant `input_required` is visible (producer still holding its handoff): succeeds | no wait on `released` |
+| produce-seam update | a completing update sent the instant `input_required` is visible (producer still holding its handoff): succeeds, with a second live task releasing concurrently | no wait on `released` |
 | answers over the cap | an answer pushing `accepted_inputs` past the byte cap: refused, nothing written | cap check removed |
 | expiry during input | TTL passes while `input_required`: task settles `cancelled`, continuation dropped, update refused; row deleted only after retention | expiry skips `input_required` |
 | cancel during resume | cancel while a resume dispatch is in flight: backend call aborted, task `cancelled` | resume spawned without `cancel_rx` |
@@ -379,4 +387,15 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
 | single wait on the global `released` channel | MEDIUM | ALREADY ADOPTED in revision 9: subscribe-first loop re-checking its own id until vacant or 1 s; the produce-seam test runs with a second live task |
 | no room left for answers under the byte cap | improvement | ADOPTED: at produce time a round whose record leaves no room for any answer settles abandoned |
 | name the TTL selector for `input_required` | improvement | ADOPTED: a new `expired_input_rounds(now)` selector beside `expired_candidates` (store.rs:1031) |
-| record the visibility in the design | improvement | NOT ADOPTED: widening visibility is an owner decision; it stays an open question, asked before code |
+| record the visibility in the design | improvement | SETTLED by maintainer decision 2026-09-26: `pub(crate)` (§6 Q4) |
+
+## 16. Final-revision delta review (two seats, both SHIP-WITH-FIXES)
+
+| finding | sev | disposition |
+|---|---|---|
+| guard refusal settled through `classify_dispatch`, which reads only backend responses | HIGH | ADOPTED: §3 A.2 settles `Fail(guard_error)` directly via `settle_cas` (worker.rs:327 shape); test rows assert `failed` |
+| wait loop returned `-32603` to a racing completing update | MEDIUM | ADOPTED: wait only while `input_required`; otherwise `-32602` at once |
+| §15 still listed visibility as open | LOW | ADOPTED: settled per §6 Q4 |
+| header range omitted §15 | LOW | ADOPTED |
+| finality next to an open visibility question | LOW | ADOPTED: question settled |
+| §15 dispositions not written into the body (produce-time room rule, `expired_input_rounds`, second live task, state-only `working`, §4.5 reason) | improvement | ADOPTED: §4.1, §4.4, §5, §4.3b, §4.5 |
