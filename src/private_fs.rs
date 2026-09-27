@@ -19,7 +19,7 @@ use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_WRITE_THROUGH, READ_CONTROL,
 };
 
 pub(crate) use crate::win_acl::Share;
@@ -276,7 +276,7 @@ pub(crate) fn replace(tmp: impl AsRef<Path>, dest: impl AsRef<Path>) -> io::Resu
     loop {
         attempt();
         trace(Trace::Replace {
-            write_through: true,
+            write_through: crate::win_acl::REPLACE_FLAGS & MOVEFILE_WRITE_THROUGH != 0,
         });
         match crate::win_acl::replace(tmp, dest) {
             Err(error) if attempt_no < ATTEMPTS && matches!(error.raw_os_error(), Some(5 | 32)) => {
