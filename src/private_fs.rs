@@ -106,7 +106,6 @@ const GENERIC_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
 pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusal> {
     let mut found = Vec::new();
     let Some(aces) = inspection.dacl.as_ref() else {
-        found.push(PrivacyRefusal::NullDacl);
         return found;
     };
     let mut read_write = false;
