@@ -66,7 +66,7 @@ pub(crate) fn prefix_allowed(component: &Component<'_>) -> bool {
 /// so the missing delete-share binds (design R3-1), no delete sharing.
 pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
     OpenOptions::new()
-        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
