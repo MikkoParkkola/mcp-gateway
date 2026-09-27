@@ -1,13 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! F13 (MIK-7586): R2's check fetches the caller's catalogue when the slot is
-//! cold, instead of forwarding the call unchecked.
-//!
-//! Router-level red-first cells. They drive only existing entry points: a
-//! POST on `/mcp` (`gateway_invoke`) or `/mcp/{name}`, and counter labels read
-//! as strings from a local Prometheus render. The wire counts `tools/list`
-//! and `tools/call` separately and records the headers of every request, so
-//! "refused" means the backend saw no call and "fetched" means it saw a list.
+//! F13 (MIK-7586): R2's check fetches the caller's catalogue on a cold slot
+//! instead of forwarding unchecked. Router-level cells on `/mcp` and
+//! `/mcp/{name}`; "refused" means the wire saw no call, "fetched" a list.
 
 use axum::body::to_bytes;
 use axum::http::StatusCode;
@@ -152,8 +147,12 @@ impl crate::transport::Transport for Wire {
                     }
                     ListMode::Hang => std::future::pending::<()>().await,
                 }
-                let tools = rec.tools.lock().clone();
-                json!({"tools": tools.unwrap_or_else(|| json!([tool("edit", &edit_schema())]))})
+                match rec.tools.lock().clone() {
+                    Some(Value::Object(result)) => Value::Object(result), // malformed-list cells
+                    t => {
+                        json!({"tools": t.unwrap_or_else(|| json!([tool("edit", &edit_schema())]))})
+                    }
+                }
             }
             "tools/call" => {
                 rec.calls.lock().push(params.unwrap_or(Value::Null));

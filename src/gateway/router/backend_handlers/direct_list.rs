@@ -45,11 +45,10 @@ pub(super) async fn drain(
 ) -> crate::Result<JsonRpcResponse> {
     let mut tools = Vec::new();
     let mut cursor: Option<Value> = None;
-    // Readable only if every page carried a result and some page a `tools`
-    // array, as the metadata fill requires. An unreadable list is answered as
-    // before but never cached: as a complete empty list it would refuse every
-    // `tools/call` as absent.
-    let (mut every_result, mut any_array) = (true, false);
+    // An unreadable list (see `readable_page`) is answered as before but never
+    // cached: as a complete empty list it would refuse every `tools/call` as
+    // absent. It must also carry a `tools` array on some page.
+    let (mut every_page, mut any_array) = (true, false);
     for _ in 0..DIRECT_LIST_MAX_PAGES {
         let mut page_params = params
             .filter(|p| p.is_object())
@@ -73,7 +72,7 @@ pub(super) async fn drain(
         if page.error.is_some() {
             return Ok(page);
         }
-        every_result &= page.result.is_some();
+        every_page &= readable_page(page.result.as_ref());
         let result = page.result.unwrap_or(Value::Null);
         if let Some(items) = result.get("tools").and_then(Value::as_array) {
             any_array = true;
@@ -84,7 +83,7 @@ pub(super) async fn drain(
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
                 let credential = !propagated_headers.is_empty();
-                if every_result && any_array {
+                if every_page && any_array {
                     backend
                         .remember_listed_tools(identity_key, credential, &tools)
                         .await;
@@ -107,6 +106,12 @@ pub(super) async fn drain(
         "tool catalogue exceeds the direct-route page cap",
         json!({ "reason": "direct_list_page_cap", "max_pages": DIRECT_LIST_MAX_PAGES }),
     ))
+}
+
+/// A page the metadata fill could read: a result object whose `tools`, when
+/// present, is an array. A cursor-only page (no `tools`) is readable.
+fn readable_page(result: Option<&Value>) -> bool {
+    result.is_some_and(|r| r.is_object() && r.get("tools").is_none_or(Value::is_array))
 }
 
 /// Keep only the tools the direct `tools/call` predicate would admit for this
@@ -141,4 +146,29 @@ pub(super) fn retain_invocable(
             .emit(crate::gateway::authz::Emit::Silent)
             .is_ok()
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable_page;
+    use serde_json::json;
+
+    /// Review fold: each page shape the direct list may cache from. Mutant
+    /// M38 (accept a non-array `tools`) reddens it.
+    #[test]
+    fn only_a_result_object_with_an_array_or_no_tools_is_readable() {
+        let rows = [
+            (Some(json!({"tools": []})), true),
+            (Some(json!({"tools": [{"name": "edit"}]})), true),
+            (Some(json!({"nextCursor": "2"})), true),
+            (Some(json!({"tools": null})), false),
+            (Some(json!({"tools": "edit"})), false),
+            (Some(json!("tools")), false),
+            (Some(serde_json::Value::Null), false),
+            (None, false),
+        ];
+        for (result, readable) in rows {
+            assert_eq!(readable_page(result.as_ref()), readable, "{result:?}");
+        }
+    }
 }

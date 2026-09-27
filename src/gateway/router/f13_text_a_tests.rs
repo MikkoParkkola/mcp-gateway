@@ -99,20 +99,32 @@ async fn post(router: &axum::Router, uri: &str, body: Value) -> Value {
 }
 
 /// Review fold: a direct `tools/list` whose result carries no `tools` array
-/// is answered but not cached, so the slot stays cold and the next call lists
-/// and is judged. Mutant M37 (cache it anyway) reddens it: the slot then holds
-/// a complete empty list, and a declared call is refused with text A.
+/// (`tools: null`, or no `tools` key and no cursor) is answered but not
+/// cached, so the slot stays cold and the next call lists and is judged.
+/// Mutants M37 (cache it anyway) and M39 (cache a readable page with no
+/// array) redden it: the slot holds a complete empty list, and a declared
+/// call is refused with text A.
 #[tokio::test]
 async fn f13_a_malformed_direct_list_leaves_the_slot_cold() {
+    for malformed in [Value::Null, json!({})] {
+        malformed_direct_list_leaves_the_slot_cold(malformed).await;
+    }
+}
+
+async fn malformed_direct_list_leaves_the_slot_cold(malformed: Value) {
     let fx = cold(InputSchemaEnforcement::Closed, ListMode::Serve).await;
-    fx.rec.serve(Value::Null);
+    fx.rec.serve(malformed.clone());
     let list = json!({"jsonrpc": "2.0", "id": 43, "method": "tools/list"});
     let listed = post(&fx.router, "/mcp/edits", list).await;
-    assert_eq!(listed["result"]["tools"], json!([]), "{listed}");
+    assert_eq!(
+        listed["result"]["tools"],
+        json!([]),
+        "{malformed}: {listed}"
+    );
     assert_eq!(
         fx.rec.lists(),
         1,
-        "the direct list did not reach the backend"
+        "{malformed}: the direct list did not reach the backend"
     );
 
     fx.rec
@@ -122,8 +134,8 @@ async fn f13_a_malformed_direct_list_leaves_the_slot_cold() {
     let body = post(&fx.router, "/mcp/edits", call).await;
     assert!(
         !body.to_string().contains(&text_a("edit")),
-        "judged absent: {body}"
+        "{malformed}: judged absent: {body}"
     );
-    assert_eq!(fx.rec.lists(), 2, "the call did not list the cold slot");
-    assert_eq!(fx.rec.calls(), 1, "the declared call was not forwarded");
+    assert_eq!(fx.rec.lists(), 2, "{malformed}: the call did not list");
+    assert_eq!(fx.rec.calls(), 1, "{malformed}: the call was not forwarded");
 }
