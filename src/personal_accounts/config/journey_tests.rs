@@ -118,6 +118,10 @@ fn without_hosted() -> String {
 /// Parse, then the structural pass, then the enabled-store resolution: the
 /// same order `Config::validate_with_env` runs them in.
 fn check(yaml: &str) -> Result<(), String> {
+    // A leading `/` is not an absolute path on Windows, so the fixture's
+    // store directories get a drive there; the rule under test is unchanged.
+    #[cfg(windows)]
+    let yaml = &yaml.replace(": /srv/", ": C:/srv/");
     let accounts: AccountsConfig = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
     validate_descriptors(Some(&accounts)).map_err(|e| e.to_string())?;
     resolve(Some(&accounts), &Overlay)
