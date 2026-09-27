@@ -1769,7 +1769,7 @@ precautions it does not exercise.
 
    ```bash
    mcp-gateway upgrade --dry-run --data-dir ~/.mcp-gateway
-   mcp-gateway upgrade --data-dir ~/.mcp-gateway
+   mcp-gateway upgrade --data-directory ~/.mcp-gateway
    ```
 
 3. Give every API key an explicit `backends` list, or `["*"]` for all: a 3.x key without one
