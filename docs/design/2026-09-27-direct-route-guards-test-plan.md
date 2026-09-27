@@ -9,7 +9,7 @@ only (throwaway PRs for red and mutants).
 | File | Holds |
 |---|---|
 | `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c (HTTP, via the test-only seam), T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
-| `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the parity tables, the structural source check, and T3c's source assertion (the bridged round calls `admit_spend_for`) |
+| `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the parity tables, the structural source check, and T3c's source assertion (the bridged round calls `admit_spend_for`); T12, T12b, T12c (DIRECT.10) |
 | `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error |
 
 T10 (task-worker path) is added by whichever of this change and LIFECYCLE.1 lands second, per the
@@ -81,6 +81,8 @@ Expected red (stated reason) versus guards (green at red, pinned for later):
 | T11 | using T7's fail-closed contract: the first call's payload-gate refusal is a delivered result today (should be a JSON-RPC error settled into the idempotency entry; the retry must replay it with count still 1) |
 | T8 | G1-G6 rows differ between routes; structural check finds `kill_switch.is_killed` etc. in `invoke_tool_traced` |
 | T9 | reservation hook counter is 1 |
+| T12 | per-backend route delivers the redacted result instead of the -32600 delivery refusal |
+| T12b | the keyed per-backend call is delivered, so there is no refusal to replay |
 | adapter table | the sentinel stub matches no row, so every classification assertion fails |
 | DIRECT.7 | T5 signing-on rows: both dispatch today (should be -32001, count 0) |
 | DIRECT.9 | the OWASP self-assessment still carries the meta-layer-only qualifiers (`docs/OWASP_AGENTIC_AI_COMPLIANCE.md` ASI08 cost budgets, ASI09 kill switch, ASI10 kill switch and budgets) and the #1452 backlog line; CI's citation check stays green, and the fix commit removes both (document diff reviewed in the final review) |
@@ -96,7 +98,7 @@ inline `admit_spend(` call in `invoke_tool_traced` (T8 structural). M10 route an
 dispatch-`Err` arm (T7 status 500). M11 wire the guards only on the sanitised arm, not the
 passthrough arm (every passthrough-mode cell). M12 move `before_dispatch` above the idempotency
 short-circuit (T3d spends or refuses a replay). M13 keep the old profile check inside
-`check_invocation_policy` (T8 structural).
+`check_invocation_policy` (T8 structural). M14 `after_dispatch` ignores a Block verdict (T12, T12b).
 
 ## Structural check scope (T8)
 
@@ -124,11 +126,8 @@ Five differences between the red commit and revision 3, each with its reason:
    not only their agreement: tool-name validation and the authorizer (a key denied `read`) are
    refused with zero dispatches; the per-key rate limit (limit 1) dispatches the first call and
    refuses the second; with the production firewall installed on router and Meta-MCP
-   (`fixture_firewalled`), a shell-injection argument is refused with zero dispatches and a
-   GitHub-token-shaped result is delivered with the token redacted and the benign text kept, the
-   same shape on both routes: a tool result is inspected under `PreserveInputRequired` on the meta
-   route, which blocks only when `inputRequests` or `requestState` change (`Immutable`, which
-   blocks any change, applies to bridge challenges only).
+   (`fixture_firewalled`), a shell-injection argument is refused with zero dispatches (the response-side row is T12,
+   Amendment 2).
    Attestation, the invocation audit record and undeclared-key refusal are already pinned on both
    routes by `router/tests/attestation_routes.rs`, `router/direct_audit_tests.rs` and
    `router/r2_identity_keys_tests.rs`; the table cites them rather than duplicate them.
@@ -159,4 +158,7 @@ Five differences between the red commit and revision 3, each with its reason:
   bind `no-read` on that id with `session_profiles().set_profile`, then send that id on both routes.
 - Expected-red table: T12 and T12b are red cells; T12c and the remaining already-shared rows are
   guards.
+- T12 and T12b observe the client-accounting exclusion through the fixture breaker (opens after one
+  counted failure): the second call must still reach the backend. The HTTP body cannot show it
+  (`delivery_refusal` is not serialised).
 - Mutant M14: `after_dispatch` ignores a Block verdict (T12, T12b red).

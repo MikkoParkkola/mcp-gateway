@@ -139,9 +139,11 @@ route does:
   `JsonRpcResponse::delivery_refusal_error` (`protocol/messages.rs`), which is what meta returns:
   HTTP 200, `-32600`, "Response blocked by security firewall", and the delivery-refusal projection
   that excludes the call from client accounting.
-- The idempotency entry settles through the existing typed path for that error, so the firewall
-  refusal marker is written by `idempotency.rs` and a replay is served as the same typed refusal;
-  no direct-only marker write.
+- The idempotency entry settles with the marked refusal body meta writes today
+  (`FIREWALL_REFUSAL_MARKER`, written at `invoke.rs:2376-2385`, restored at `invoke.rs:1851-1867`).
+  That write/restore pair moves into `idempotency.rs` (`firewall_refusal_body()`,
+  `is_firewall_refusal(&Value)`); meta and the direct settle and `CachedError` arms all call it, so a
+  direct replay is served as the same delivery refusal and never as a plain error.
 - Warn and Allow deliver the (redacted) result, unchanged from today.
 The scan stays one implementation; only the verdict is newly acted on.
 
@@ -177,7 +179,8 @@ The authoritative test list, fixtures, red reasons and mutants are in the compan
 `docs/design/2026-09-27-direct-route-guards-test-plan.md`. Summary: T1-T11 cover DIRECT.1-7 on the
 direct route (T1-T7b and T11 also against a passthrough backend; T10, the task-worker path, lands
 with whichever of this change and LIFECYCLE.1 merges second), T8 is the both-routes parity and structural
-check (DIRECT.8), T12/T12b pin the response-firewall Block on the per-backend route (DIRECT.10), and
+check (DIRECT.8), T12/T12b pin the response-firewall Block on the per-backend route and T12c pins Warn/Allow
+delivery (DIRECT.10), and
 mutants M1-M14 each redden a named cell. An allowed baseline dispatches exactly
 once in every mode.
 
