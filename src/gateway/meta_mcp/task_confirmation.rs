@@ -518,3 +518,6 @@ mod tests {
         assert_eq!(cleared.idempotency_key.as_deref(), Some("key-a"));
     }
 }
+
+#[cfg(test)]
+mod slot_tests;
