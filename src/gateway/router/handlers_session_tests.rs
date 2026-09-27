@@ -385,7 +385,13 @@ async fn the_dashboard_shows_session_fingerprints_and_the_admin_api_takes_raw_id
     );
     let inspected = read(
         create_router(Arc::clone(&state))
-            .oneshot(get(&format!("/api/costs?session={raw}")))
+            .oneshot({
+                let mut request = get("/api/costs");
+                request
+                    .headers_mut()
+                    .insert("x-cost-session-id", raw.parse().unwrap());
+                request
+            })
             .await
             .unwrap(),
     )
