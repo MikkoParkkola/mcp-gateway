@@ -70,7 +70,7 @@ fn unix_now() -> u64 {
 fn config(env: &std::path::Path, user_endpoint: &str, starts: u32) -> crate::config::Config {
     serde_yaml::from_str(&format!(
         r#"
-env_files: ["{env}"]
+env_files: ['{env}']
 auth:
   enabled: true
   public_paths: []
@@ -106,7 +106,7 @@ accounts:
     public_origin: https://chat.fixture.test
     return_paths: [/]
 "#,
-        env = env.display()
+        env = env.display().to_string().replace('\'', "''")
     ))
     .unwrap()
 }

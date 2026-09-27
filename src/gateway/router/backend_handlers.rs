@@ -1320,10 +1320,9 @@ fn scan_direct_tools_list_response(
 
 /// GET /api/costs — REST endpoint for per-key and aggregate cost views.
 ///
-/// Query parameters:
-/// - `key=<name>`: view cost for a single API key
-/// - `session=<id>`: view cost for a specific session
-/// - (no params): aggregate view across all sessions and keys
+/// - `?key=<name>`: view cost for a single API key
+/// - `X-Cost-Session-Id: <id>` header: view cost for one session
+/// - neither: aggregate view across all sessions and keys
 pub(super) async fn costs_handler(
     State(state): State<Arc<AppState>>,
     request: axum::http::Request<axum::body::Body>,
@@ -1360,6 +1359,25 @@ pub(super) async fn costs_handler(
         })
         .unwrap_or_default();
 
+    // A session id is a bearer handle, so it travels in a header, never the
+    // URI (#1529): a query value lands in access and trace logs.
+    let bad = |message: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
+    if query.contains_key("session") {
+        return bad("Pass the session id in the X-Cost-Session-Id header, not ?session=")
+            .into_response();
+    }
+    let session = match request
+        .headers()
+        .get("x-cost-session-id")
+        .map(|v| v.to_str())
+    {
+        Some(Ok(id)) if !id.trim().is_empty() => Some(id.trim().to_string()),
+        Some(_) => return bad("X-Cost-Session-Id must be a non-empty text value").into_response(),
+        None => None,
+    };
+    if session.is_some() && query.contains_key("key") {
+        return bad("Select by ?key= or by X-Cost-Session-Id, not both").into_response();
+    }
     let tracker = state.meta_mcp.cost_tracker();
 
     let body = if let Some(key_name) = query.get("key") {
@@ -1369,8 +1387,8 @@ pub(super) async fn costs_handler(
                 "error": format!("No data for key '{key_name}'")
             }),
         }
-    } else if let Some(session_id) = query.get("session") {
-        match tracker.session_snapshot(session_id) {
+    } else if let Some(session_id) = session {
+        match tracker.session_snapshot(&session_id) {
             Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
             None => serde_json::json!({
                 "error": format!("No data for session '{session_id}'")
