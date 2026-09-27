@@ -935,11 +935,15 @@
     },
     {
       "id": "MIK-7570.OWASP.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "docs/OWASP_AGENTIC_AI_COMPLIANCE.md",
+        "scripts/dev/check-owasp-citations.py",
+        "scripts/dev/test_check_owasp_citations.py"
+      ],
+      "note": "Graded 2026-09-27 (#1443). The self-assessment was audited claim by claim against the request path: two claimed controls were not wired (tool-descriptor validator, grant-collision check; GitHub #1441), and kill switch, cost budget and seven more controls run only in meta dispatch (GitHub #1452). The document now cites only request-path controls, states default-on versus opt-in, scopes meta-only controls, adds the 4.0 multi-user controls and reads 3/10 COVERED, 7/10 PARTIAL. scripts/dev/check-owasp-citations.py fails CI when it cites a missing path or a validation command that matches no test. Green: CI run 36275066707 at fe47b9bda. Red first: CI run 36245602186 (stale src/security/ssrf.rs). Mutant: run 36270553668 (stale path re-added, check red). Two independent reviews of the rewrite and of each delta: SHIP."
     },
     {
       "id": "MIK-7570.PAGING.1",
