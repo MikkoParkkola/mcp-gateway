@@ -56,7 +56,7 @@ pub(crate) async fn current_client(
             handle,
             Now::read(),
             &session_limits(state),
-            Touch::No,
+            Touch::Yes,
         ) == SessionCheck::Valid
     {
         return Some(dashboard_client());
