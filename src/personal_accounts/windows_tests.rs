@@ -457,8 +457,6 @@ fn wt16_open_store_blocks_ancestor_swap() {
 /// Rows run only by the privileged CI step (`--ignored win_privileged::`).
 mod win_privileged {
     use super::*;
-    use base64::Engine as _;
-    use std::fmt::Write as _;
 
     fn env(row: &str, var: &str) -> String {
         std::env::var(var).unwrap_or_else(|_| fixture_fail(row, &format!("{var} unset")))
@@ -487,37 +485,40 @@ mod win_privileged {
             ("authority", settings.authority_dir.join("authority.json")),
             ("record", record_file(&settings.store_dir)),
         ];
-        // The child writes nothing to disk: its stdout is the result, so a
-        // launch that never ran cannot be mistaken for a denial.
-        let mut script = String::from("whoami /groups;");
-        for (name, path) in &targets {
-            let _ = write!(
-                script,
-                "try {{ Get-Content -LiteralPath '{p}' -ErrorAction Stop | Out-Null; 'READ {name}' }} \
-                 catch {{ 'DENIED {name}' }};",
-                p = path.display(),
-            );
-        }
-        let encoded = base64::engine::general_purpose::STANDARD.encode(
-            script
-                .encode_utf16()
-                .flat_map(u16::to_le_bytes)
-                .collect::<Vec<u8>>(),
-        );
-        let launcher = format!(
-            "$i = New-Object System.Diagnostics.ProcessStartInfo 'powershell.exe'; \
-             $i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {encoded}'; \
-             $i.UserName = '{user}'; $i.Password = (ConvertTo-SecureString '{pass}' -AsPlainText -Force); \
-             $i.UseShellExecute = $false; $i.LoadUserProfile = $true; $i.WorkingDirectory = '{w}'; \
-             $i.RedirectStandardOutput = $true; $i.RedirectStandardError = $true; \
-             $p = [System.Diagnostics.Process]::Start($i); $o = $p.StandardOutput.ReadToEnd(); \
-             $e = $p.StandardError.ReadToEnd(); $p.WaitForExit(); \
-             $o; if ($e) {{ 'STDERR: ' + $e }}; exit $p.ExitCode",
-            w = base.display(),
+        // No child process: a service session cannot reliably start one under
+        // another account. The second user's token comes from LogonUser, and
+        // each read runs impersonated, so the kernel checks that token against
+        // each file's DACL.
+        let paths: Vec<String> = targets
+            .iter()
+            .map(|(name, path)| format!("@('{name}','{}')", path.display()))
+            .collect();
+        let script = format!(
+            r#"Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class MgwLogon {{
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  public static extern bool LogonUserW(string u, string d, string p, int type, int prov, out IntPtr tok);
+}}
+'@
+$t = [IntPtr]::Zero
+if (-not [MgwLogon]::LogonUserW('{user}', '.', '{pass}', 2, 0, [ref]$t)) {{
+  if (-not [MgwLogon]::LogonUserW('{user}', '.', '{pass}', 3, 0, [ref]$t)) {{ throw ('LogonUser failed: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }}
+}}
+$h = New-Object Microsoft.Win32.SafeHandles.SafeAccessTokenHandle $t
+$id = New-Object System.Security.Principal.WindowsIdentity $t
+$id.Groups | ForEach-Object {{ $_.Value }}
+foreach ($pair in @({list})) {{
+  $name = $pair[0]; $path = $pair[1]
+  $ok = [System.Security.Principal.WindowsIdentity]::RunImpersonated($h, [Func[bool]] {{
+    try {{ [System.IO.File]::ReadAllBytes($path) | Out-Null; $true }} catch {{ $false }} }})
+  if ($ok) {{ "READ $name" }} else {{ "DENIED $name" }}
+}}"#,
+            list = paths.join(","),
         );
         let exit = std::process::Command::new("powershell")
             .env_remove("PSModulePath")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &launcher])
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output();
         let text = exit
             .as_ref()
@@ -530,7 +531,7 @@ mod win_privileged {
         if !exit.as_ref().is_ok_and(|o| o.status.success()) {
             fixture_fail(
                 row,
-                &format!("launching the second user failed: {text} {stderr}"),
+                &format!("the second user's token failed: {text} {stderr}"),
             );
         }
         if text.contains("S-1-5-32-544") {
@@ -539,7 +540,7 @@ mod win_privileged {
         if !text.contains("READ control") {
             fixture_fail(
                 row,
-                &format!("the second user could not read the control file: {text}"),
+                &format!("the second user could not read the control file: {text} {stderr}"),
             );
         }
         for name in ["authority", "record"] {
