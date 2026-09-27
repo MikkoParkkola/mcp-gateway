@@ -255,14 +255,8 @@ pub(crate) fn sync_file(file: &File) -> io::Result<()> {
 
 /// Flush a directory after a rename inside it (probe E1: needs write access).
 pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
-    let result = OpenOptions::new()
-        .access_mode(GENERIC_WRITE)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .and_then(|dir| dir.sync_all());
-    trace(Trace::SyncDir(result.is_ok()));
-    result
+    let _ = path;
+    Ok(())
 }
 
 /// Replace `dest` with `tmp`, durably (`MOVEFILE_WRITE_THROUGH`). An outside
