@@ -388,20 +388,24 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
     if unsafe { GetSecurityDescriptorControl(guard.0, &raw mut control, &raw mut revision) } == 0 {
         return Err(last());
     }
+    // Owner and DACL lie inside the self-relative descriptor, so every read
+    // is bounded by where the descriptor ends.
+    // SAFETY: contract 4 — `guard` keeps a valid descriptor alive.
+    let sd_len = unsafe { GetSecurityDescriptorLength(guard.0) } as usize;
+    let sd_start = guard.0 as usize;
+    let sd_end = sd_start
+        .checked_add(sd_len)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "descriptor length"))?;
+    let within = |ptr: usize| {
+        (sd_start..sd_end)
+            .contains(&ptr)
+            .then(|| sd_end - ptr)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "outside descriptor"))
+    };
     let owner = if owner.is_null() {
         None
     } else {
-        // The owner SID lies inside the self-relative descriptor, so the
-        // readable range ends where the descriptor does.
-        // SAFETY: contract 4 — `guard` keeps a valid descriptor alive.
-        let sd_len = unsafe { GetSecurityDescriptorLength(guard.0) } as usize;
-        let avail = (guard.0 as usize)
-            .checked_add(sd_len)
-            .and_then(|end| end.checked_sub(owner as usize))
-            .filter(|_| owner as usize >= guard.0 as usize)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "owner outside descriptor")
-            })?;
+        let avail = within(owner as usize)?;
         // SAFETY: contract 3/4 — `avail` bytes from `owner` lie inside the live
         // descriptor.
         Some(unsafe { copy_sid(owner.cast::<u8>().cast_const(), avail) }?)
@@ -409,8 +413,10 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
     let aces = if dacl.is_null() {
         None
     } else {
-        // SAFETY: contract 4 — the ACL lives inside the guarded descriptor.
-        Some(unsafe { read_aces(dacl) }?)
+        let avail = within(dacl as usize)?;
+        // SAFETY: contract 3/4 — `avail` bytes from `dacl` lie inside the live
+        // descriptor.
+        Some(unsafe { read_aces(dacl, avail) }?)
     };
     drop(guard);
     Ok(Inspection {
@@ -423,11 +429,18 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
 /// Decode every ACE, bounded by `AceCount` and `AclSize` (contract 3).
 ///
 /// # Safety
-/// `acl` must point at a valid ACL that outlives this call.
-unsafe fn read_aces(acl: *const ACL) -> io::Result<Vec<Ace>> {
+/// `acl` must point at an ACL that outlives this call, readable for `avail`
+/// bytes.
+unsafe fn read_aces(acl: *const ACL, avail: usize) -> io::Result<Vec<Ace>> {
     let bad = || io::Error::new(io::ErrorKind::InvalidData, "malformed ACL");
-    // SAFETY: caller contract — a valid ACL header.
+    if avail < std::mem::size_of::<ACL>() {
+        return Err(bad());
+    }
+    // SAFETY: caller contract — the header lies inside the readable range.
     let header = unsafe { *acl };
+    if usize::from(header.AclSize) > avail {
+        return Err(bad());
+    }
     let acl_end = acl as usize + usize::from(header.AclSize);
     let mut out = Vec::with_capacity(usize::from(header.AceCount));
     for index in 0..u32::from(header.AceCount) {

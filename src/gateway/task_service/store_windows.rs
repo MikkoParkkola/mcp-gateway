@@ -31,16 +31,20 @@ pub(super) fn judge_store_dir(dir: &Path) -> Result<crate::fs_lock::DirPin, Stor
     Ok(crate::fs_lock::DirPin(handle))
 }
 
-/// T5: create the store directory private from its first instant. Missing
-/// ancestors are created plainly; they are outside the model, as on unix.
+/// T5: create the store directory, and each missing ancestor, private from its
+/// first instant, as unix creates them all `0700`.
 pub(super) fn create_private_dir(dir: &Path) -> Result<(), StoreError> {
-    if let Some(parent) = dir.parent() {
-        fs::create_dir_all(parent).map_err(|_| StoreError::Unavailable)?;
+    let missing: Vec<&Path> = dir.ancestors().take_while(|p| !p.exists()).collect();
+    for path in missing.into_iter().rev() {
+        match private_fs::create_dir_private(path) {
+            Err(error) if error.kind() != io::ErrorKind::AlreadyExists => {
+                tracing::warn!(%error, path = %path.display(), "task store directory not created");
+                return Err(StoreError::Unavailable);
+            }
+            _ => {}
+        }
     }
-    private_fs::create_dir_private(dir).map_err(|error| {
-        tracing::warn!(%error, path = %dir.display(), "task store directory not created");
-        StoreError::Unavailable
-    })
+    Ok(())
 }
 
 /// T4: a scratch record, private from creation, no sharing.

@@ -67,3 +67,9 @@ pub(super) fn open_nofollow(path: &Path) -> io::Result<File> {
 pub(super) fn not_private(file: &File, metadata: &Metadata) -> bool {
     !metadata.is_file() || private_fs::judge_file(file).is_err()
 }
+
+// W-T7 (lexical): the path rule alone, with no filesystem behind it, so a
+// later layer (locality, the no-follow re-walk) cannot stand in for it.
+#[cfg(test)]
+#[path = "storage_windows_tests.rs"]
+mod tests;

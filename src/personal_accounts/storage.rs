@@ -381,12 +381,21 @@ fn claim_store(
 > {
     #[cfg(windows)]
     crate::private_fs::after_dir_judged(&config.store_dir);
+    // A sidecar that fails its privacy judgement is a configuration refusal,
+    // like a store directory that fails it; anything else is unavailability.
+    let refused = |error: std::io::Error| match error.kind() {
+        // The judgement's own refusal carries no OS error code.
+        std::io::ErrorKind::PermissionDenied if cfg!(windows) && error.raw_os_error().is_none() => {
+            AccountError::InvalidConfiguration
+        }
+        _ => AccountError::StorageUnavailable,
+    };
     let record_lock =
         crate::fs_lock::ExclusiveFileLock::try_acquire(&config.store_dir.join(LOCK_FILE))
-            .map_err(|_| AccountError::StorageUnavailable)?;
+            .map_err(refused)?;
     let authority_lock =
         crate::fs_lock::ExclusiveFileLock::try_acquire(&config.authority_dir.join(LOCK_FILE))
-            .map_err(|_| AccountError::StorageUnavailable)?;
+            .map_err(refused)?;
     Ok((record_lock.pinning(pins.0), authority_lock.pinning(pins.1)))
 }
 

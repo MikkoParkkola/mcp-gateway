@@ -119,7 +119,9 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
                 if sid != user {
                     found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
                 } else if flags & INHERIT_ONLY == 0 {
-                    read_write |= mask & GENERIC_ALL != 0 || mask & READ_WRITE == READ_WRITE;
+                    read_write |= mask & GENERIC_ALL != 0
+                        || mask & READ_WRITE == READ_WRITE
+                        || mask & GENERIC_READ_WRITE == GENERIC_READ_WRITE;
                 }
             }
             // A deny only narrows access; it may name anyone. One naming the

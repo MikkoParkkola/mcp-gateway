@@ -71,7 +71,7 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
   the gateway warns once per process when it writes such a file. **On Windows,
   put the config and any key material in a directory only the gateway's account
   can read.** Moving these writers onto the stores' owner-only creation is
-  tracked separately.
+  tracked in #1718.
 
 ### Security Testing
 
