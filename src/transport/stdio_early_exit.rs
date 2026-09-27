@@ -113,8 +113,11 @@ pub(super) fn excerpt(
         .map(|s| s.trim().to_string())
         .filter(|s| s.len() >= 4)
         .collect();
-    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    // Dedup needs equal values adjacent; the stable length sort then keeps
+    // longest first, so a secret containing another is replaced first.
+    secrets.sort_unstable();
     secrets.dedup();
+    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
     let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
     let lines: Vec<String> = tail.iter().map(|raw| redact_line(raw, &secrets)).collect();
     let mut text = lines.join("\n");
