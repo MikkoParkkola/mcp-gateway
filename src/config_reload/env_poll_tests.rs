@@ -549,3 +549,21 @@ fn u22_l10_a_read_that_cannot_start_still_retries_and_warns_once() {
     });
     assert_eq!(count(&logs, "WARN", "cannot start an env-file read"), 1);
 }
+
+/// U24: a prime answers only the next failure. After a config-file failure
+/// E1 and a retry failing with E2, E1 coming back is a change and warns.
+#[test]
+fn u24_an_error_that_changes_back_after_a_prime_warns_again() {
+    use super::super::ReloadTrigger;
+    let counts = super::EnvReloadCounts::default();
+    let mut limiter = WarnLimiter::default();
+    let retry = ReloadTrigger::Retry(PathBuf::from("/cfg.yaml"));
+    counts.settled(&mut limiter, Some("E1"), &ReloadTrigger::ConfigFile);
+    counts.report_failure(&mut limiter, &retry, "E2");
+    counts.report_failure(&mut limiter, &retry, "E1");
+    assert_eq!(
+        counts.warns.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "E2 is new, and E1 after E2 is a change"
+    );
+}
