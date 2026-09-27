@@ -116,6 +116,50 @@ fn export_reports_busy_when_the_log_changes_twice() {
     );
 }
 
+/// Append until the newest sealed segment number has moved on: one rotation.
+fn rotate(l: &TransparencyLogger, log: &Path) {
+    use crate::security::transparency_log::segments::list_segments;
+    let newest = || list_segments(log).unwrap().last().map_or(0, |s| s.seq + 1);
+    let target = newest() + 1;
+    let mut i = 0;
+    while newest() < target {
+        event(l, &format!("r{i}"));
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+}
+
+/// A rotation (no file vanishes, only the segment list changes) after both
+/// scans: a busy poll that forwards nothing, and the next poll carries on.
+#[test]
+fn export_reports_busy_when_segments_change_on_both_scans() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = logger(&log);
+    (0..3).for_each(|i| event(&l, &format!("a{i}")));
+    let mut exp = exporter(dir.path(), &log);
+    let (l1, p1) = (Arc::clone(&l), log.clone());
+    set(&EXPORT_AFTER_SCAN, move || {
+        rotate(&l1, &p1);
+        let (l2, p2) = (Arc::clone(&l1), p1.clone());
+        set(&EXPORT_AFTER_SCAN, move || rotate(&l2, &p2));
+    });
+    EXPORT_PASSES.with(|c| c.set(0));
+    let sink = CollectingSink::new();
+    match exp.poll(&sink) {
+        Err(ExportError::Io(e)) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::Interrupted, "{e}");
+        }
+        other => panic!("expected a busy poll, got {other:?}"),
+    }
+    assert_eq!(passes(), 2, "one rescan, then busy");
+    assert!(sink.delivered().is_empty());
+    assert!(
+        exp.poll(&sink).unwrap().forwarded >= 3,
+        "the next poll recovers"
+    );
+}
+
 /// Growth during the scan: no rescan.
 #[test]
 fn export_does_not_rescan_for_growth() {

@@ -29,12 +29,13 @@ fn open_names_the_active_file() {
     let e = TransparencyLogger::open(cfg(&path, 2, false))
         .err()
         .expect("a directory");
-    // The first call to fail differs by platform: unix refuses the open,
-    // Windows the first read. Either way the error names it and the path.
+    // The first call to fail differs by platform: unix refuses the open;
+    // Windows opens a directory handle and refuses the first read of the tail.
+    let op = if cfg!(windows) { "read" } else { "open" };
     let text = e.to_string();
     assert!(
-        text.contains("audit log: open ") || text.contains("audit log: read "),
-        "no operation in: {text}"
+        text.contains(&format!("audit log: {op} ")),
+        "no `{op}` in: {text}"
     );
     assert!(text.contains(&path.display().to_string()), "{text}");
 }
