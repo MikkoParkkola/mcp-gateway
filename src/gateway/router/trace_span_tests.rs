@@ -57,8 +57,8 @@ async fn t1_query_secrets_never_reach_the_trace_span() {
     );
 }
 
-/// T2: the span names the route template, so tracing stays useful, and an
-/// unmatched path is not echoed either.
+/// T2: the span names the route template, so tracing stays useful. Only the
+/// trace layer's own lines are read: a handler may log its path.
 #[tokio::test(flavor = "current_thread")]
 async fn t2_the_span_names_the_route_template() {
     let post = Request::builder()
@@ -68,25 +68,37 @@ async fn t2_the_span_names_the_route_template() {
         .header("content-type", "application/json")
         .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#))
         .unwrap();
-    let text = traced(vec![
-        get("/dashboard?bootstrap=x"),
-        post,
-        get("/unrouted-canary-3d2"),
-    ])
-    .await;
-    assert!(text.contains("/dashboard"), "{text}");
+    let text = traced(vec![get("/dashboard?bootstrap=x"), post]).await;
+    let span_lines: String = text
+        .lines()
+        .filter(|l| l.contains(": tower_http::"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(span_lines.contains("path=/dashboard"), "{text}");
     assert!(
-        text.contains("/mcp/{name}"),
+        span_lines.contains("path=/mcp/{name}"),
         "route template missing:\n{text}"
     );
     assert!(
-        !text.contains("backend-canary-77c"),
-        "path value logged:\n{text}"
+        !span_lines.contains("backend-canary-77c"),
+        "path value in span:\n{span_lines}"
     );
-    assert!(
-        !text.contains("unrouted-canary-3d2"),
-        "unmatched path logged:\n{text}"
-    );
+}
+
+/// T2b: a request with no matched route is named `unmatched`, never its path.
+#[test]
+fn t2b_an_unmatched_request_is_not_echoed() {
+    let (captured, _guard) = capture_debug();
+    let request = Request::builder()
+        .uri("/unrouted-canary-3d2?q=1")
+        .body(Body::empty())
+        .unwrap();
+    let span = super::trace_span::span_for(&request);
+    let _entered = span.enter();
+    tracing::debug!(target: "tower_http::trace", "probe");
+    let text = captured.text();
+    assert!(text.contains("path=unmatched"), "{text}");
+    assert!(!text.contains("unrouted-canary-3d2"), "{text}");
 }
 
 /// T3: `/api/costs` selects a session by the `X-Cost-Session-Id` header and
@@ -132,4 +144,17 @@ async fn t3_costs_select_a_session_by_header_not_query() {
     let (status, body) = call(get("/api/costs?session=gw-cost-a")).await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
     assert!(body.contains("X-Cost-Session-Id"), "{body}");
+
+    let mut both = by_header("gw-cost-a");
+    *both.uri_mut() = "/api/costs?key=ops".parse().unwrap();
+    assert_eq!(
+        call(both).await.0,
+        axum::http::StatusCode::BAD_REQUEST,
+        "both selectors"
+    );
+    assert_eq!(
+        call(by_header(" ")).await.0,
+        axum::http::StatusCode::BAD_REQUEST,
+        "empty header"
+    );
 }

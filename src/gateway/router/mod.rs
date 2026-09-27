@@ -441,8 +441,8 @@ pub(crate) fn create_router_with_accounts(
         let offers = ConnectOffers::new(Arc::clone(&handles.journeys), live);
         state.meta_mcp.install_connect_offers(offers);
     }
-    // Merged outside the main `TraceLayer` below: its span records the full
-    // URI, and the callback's query carries the code and state (§4.3).
+    // Merged outside the main `TraceLayer` below, with its own path-only span
+    // (§4.3): the callback's query carries the code and state.
     let accounts_router = accounts::router(accounts, &startup_config, |owner| {
         authenticate(
             owner,

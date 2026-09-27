@@ -1320,10 +1320,9 @@ fn scan_direct_tools_list_response(
 
 /// GET /api/costs — REST endpoint for per-key and aggregate cost views.
 ///
-/// Query parameters:
-/// - `key=<name>`: view cost for a single API key
-/// - `session=<id>`: view cost for a specific session
-/// - (no params): aggregate view across all sessions and keys
+/// - `?key=<name>`: view cost for a single API key
+/// - `X-Cost-Session-Id: <id>` header: view cost for one session
+/// - neither: aggregate view across all sessions and keys
 pub(super) async fn costs_handler(
     State(state): State<Arc<AppState>>,
     request: axum::http::Request<axum::body::Body>,

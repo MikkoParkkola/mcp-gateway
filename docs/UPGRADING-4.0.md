@@ -1706,14 +1706,15 @@ dashboard link value in `/dashboard?bootstrap=<value>`. With `tower_http=debug` 
 reached the log.
 
 - The span now records the method and the matched route template only (for example
-  `/mcp/{name}`), for every route. It never records the query string, a path value or a header.
+  `/mcp/{name}`), for every route the gateway traces. It never records the query string, a path
+  value or a header.
 - `/api/costs` selects a session by the `X-Cost-Session-Id` request header. `?session=` is refused
   with HTTP 400 and a message naming the header. `?key=` (an API key's name) is unchanged. Sending
   both `?key=` and the header is refused.
 - A dashboard link presented from anywhere but the gateway's own machine is refused, as before, and
   is now also used up. The refusal says so. A copy left in a browser history, a proxy log or a
-  `Referer` header therefore dies on its first use elsewhere. A refusal because no admin
-  credential is configured still leaves the link usable.
+  `Referer` header therefore dies on its first use elsewhere. On the gateway's own machine, a
+  refusal because no admin credential is configured still leaves the link usable.
 
 **Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on

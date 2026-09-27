@@ -11,6 +11,15 @@ use axum::http::StatusCode;
 use super::*;
 
 fn redeem_from(state: &AuthState, value: &str, peer: [u8; 4], forwarded: bool) -> StatusCode {
+    redeem_body(state, value, peer, forwarded).0
+}
+
+fn redeem_body(
+    state: &AuthState,
+    value: &str,
+    peer: [u8; 4],
+    forwarded: bool,
+) -> (StatusCode, String) {
     let mut request = Request::builder()
         .uri(format!("/dashboard?bootstrap={value}"))
         .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -20,9 +29,22 @@ fn redeem_from(state: &AuthState, value: &str, peer: [u8; 4], forwarded: bool) -
         request = request.header("x-forwarded-for", "203.0.113.9");
     }
     let request = request.body(Body::empty()).expect("request builds");
-    try_dashboard_bootstrap(state, &request)
-        .expect("a bootstrap link is always answered here")
-        .status()
+    let response =
+        try_dashboard_bootstrap(state, &request).expect("a bootstrap link is always answered here");
+    let status = response.status();
+    let body = futures::executor::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+        .expect("body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// T5d: the refusal says whether the link was used up.
+#[test]
+fn t5d_the_refusal_says_whether_the_link_is_spent() {
+    let (state, printed) = bootstrap_state(Some("bearer"), vec![]);
+    let (_, wrong) = redeem_body(&state, "not-the-value", REMOTE, false);
+    assert!(!wrong.contains("used it up"), "{wrong}");
+    let (_, spent) = redeem_body(&state, &printed, REMOTE, false);
+    assert!(spent.contains("used it up"), "{spent}");
 }
 
 const LOCAL: [u8; 4] = [127, 0, 0, 1];
