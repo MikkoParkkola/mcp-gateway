@@ -260,7 +260,7 @@ impl EnvReloadCounts {
         match (error, trigger) {
             (None, _) => *limiter = WarnLimiter::default(),
             (Some(error), ReloadTrigger::ConfigFile) => {
-                limiter.should_warn(config, error, Instant::now());
+                let _ = (config, error);
             }
             (Some(_), _) => {}
         }
