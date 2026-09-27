@@ -1712,7 +1712,8 @@ In 4.0:
 - Both limits are measured on the monotonic and the wall clock, so a machine that sleeps
   overnight wakes to an ended session.
 - The dashboard has a **Log out** button. `POST /dashboard/logout` ends the session on the
-  server, not only in the browser, and works while the audit log is unavailable.
+  server, not only in the browser, redirects to `/ui`, and works while the audit log is
+  unavailable.
 - A request with an ended session cookie gets a 401 that says the session ended and clears
   the cookie, instead of "Missing Authorization header". A bearer token sent with it is
   still honoured, and on a public path the request proceeds as unauthenticated.
@@ -1736,7 +1737,9 @@ auth:
 ```
 
 Both must be above zero, and the idle limit may not exceed the absolute one; the gateway
-refuses to start or reload otherwise. A reload applies new limits to sessions already open.
+refuses to start or reload otherwise. A reload applies shorter limits to sessions already
+open; a longer absolute limit reaches sessions opened after it, because a browser keeps the
+cookie lifetime it was given.
 
 Library users: `DashboardBootstrap::issue_session` and `session_is_valid` are removed.
 

@@ -623,9 +623,7 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
 /// `server.public_url` and `control_plane.role_mapping` are re-read per request
 /// (see `router::well_known`, `router::origin_guard`, `ui::control_plane`, `auth::live`).
 fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, bool)> {
-    // A macro rather than sixteen hand-written comparisons: the point is that
-    // the list is exhaustive, and a shape that makes adding one a single line
-    // is the shape that stays exhaustive.
+    // A macro so the list stays exhaustive: adding a section is one line.
     macro_rules! sections {
         ($($(#[$attr:meta])* $name:literal => $field:ident),* $(,)?) => {
             vec![$($(#[$attr])* (
@@ -635,8 +633,8 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         };
     }
 
-    sections![
-        "auth" => auth,
+    let mut sections = sections![
+        "auth" => auth, // first: compared below without `dashboard_session`
         "mtls" => mtls,
         "key_server" => key_server,
         "agent_auth" => agent_auth,
@@ -663,7 +661,9 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "accounts" => accounts,
         #[cfg(feature = "cost-governance")]
         "cost_governance" => cost_governance,
-    ]
+    ];
+    sections[0].1 = running.auth.restart_only_json() != wanted.auth.restart_only_json();
+    sections
 }
 
 /// Returns `true` when the TCP-listener address differs.

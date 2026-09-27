@@ -1143,11 +1143,13 @@ whichever comes first; the cookie's `Max-Age` matches the 8 hours. The
 dashboard's own 5-second refresh is checked but is not activity, so an unattended
 tab signs out at the idle limit. Change the limits under `auth.dashboard_session`
 (`idle_timeout_secs`, `absolute_timeout_secs`); a reload applies them to open
-sessions.
+sessions. A browser keeps the `Max-Age` its cookie was issued with, so a longer
+absolute limit reaches sessions opened after the reload.
 
 **Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
-on the server as well as in the browser. It answers `303` whether or not the
-session was still live, and it works while the audit log is unavailable.
+on the server as well as in the browser and redirects to `/ui`. It answers `303`
+whether or not the session was still live, and it works while the audit log is
+unavailable. A logout that ends a session writes one `admin_action` audit record.
 
 To sign in again without a restart:
 
@@ -1161,7 +1163,10 @@ returns a new one. The credential is read from the environment, never from an
 argument, so it does not appear in the command line other users can list; read
 it as above rather than typing it into the command, which would put it in shell
 history. Without `--url`, the gateway address comes from the config, and a config
-that fails to load is an error rather than a guess. Only the static bearer or an admin API
+that fails to load is an error rather than a guess. The command presents no client
+certificate, so on a listener with `mtls.require_client_cert` call the endpoint
+with your client certificate instead:
+`curl --cert client.pem --key client-key.pem --cacert ca.pem -X POST -H "Authorization: Bearer $MCP_GATEWAY_TOKEN" https://127.0.0.1:39400/ui/api/dashboard-link`. Only the static bearer or an admin API
 key may mint a link: a dashboard session or an SSO login gets `403`. The new link
 keeps every rule above: single use, from this machine only.
 

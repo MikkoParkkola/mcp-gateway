@@ -141,6 +141,18 @@ impl Default for AuthConfig {
 }
 
 impl AuthConfig {
+    /// This section as a reload compares it for "restart required": without
+    /// `dashboard_session`, which is read on every session check and so
+    /// applies live. Field order is fixed and there are no maps, so plain
+    /// JSON is canonical.
+    pub(crate) fn restart_only_json(&self) -> String {
+        let view = Self {
+            dashboard_session: DashboardSessionConfig::default(),
+            ..self.clone()
+        };
+        serde_json::to_string(&view).unwrap_or_default()
+    }
+
     /// ADR-008 INV-2 (MIK-6752): does this auth configuration imply the gateway
     /// may serve more than one principal?
     ///

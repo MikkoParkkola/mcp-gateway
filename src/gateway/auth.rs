@@ -824,9 +824,7 @@ pub async fn auth_middleware(
         // client must not be locked out by it), a fresh bootstrap link (the
         // operator is re-entering, exactly when a stale cookie is present), or
         // a public path, which needs no credential at all.
-        let has_bearer = request
-            .headers()
-            .contains_key(axum::http::header::AUTHORIZATION);
+        let has_bearer = presented_credential(request.headers()).is_some();
         let is_bootstrap = request.uri().path() == "/dashboard"
             && request.uri().query().and_then(bootstrap_param).is_some();
         if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
@@ -842,7 +840,11 @@ pub async fn auth_middleware(
         .headers()
         .get_all(axum::http::header::SET_COOKIE)
         .iter()
-        .any(|v| v.as_bytes().starts_with(SESSION_COOKIE.as_bytes()));
+        .any(|v| {
+            v.as_bytes()
+                .strip_prefix(SESSION_COOKIE.as_bytes())
+                .is_some_and(|rest| rest.starts_with(b"="))
+        });
     if dead_session
         && !sets_session
         && let Ok(value) = session_cookie("", 0, secure).parse()

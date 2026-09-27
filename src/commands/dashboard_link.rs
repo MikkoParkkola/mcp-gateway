@@ -17,9 +17,10 @@ pub(crate) const TOKEN_ENV: &str = "MCP_GATEWAY_TOKEN";
 ///
 /// A message naming [`TOKEN_ENV`] when it is unset or blank.
 pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    // Not trimmed: credentials compare byte for byte, so rewriting one would
+    // turn a valid key into a refused one. Only a blank value is missing.
     lookup(TOKEN_ENV)
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
+        .filter(|t| !t.trim().is_empty())
         .ok_or_else(|| {
             format!(
                 "{TOKEN_ENV} is not set. Export the gateway's bearer token or an admin API \
@@ -148,6 +149,13 @@ mod tests {
 
         let blank = read_token(|_| Some("  ".to_string())).expect_err("blank is unset");
         assert!(blank.contains(TOKEN_ENV), "{blank}");
+
+        let padded = read_token(|_| Some(" tok ".to_string()));
+        assert_eq!(
+            padded.as_deref(),
+            Ok(" tok "),
+            "a credential is passed as given"
+        );
     }
 
     /// An in-process gateway stand-in: answers the link only for `tok`.

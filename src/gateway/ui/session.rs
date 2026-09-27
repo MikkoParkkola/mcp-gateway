@@ -33,18 +33,20 @@ pub fn logout_router() -> Router<Arc<AppState>> {
     Router::new().route(LOGOUT_PATH, post(logout))
 }
 
-/// Revoke the presented session server-side and clear the cookie. Idempotent:
-/// an unknown, expired or absent handle gets the same answer.
+/// Revoke the presented session server-side, clear the cookie and send the
+/// browser to `/ui`. Idempotent: an unknown, expired or absent handle gets the
+/// same answer.
 async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let ended = session_cookie_value(&headers)
         .is_some_and(|handle| state.dashboard_bootstrap.revoke(&handle));
     // The one audit write that does not fail closed: refusing to revoke a
-    // session because the log is down is worse than a missing record.
-    if let Some(log) = &state.transparency_log {
+    // session because the log is down is worse than a missing record. Written
+    // only when a live session actually ended: the route is unauthenticated,
+    // so recording every attempt would let anyone fill the log.
+    if ended && let Some(log) = &state.transparency_log {
         let mut fields = serde_json::Map::new();
         fields.insert("route".into(), LOGOUT_PATH.into());
         fields.insert("method".into(), "POST".into());
-        fields.insert("session_ended".into(), ended.into());
         let envelope = AuditEnvelope::ok(AuditWho::from_request(None, None));
         if let Err(error) = log.append_admin_action("admin_ui", fields, &envelope) {
             tracing::warn!(%error, "Dashboard logout not recorded; the session was still revoked");
@@ -54,7 +56,8 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
     (
         StatusCode::SEE_OTHER,
         [
-            (header::LOCATION, "/dashboard".to_string()),
+            // `/ui` needs no session; `/dashboard` would answer 401 now.
+            (header::LOCATION, "/ui".to_string()),
             (header::SET_COOKIE, session_cookie("", 0, secure)),
         ],
     )
@@ -82,7 +85,7 @@ pub(super) async fn dashboard_link(
         return admin_auth_required().into_response();
     }
     let config = state.live_config.get();
-    if cookies_are_secure(&config) && !config.mtls.enabled {
+    if cookies_are_secure(&config) && !state.live_config.running().mtls.enabled {
         // The session cookie would be `Secure` over a plain-HTTP loopback
         // listener, and a browser discards it: the link would be spent for
         // nothing. Same refusal as the startup banner's.
@@ -93,9 +96,11 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
-    let host = config.server.host.as_str();
-    let wildcard = matches!(host, "0.0.0.0" | "::" | "");
-    if !wildcard && !crate::gateway::router::is_loopback_bind(host) {
+    // Host, port and TLS are restart-only: the running listener's values, not
+    // a reloaded file's, say where a browser can reach this process.
+    let running = state.live_config.running();
+    let host = running.server.host.as_str();
+    if !is_wildcard(host) && !crate::gateway::router::is_loopback_bind(host) {
         // Redemption accepts only a loopback peer, and a browser reaching a
         // concrete network address is not one: the link could never open.
         return flat_error(
@@ -106,8 +111,12 @@ pub(super) async fn dashboard_link(
         .into_response();
     }
     let value = state.dashboard_bootstrap.rearm();
-    let scheme = if config.mtls.enabled { "https" } else { "http" };
-    let authority = loopback_authority(&config.server.host, config.server.port);
+    let scheme = if running.mtls.enabled {
+        "https"
+    } else {
+        "http"
+    };
+    let authority = loopback_authority(host, running.server.port);
     Json(json!({ "link": format!("{scheme}://{authority}/dashboard?bootstrap={value}") }))
         .into_response()
 }
@@ -115,14 +124,23 @@ pub(super) async fn dashboard_link(
 /// An address a browser on this machine can open. Redemption is loopback
 /// only, so a wildcard bind becomes the loopback address.
 fn loopback_authority(host: &str, port: u16) -> String {
-    let host = match host {
-        "0.0.0.0" | "" => "127.0.0.1",
-        "::" => "::1",
-        other => other,
+    let host = match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(ip)) if ip.is_unspecified() => "::1",
+        _ if is_wildcard(host) => "127.0.0.1",
+        _ => host,
     };
     if host.parse::<std::net::Ipv6Addr>().is_ok() {
         format!("[{host}]:{port}")
     } else {
         format!("{host}:{port}")
     }
+}
+
+/// A bind on every interface, in any spelling (`0.0.0.0`, `::`,
+/// `0:0:0:0:0:0:0:0`), or none given.
+fn is_wildcard(host: &str) -> bool {
+    host.is_empty()
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_unspecified())
 }

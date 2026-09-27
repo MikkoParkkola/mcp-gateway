@@ -190,6 +190,15 @@ fn is_admin_view(reply: &Reply) -> bool {
     reply.status == StatusCode::OK && reply.json().get("tool_count").is_some()
 }
 
+/// `state` with `running` as the process's startup config, as if it had been
+/// started with it: host, port and TLS are read from there, not from reloads.
+fn with_running(mut state: Arc<AppState>, running: crate::config::Config) -> Arc<AppState> {
+    Arc::get_mut(&mut state)
+        .expect("state is unique")
+        .live_config = Arc::new(crate::config_reload::LiveConfig::new(running));
+    state
+}
+
 /// A real audit log on `state`, as the server wires it.
 fn with_audit(
     state: &mut Arc<AppState>,
@@ -230,7 +239,8 @@ async fn logout_revokes_server_side() {
         out.headers
             .get(header::LOCATION)
             .and_then(|v| v.to_str().ok()),
-        Some("/dashboard")
+        Some("/ui"),
+        "logout lands on a page that needs no session"
     );
     assert!(
         out.clears_cookie(),
@@ -304,6 +314,35 @@ async fn logout_writes_one_admin_action_record() {
         .count();
     assert_eq!(records, 1, "one logout record: {raw}");
     assert!(!raw.contains(&h), "the handle never reaches the log");
+
+    // The route is unauthenticated, so attempts that end nothing write nothing.
+    for cookie in [None, Some("never-issued"), Some(h.as_str())] {
+        assert_eq!(
+            send(&state, logout(cookie)).await.status,
+            StatusCode::SEE_OTHER
+        );
+    }
+    let after = std::fs::read_to_string(log.path()).unwrap_or_default();
+    assert_eq!(after, raw, "no record for a logout that ended no session");
+}
+
+/// A cross-site page cannot log the operator out: the origin guard refuses a
+/// foreign `Origin` before the route runs.
+#[tokio::test]
+async fn a_cross_site_logout_is_refused() {
+    let (state, _dir) = fixture().await;
+    let h = issue(&state);
+    let mut forged = logout(Some(&h));
+    forged.headers_mut().insert(
+        header::ORIGIN,
+        "https://attacker.example".parse().expect("origin"),
+    );
+    assert_eq!(send(&state, forged).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        check(&state, &h),
+        SessionCheck::Valid,
+        "the session survives"
+    );
 }
 
 /// E5-T15: GET cannot log anybody out, so a link or an image cannot either.
@@ -562,6 +601,16 @@ async fn bootstrap_redeems_past_a_dead_cookie() {
         "a new session cookie is set: {}",
         out.set_cookie()
     );
+    let fresh = out
+        .set_cookie()
+        .split(';')
+        .next()
+        .and_then(|c| c.strip_prefix(&format!("{SESSION_COOKIE}=")))
+        .expect("the new handle")
+        .to_string();
+    assert!(is_admin_view(
+        &send(&state, get(STATUS, Some(&fresh))).await
+    ));
 }
 
 /// The link the dashboard-link endpoint returned, for `credential`.
@@ -643,9 +692,53 @@ async fn only_a_static_admin_credential_may_mint_a_link() {
 #[tokio::test]
 async fn no_link_is_minted_for_a_network_bind() {
     let (state, _dir) = fixture().await;
-    reload(&state, |c| c.server.host = "10.0.0.5".to_string());
+    let mut running = (*state.live_config.get()).clone();
+    running.server.host = "10.0.0.5".to_string();
+    let state = with_running(state, running);
     let before = state.dashboard_bootstrap.peek();
     let out = mint(&state, Some(ADMIN_KEY), None).await;
     assert_eq!(out.status, StatusCode::CONFLICT, "{}", out.body);
     assert_eq!(state.dashboard_bootstrap.peek(), before, "nothing re-armed");
+}
+
+/// A wildcard bind, in any spelling, mints a loopback link a browser here can
+/// open; `localhost` keeps its name.
+#[tokio::test]
+async fn a_wildcard_bind_mints_a_loopback_link() {
+    for (bind, host) in [
+        ("0.0.0.0", "127.0.0.1"),
+        ("::", "[::1]"),
+        ("0:0:0:0:0:0:0:0", "[::1]"),
+        ("localhost", "localhost"),
+    ] {
+        let (state, _dir) = fixture().await;
+        let mut running = (*state.live_config.get()).clone();
+        running.server.host = bind.to_string();
+        let state = with_running(state, running);
+        let out = mint(&state, Some(ADMIN_KEY), None).await;
+        assert_eq!(out.status, StatusCode::OK, "{bind}: {}", out.body);
+        let link = out.json()["link"].as_str().unwrap_or_default().to_string();
+        assert!(
+            link.starts_with(&format!("http://{host}:")),
+            "{bind}: {link}"
+        );
+    }
+}
+
+/// Session limits apply on reload, so a reload that changes only them is not
+/// reported as waiting for a restart; any other `auth` change still is.
+#[test]
+fn session_limits_are_not_reported_as_restart_only() {
+    let live = crate::config_reload::LiveConfig::new(crate::config::Config::default());
+    let mut wanted = crate::config::Config::default();
+    wanted.auth.dashboard_session.idle_timeout_secs = 600;
+    live.set(wanted.clone());
+    assert!(
+        !live.pending_restart_fields().contains(&"auth"),
+        "{:?}",
+        live.pending_restart_fields()
+    );
+    wanted.auth.enabled = true;
+    live.set(wanted);
+    assert!(live.pending_restart_fields().contains(&"auth"));
 }
