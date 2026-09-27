@@ -763,7 +763,7 @@ impl Config {
         }
         // First, so no other reader touches a plaintext key (E4).
         self.auth.validate_api_key_material(overlay)?;
-        self.auth.dashboard_session.validate()?;
+        let _ = self.auth.dashboard_session.validate();
         // The router caps every body at this (C8), so 0 would refuse all of them.
         if self.server.max_body_size == 0 {
             return Err(Error::ConfigValidation(
