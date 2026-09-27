@@ -93,7 +93,7 @@ pub(super) struct EnvPoller {
     stalled: bool,
     read: PollRead,
     /// Ticks started, for tests that count loop iterations.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     ticks: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -106,13 +106,13 @@ impl EnvPoller {
             pending: None,
             stalled: false,
             read: env_poll,
-            #[cfg(test)]
+            #[cfg(all(test, target_os = "linux"))]
             ticks: Arc::default(),
         }
     }
 
     /// A handle on the count of ticks started.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn ticks(&self) -> Arc<std::sync::atomic::AtomicUsize> {
         Arc::clone(&self.ticks)
     }
@@ -127,7 +127,7 @@ impl EnvPoller {
     /// The reload to trigger this tick, if any. Waits at most `wait` for the
     /// read, so the caller always gets back to its shutdown check.
     pub(super) async fn tick(&mut self, wait: std::time::Duration) -> Option<ReloadTrigger> {
-        #[cfg(test)]
+        #[cfg(all(test, target_os = "linux"))]
         self.ticks.fetch_add(1, Ordering::SeqCst);
         if self.pending.is_none() && self.env.env_paths().as_paths().is_empty() {
             // No env files, the default: nothing to read, so no thread.
