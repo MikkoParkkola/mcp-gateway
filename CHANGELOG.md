@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+<!-- New entries go in changelog.d/<number>.<type>.md (see CONTRIBUTING.md); they are folded in here at release. -->
 
 ### Highlights
 
