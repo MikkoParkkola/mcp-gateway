@@ -106,7 +106,7 @@ accounts:
     public_origin: https://chat.fixture.test
     return_paths: [/]
 "#,
-        env = env.display()
+        env = env.display().to_string().replace('\'', "''")
     ))
     .unwrap()
 }
