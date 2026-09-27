@@ -31,8 +31,9 @@ fn yaml(auth: bool, store_dir: Option<&Path>) -> String {
         use std::fmt::Write as _;
         let _ = write!(
             y,
-            "control_plane:\n  store_dir: \"{}\"\n",
-            dir.to_string_lossy()
+            // Single-quoted: a Windows path's backslashes stay literal.
+            "control_plane:\n  store_dir: '{}'\n",
+            dir.to_string_lossy().replace('\'', "''")
         );
     }
     y

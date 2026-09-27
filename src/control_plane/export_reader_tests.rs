@@ -67,9 +67,12 @@ fn export_rescans_once_when_a_listed_file_vanishes() {
     (0..3).for_each(|i| event(&l, &format!("a{i}")));
     let mut exp = exporter(dir.path(), &log);
     let (p, gone) = (log.clone(), sibling(&log, "moved"));
+    // Gone between the listing and the open; back before the rescan lists.
     set(&EXPORT_LISTED, move || {
         std::fs::rename(&p, &gone).unwrap();
-        set(&EXPORT_LISTED, move || std::fs::rename(&gone, &p).unwrap());
+        set(&EXPORT_AFTER_SCAN, move || {
+            std::fs::rename(&gone, &p).unwrap();
+        });
     });
     EXPORT_PASSES.with(|c| c.set(0));
     let sink = CollectingSink::new();
@@ -158,6 +161,19 @@ fn export_reports_busy_when_segments_change_on_both_scans() {
         exp.poll(&sink).unwrap().forwarded >= 3,
         "the next poll recovers"
     );
+}
+
+/// A log never written (the governance log with auth off): an empty poll,
+/// not a busy log on every poll.
+#[test]
+fn export_of_an_absent_log_is_an_empty_poll() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let mut exp = exporter(dir.path(), &log);
+    EXPORT_PASSES.with(|c| c.set(0));
+    let out = exp.poll(&CollectingSink::new()).unwrap();
+    assert_eq!(out.forwarded, 0);
+    assert_eq!(passes(), 1, "an absent log is not a rotation");
 }
 
 /// Growth during the scan: no rescan.

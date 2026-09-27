@@ -40,7 +40,11 @@ fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBu
         .filter(|s| from.is_none_or(|f| s.seq >= f))
         .map(|s| (s.seq, s.path, false))
         .collect();
-    out.push((active_seq, log_path.to_path_buf(), true));
+    // An absent active file (a log never written) is not listed, so it is
+    // an empty scan rather than a vanish on every poll.
+    if log_path.exists() {
+        out.push((active_seq, log_path.to_path_buf(), true));
+    }
     Ok(out)
 }
 
@@ -69,12 +73,16 @@ impl LogExporter {
         let mut attempt = 0;
         loop {
             let all = listed(&self.log_path)?;
-            let scan = self.scan_once(anchor, from, &all)?;
+            let result = self.scan_once(anchor, from, &all);
             hook_after_scan();
             let seqs = |f: &[(u64, PathBuf, bool)]| f.iter().map(|x| x.0).collect::<Vec<_>>();
             let stable = seqs(&all) == seqs(&files(&self.log_path, None)?);
-            if stable && !scan.vanished {
-                return Ok(scan);
+            // A failed pass over a list that changed under it (say a chain
+            // break read across a rotation) is retried like any other.
+            match result {
+                Ok(scan) if stable && !scan.vanished => return Ok(scan),
+                Err(e) if stable => return Err(e),
+                _ => {}
             }
             if attempt == 1 {
                 return Err(ExportError::Io(std::io::Error::new(
@@ -107,7 +115,15 @@ impl LogExporter {
         let mut passed = anchor == "genesis";
         let mut running_prev: Option<String> = passed.then(|| "genesis".to_string());
         let checkpoint = anchor.to_string();
-        for (seq, path, active) in files(&self.log_path, if passed { None } else { from })? {
+        // This pass reads the listing it was given (sealed files from the
+        // cursor's segment on, unless the anchor is genesis; the active file).
+        let floor = if passed { None } else { from };
+        let wanted: Vec<_> = all
+            .iter()
+            .filter(|f| f.2 || floor.is_none_or(|s| f.0 >= s))
+            .cloned()
+            .collect();
+        for (seq, path, active) in wanted {
             let file = match std::fs::File::open(&path) {
                 Ok(f) => f,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

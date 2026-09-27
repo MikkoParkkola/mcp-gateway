@@ -520,8 +520,8 @@ impl TransparencyLogger {
             .inner
             .lock()
             .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
-        // Rotation, the disk-full path and the one `<path>.lock` acquisition
-        // all run under `Inner`, so `record_append` sees only the final result.
+        // Rotation and the disk-full path run under `Inner` (and the lease
+        // held since open), so `record_append` sees only the final result.
         self.append_locked(&mut inner, fields, resync)
     }
 }
