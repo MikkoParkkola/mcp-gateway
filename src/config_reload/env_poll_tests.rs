@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `env_poll` and `WarnLimiter` (#1286): pure, no timing.
+//! `env_poll`, `WarnLimiter` and `EnvPoller` (#1286).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -300,4 +300,50 @@ fn u18_a_path_recorded_absent_and_loaded_differs() {
     assert_eq!(env_poll(&overlay, &paths), Some(p.clone()));
     std::fs::remove_file(&p).unwrap();
     assert_eq!(env_poll(&overlay, &paths), Some(p));
+}
+
+/// A poll read that never finishes in time, like a stalled NFS mount.
+fn stalled_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
+    std::thread::sleep(Duration::from_secs(10));
+    None
+}
+
+/// U19: a stalled read does not hold the tick, so the rewatch loop gets
+/// back to its shutdown check; the next tick waits on the same read.
+#[tokio::test]
+async fn u19_a_stalled_read_returns_within_the_wait() {
+    let mut poller = super::EnvPoller::new(
+        std::sync::Arc::default(),
+        std::sync::Arc::default(),
+        PathBuf::from("/cfg.yaml"),
+    )
+    .with_read(stalled_read);
+    for _ in 0..2 {
+        let tick = tokio::time::timeout(
+            Duration::from_secs(2),
+            poller.tick(Duration::from_millis(100)),
+        )
+        .await;
+        assert!(
+            matches!(tick, Ok(None)),
+            "a stalled read must not hold the tick"
+        );
+    }
+}
+
+/// U20: a failed config-file reload is recorded under the config path, so
+/// the first retry of the same error does not warn a second time.
+#[test]
+fn u20_a_config_file_failure_primes_the_limiter_for_its_retries() {
+    use super::super::ReloadTrigger;
+    let counts = super::EnvReloadCounts::default();
+    let mut limiter = WarnLimiter::default();
+    let config = PathBuf::from("/cfg.yaml");
+    counts.settled(&mut limiter, Some("E"), &ReloadTrigger::ConfigFile, &config);
+    counts.report_failure(&mut limiter, &ReloadTrigger::Retry(config), "E");
+    assert_eq!(
+        counts.warns.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the retry repeats the config-file failure's warning"
+    );
 }

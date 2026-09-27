@@ -1203,6 +1203,7 @@ impl ConfigWatcher {
             // covering the reload lock only ever exercised the other two entry
             // points: an edit that moved the lock here alone would not have
             // failed a single test.
+            let retry_key = config_path.clone();
             let ctx =
                 ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl)
                     .with_env(env)
@@ -1227,7 +1228,8 @@ impl ConfigWatcher {
                             env_poll::log_trigger(&trigger);
                             env_reloads.count_attempt(&trigger);
                             let result = ctx.reload_outcome().await;
-                            env_reloads.settled(&mut env_warns, result.is_ok());
+                            let error = result.as_ref().err().map(String::as_str);
+                            env_reloads.settled(&mut env_warns, error, &trigger, &retry_key);
                             match (result, &trigger) {
                                 (Ok(outcome), ReloadTrigger::EnvFile(path)) => {
                                     env_poll::report_reloaded(path, &outcome);

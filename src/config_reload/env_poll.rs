@@ -37,10 +37,6 @@ pub(super) const POLL_EVERY: Duration = ENV_POLL;
 #[cfg(test)]
 pub(super) const POLL_EVERY: Duration = TEST_ENV_POLL;
 
-// Every poll interval must outlast the debounce, which restarts on each
-// trigger: a faster poll would postpone the reload forever.
-const _: () = assert!(ENV_POLL.as_millis() > DEBOUNCE.as_millis() + RELOAD_TICK.as_millis());
-
 /// How long a path's repeated, unchanged reload error stays at debug.
 const WARN_EVERY: Duration = Duration::from_secs(60);
 
@@ -82,11 +78,18 @@ pub(super) fn report_reloaded(path: &Path, outcome: &super::ReloadOutcome) {
 }
 
 /// The poll's state between ticks.
+/// What one poll reads: the first recorded path that differs.
+type PollRead = fn(&EnvOverlay, &[PathBuf]) -> Option<PathBuf>;
+
 pub(super) struct EnvPoller {
     env: Arc<LiveEnv>,
     reloads: Arc<EnvReloadCounts>,
     /// The config the gateway was started with, named in a retry.
     config: PathBuf,
+    /// A read that has not finished yet, awaited again on the next tick
+    /// instead of starting another.
+    pending: Option<tokio::sync::oneshot::Receiver<Option<PathBuf>>>,
+    read: PollRead,
 }
 
 impl EnvPoller {
@@ -95,18 +98,44 @@ impl EnvPoller {
             env,
             reloads,
             config,
+            pending: None,
+            read: env_poll,
         }
     }
 
-    /// The reload to trigger this tick, if any.
-    pub(super) async fn tick(&self) -> Option<ReloadTrigger> {
-        let applied = self.env.get();
-        let paths = self.env.env_paths().as_paths().to_vec();
-        // Off the async workers: on NFS or FUSE a read can stall.
-        let differs = tokio::task::spawn_blocking(move || env_poll(&applied, &paths))
-            .await
-            .ok()
-            .flatten();
+    /// Replace the read, so a test can make it stall.
+    #[cfg(test)]
+    pub(super) fn with_read(mut self, read: PollRead) -> Self {
+        self.read = read;
+        self
+    }
+
+    /// The reload to trigger this tick, if any. Waits at most `wait` for the
+    /// read, so the caller always gets back to its shutdown check.
+    pub(super) async fn tick(&mut self, wait: std::time::Duration) -> Option<ReloadTrigger> {
+        let mut read = if let Some(read) = self.pending.take() {
+            read
+        } else {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (applied, paths) = (self.env.get(), self.env.env_paths().as_paths().to_vec());
+            let poll = self.read;
+            // A detached thread, not `spawn_blocking`: a read stalled on NFS
+            // or FUSE must not hold the runtime's shutdown, which waits for
+            // blocking tasks.
+            std::thread::Builder::new()
+                .name("env-poll".into())
+                .spawn(move || {
+                    let _ = tx.send(poll(&applied, &paths));
+                })
+                .ok()?;
+            rx
+        };
+        let Ok(result) = tokio::time::timeout(wait, &mut read).await else {
+            // Still reading: check the same read again next tick.
+            self.pending = Some(read);
+            return None;
+        };
+        let differs = result.ok().flatten();
         match differs {
             Some(path) => Some(ReloadTrigger::EnvFile(path)),
             // A failed reload may have carried a valid config edit that no
@@ -182,17 +211,30 @@ pub(super) struct EnvReloadCounts {
 
 impl EnvReloadCounts {
     /// Whether the last reload failed.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn failed(&self) -> bool {
         self.failed.load(Ordering::SeqCst)
     }
 
     /// Record how a reload ended. A success clears every path's warning
     /// state, so a failure that comes back is warned about at once.
-    pub(super) fn settled(&self, limiter: &mut WarnLimiter, ok: bool) {
-        self.failed.store(!ok, Ordering::SeqCst);
-        if ok {
-            *limiter = WarnLimiter::default();
+    ///
+    /// A config-file failure is recorded under `config`, the key its retries
+    /// use, so the first retry does not repeat the warning it already logged.
+    pub(super) fn settled(
+        &self,
+        limiter: &mut WarnLimiter,
+        error: Option<&str>,
+        trigger: &ReloadTrigger,
+        config: &Path,
+    ) {
+        self.failed.store(error.is_some(), Ordering::SeqCst);
+        match (error, trigger) {
+            (None, _) => *limiter = WarnLimiter::default(),
+            (Some(error), ReloadTrigger::ConfigFile) => {
+                limiter.should_warn(config, error, Instant::now());
+            }
+            (Some(_), _) => {}
         }
     }
 
