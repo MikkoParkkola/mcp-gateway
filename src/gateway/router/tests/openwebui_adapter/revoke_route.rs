@@ -82,7 +82,7 @@ accounts:
       resource: {RESOURCE}
       issuer: {ISSUER}
 {hosted}"#,
-        env = env.display()
+        env = env.display().to_string().replace('\'', "''")
     ))
     .unwrap()
 }

@@ -90,7 +90,7 @@ accounts:
       issuer: https://issuer.fixture.test
       redirect_uri: https://chat.fixture.test/accounts/v1/callback
 {hosted}"#,
-        env = env.display()
+        env = env.display().to_string().replace('\'', "''")
     ))
     .unwrap()
 }
