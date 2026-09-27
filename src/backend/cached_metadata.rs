@@ -237,8 +237,9 @@ impl<T> CachedMetadata<T> {
         loop {
             match self.acquire(ttl) {
                 CacheFetchState::Cached(value) => return Ok(value),
-                CacheFetchState::Wait(mut receiver) => {
-                    let _ = receiver.changed().await;
+                CacheFetchState::Wait(receiver) => {
+                    drop(receiver);
+                    return fetch().await.map(|(value, _)| Arc::new(value));
                 }
                 CacheFetchState::Fetch(permit) => {
                     let result = fetch().await;
