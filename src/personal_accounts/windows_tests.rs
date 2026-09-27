@@ -281,11 +281,10 @@ fn wt17_reader_closes_before_replace() {
     ));
     let _ = (instrument::take_trace(), instrument::take_attempts());
     let first = grant();
+    let refreshed_now = store.refresh_tokens(&alice(), &version(&first), &refreshed(&first));
     assert!(
-        store
-            .refresh_tokens(&alice(), &version(&first), &refreshed(&first))
-            .is_ok(),
-        "WT-ASSERT W-T17: the refresh's replace was blocked with no outside holder"
+        refreshed_now.is_ok(),
+        "WT-ASSERT W-T17: the refresh failed with no outside holder: {refreshed_now:?}"
     );
     let replaces = instrument::take_trace()
         .iter()
@@ -628,5 +627,82 @@ fn wt16b_judged_directory_is_held_until_custody() {
             Ok(Ok(AccountLookup::Connected(_)))
         ),
         "WT-ASSERT W-T16b: the store did not open over what it judged"
+    );
+}
+
+// W-T10c: a 3.x token swapped for a symlink after the path check and before
+// the open is refused: the open does not follow it.
+#[test]
+fn wt10c_legacy_token_swapped_for_a_link_refuses() {
+    let (root, path) = legacy_token("W-T10c");
+    let user = crate::private_fs::test_support::user_sid();
+    icacls(
+        "W-T10c",
+        &path,
+        &["/inheritance:r", "/grant:r", &format!("*{user}:F")],
+    );
+    let target = root.path().join("private_target.json");
+    std::fs::copy(&path, &target).unwrap();
+    icacls(
+        "W-T10c",
+        &target,
+        &["/inheritance:r", "/grant:r", &format!("*{user}:F")],
+    );
+    assert!(
+        read_legacy_source(&path).is_ok(),
+        "WT-FIXTURE W-T10c: the private token itself must read"
+    );
+    let (link, to) = (path.clone(), target.clone());
+    instrument::set_hook(Some(Box::new(move |which, p| {
+        if which == Hook::BeforeRecordOpen && p == link {
+            std::fs::remove_file(&link).unwrap();
+            std::os::windows::fs::symlink_file(&to, &link).unwrap();
+        }
+    })));
+    let read = read_legacy_source(&path);
+    instrument::set_hook(None);
+    assert!(
+        matches!(read, Err(SourceRefusal::NotPrivate { .. })),
+        "WT-ASSERT W-T10c: a link swapped in before the open was followed: {read:?}"
+    );
+}
+
+// W-T10d: a deny naming the user is removed by the printed repair.
+#[test]
+fn wt10d_remediation_removes_a_user_deny() {
+    use std::os::windows::process::CommandExt as _;
+    let (_root, path) = legacy_token("W-T10d");
+    let user = crate::private_fs::test_support::user_sid();
+    icacls(
+        "W-T10d",
+        &path,
+        &["/inheritance:r", "/grant:r", &format!("*{user}:F")],
+    );
+    icacls("W-T10d", &path, &["/deny", &format!("*{user}:(WD)")]);
+    let text = read_legacy_source(&path)
+        .err()
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    assert!(
+        text.contains("NoReadWrite"),
+        "WT-FIXTURE W-T10d: the planted deny did not fail P3: {text}"
+    );
+    for command in text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("icacls "))
+    {
+        let ran = std::process::Command::new("cmd")
+            .arg("/C")
+            .raw_arg(command)
+            .status();
+        if !ran.is_ok_and(|s| s.success()) {
+            fixture_fail("W-T10d", &format!("remediation command failed: {command}"));
+        }
+    }
+    let after = read_legacy_source(&path);
+    assert!(
+        after.is_ok(),
+        "WT-ASSERT W-T10d: still refused after the printed repair: {after:?}"
     );
 }

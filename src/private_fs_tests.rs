@@ -149,41 +149,42 @@ fn wt8c_inherit_only_grant_refuses() {
     assert_eq!(got, Err(PrivacyRefusal::NoReadWrite), "WT-ASSERT W-T8c");
 }
 
-// W-T8d: a deny naming the user that takes away write fails P3.
+// W-T8d: a deny naming the user that takes away write data fails P3. Only
+// FILE_WRITE_DATA is denied, so the fixture's own read open still works.
 #[test]
 fn wt8d_user_deny_refuses() {
     let user = user_sid();
-    let sddl = format!("O:{user}D:P(D;;FW;;;{user})(A;;FA;;;{user})");
-    let got = judged_after_plant("W-T8d", &sddl, &sddl);
-    assert_eq!(got, Err(PrivacyRefusal::NoReadWrite), "WT-ASSERT W-T8d");
+    let sddl = format!("O:{user}D:P(D;;0x2;;;{user})(A;;FA;;;{user})");
+    let root = tempfile::tempdir().unwrap();
+    let file = private_file_in(root.path(), "record.json");
+    // The read-back spells 0x2 as an alias, so require only that a deny for
+    // the user survived the plant.
+    let back = super::test_support::plant_any("W-T8d", &file, &sddl);
+    if !back.contains("(D;;") || !back.contains(&user) {
+        super::test_support::fixture_fail("W-T8d", &format!("planted {sddl}, read back {back}"));
+    }
+    assert_eq!(
+        judge_path(&file),
+        Err(PrivacyRefusal::NoReadWrite),
+        "WT-ASSERT W-T8d: {back}"
+    );
 }
 
-// W-T8e: a generic read+write grant to the user satisfies P3, and a deny
-// that applies to children only takes nothing away (accept side of P3).
+// W-T8e: a deny that applies to children only takes nothing away (accept
+// side of P3). A generic grant cannot be planted: Windows maps GENERIC_*
+// rights to specific ones when it stores the ACE.
 #[test]
-fn wt8e_generic_grant_and_inherit_only_deny_accepted() {
+fn wt8e_inherit_only_deny_accepted() {
     let user = user_sid();
-    for (row, sddl, kept) in [
-        (
-            "W-T8e/generic",
-            format!("O:{user}D:P(A;;GRGW;;;{user})"),
-            "GRGW",
-        ),
-        (
-            "W-T8e/io-deny",
-            format!("O:{user}D:P(D;IO;FA;;;{user})(A;;FA;;;{user})"),
-            "(D;IO;",
-        ),
-    ] {
-        let root = tempfile::tempdir().unwrap();
-        let file = private_file_in(root.path(), "record.json");
-        let back = super::test_support::plant_any(row, &file, &sddl);
-        // The row only proves something if Windows kept what it tests.
-        if !back.contains(kept) {
-            super::test_support::fixture_fail(row, &format!("planted {sddl}, read back {back}"));
-        }
-        assert_eq!(judge_path(&file), Ok(()), "WT-ASSERT {row}: {back}");
+    let sddl = format!("O:{user}D:P(D;IO;FA;;;{user})(A;;FA;;;{user})");
+    let root = tempfile::tempdir().unwrap();
+    let file = private_file_in(root.path(), "record.json");
+    let back = super::test_support::plant_any("W-T8e", &file, &sddl);
+    // The row only proves something if Windows kept the inherit-only deny.
+    if !back.contains("(D;IO;") {
+        super::test_support::fixture_fail("W-T8e", &format!("planted {sddl}, read back {back}"));
     }
+    assert_eq!(judge_path(&file), Ok(()), "WT-ASSERT W-T8e: {back}");
 }
 
 // W-T11: only P4 fails (owner BUILTIN\Administrators).

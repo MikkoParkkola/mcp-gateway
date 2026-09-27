@@ -113,6 +113,12 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     // the private-directory precondition is already violated, which is exactly
     // when a defence has to hold. The re-check below is against the OPEN
     // handle's own metadata, which no rename can change.
+    // Windows opens without following a reparse point, so a link swapped in
+    // after the check above is refused by the handle's own type below.
+    #[cfg(windows)]
+    let mut file =
+        crate::private_fs::open_file_read(path).map_err(|_| not_private(shown.clone(), ""))?;
+    #[cfg(not(windows))]
     let mut file = std::fs::File::open(path).map_err(|_| not_private(shown.clone(), ""))?;
     let opened = file
         .metadata()
@@ -196,6 +202,10 @@ fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) 
     out.push_str(":\n");
     if found.iter().any(|r| matches!(r, P::ForeignOwner(_))) {
         let _ = writeln!(out, "icacls \"{path}\" /setowner \"{me}\"");
+    }
+    // `/grant:r` replaces allow grants only; a deny naming the user survives it.
+    if found.iter().any(|r| matches!(r, P::NoReadWrite)) {
+        let _ = writeln!(out, "icacls \"{path}\" /remove:d \"{me}\"");
     }
     let _ = writeln!(out, "icacls \"{path}\" /inheritance:r /grant:r \"{me}:F\"");
     for refusal in found {
