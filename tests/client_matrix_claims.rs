@@ -261,7 +261,7 @@ fn parse_verified(status: &str) -> Option<Verified> {
     let commit = code_spans(parts.next()?.strip_prefix("gateway ")?)
         .into_iter()
         .next()?;
-    let file = rest.split("](").nth(1)?.split(')').next()?.to_string();
+    let file = rest.split("[run](").nth(1)?.split(')').next()?.to_string();
     Some(Verified {
         version,
         date,
@@ -314,20 +314,49 @@ fn has_token(cell: &str, token: &str) -> bool {
     !token.is_empty()
         && cell.match_indices(token).any(|(i, _)| {
             let before = cell[..i].chars().next_back();
-            let after = cell[i + token.len()..].chars().next();
-            // A trailing `.` may end a sentence; any other version character
-            // continues the token.
-            !before.is_some_and(part) && !after.is_some_and(|c| part(c) && c != '.')
+            let rest = &cell[i + token.len()..];
+            // A `.` ends a sentence only when no version component follows it.
+            let continues = rest.starts_with('.')
+                && rest[1..].starts_with(|c: char| c.is_ascii_alphanumeric())
+                || rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-');
+            !before.is_some_and(part) && !continues
+        })
+}
+
+/// Whether `cell` begins with the whole value `value`: it is the entire cell
+/// or is followed by `;`, `,` or ` (`, so `Mikko` does not match
+/// `Mikko Parkkola` and `Claude` does not match `Claude Code`.
+fn leads_with(cell: &str, value: &str) -> bool {
+    !value.is_empty()
+        && cell.strip_prefix(value).is_some_and(|rest| {
+            rest.is_empty()
+                || rest.starts_with(';')
+                || rest.starts_with(',')
+                || rest.starts_with(" (")
         })
 }
 
 #[test]
 fn run_field_matching_is_exact() {
-    let run = "| Client | Claude Code (CLI), `2.1.280 (Claude Code)` |\n| Owner | |\n";
-    assert!(has_token(run_field(run, "Client"), "2.1.280"));
-    assert!(!has_token(run_field(run, "Client"), "2.1.28"));
+    let run = "| Client | Claude Code (CLI), `2.1.280 (Claude Code)` |\n| Owner | |\n\
+               | Date | 2026-09-23 (UTC 00:05) |\n| Gateway | built at `e3c8645f` (x) |\n";
+    let client = run_field(run, "Client");
+    assert!(has_token(client, "2.1.280"));
+    for wrong in ["2.1.28", "2.1", "2"] {
+        assert!(!has_token(client, wrong), "{wrong} must not match 2.1.280");
+    }
+    assert!(!has_token("`2.1.280.1`", "2.1.280"));
+    assert!(has_token("ran 2.1.280.", "2.1.280"));
+    assert!(leads_with(client, "Claude Code"));
+    assert!(!leads_with(client, "Claude"));
     assert_eq!(run_field(run, "Owner"), "");
-    assert!(!has_token(run_field(run, "Owner"), "Owner"));
+    assert!(!leads_with(run_field(run, "Owner"), "Owner"));
+    assert!(leads_with("Mikko Parkkola; run by x", "Mikko Parkkola"));
+    assert!(!leads_with("Mikko Parkkola; run by x", "Mikko"));
+    assert!(leads_with(run_field(run, "Date"), "2026-09-23"));
+    assert!(!leads_with(run_field(run, "Date"), "2026-09-2"));
+    assert!(has_token(run_field(run, "Gateway"), "e3c8645f"));
+    assert!(!has_token(run_field(run, "Gateway"), "e3c8645"));
 }
 
 /// Every row is verified from a recorded run or says Unverified. A verified
@@ -364,16 +393,16 @@ fn every_row_is_backed_by_a_recorded_run_or_unverified() {
             .unwrap_or_else(|_| panic!("{client}: evidence file {} is missing", v.file));
         let client_cell = run_field(&run, "Client");
         assert!(
-            client_cell.starts_with(&label_of(&client)) && has_token(client_cell, &v.version),
+            leads_with(client_cell, &label_of(&client)) && has_token(client_cell, &v.version),
             "{client}: the run's Client field does not name this client at {}",
             v.version
         );
         assert!(
-            run_field(&run, "Date").starts_with(&v.date),
+            leads_with(run_field(&run, "Date"), &v.date),
             "{client}: run date"
         );
         assert!(
-            run_field(&run, "Owner").starts_with(&v.owner),
+            leads_with(run_field(&run, "Owner"), &v.owner),
             "{client}: run owner"
         );
         assert!(

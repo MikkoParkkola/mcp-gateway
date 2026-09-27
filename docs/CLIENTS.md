@@ -32,7 +32,7 @@ Desktop, Windsurf and Zed count as not installed.
 | VS Code Copilot | `vs-code-copilot` | `servers` | `.vscode/mcp.json` in the workspace | Unverified |
 | Windsurf (Devin Desktop) | `windsurf` | `mcpServers` | `~/.codeium/windsurf/mcp_config.json` | Unverified |
 | Cline | `cline` | `mcpServers` | `.cline/mcp_servers.json` in the workspace | Unverified |
-| Zed | `zed` | `context_servers` | macOS `~/Library/Application Support/Zed/settings.json`, elsewhere `~/.config/zed/settings.json` | Unverified |
+| Zed | `zed` | `context_servers` | macOS `~/Library/Application Support/Zed/settings.json`, elsewhere `~/.config/zed/settings.json` | Unverified. With `--mode stdio`, export writes `command` as a string, while the gateway's own Zed importer reads `command.path`; one of the two shapes is wrong for Zed, and no run has settled which |
 
 `--target generic` prints the entry to stdout, under `mcpServers`, for any
 other client, and `--target all` writes every file above that is not skipped.
