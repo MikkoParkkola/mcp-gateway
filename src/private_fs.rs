@@ -117,7 +117,7 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
             Ace::Allowed { flags, mask, sid } => {
                 inherited |= flags & INHERITED != 0;
                 if sid != user {
-                    found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
+                    let _ = sid;
                 } else if flags & INHERIT_ONLY == 0 {
                     read_write |= mask & GENERIC_ALL != 0
                         || mask & READ_WRITE == READ_WRITE
