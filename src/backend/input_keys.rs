@@ -129,16 +129,17 @@ impl Backend {
             Err(_) => return Ok(unavailable(mode)),
         };
         // A store voided by a newer list (a direct-route list replaced the
-        // slot mid-fill) is judged from that newer list; a store voided by an
-        // invalidation leaves the slot empty and is judged from this one.
-        let voided = matches!(completeness, Completeness::Unknown);
-        let newer = voided
-            .then(|| self.get_cached_tool_for(identity_key, tool))
+        // slot mid-fill; stored complete) is judged wholly from that list,
+        // presence and absence alike; a store voided by an invalidation
+        // leaves the slot empty and is judged from this one.
+        let newer = matches!(completeness, Completeness::Unknown)
+            .then(|| self.held_tools_for(identity_key))
             .flatten();
-        if let Some(found) = newer
-            .as_ref()
-            .or_else(|| tools.iter().find(|t| t.name == tool))
-        {
+        let (tools, completeness) = match newer {
+            Some(newer) => (newer, Completeness::Complete),
+            None => (tools, completeness),
+        };
+        if let Some(found) = tools.iter().find(|t| t.name == tool) {
             return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
         }
         Ok(match completeness {
@@ -218,12 +219,9 @@ impl Backend {
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             // A readable list is proof the slot recovered: end both
-            // cooldowns, and void any in-flight fill's claim to restart one.
+            // cooldowns. A fill it voids sees the value and stamps nothing.
             *entry.tools_fill_failed_at.lock() = None;
             *entry.tools_refresh_failed_at.lock() = None;
-            entry
-                .tools_direct_epoch
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
     }
 }

@@ -10,7 +10,6 @@
 //! the fill ends without storing, and never on a caller cancellation.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::LIST_MAX_PAGES;
@@ -109,17 +108,13 @@ pub(crate) enum FillEnd {
 pub(crate) struct FillGuard {
     entry: Arc<PooledEntry>,
     end: FillEnd,
-    /// The slot's direct-list epoch when the fill was armed.
-    epoch: u64,
 }
 
 impl FillGuard {
     pub(super) fn arm(entry: Arc<PooledEntry>) -> Self {
-        let epoch = entry.tools_direct_epoch.load(Ordering::SeqCst);
         Self {
             entry,
             end: FillEnd::Pending,
-            epoch,
         }
     }
 
@@ -141,10 +136,16 @@ impl Drop for FillGuard {
             }
             FillEnd::Unreplayable => count("input_schema_fetch_failed"),
             FillEnd::Drained => {
-                // Voided by a newer direct list: that list ended the cooldown.
-                if self.entry.tools_direct_epoch.load(Ordering::SeqCst) == self.epoch {
-                    *stamp.lock() = Some((tokio::time::Instant::now(), None));
-                }
+                // Voided. Stamp only if the slot is still empty (an
+                // invalidation). A newer list already stored ended the
+                // cooldown. Checked and stamped under the cache's read guard,
+                // so a direct list (which stores and clears the stamp under
+                // the write guard) lands wholly before or after.
+                self.entry.tools_cache.with_cached(|held| {
+                    if held.is_none() {
+                        *stamp.lock() = Some((tokio::time::Instant::now(), None));
+                    }
+                });
                 count("input_schema_fetched");
             }
             FillEnd::Stored => {

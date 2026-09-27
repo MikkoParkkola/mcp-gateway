@@ -175,6 +175,11 @@ impl Backend {
         self.get_cached_tool_for(None, name)
     }
 
+    /// The list `binding`'s slot holds now, fresh or not; `None` when empty.
+    pub(super) fn held_tools_for(&self, binding: Option<&str>) -> Option<Arc<Vec<Tool>>> {
+        self.tools_slot(binding).tools_cache.snapshot_shared()
+    }
+
     /// Snapshot of the tools cached on `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tools_snapshot_for(&self, binding: Option<&str>) -> Arc<Vec<Tool>> {

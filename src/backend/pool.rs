@@ -116,9 +116,7 @@ pub(crate) struct PooledEntry {
     /// `LIST_FILL_COOLDOWN` of it a stale hit is judged from the held schema
     /// without listing, whatever the failure's class. Stale hits only.
     pub(crate) tools_refresh_failed_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
-    /// Bumped by every direct-route list stored in this slot. A fill voided
-    /// by that newer list must not restart the cooldown it just ended.
-    pub(crate) tools_direct_epoch: std::sync::atomic::AtomicU64,
+
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
@@ -207,7 +205,7 @@ impl PooledEntry {
             tools_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
-            tools_direct_epoch: std::sync::atomic::AtomicU64::new(0),
+
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),

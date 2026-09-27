@@ -286,8 +286,8 @@ async fn a3_t11_a_handshake_failure_answers_as_the_dispatch() {
 }
 
 /// Review fold: a fill voided by a newer direct-route list does not restart
-/// the cooldown that list ended. Mutant M33 (ignore the direct-list epoch)
-/// reddens it.
+/// the cooldown that list ended: the slot holds a value when the voided guard
+/// drops. Mutant M33 (stamp whatever the slot holds) reddens it.
 #[tokio::test]
 async fn a3_t12_a_fill_voided_by_a_direct_list_stamps_nothing() {
     let lister = Lister::new(Mode::Serve);
@@ -340,5 +340,30 @@ fn a3_t14_a_fill_voided_by_a_newer_list_is_judged_from_it() {
     assert!(
         matches!(out, Ok(None)),
         "judged from the superseded list: {out:?}"
+    );
+}
+
+/// Delta-review fold: a newer direct list that no longer carries the tool
+/// makes a voided fill's call a complete-list miss (text A), not a judgement
+/// against the superseded schema. Mutant M36 reddens it too.
+#[test]
+fn a3_t15_a_newer_list_without_the_tool_is_a_miss() {
+    let (out, _) = metered(true, async {
+        let lister = Lister::new(Mode::Barrier);
+        let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+        let other = json!({"name": "other", "inputSchema": {"type": "object"}});
+        let arguments = json!({"edits": []});
+        let (out, ()) = tokio::join!(check(&backend, "edit", &arguments), async {
+            lister.started.notified().await;
+            backend.remember_listed_tools(None, false, &[other]).await;
+            lister.release.notify_one();
+        });
+        out
+    });
+    let text = super::super::fill_check::text_absent("edit");
+    assert_eq!(
+        out.expect("a result"),
+        Some(text),
+        "judged from the superseded list"
     );
 }
