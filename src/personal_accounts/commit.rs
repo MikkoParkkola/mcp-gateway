@@ -84,8 +84,8 @@ pub(in crate::personal_accounts) mod next_scratch {
 fn create_scratch(dir: &Path, name: &str) -> Result<(fs::File, std::path::PathBuf), AccountError> {
     // Windows redraws (test plan W-T26); unix keeps its single attempt.
     const ATTEMPTS: usize = if cfg!(windows) { 4 } else { 1 };
+    let tmp = dir.join(scratch_name(name)?);
     for _ in 0..ATTEMPTS {
-        let tmp = dir.join(scratch_name(name)?);
         match open_private(&tmp) {
             Ok(file) => return Ok((file, tmp)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
