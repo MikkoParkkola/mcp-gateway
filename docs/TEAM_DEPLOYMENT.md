@@ -140,7 +140,7 @@ server:
   host: "0.0.0.0"
   port: 39400
   public_url: "https://mcp.example.com"
-  cleartext_http: tls_terminated_upstream
+  cleartext_htp: tls_terminated_upstream
 auth:
   enabled: true
   bearer_token: "env:MCP_GATEWAY_TOKEN"     # operator only
