@@ -109,6 +109,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
     ),
     (
+        "src/private_fs.rs",
+        "Windows store custody: no-follow open, DACL judged on the handle (ADR-016)",
+    ),
+    (
         "src/registry/marketplace/mod.rs",
         "marketplace manifests; public",
     ),
