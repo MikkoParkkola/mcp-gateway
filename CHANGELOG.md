@@ -46,6 +46,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend now gets its own cache directory. An operator-set
   `npm_config_cache` is left alone.
 
+- **A backend whose package install is unusable now repairs itself.** A package
+  manager says so on stderr and the child exits before it can answer the
+  handshake, so the transport's own error carried only `Backend timeout` and
+  nothing could tell that death apart from a backend that is merely dead. The
+  child's last stderr lines are now kept and settled with the error, and every
+  start of a backend passes through the repair: an install that names a missing
+  module has its cache cleared and is retried once. Because the decision sits on
+  the start path rather than inside the transport, it also reaches the starts
+  warm-start and the health probe make, and a failed start reports what the
+  child actually said. The delete is bounded to the per-backend caches the
+  gateway creates under its own data directory — a cache an operator pointed a
+  backend at by hand is never removed — and it runs on the blocking pool.
+
+- **Operator npm settings reach the package managers a backend spawns.**
+  `env_clear()` left a backend's installs with none of them, so a git-sourced
+  dependency was refused with `EALLOWGIT` unless that backend's own `env:` block
+  repeated the setting. Every `npm_config_*` setting is forwarded instead —
+  matched the way npm reads it, case-insensitively — except the cache directory
+  the gateway assigns per backend, and except credentials, which a backend
+  passes through its own config when it needs them.
+
 ### Changed
 - **A tool count is no longer reported as `0` before a backend has been
   enumerated.** `gateway_list_servers`, the `initialize` preamble and the

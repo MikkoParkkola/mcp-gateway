@@ -8,8 +8,9 @@
 //! error for supported versions and retries with the highest mutually
 //! supported version.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -71,11 +72,57 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
         }
     }
 
+    // Operator-level npm settings reach the package managers a backend shells
+    // out to. `npm_config_cache` is not forwarded — the gateway assigns that
+    // per backend, and a shared cache is what tears under concurrent installs —
+    // and a credential is not forwarded either, because a backend that needs
+    // one names it in its own config.
+    for (name, value) in forwarded_npm_config(std::env::vars_os()) {
+        cmd.env(name, value);
+    }
+
     // Backend configuration is authoritative and may intentionally override
     // a safe default such as PATH, HOME, or TMPDIR.
     for (key, value) in backend_env {
         cmd.env(key, value);
     }
+}
+
+const CACHE_ENV: &str = "npm_config_cache";
+
+/// How many stderr lines a failed start is reported with.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// How long a failed start waits for the child's stderr to be drained.
+const STDERR_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The operator's npm settings, minus the cache directory the gateway assigns
+/// per backend and minus anything carrying a credential.
+///
+/// npm reads its environment case-insensitively, so `NPM_CONFIG_ALLOW_GIT`
+/// counts as a setting exactly as the lowercase spelling does.
+fn forwarded_npm_config<I>(vars: I) -> Vec<(std::ffi::OsString, std::ffi::OsString)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    vars.into_iter()
+        .filter(|(key, _)| {
+            key.to_str().is_some_and(|name| {
+                let name = name.to_ascii_lowercase();
+                name.starts_with("npm_config_") && name != CACHE_ENV && !carries_credential(&name)
+            })
+        })
+        .collect()
+}
+
+/// Whether an npm setting is a credential rather than a behaviour.
+///
+/// `env_clear` keeps gateway secrets out of children, and a backend that needs
+/// registry credentials passes them through its own `env:` block, where the
+/// config names them. Inheriting whatever the gateway process happens to hold
+/// would put them in every backend instead.
+fn carries_credential(lowercase_key: &str) -> bool {
+    lowercase_key.contains("_auth") || lowercase_key.contains(":_password")
 }
 
 /// A per-backend npm cache, so backends sharing a command cannot tear one tree.
@@ -157,6 +204,16 @@ pub struct StdioTransport {
     /// flushing them when the call ends is collect-then-emit, which ADR-014 §1
     /// rejects: a progress update that arrives with the result is not progress.
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
+    /// The last lines the child wrote to stderr.
+    ///
+    /// A package manager that cannot use its install tree says so here and
+    /// dies before it can answer anything, so this is the only place that
+    /// failure is visible: it is what tells a failed install apart from a
+    /// backend that is merely dead, and what a failed start is reported with.
+    stderr_tail: Arc<std::sync::Mutex<VecDeque<String>>>,
+    /// The task draining the child's stderr, so a failure can wait for the
+    /// child's last words instead of racing them.
+    stderr_reader: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl StdioTransport {
@@ -185,19 +242,69 @@ impl StdioTransport {
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
             progress_destinations: dashmap::DashMap::new(),
+            stderr_tail: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+            stderr_reader: std::sync::Mutex::new(None),
         })
     }
 
-    fn diagnostic_command(&self) -> String {
+    pub(crate) fn diagnostic_command(&self) -> String {
         crate::security::summarize_stdio_command(&self.command)
     }
 
-    /// Start the subprocess
+    /// Drops what the previous attempt said, so each start is judged on its own.
+    fn clear_stderr_tail(&self) {
+        if let Ok(mut tail) = self.stderr_tail.lock() {
+            tail.clear();
+        }
+    }
+
+    /// Waits, briefly, for the stderr reader to finish.
+    ///
+    /// The reader is its own task, so a child that dies mid-handshake is
+    /// visible to the failure path before the last thing it said has been
+    /// read. A child that has exited closes the pipe, so this returns as soon
+    /// as there is nothing left to read and only ever waits out the grace for
+    /// a backend that is still alive.
+    async fn settle_stderr_tail(&self) {
+        let handle = self
+            .stderr_reader
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(handle) = handle {
+            let _ = tokio::time::timeout(STDERR_DRAIN_GRACE, handle).await;
+        }
+    }
+
+    /// The cache directory this backend installs into, if it has one.
+    ///
+    /// A backend that does not shell out to a package manager has none, and a
+    /// value an operator set by hand is theirs: the caller decides whether it
+    /// is a path this process created.
+    pub(crate) fn package_cache_dir(&self) -> Option<PathBuf> {
+        self.env.get(CACHE_ENV).map(PathBuf::from)
+    }
+
+    /// The child's last lines on stderr, as one block.
+    pub(crate) fn stderr_tail(&self) -> String {
+        self.stderr_tail.lock().map_or_else(
+            |_| String::new(),
+            |tail| tail.iter().cloned().collect::<Vec<_>>().join("\n"),
+        )
+    }
+
+    /// Start the subprocess and complete the MCP handshake.
+    ///
+    /// A failure leaves the child's last stderr lines settled, so whoever
+    /// decides what to do about the failure can read what it said.
     ///
     /// # Errors
     ///
-    /// Returns an error if the command cannot be spawned or MCP initialization fails.
+    /// Returns an error if the command cannot be spawned or initialization
+    /// fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.clear_stderr_tail();
+
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
@@ -306,12 +413,22 @@ impl StdioTransport {
         });
 
         let command = self.diagnostic_command();
-        tokio::spawn(async move {
+        let stderr_tail = Arc::clone(&self.stderr_tail);
+        let stderr_reader = tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 debug!(command = %command, line_len = line.len(), "Received line from stderr");
+                if let Ok(mut tail) = stderr_tail.lock() {
+                    if tail.len() == STDERR_TAIL_LINES {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line);
+                }
             }
         });
+        if let Ok(mut slot) = self.stderr_reader.lock() {
+            *slot = Some(stderr_reader);
+        }
 
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now rather than waiting for the
@@ -327,6 +444,7 @@ impl StdioTransport {
             if let Err(close_error) = self.close().await {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
             }
+            self.settle_stderr_tail().await;
             return Err(error);
         }
 

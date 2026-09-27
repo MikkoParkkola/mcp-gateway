@@ -314,6 +314,11 @@ fn backend_subprocess_receives_only_safe_and_explicit_environment() {
             PARENT_SECRET_ENV,
             "dummy-parent-secret-must-not-reach-backend",
         )
+        // The operator's npm settings — in both spellings npm reads — plus a
+        // credential that no backend's config names.
+        .env("npm_config_allow_git", "all")
+        .env("NPM_CONFIG_PREFER_OFFLINE", "1")
+        .env("npm_config__auth", "must-not-reach-a-backend")
         .output()
         .expect("run isolated child-environment scenario");
 
@@ -356,15 +361,22 @@ case "$request" in
         home_present=false
         tmpdir_present=false
         cwd_preserved=false
+        npm_setting_present=false
+        npm_upper_setting_present=false
+        npm_credential_present=false
         [ "${MCP_GATEWAY_TEST_PARENT_SECRET+x}" = x ] && parent_secret_present=true
         [ "${MCP_GATEWAY_TEST_EXPLICIT_BACKEND:-}" = configured-value ] && explicit_backend_present=true
         [ -n "${PATH:-}" ] && path_present=true
         [ -n "${HOME:-}" ] && home_present=true
         [ -n "${TMPDIR:-}" ] && tmpdir_present=true
         [ -f server.sh ] && cwd_preserved=true
-        printf '{"jsonrpc":"2.0","id":2,"result":{"parent_secret_present":%s,"explicit_backend_present":%s,"path_present":%s,"home_present":%s,"tmpdir_present":%s,"cwd_preserved":%s}}\n' \
+        [ "${npm_config_allow_git:-}" = all ] && npm_setting_present=true
+        [ "${NPM_CONFIG_PREFER_OFFLINE:-}" = 1 ] && npm_upper_setting_present=true
+        [ "${npm_config__auth+x}" = x ] && npm_credential_present=true
+        printf '{"jsonrpc":"2.0","id":2,"result":{"parent_secret_present":%s,"explicit_backend_present":%s,"path_present":%s,"home_present":%s,"tmpdir_present":%s,"cwd_preserved":%s,"npm_setting_present":%s,"npm_upper_setting_present":%s,"npm_credential_present":%s}}\n' \
             "$parent_secret_present" "$explicit_backend_present" "$path_present" \
-            "$home_present" "$tmpdir_present" "$cwd_preserved"
+            "$home_present" "$tmpdir_present" "$cwd_preserved" \
+            "$npm_setting_present" "$npm_upper_setting_present" "$npm_credential_present"
         ;;
 esac
 done
@@ -397,6 +409,20 @@ done
     assert_eq!(report["home_present"], true);
     assert_eq!(report["tmpdir_present"], true);
     assert_eq!(report["cwd_preserved"], true);
+    assert_eq!(
+        report["npm_setting_present"], true,
+        "a setting that decides whether a git-sourced dependency can install at all must reach \
+         the package manager the backend shells out to"
+    );
+    assert_eq!(
+        report["npm_upper_setting_present"], true,
+        "npm reads its environment case-insensitively, so the uppercase spelling is a setting too"
+    );
+    assert_eq!(
+        report["npm_credential_present"], false,
+        "the child environment stays what the config names: a credential the config does not name \
+         for this backend must not be inherited"
+    );
 }
 
 /// Is dropping every handle enough to reap the child, or does the reader
