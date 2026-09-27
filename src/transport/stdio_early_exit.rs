@@ -111,7 +111,7 @@ pub(super) fn excerpt(
         .map(str::trim)
         .filter(|s| s.len() >= 4)
         .collect();
-    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    secrets.sort_by_key(|s| s.len());
     let lines: Vec<String> = tail.iter().map(|raw| redact_line(raw, &secrets)).collect();
     let mut text = lines.join("\n");
     if text.len() > EXCERPT_BYTES {
