@@ -119,12 +119,14 @@ a binary swap plus a symlink flip.
 > moving; re-staging on every commit never lets a cutover finish. Re-stage only when
 >
 > ```
+> set -e
 > git fetch origin docs/ranking-1-release-line
 > git diff --name-only <staged-sha>..origin/docs/ranking-1-release-line -- src/ Cargo.toml Cargo.lock
 > ```
 >
-> is non-empty. Fetch first, and if `git fetch` or `git diff` fails, stop: do not rebuild and
-> do not cut over until both the fetch and the diff succeed. A stale local ref prints nothing, and rebuilding from
+> is non-empty. Read the exit status, not only the output: with `set -e` a failed fetch or
+> diff stops the block. If either fails, stop: do not rebuild and do not cut over until both
+> succeed. A stale local ref prints nothing, and rebuilding from
 > it would reproduce the same stale build. Six of the seven commits above were documentation and changed nothing the
 > binary carries; one was #707 and changed everything. If that command prints nothing, the
 > staged artifact is current for this criterion and the cutover proceeds.
@@ -235,8 +237,15 @@ GW=/tmp/gw/mcp-gateway-darwin-arm64
 # 1b. Option C — build from the release line instead, in a checkout at its fetched tip.
 #     Not origin/main: main lags the release line and can lack its security fixes,
 #     which the drift checker cannot see.
+# Build in a fresh worktree so no local edit or untracked file enters the binary.
+# Run these lines under `set -e`, so a failed fetch, worktree add or clean check
+# stops before the build:
+# set -e
 # git fetch origin docs/ranking-1-release-line
-# git checkout --detach origin/docs/ranking-1-release-line
+# git worktree add --detach ../gw-cutover-build origin/docs/ranking-1-release-line
+# cd ../gw-cutover-build
+# tree_status=$(git status --porcelain)
+# test -z "$tree_status"
 #     Same recipe release.yml uses for the darwin-arm64 asset. Needs headroom:
 #     cold, 431 crates, and a hook refuses to build under 5 GB free.
 # cargo build --release --target aarch64-apple-darwin
@@ -324,7 +333,8 @@ Grade on these four conditions, not on the transcript:
    checker passes any 4xx for these two (neither sets `refusal_status` in
    `security-controls.toml`), so this condition is stricter than its exit code: the guard
    itself answers 403 (`src/gateway/router/origin_guard.rs`), and any other 4xx means
-   something in front of it refused,
+   a different layer refused (a proxy, the router, or another gateway check) and the
+   guard itself was not exercised,
 4. no control that was covered in the recorded baseline has become `uncovered`.
 
 The shape, measured against the 4.0.0 build on 2026-09-21:
