@@ -145,34 +145,11 @@ under signing must move to `gateway_invoke` (maintainer decision 2026-09-27: fai
 
 ## 5. Tests (red first)
 
-All router cells use one counting backend and assert its call count. An allowed-call baseline row
-(no control armed) must dispatch exactly once, so a harness that never reaches the backend cannot pass.
-
-| id | AC | Cell | Red today |
-|---|---|---|---|
-| T1 | DIRECT.1 | backend killed via `KillSwitch::kill`; POST `/mcp/{name}` `tools/call`; -32000; count 0 | backend called |
-| T1b | DIRECT.1 | as T1 but the idempotency key already holds a cached result; still -32000 (kill precedes the cache) | cached result returned |
-| T2 | DIRECT.1 | capability disabled by error budget; -32000; count 0 | backend called |
-| T3 | DIRECT.2 | limit of N calls, empty accumulator: N direct calls succeed, call N+1 -32003; count N; successful results carry `_cost_warnings` near the limit | all N+1 dispatched |
-| T3b | DIRECT.2 | direct JSON-RPC and transport failures do not increment the spend accumulator | n/a (guard) |
-| T3c | DIRECT.2 | limit 1: one bridged round spends it, then a direct call is refused -32003; plus a source assertion that the bridged round (`invoke.rs:937`) calls `admit_spend_for` | the direct call dispatches |
-| T4 | DIRECT.3 | session profile excluding the tool, `mcp-session-id` set: refused, count 0; absent and empty header: default profile, dispatched | backend called |
-| T5 | DIRECT.4, DIRECT.7 | matrix: signing off (dispatched); signing on, nonce optional (-32001, count 0); signing on + `require_nonce` (-32001, count 0); a signed `gateway_invoke` under each signing config succeeds; with an idempotency key already holding a cached result, still -32001 | third row dispatched |
-| T6 | DIRECT.5 | backend returning JSON-RPC errors (not rate-limit); server threshold reached before any per-capability limit (capability budget disabled in the fixture); after N failures `is_killed` is true and the next call is refused | never killed |
-| T6b | DIRECT.5 | backend rate-limit refusals do not count toward the budget | n/a (guard) |
-| T7 | DIRECT.6 | response contract `fail_closed` + `action_mode`, no contract for the tool: refused post-dispatch with HTTP 200 and the gate's JSON-RPC error, count 1; observe mode (`action_mode` off): delivered, warning logged | delivered in both |
-| T7b | DIRECT.6 | response inspection `action_mode` with a HIGH finding: refused; context integrity `team_shared` withholding: withheld | delivered |
-| T8 | DIRECT.8 | both-routes parity table (§6) | G1-G6 rows red on Direct |
-| T9 | ordering | with the T1 kill fixture, the idempotency reservation is never called (counter via a test hook on `direct_route_idempotency`) | counter is 1 today |
-| T10 | worker | T1, T3 and T7 run through the LIFECYCLE.1 task worker's dispatch as well as the request thread (lands with or after LIFECYCLE.1; added to whichever lands second) | backend called |
-| T11 | replay | a payload-gate refusal settles the idempotency entry; a retry with the same key replays the refusal without dispatching | n/a (guard) |
-
-Mutants (throwaway CI): M1 drop kill switch from `admit_target` (T1, T1b, T8); M2 drop `admit_spend_for`
-on direct (T3, T8); M3 drop spend recording from `account_dispatch` (T3); M4 drop the profile step (T4);
-M5 call `admit_target` after the reservation (T9, T1b); M6 drop the signing refusal (T5); M6b restore the `&& require_nonce` condition (T5 nonce-optional row); M7 skip
-`account_dispatch` on direct (T6, T3); M8 skip `gate_payload` on direct (T7, T7b, T8); M9 add a control
-inline in `invoke_tool_traced` only (T8 structural check, §6); M10 map an S4 refusal to the
-dispatch-`Err` arm (T7 status 500 instead of 200).
+The authoritative test list, fixtures, red reasons and mutants are in the companion test plan,
+`docs/design/2026-09-27-direct-route-guards-test-plan.md`. Summary: T1-T11 cover DIRECT.1-7 on the
+direct route (each also against a passthrough backend), T8 is the both-routes parity and structural
+check (DIRECT.8), and mutants M1-M13 each redden a named cell. An allowed baseline dispatches exactly
+once in every mode.
 
 ## 6. Both-routes parity test (DIRECT.8)
 
