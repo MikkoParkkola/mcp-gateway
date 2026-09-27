@@ -75,7 +75,7 @@ pub(super) async fn dashboard_link(
         c.admin
             && matches!(
                 c.credential_kind,
-                CredentialKind::StaticBearer | CredentialKind::ApiKey
+                CredentialKind::StaticBearer | CredentialKind::ApiKey | CredentialKind::DashboardSession
             )
     });
     if !may_mint {
