@@ -21,9 +21,13 @@ static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::Allow
 
 const DOC: &str = include_str!("../../../docs/identity_grants.md");
 
+/// The doc with LF line ends: a Windows checkout converts it to CRLF.
+static DOC_LF: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| DOC.replace("\r\n", "\n"));
+
 /// The body of the first fenced YAML block whose first line is `first_line`.
 fn doc_yaml_block(first_line: &str) -> &'static str {
-    DOC.split("```yaml\n")
+    DOC_LF
+        .split("```yaml\n")
         .skip(1)
         .map(|block| block.split("```").next().unwrap())
         .find(|block| block.starts_with(first_line))
