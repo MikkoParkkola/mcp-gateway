@@ -493,7 +493,7 @@ unsafe fn read_aces(acl: *const ACL, avail: usize) -> io::Result<Vec<Ace>> {
 
 /// The flags `replace` passes to `MoveFileExW`; the durability trace (W-T22)
 /// reads the write-through bit from here, so it reports the argument itself.
-pub(crate) const REPLACE_FLAGS: u32 = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+pub(crate) const REPLACE_FLAGS: u32 = MOVEFILE_REPLACE_EXISTING;
 
 /// Replace `dest` with `tmp`; returns only once the rename is on disk.
 pub(crate) fn replace(tmp: &Path, dest: &Path) -> io::Result<()> {
