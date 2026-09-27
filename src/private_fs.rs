@@ -78,7 +78,7 @@ pub(crate) fn open_file_read(path: &Path) -> io::Result<File> {
     hook(Hook::BeforeRecordOpen, path);
     OpenOptions::new()
         .access_mode(GENERIC_READ | READ_CONTROL)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
 }
 
