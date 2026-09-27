@@ -62,6 +62,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/ui/api/tools", get(tools))
         .route("/ui/api/config", get(config))
         .route("/ui/api/reload", post(reload))
+        .route("/dashboard/logout", post(session::logout))
         .route("/ui/api/dashboard-link", post(session::dashboard_link))
         .route("/dashboard", get(dashboard_handler))
         .merge(capabilities::capabilities_router())

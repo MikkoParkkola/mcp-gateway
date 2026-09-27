@@ -345,7 +345,8 @@ fn metrics_route(config: &crate::config::Config) -> Router {
 fn unauthenticated_routes() -> Router<Arc<AppState>> {
     #[cfg(feature = "webui")]
     {
-        super::ui::session::logout_router()
+        let _ = super::ui::session::logout_router();
+        Router::new()
     }
     #[cfg(not(feature = "webui"))]
     {
