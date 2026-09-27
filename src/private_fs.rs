@@ -230,9 +230,6 @@ pub(crate) fn judge_file(file: &File) -> Result<(), PrivacyRefusal> {
     if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(PrivacyRefusal::ReparsePoint);
     }
-    if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        return Err(PrivacyRefusal::NotRegular);
-    }
     first(privacy_refusals(file))
 }
 
