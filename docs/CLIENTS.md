@@ -5,8 +5,9 @@ against a 4.0.0 gateway.
 
 The gateway supports a client's **config contract**: the settings key and file
 that `mcp-gateway setup export` writes, and an MCP transport the client speaks
-(stdio or streamable HTTP). It does not pin client builds. A client that keeps
-its key and file keeps working at any version; one that renames either breaks.
+(stdio or streamable HTTP). It does not pin client builds: a matching key and
+file is what export relies on, and a client that renames either breaks. That a
+given client version then works is shown only by a verified row below.
 The reasoning is in the
 [supported matrix](release/v4.0.0-supported-matrix.md#reference-clients).
 
@@ -18,7 +19,10 @@ against fixture config files, and no launched client has been recorded.
 ## Clients with an export target
 
 `mcp-gateway setup export --target <target>` writes the gateway entry into the
-file below, backs up the old file and prints the rollback command.
+file below. An existing file is backed up first and the rollback command is
+printed. A client whose directory does not exist is skipped: a workspace client
+(Cursor, VS Code Copilot, Cline) needs the workspace folder, and Claude
+Desktop, Windsurf and Zed count as not installed.
 
 | Client | Target | Config key | Location | Status |
 |---|---|---|---|---|
@@ -31,7 +35,7 @@ file below, backs up the old file and prints the rollback command.
 | Zed | `zed` | `context_servers` | macOS `~/Library/Application Support/Zed/settings.json`, elsewhere `~/.config/zed/settings.json` | Unverified |
 
 `--target generic` prints the entry to stdout, under `mcpServers`, for any
-other client, and `--target all` writes every file above.
+other client, and `--target all` writes every file above that is not skipped.
 
 ## Clients without an export target
 
