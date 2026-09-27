@@ -13,7 +13,8 @@ use crate::personal_accounts::refusal::marked;
 
 use super::super::super::account_resolver_fixture::{
     ALICE_WORK_TOKEN, Answer, Bind, Descriptors, ProviderStep, ROTATED_TOKEN, WORK, account_key,
-    custody_with_steps, execute, execute_bridged, external_cfg, gateway, grant, identity, slots,
+    custody_with_steps, execute, execute_bridged, execute_bridged_keyed, external_cfg, gateway,
+    grant, identity, slots,
 };
 
 const FRESH: u64 = u64::MAX;
@@ -262,5 +263,85 @@ async fn a_cold_slot_list_401_forces_the_refresh() {
         dispatches.calls().len(),
         0,
         "no tools/call after a refused list"
+    );
+}
+
+/// F13 x A11-c, bridged round: the slot is emptied between the two rounds, so
+/// the continuation's R2 check lists first, and that list gets the 401. The
+/// round forces the one refresh and answers with the reconnect refusal, it
+/// sends no second `tools/call`, and it releases the idempotency key, so the
+/// same key is readmitted rather than served a stored failure. Mutants M31
+/// (drop the bridged park) and M32 (settle the parked key) redden it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
+    let custody = custody_with_steps(
+        &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
+        ROTATED_TOKEN,
+        &[ProviderStep::InvalidGrant],
+    );
+    let installed = custody.installed();
+    let (mut meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+    meta.enable_idempotency(
+        std::sync::Arc::new(crate::idempotency::IdempotencyCache::new()),
+        std::time::Duration::from_secs(300),
+    );
+    let backend = meta
+        .backends
+        .get("mail")
+        .expect("the fixture registers mail");
+    dispatches.on_next_call(move || backend.empty_tool_catalogues_for_test());
+    dispatches.script_lists();
+    dispatches.script(&[
+        Answer::Result(serde_json::json!({
+            "tools": [{"name": "read", "inputSchema": {"type": "object"}}]
+        })),
+        Answer::Result(serde_json::json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which folder?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-f13"
+        })),
+        Answer::Status(401),
+    ]);
+    let alice = identity("alice");
+    let first = Box::pin(execute_bridged_keyed(
+        &meta,
+        "mail",
+        Some(&alice),
+        Some("k-f13"),
+    ))
+    .await
+    .expect_err("a revoked grant on the continuation's list must refuse");
+    assert_eq!(
+        first.to_rpc_code(),
+        -32603,
+        "the reconnect refusal: {first}"
+    );
+    assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
+    assert_eq!(
+        dispatches.calls().len(),
+        1,
+        "no call after the refused list"
+    );
+
+    let again = Box::pin(execute_bridged_keyed(
+        &meta,
+        "mail",
+        Some(&alice),
+        Some("k-f13"),
+    ))
+    .await;
+    assert!(
+        !format!("{again:?}").contains("outcome is unknown"),
+        "the key was settled, so the retry was served a stored failure: {again:?}"
     );
 }

@@ -458,6 +458,15 @@ impl Backend {
     /// reports empty. `pooled_transport_for_test` does not create, but answers
     /// `None` for both "slot absent" and "slot present, transport unstarted".
     /// This is the one probe that distinguishes them.
+    /// Test-only: empty every slot's tool catalogue, so the next R2 check
+    /// on any slot is cold (F13 cells for a slot emptied between rounds).
+    #[cfg(test)]
+    pub(crate) fn empty_tool_catalogues_for_test(&self) {
+        for entry in &self.pool {
+            entry.value().tools_cache.invalidate_if(|_| true);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn pool_has_slot_for_test(&self, key: &PoolKey) -> bool {
         self.pool.get(key).is_some()

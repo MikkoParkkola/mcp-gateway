@@ -501,6 +501,9 @@ pub(super) struct Dispatches {
     answers: Mutex<std::collections::VecDeque<Answer>>,
     /// The script answers the cold-slot `tools/list` too (F13 A11-c cells).
     lists_scripted: std::sync::atomic::AtomicBool,
+    /// Run once, as the next `tools/call` is answered (F13: empties the slot
+    /// between a bridged exchange's rounds).
+    on_call: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// One scripted backend answer (A11 cells).
@@ -527,6 +530,11 @@ fn http_status_error(status: u16) -> crate::Error {
 
 impl Dispatches {
     /// Answer the next dispatches with these HTTP statuses (A11 cells).
+    /// Run `hook` once, as the next `tools/call` is answered.
+    pub(super) fn on_next_call(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.on_call.lock() = Some(Box::new(hook));
+    }
+
     /// Let the script answer `tools/list` as well as `tools/call`.
     pub(super) fn script_lists(&self) {
         self.lists_scripted
@@ -613,6 +621,11 @@ impl crate::transport::Transport for CapturingTransport {
             identity_key: identity_key.map(str::to_string),
             method: method.to_string(),
         });
+        if method == "tools/call"
+            && let Some(hook) = self.dispatches.on_call.lock().take()
+        {
+            hook();
+        }
         // The scripted answers are for `tools/call`; the cold-slot
         // `tools/list` R2 sends first (F13) keeps the fixture's catalogue.
         if method != "tools/list"
@@ -649,5 +662,6 @@ impl crate::transport::Transport for CapturingTransport {
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
 pub(super) use gateway::{
-    Bind, Descriptors, execute, execute_bridged, external_cfg, gateway, slots,
+    Bind, Descriptors, execute, execute_bridged, execute_bridged_keyed, external_cfg, gateway,
+    slots,
 };

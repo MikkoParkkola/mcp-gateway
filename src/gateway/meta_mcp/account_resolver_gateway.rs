@@ -301,7 +301,22 @@ pub(in super::super) async fn execute_bridged(
     server: &str,
     caller_identity: Option<&VerifiedIdentity>,
 ) -> crate::Result<Value> {
+    execute_bridged_keyed(meta, server, caller_identity, None).await
+}
+
+/// [`execute_bridged`] under a client idempotency key (F13 key-release cell).
+pub(in super::super) async fn execute_bridged_keyed(
+    meta: &MetaMcp,
+    server: &str,
+    caller_identity: Option<&VerifiedIdentity>,
+    key: Option<&str>,
+) -> crate::Result<Value> {
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: key.map(str::to_string),
+        ..Default::default()
+    };
     let mut context = caller(caller_identity);
+    context.retry = &retry;
     context.channel = &AcceptingChannel;
     context.input_capabilities = crate::protocol::meta::classify_request(
         Some(&json!({
