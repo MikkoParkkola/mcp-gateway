@@ -91,6 +91,10 @@ pub(super) fn boot_cost_governance(
 /// How often a running gateway saves today's spend to `costs.json`. A hard
 /// kill loses at most this much.
 #[cfg(feature = "cost-governance")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "red-first stub, wired by the fix")
+)]
 pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Save today's spend to `<data_dir>/costs.json`.
