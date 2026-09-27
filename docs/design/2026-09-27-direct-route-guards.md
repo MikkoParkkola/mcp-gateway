@@ -96,7 +96,7 @@ There is one chain per route boundary and one implementation per control:
   `after_dispatch`; no direct-route code path calls a stage method except through them.
 
 Direct-route order (request thread and LIFECYCLE.1 worker alike):
-1. `DirectRouteGuards::run`: S1 `admit_target`, then the G7 signing refusal (§2.3), then LIFECYCLE.1's
+1. `DirectRouteGuards::run`: S1 `admit_target`, then the G7 signing refusal (§2.3; condition: signing enabled), then LIFECYCLE.1's
    router-only checks. All of `run` executes before the idempotency reservation, so a refused call
    attempts no reservation and a cached result is never returned past a refusal.
 2. Idempotency reservation / cached-result short-circuit (unchanged, `backend_handlers.rs:~955`).
@@ -119,16 +119,14 @@ Direct session id: the `mcp-session-id` header when present (`backend_handlers.r
 with none (or an empty header) `active_profile` returns the default routing profile, as for a
 sessionless meta call (`meta_mcp/mod.rs:1550`).
 
-### 2.3 G7 signing and nonce
+### 2.3 G7 signing (maintainer decision 2026-09-27)
 
-ADR-001 defines message signing for the `gateway_invoke` envelope only; the direct route has no
-signed envelope to carry a nonce or return a MAC. Proposal: when `message_signing.enabled` and
-`require_nonce` are both on, the direct route refuses `tools/call` with `-32001`
-("message signing is enforced; use gateway_invoke"), so an operator who mandates signed exchanges
-has no unsigned side door. The refusal is a step of `DirectRouteGuards::run` (before the idempotency
-reservation). This is a direct-route restriction, not a claim that signing is
-gateway-wide. With signing off or nonce optional, behaviour is unchanged. Extending
-ADR-001 to the direct route is out of scope. Reviewers: challenge this.
+ADR-001 defines message signing for the `gateway_invoke` envelope only; the direct route has no signed
+envelope. With message signing enabled, the direct route refuses `tools/call` with `-32001`
+("message signing is enabled; use gateway_invoke"), whatever `require_nonce` is set to, so no unsigned
+direct response is ever delivered while signing is on. The refusal is a step of `DirectRouteGuards::run`
+(before the idempotency reservation). With signing off, behaviour is unchanged. The signed envelope
+stays `gateway_invoke`-only; ADR-001 is not amended.
 
 ## 3. Visibility (maintainer decision 2026-09-27)
 
@@ -141,9 +139,9 @@ precedent for `DirectRouteGuards`. Nothing existing is widened.
 A direct `/mcp/{name}` call to a killed backend or disabled capability, over a key's cost budget, or
 outside the session's active profile is now refused with the error meta dispatch returns. Direct-route
 failures count toward the error budget and can auto-kill a backend. Response contract, inspection and
-context-integrity settings now apply to direct-route results. With message signing and
-`require_nonce` both on, the direct route refuses `tools/call` with -32001 and names
-`gateway_invoke` (maintainer decision 2026-09-27: fail closed).
+context-integrity settings now apply to direct-route results. With message signing on, the direct
+route refuses `tools/call` with -32001 and names `gateway_invoke`: clients that call backends directly
+under signing must move to `gateway_invoke` (maintainer decision 2026-09-27: fail closed).
 
 ## 5. Tests (red first)
 
@@ -159,7 +157,7 @@ All router cells use one counting backend and assert its call count. An allowed-
 | T3b | DIRECT.2 | direct JSON-RPC and transport failures do not increment the spend accumulator | n/a (guard) |
 | T3c | DIRECT.2 | limit 1: one bridged round spends it, then a direct call is refused -32003; plus a source assertion that the bridged round (`invoke.rs:937`) calls `admit_spend_for` | the direct call dispatches |
 | T4 | DIRECT.3 | session profile excluding the tool, `mcp-session-id` set: refused, count 0; absent and empty header: default profile, dispatched | backend called |
-| T5 | DIRECT.4 | matrix: signing off (dispatched); signing on, nonce optional (dispatched); signing on + `require_nonce` (-32001, count 0); signed `gateway_invoke` with nonce under the same config succeeds; with an idempotency key already holding a cached result, still -32001 | third row dispatched |
+| T5 | DIRECT.4, DIRECT.7 | matrix: signing off (dispatched); signing on, nonce optional (-32001, count 0); signing on + `require_nonce` (-32001, count 0); a signed `gateway_invoke` under each signing config succeeds; with an idempotency key already holding a cached result, still -32001 | third row dispatched |
 | T6 | DIRECT.5 | backend returning JSON-RPC errors (not rate-limit); server threshold reached before any per-capability limit (capability budget disabled in the fixture); after N failures `is_killed` is true and the next call is refused | never killed |
 | T6b | DIRECT.5 | backend rate-limit refusals do not count toward the budget | n/a (guard) |
 | T7 | DIRECT.6 | response contract `fail_closed` + `action_mode`, no contract for the tool: refused post-dispatch with HTTP 200 and the gate's JSON-RPC error, count 1; observe mode (`action_mode` off): delivered, warning logged | delivered in both |
@@ -171,7 +169,7 @@ All router cells use one counting backend and assert its call count. An allowed-
 
 Mutants (throwaway CI): M1 drop kill switch from `admit_target` (T1, T1b, T8); M2 drop `admit_spend_for`
 on direct (T3, T8); M3 drop spend recording from `account_dispatch` (T3); M4 drop the profile step (T4);
-M5 call `admit_target` after the reservation (T9, T1b); M6 drop the nonce refusal (T5); M7 skip
+M5 call `admit_target` after the reservation (T9, T1b); M6 drop the signing refusal (T5); M6b restore the `&& require_nonce` condition (T5 nonce-optional row); M7 skip
 `account_dispatch` on direct (T6, T3); M8 skip `gate_payload` on direct (T7, T7b, T8); M9 add a control
 inline in `invoke_tool_traced` only (T8 structural check, §6); M10 map an S4 refusal to the
 dispatch-`Err` arm (T7 status 500 instead of 200).

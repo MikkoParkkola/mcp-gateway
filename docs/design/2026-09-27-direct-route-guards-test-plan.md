@@ -66,7 +66,7 @@ Expected red (stated reason) versus guards (green at red, pinned for later):
 | T3 | call N+1 dispatches; no `_cost_warnings` |
 | T3c | limit 2.0: an opening call and one bridged round both dispatch and spend 2.0, then a direct call dispatches (should be -32003); the source assertion finds `admit_spend(` in `BridgeDispatcher::invoke` |
 | T4 | refused-profile call dispatches |
-| T5 | `require_nonce` row dispatches; cached-result row returns the cached value |
+| T5 | the signing-on rows (nonce optional and `require_nonce`) dispatch; the cached-result row returns the cached value |
 | T6 | `is_killed` stays false after N direct failures |
 | T7 | fail-closed contract result delivered (HTTP 200 with result, not error) |
 | T7b-i | response inspection `action_mode`, a result carrying a HIGH finding: delivered (should be refused) |
@@ -75,15 +75,15 @@ Expected red (stated reason) versus guards (green at red, pinned for later):
 | T8 | G1-G6 rows differ between routes; structural check finds `kill_switch.is_killed` etc. in `invoke_tool_traced` |
 | T9 | reservation hook counter is 1 |
 | adapter table | the sentinel stub matches no row, so every classification assertion fails |
-| DIRECT.7 | pending a maintainer ruling on the AC wording; T5 covers the fail-closed rule either way |
+| DIRECT.7 | T5 signing-on rows: both dispatch today (should be -32001, count 0) |
 | DIRECT.9 | the OWASP self-assessment still carries the meta-layer-only qualifiers (ASI08-ASI10) and the #1452 backlog line; CI's citation check stays green, and the fix commit removes both (document diff reviewed in the final review) |
-| Guards (green at red): T3b, T6b, T11b (a preseeded cached error replays without dispatch), T3d (a successful cached result replays after the budget is exhausted, no dispatch, no spend), T8 already-shared table, T5 signing-off and nonce-optional rows, T4 absent/empty header rows, allowed baselines | — |
+| Guards (green at red): T3b, T6b, T11b (a preseeded cached error replays without dispatch), T3d (a successful cached result replays after the budget is exhausted, no dispatch, no spend), T8 already-shared table, T5 signing-off row and the signed `gateway_invoke` rows, T4 absent/empty header rows, allowed baselines | — |
 
 ## Mutants (one throwaway PR each, on the fix head)
 
 M1 drop kill switch from `admit_target` (T1, T1b, T8). M2 skip `before_dispatch` on direct (T3, T8).
 M3 drop spend recording from `account_dispatch` (T3). M4 drop the profile step (T4). M5 call
-`run` after the idempotency reservation (T9, T1b). M6 drop the G7 refusal (T5). M7 skip
+`run` after the idempotency reservation (T9, T1b). M6 drop the G7 refusal (T5). M6b restore the `&& require_nonce` condition (T5 nonce-optional row). M7 skip
 `account_dispatch` on direct (T6, T3). M8 skip `gate_payload` on direct (T7, T7b, T8). M9 re-add an
 inline `admit_spend(` call in `invoke_tool_traced` (T8 structural). M10 route an S4 refusal to the
 dispatch-`Err` arm (T7 status 500). M11 wire the guards only on the sanitised arm, not the
