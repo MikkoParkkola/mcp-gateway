@@ -116,6 +116,33 @@ fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
     out
 }
 
+/// (platform word, path) for every platform-specific literal in the path
+/// helpers, from the `#[cfg]` line above each `return`.
+fn platform_paths() -> Vec<(&'static str, String)> {
+    let helpers = PATHS_SRC.split("#[cfg(test)]").next().unwrap();
+    let mut out = Vec::new();
+    let mut cfg = "";
+    for line in helpers.lines().map(str::trim) {
+        if line.starts_with("#[cfg(") {
+            cfg = line;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("return home_path(\"") {
+            let path = format!("~/{}", rest.split('"').next().unwrap());
+            let word = match cfg {
+                c if c.contains("not(any(") => "Windows",
+                c if c.contains("not(") => "elsewhere",
+                c if c.contains("\"macos\"") => "macOS",
+                c if c.contains("\"linux\"") => "Linux",
+                other => panic!("unrecognised cfg `{other}` in src/commands/paths.rs"),
+            };
+            out.push((word, path));
+        }
+    }
+    assert!(out.len() >= 5, "found only {out:?} platform paths");
+    out
+}
+
 /// `--target` value -> client label, from the exporter's `match target` arms.
 fn target_labels() -> BTreeMap<String, String> {
     let specs = fn_body(EXPORT_SRC, "client_specs");
@@ -174,6 +201,16 @@ fn every_export_target_has_a_row_and_parses() {
 fn each_row_matches_the_exporter_for_that_client() {
     let clients = exporter_clients();
     let targets = target_labels();
+    let clap_names: BTreeSet<String> = ExportTarget::value_variants()
+        .iter()
+        .map(|t| t.to_possible_value().unwrap().get_name().to_string())
+        .collect();
+    for target in targets.keys() {
+        assert!(
+            clap_names.contains(target),
+            "derived target `{target}` is not a clap value"
+        );
+    }
     let rows = export_rows();
     assert_eq!(
         rows.len(),
@@ -194,6 +231,14 @@ fn each_row_matches_the_exporter_for_that_client() {
         assert_eq!(key, real_key, "{label}: config key");
         let documented: BTreeSet<String> = code_spans(location).into_iter().collect();
         assert_eq!(&documented, real_paths, "{label}: locations");
+        for (platform, path) in platform_paths() {
+            if real_paths.contains(&path) {
+                assert!(
+                    location.contains(&format!("{platform} `{path}`")),
+                    "{label}: `{path}` must be labelled {platform}"
+                );
+            }
+        }
     }
 }
 
@@ -253,11 +298,36 @@ fn all_statuses() -> Vec<(String, String)> {
     statuses
 }
 
-/// The `| Field | value |` cell of a recorded run.
+/// The value cell of a recorded run's `| Field | value |` row.
 fn run_field<'a>(run: &'a str, field: &str) -> &'a str {
-    run.lines()
+    let line = run
+        .lines()
         .find(|l| l.starts_with(&format!("| {field} |")))
-        .unwrap_or_else(|| panic!("the recorded run has no `{field}` row"))
+        .unwrap_or_else(|| panic!("the recorded run has no `{field}` row"));
+    line[field.len() + 4..].trim().trim_end_matches('|').trim()
+}
+
+/// Whether `cell` holds `token` as a whole token: not a prefix of a longer
+/// version, word or hash.
+fn has_token(cell: &str, token: &str) -> bool {
+    let part = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    !token.is_empty()
+        && cell.match_indices(token).any(|(i, _)| {
+            let before = cell[..i].chars().next_back();
+            let after = cell[i + token.len()..].chars().next();
+            // A trailing `.` may end a sentence; any other version character
+            // continues the token.
+            !before.is_some_and(part) && !after.is_some_and(|c| part(c) && c != '.')
+        })
+}
+
+#[test]
+fn run_field_matching_is_exact() {
+    let run = "| Client | Claude Code (CLI), `2.1.280 (Claude Code)` |\n| Owner | |\n";
+    assert!(has_token(run_field(run, "Client"), "2.1.280"));
+    assert!(!has_token(run_field(run, "Client"), "2.1.28"));
+    assert_eq!(run_field(run, "Owner"), "");
+    assert!(!has_token(run_field(run, "Owner"), "Owner"));
 }
 
 /// Every row is verified from a recorded run or says Unverified. A verified
@@ -294,20 +364,20 @@ fn every_row_is_backed_by_a_recorded_run_or_unverified() {
             .unwrap_or_else(|_| panic!("{client}: evidence file {} is missing", v.file));
         let client_cell = run_field(&run, "Client");
         assert!(
-            client_cell.contains(&label_of(&client)) && client_cell.contains(&v.version),
+            client_cell.starts_with(&label_of(&client)) && has_token(client_cell, &v.version),
             "{client}: the run's Client field does not name this client at {}",
             v.version
         );
         assert!(
-            run_field(&run, "Date").contains(&v.date),
+            run_field(&run, "Date").starts_with(&v.date),
             "{client}: run date"
         );
         assert!(
-            run_field(&run, "Owner").contains(&v.owner),
+            run_field(&run, "Owner").starts_with(&v.owner),
             "{client}: run owner"
         );
         assert!(
-            run_field(&run, "Gateway").contains(&v.commit),
+            has_token(run_field(&run, "Gateway"), &v.commit),
             "{client}: run gateway commit"
         );
         verified += 1;
