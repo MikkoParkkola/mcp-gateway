@@ -154,7 +154,7 @@ impl EnvPoller {
                 .ok()?;
             rx
         };
-        let Ok(result) = tokio::time::timeout(wait, &mut read).await else {
+        let Ok::<_, ()>(result) = Ok((&mut read).await) else {
             // Still reading: check the same read again next tick. Warned once
             // per stall, because env-file changes go unseen until it ends.
             if !self.stalled {
