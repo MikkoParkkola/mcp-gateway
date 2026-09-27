@@ -1544,7 +1544,8 @@ the caller has no credential, so the gateway now treats it as a secret.
 
 The first time a caller uses a tool the gateway has not yet listed for it, the gateway lists that
 backend's tools once, as that caller, before judging the call (§31). Before this release such a
-call was forwarded unchecked.
+call was forwarded unchecked. A call on a catalogue older than the backend's `cache_ttl` refreshes it the
+same way; if that refresh fails, the call is judged against the last list.
 
 - **If the backend cannot be reached** (connection refused, no answer within its `timeout`, or
   a transport error), the call gets the same error a failed tool call to that backend gets, and

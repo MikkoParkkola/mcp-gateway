@@ -184,3 +184,59 @@ async fn a3_t10_an_unreplayable_failure_is_not_replayed() {
         "the second call was answered from a cooldown"
     );
 }
+
+/// A backend on the `Shared` slot with a 50 ms cache TTL (A4 cells).
+fn short_ttl(lister: &Arc<Lister>) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        "f13",
+        BackendConfig::default(),
+        &no_breaker(),
+        Duration::from_millis(50),
+    ));
+    backend.set_transport_for_test(Arc::clone(lister) as Arc<dyn crate::transport::Transport>);
+    backend
+}
+
+/// A4-T1: a hit on a stale slot refreshes once, so a key the backend added
+/// after the first fill is accepted. Mutant M28 (judge stale hits from the
+/// cache) keeps refusing it.
+#[tokio::test]
+async fn a4_t1_a_stale_hit_refreshes_once() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = short_ttl(&lister);
+    let first = check(&backend, "edit", &json!({"edits": []})).await;
+    assert!(matches!(first, Ok(None)), "{first:?}");
+    let v2 = json!({"type": "object", "properties": {"edits": {"type": "array"}, "note": {}}});
+    *lister.pages.lock() = vec![(vec![json!({"name": "edit", "inputSchema": v2})], None)];
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let added = check(&backend, "edit", &json!({"edits": [], "note": 1})).await;
+    assert!(
+        matches!(added, Ok(None)),
+        "the added key was judged stale: {added:?}"
+    );
+    assert_eq!(lister.lists(), 2, "a stale hit must refresh exactly once");
+}
+
+/// A4-T2: when the stale hit's refresh fails, the call is judged from the held
+/// schema (design E), and a second stale hit within the cooldown does not
+/// list. Mutant M29 (propagate the refresh error) reddens it.
+#[tokio::test]
+async fn a4_t2_a_failed_refresh_falls_back_to_the_held_schema() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = short_ttl(&lister);
+    let _ = check(&backend, "edit", &json!({"edits": []})).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    lister.set(Mode::Down);
+    for _ in 0..2 {
+        let held = check(&backend, "edit", &undeclared()).await;
+        assert!(
+            matches!(held, Ok(Some(ref t)) if t.contains("zzinvented")),
+            "{held:?}"
+        );
+    }
+    assert_eq!(
+        lister.lists(),
+        2,
+        "the second stale hit listed inside the cooldown"
+    );
+}

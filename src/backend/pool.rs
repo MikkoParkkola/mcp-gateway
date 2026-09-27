@@ -110,6 +110,10 @@ pub(crate) struct PooledEntry {
     /// paused test clock advances it with the timeouts. Tools only. The flag
     /// is the transport failure to replay (A3), `None` for an unreadable
     /// list, so a fast-failed call answers as the failure it stands in for.
+    /// When a stale hit's refresh last failed (A4). Inside
+    /// `LIST_FILL_COOLDOWN` of it a stale hit is judged from the held schema
+    /// without listing, whatever the failure's class. Stale hits only.
+    pub(crate) tools_refresh_failed_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
     pub(crate) tools_fill_failed_at:
         parking_lot::Mutex<Option<(tokio::time::Instant, Option<super::fill_check::Replay>)>>,
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
@@ -199,6 +203,7 @@ impl PooledEntry {
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
+            tools_refresh_failed_at: parking_lot::Mutex::new(None),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),

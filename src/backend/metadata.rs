@@ -37,6 +37,17 @@ impl Backend {
         self.pooled_entry(&self.pool_key_for(binding))
     }
 
+    /// Whether a stale hit's refresh on `binding`'s slot failed within the
+    /// cooldown (A4); with `stamp`, record such a failure now.
+    pub(super) fn stale_refresh_cooling(&self, binding: Option<&str>, stamp: bool) -> bool {
+        let slot = self.tools_slot(binding);
+        let mut at = slot.tools_refresh_failed_at.lock();
+        if stamp {
+            *at = Some(tokio::time::Instant::now());
+        }
+        at.is_some_and(|at| at.elapsed() < super::fill_check::LIST_FILL_COOLDOWN)
+    }
+
     /// Whether `binding`'s slot is in a fill cooldown whose failure was NOT a
     /// transport one (A3): its fast-fail stands in for an unreadable list.
     pub(super) fn cooling_after_unreadable_list(&self, binding: Option<&str>) -> bool {

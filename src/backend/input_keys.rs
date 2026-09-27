@@ -84,15 +84,39 @@ impl Backend {
         if mode == InputSchemaEnforcement::Off {
             return Ok(None);
         }
-        if let Some(cached) = self.get_cached_tool_for(identity_key, tool) {
-            return Ok(self.judge_keys(&cached.input_schema, tool, arguments, mode));
+        // A4: a hit is judged from the cache while the slot is fresh; a stale
+        // hit refreshes once, and falls back to the held schema (design E)
+        // when it cannot: no list is allowed, the failsafe refuses it, the
+        // refresh fails, or one failed within the cooldown.
+        let cached = self.get_cached_tool_for(identity_key, tool);
+        let held = |cached: &crate::protocol::Tool| {
+            Ok(self.judge_keys(&cached.input_schema, tool, arguments, mode))
+        };
+        if let Some(cached) = &cached
+            && (self.has_cached_tools_for(identity_key)
+                || self.stale_refresh_cooling(identity_key, false))
+        {
+            return held(cached);
         }
         if !self.fetch_carries_caller_identity(identity_key) && !headers.is_empty() {
+            if let Some(cached) = &cached {
+                return held(cached);
+            }
             count("input_schema_fetch_skipped_a3");
             return Ok(unavailable(mode));
         }
         let (tools, completeness) = match self.tools_for_check(identity_key, headers).await {
             Ok(fetched) => fetched,
+            Err(e) if cached.is_some() => {
+                // A gate refusal was never attempted: fall back, record nothing.
+                if !matches!(
+                    e,
+                    crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_)
+                ) {
+                    self.stale_refresh_cooling(identity_key, true);
+                }
+                return cached.as_ref().map_or(Ok(None), held);
+            }
             // Raised only by the fill's own failsafe gate: no transport
             // constructs either variant.
             Err(e @ (crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_))) => {
