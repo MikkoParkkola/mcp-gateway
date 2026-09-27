@@ -89,6 +89,9 @@ mod sso_admin_tests;
 /// router harness and the account fixtures together. Test-only.
 #[cfg(test)]
 pub(crate) mod tests;
+mod trace_span;
+#[cfg(test)]
+mod trace_span_tests;
 #[cfg(test)]
 mod webhook_scope_tests;
 
@@ -438,8 +441,8 @@ pub(crate) fn create_router_with_accounts(
         let offers = ConnectOffers::new(Arc::clone(&handles.journeys), live);
         state.meta_mcp.install_connect_offers(offers);
     }
-    // Merged outside the main `TraceLayer` below: its span records the full
-    // URI, and the callback's query carries the code and state (§4.3).
+    // Merged outside the main `TraceLayer` below, with its own path-only span
+    // (§4.3): the callback's query carries the code and state.
     let accounts_router = accounts::router(accounts, &startup_config, |owner| {
         authenticate(
             owner,
@@ -453,7 +456,8 @@ pub(crate) fn create_router_with_accounts(
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        // Method and route only (#1529). Routes merged below are outside it.
+        .layer(TraceLayer::new_for_http().make_span_with(trace_span::span_for))
         .with_state(state);
 
     // Merge key server routes (unauthenticated) if enabled
