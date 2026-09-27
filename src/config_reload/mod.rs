@@ -999,6 +999,8 @@ enum ReloadTrigger {
     ConfigFile,
     /// A recorded env file's content differs from the live overlay (#1286).
     EnvFile(PathBuf),
+    /// The last reload failed; retried each poll until one succeeds.
+    Retry(PathBuf),
 }
 
 /// Returns `true` for create/modify events on the watched config file.
@@ -1093,7 +1095,11 @@ impl ConfigWatcher {
             event_tx,
             shutdown_rx.resubscribe(),
             watch_chain::CHAIN_RETRY,
-            env_poll::EnvPoller::new(Arc::clone(&env), Arc::clone(&env_reloads)),
+            env_poll::EnvPoller::new(
+                Arc::clone(&env),
+                Arc::clone(&env_reloads),
+                config_path.clone(),
+            ),
             env_poll::POLL_EVERY,
         );
 
@@ -1236,11 +1242,11 @@ impl ConfigWatcher {
                                         "Config reload: complete"
                                     );
                                 }
-                                (Err(e), ReloadTrigger::EnvFile(path))
-                                    if !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
+                                (Err(e), trigger)
+                                    if !matches!(trigger, ReloadTrigger::ConfigFile)
+                                        && !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
                                 {
-                                    let posture = is_posture_refusal(&e);
-                                    env_reloads.report_failure(&mut env_warns, path, &e, posture);
+                                    env_reloads.report_failure(&mut env_warns, trigger, &e);
                                 }
                                 (Err(e), _) if is_posture_refusal(&e) => {
                                     // Its own arm, ahead of the generic one: a

@@ -120,7 +120,9 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   NFS and FUSE mounts. A file that fails to load keeps the running values and is retried, with
   at most one warning a minute per file unless the error changes. A lookup error on an env
   file (a link loop, a directory the gateway cannot search) now fails the load instead of
-  reading as a missing file. See `docs/DEPLOYMENT.md`. (#1286)
+  reading as a missing file. After a failed reload the gateway retries every 2 seconds until
+  one succeeds, so a config edit that failed alongside a broken env file still applies once the
+  env file is fixed. See `docs/DEPLOYMENT.md`. (#1286)
 
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already

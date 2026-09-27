@@ -200,11 +200,19 @@ async fn p4_a_config_edit_that_failed_with_a_broken_env_file_applies_when_it_is_
         "routing_profiles:\n  p:\n    description: \"two\"\n",
     )
     .unwrap();
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Restore the env file as soon as a reload has failed, before or after
+    // the poll saw the broken bytes: either way the edit must still apply.
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        while !g.watcher.env_reloads().failed() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(failed.is_ok(), "premise: the combined reload failed");
     assert_eq!(
         description(&g.live).as_deref(),
         Some("x"),
-        "premise: the combined reload failed and applied nothing"
+        "premise: the failed reload applied nothing"
     );
 
     write_owner_only(&env_path, "MCP_GW_T1286_P4=ok\n").unwrap();

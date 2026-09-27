@@ -65,6 +65,9 @@ pub(super) fn log_trigger(trigger: &ReloadTrigger) {
                 "Config watcher: env file differs from the loaded one, triggering reload"
             );
         }
+        ReloadTrigger::Retry(_) => {
+            tracing::debug!("Config watcher: the last reload failed, retrying it");
+        }
     }
 }
 
@@ -82,21 +85,21 @@ pub(super) fn report_reloaded(path: &Path, outcome: &super::ReloadOutcome) {
 pub(super) struct EnvPoller {
     env: Arc<LiveEnv>,
     reloads: Arc<EnvReloadCounts>,
-    /// The last path that differed, kept until a tick finds none.
-    last_differing: Option<PathBuf>,
+    /// The config the gateway was started with, named in a retry.
+    config: PathBuf,
 }
 
 impl EnvPoller {
-    pub(super) fn new(env: Arc<LiveEnv>, reloads: Arc<EnvReloadCounts>) -> Self {
+    pub(super) fn new(env: Arc<LiveEnv>, reloads: Arc<EnvReloadCounts>, config: PathBuf) -> Self {
         Self {
             env,
             reloads,
-            last_differing: None,
+            config,
         }
     }
 
-    /// The path to trigger a reload for this tick, if any.
-    pub(super) async fn tick(&mut self) -> Option<PathBuf> {
+    /// The reload to trigger this tick, if any.
+    pub(super) async fn tick(&self) -> Option<ReloadTrigger> {
         let applied = self.env.get();
         let paths = self.env.env_paths().as_paths().to_vec();
         // Off the async workers: on NFS or FUSE a read can stall.
@@ -105,17 +108,14 @@ impl EnvPoller {
             .ok()
             .flatten();
         match differs {
-            Some(path) => {
-                self.last_differing = Some(path.clone());
-                Some(path)
+            Some(path) => Some(ReloadTrigger::EnvFile(path)),
+            // A failed reload may have carried a valid config edit that no
+            // later change will trigger again (the env file was put back):
+            // retry every tick until one succeeds.
+            None if self.reloads.failed.load(Ordering::SeqCst) => {
+                Some(ReloadTrigger::Retry(self.config.clone()))
             }
-            // The file is back at the loaded bytes, but the reload it caused
-            // failed and may have carried a valid config edit: retry it once.
-            None if self.reloads.failed.load(Ordering::SeqCst) => self.last_differing.take(),
-            None => {
-                self.last_differing = None;
-                None
-            }
+            None => None,
         }
     }
 }
@@ -152,6 +152,12 @@ pub(super) struct EnvReloadCounts {
 }
 
 impl EnvReloadCounts {
+    /// Whether the last reload failed.
+    #[cfg(test)]
+    pub(super) fn failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
+    }
+
     /// Record how a reload ended. A success clears every path's warning
     /// state, so a failure that comes back is warned about at once.
     pub(super) fn settled(&self, limiter: &mut WarnLimiter, ok: bool) {
@@ -168,33 +174,35 @@ impl EnvReloadCounts {
         }
     }
 
-    /// Log a failed env-file reload: warn when `limiter` allows, else debug.
-    /// A posture refusal keeps its own wording (a decision about the config,
+    /// Log a reload the poll started (an env-file change or a retry) that
+    /// failed: warn when `limiter` allows for that path, else debug. A
+    /// posture refusal keeps its own wording (a decision about the config,
     /// not a file to fix) but is throttled like any other retried failure.
     pub(super) fn report_failure(
         &self,
         limiter: &mut WarnLimiter,
-        path: &Path,
+        trigger: &ReloadTrigger,
         error: &str,
-        posture_refusal: bool,
     ) {
+        let (ReloadTrigger::EnvFile(path) | ReloadTrigger::Retry(path)) = trigger else {
+            return;
+        };
         if !limiter.should_warn(path, error, Instant::now()) {
             tracing::debug!(
                 path = %path.display(),
                 error = %error,
-                "Config reload: env-file reload still failing"
+                "Config reload: still failing"
             );
             return;
         }
         self.warns.fetch_add(1, Ordering::SeqCst);
-        if posture_refusal {
+        if super::is_posture_refusal(error) {
             tracing::warn!(path = %path.display(), "Config reload: {error}");
         } else {
             tracing::warn!(
                 path = %path.display(),
                 error = %error,
-                "Config reload: env file changed but the reload failed; \
-                 keeping the current config and retrying every poll"
+                "Config reload: failed; keeping the current config and retrying every poll"
             );
         }
     }

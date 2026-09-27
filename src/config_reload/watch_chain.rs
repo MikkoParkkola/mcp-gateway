@@ -229,7 +229,7 @@ pub(super) fn spawn_rewatch_task(
     reload: tokio::sync::mpsc::Sender<ReloadTrigger>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     retry_every: std::time::Duration,
-    mut poller: super::env_poll::EnvPoller,
+    poller: super::env_poll::EnvPoller,
     env_poll_every: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -256,8 +256,8 @@ pub(super) fn spawn_rewatch_task(
                 _ = env_poll.tick() => {
                     // No memo: a file that differs is re-triggered every tick
                     // until a reload succeeds; the debounce coalesces them.
-                    if let Some(path) = poller.tick().await {
-                        let _ = reload.try_send(ReloadTrigger::EnvFile(path));
+                    if let Some(trigger) = poller.tick().await {
+                        let _ = reload.try_send(trigger);
                     }
                     continue;
                 }

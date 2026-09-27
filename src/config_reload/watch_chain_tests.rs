@@ -246,6 +246,7 @@ mod real_watcher {
             crate::config_reload::env_poll::EnvPoller::new(
                 Arc::new(crate::config::LiveEnv::default()),
                 Arc::default(),
+                PathBuf::new(),
             ),
             Duration::from_secs(3600),
         );
@@ -639,6 +640,7 @@ mod real_watcher {
             crate::config_reload::env_poll::EnvPoller::new(
                 Arc::new(crate::config::LiveEnv::default()),
                 Arc::default(),
+                PathBuf::new(),
             ),
             Duration::from_secs(3600),
         );
