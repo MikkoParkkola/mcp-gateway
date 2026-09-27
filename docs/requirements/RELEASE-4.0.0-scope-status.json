@@ -918,7 +918,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-27 (D3-e). Not yet built. Gap at source: the `identity grants` CLI writes only the grant file on upsert and revoke (src/commands/identity.rs:176, :199), and docs/identity_grants.md:259-261 states that grant reloads are recorded in the tracing log only, not in the governance audit log."
+      "note": "Added 2026-09-27 (D3-e). Not yet built. Gap at source: the `identity grants` CLI writes only the grant file on upsert and revoke (src/commands/identity.rs:176, :199), and docs/identity_grants.md:259-261 states that grant reloads are recorded in the tracing log only, not in the governance audit log. Design constraint: a file-driven reload has no actor, and fabricating one would corrupt the governance log (docs/internal/design/2026-09-22-live-identity-grant-reload.md:529-552); that design deferred the append pending an event type for no-actor file events, so building this row needs that event type first."
     },
     {
       "id": "MIK-7570.METRICS.2",
