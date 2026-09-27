@@ -120,7 +120,7 @@ pub(super) fn spawn_cost_saver(
         interval.tick().await;
         let stopped = async move {
             match shutdown {
-                Some(mut rx) => drop(rx.recv().await),
+                Some(_rx) => std::future::pending().await,
                 None => std::future::pending().await,
             }
         };
