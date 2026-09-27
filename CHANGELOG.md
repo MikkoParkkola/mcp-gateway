@@ -28,6 +28,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
   and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
   backend under a runtime profile is skipped. (#526)
+- **The 3.5.1 upgrade rehearsal runs in CI.** A new `upgrade-rehearsal` job upgrades the
+  v3.5.1 release binary to the pull request's build, turns the modern protocol off, rolls back,
+  and fails when config, credentials, permissions, mounts or active callers do not survive.
+  `scripts/release/nfr_upgrade_1_rehearsal.sh` now exits 1 when any check fails.
+
 - **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
   reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
   by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket

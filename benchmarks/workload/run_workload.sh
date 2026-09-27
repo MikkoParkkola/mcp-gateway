@@ -14,6 +14,11 @@
 
 set -Eeuo pipefail
 
+# Rendered gateway configs must be owner-only: a 4.0 gateway refuses a config
+# other users can read (UPGRADING-4.0 §35), so under a 0002 umask every 4.0 arm
+# dies on its first rep. The k6 container runs as this uid, so it still reads.
+umask 077
+
 HERE="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(CDPATH= cd -- "$HERE/../.." && pwd)"
 
@@ -105,6 +110,8 @@ if "${WORKLOAD_FIXTURE}" not in text:
     raise SystemExit(f"void: {src} has no ${{WORKLOAD_FIXTURE}} placeholder")
 open(dst, "w").write(text.replace("${WORKLOAD_FIXTURE}", fixture))
 PY
+    # The umask covers a new file only; a re-render keeps an old file's mode.
+    chmod 600 "$CONFIG_DIR/$name"
     sha256_of "$HERE/$name" "$CONFIG_DIR/$name" >> "$run/config.sha256"
   done
 }
