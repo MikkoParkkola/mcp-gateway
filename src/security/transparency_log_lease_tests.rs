@@ -7,7 +7,22 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::lease::{LEASE_RETRY, acquire_with};
-use super::rotation_tests::{append, cfg, log_path, rotate_n, verify};
+use super::rotation_tests::{append, cfg, log_path, verify};
+use super::segments::list_segments;
+
+/// Append until `n` more rotations have happened, counted by the newest
+/// sealed segment number: with retention, the number of sealed files stops
+/// growing, but each rotation still seals a higher number.
+fn rotate_n(l: &TransparencyLogger, path: &std::path::Path, n: u64) {
+    let newest = |p: &std::path::Path| list_segments(p).unwrap().last().map_or(0, |s| s.seq + 1);
+    let target = newest(path) + n;
+    let mut i = 0;
+    while newest(path) < target {
+        append(l, i);
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+}
 use super::segments::sibling;
 use super::*;
 
