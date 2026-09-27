@@ -54,6 +54,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+  refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
+  idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
+
 - **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
   identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
   5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
@@ -163,6 +167,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   the slot's circuit breaker and rate limiter. A backend that cannot be reached answers, and
   is charged to the error budget, as a failed call to it would. New
   `mcp_input_schema_events_total` kinds; see UPGRADING §59.
+- **The OWASP self-assessment matches the shipped controls.** It had claimed a
+  tool-descriptor validator and a grant-collision check that never run on a request, a removed
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
+  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
+  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  Withholding poisoned tool descriptors is tracked in #1441.
+
 - **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
   `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
   so callers sharing a backend could read or cancel each other's tasks. These methods now
@@ -1053,12 +1064,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   than handed to the client, bound to the caller and the original request, and
   redeemable once.
 
-  **Retry forwarding is not implemented in this release.** The minting,
-  sealing and single-use ledger exist and are tested; unsealing a continuation
-  and forwarding the retry to the backend does not. A well-formed retry is
-  refused with `-32602` and "retry forwarding is not available on this build"
-  rather than being run as a fresh call, because running it fresh would repeat
-  whatever the first attempt already did. MIK-7325 owns the forwarding path.
+  **A retry is forwarded through the sealed continuation.** The gateway opens
+  the `requestState` it minted, checks that it is bound to this caller and this
+  request, spends it once, and sends the backend's own state and the client's
+  answers upstream beside `arguments`. Answers without that `requestState` are
+  refused with `-32602` rather than run as a fresh call, because running it
+  fresh would repeat whatever the first attempt already did.
 
 - **`tools/call` no longer drops a retry's `inputResponses` and
   `requestState`.** Both were silently discarded, so an elicitation could never

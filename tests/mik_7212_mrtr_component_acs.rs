@@ -800,18 +800,15 @@ fn retry_via_invoke(
     json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params })
 }
 
-/// GIVEN a handle the gateway minted, WHEN a retry presents it in each of the
-/// three shapes a server may legitimately send back, THEN the backend receives
-/// the continuation the handle sealed — and nothing the client authored.
-///
-/// The fourth shape, neither field, is the fresh call: it is
-/// `fixture_control_a_fresh_call_reaches_the_backend`, which passes today and
-/// is what stops this row's red from being a broken fixture.
-///
-/// `requestState` is asserted to be the backend's own sealed state, not the
-/// handle presented. Echoing the client's envelope back to the backend would
-/// hand a server a value it never issued, which is the whole reason the
-/// gateway mints one (`src/protocol/continuation.rs:71`).
+/// GIVEN a minted handle, WHEN a retry presents it with or without answers, THEN
+/// the backend receives the continuation it sealed and nothing client-authored.
+/// Answers WITHOUT the handle are refused -32602 over this same HTTP hop and never
+/// reach the backend: MRTR client rule 2 makes the client echo the requestState
+/// this gateway always sends (MIK-7325.RETRY.1). The fourth shape, neither field,
+/// is the fresh call (`fixture_control_a_fresh_call_reaches_the_backend`).
+/// `requestState` must be the backend's own sealed state, not the handle presented:
+/// echoing the client's envelope would hand a server a value it never issued
+/// (`src/protocol/continuation.rs:71`).
 #[tokio::test]
 async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
     let answers = json!({ "city": "Helsinki" });
@@ -837,12 +834,14 @@ async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
         let (_status, response) = post(&state, &body).await;
 
         let calls = received.lock().expect("recorder").clone();
-        assert_eq!(
-            calls.len(),
-            1,
-            "{case}: the retry must reach the backend, it recorded {calls:?}; \
-             the gateway answered {response}"
-        );
+        if !with_state {
+            let code = response.pointer("/error/code").and_then(Value::as_i64);
+            assert_eq!(code, Some(-32602), "{case}: must be refused: {response}");
+            assert!(calls.is_empty(), "{case}: reached the backend: {calls:?}");
+            continue;
+        }
+        let why = format!("{case}: the retry must reach the backend; gateway answered {response}");
+        assert_eq!(calls.len(), 1, "{why}, it recorded {calls:?}");
         let arrived = &calls[0];
         assert_eq!(
             arrived.get("requestState").and_then(Value::as_str),
