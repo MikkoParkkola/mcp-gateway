@@ -1335,6 +1335,11 @@ CASES += [
     # match drops one silently, and the per-workflow guard is what says so.
     ("ci-digest-download-renamed", "ci.yml",
      "          pattern: image-digests-*\n", "          pattern: image-digest-leg-*\n", CAUGHT),
+    # `name:` wins over `pattern:` in the action, so a download that names
+    # some other artifact takes no digests, whatever its pattern says.
+    ("ci-digest-download-named-elsewhere", "ci.yml",
+     "          pattern: image-digests-*\n",
+     "          name: some-other-artifact\n          pattern: image-digests-*\n", CAUGHT),
 ]
 
 

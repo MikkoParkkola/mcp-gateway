@@ -2176,14 +2176,18 @@ class WorkflowWiring(unittest.TestCase):
             ]
             if not downloads:
                 continue
-            # A download naming neither `name:` nor `pattern:` takes every
-            # artifact of the run, so every upload is a handoff.
-            wanted = [artifact_keys(block, ("name", "pattern")) or ["*"] for block in downloads]
+            # One selector per download, as the action reads it: `name:` wins,
+            # then `pattern:`; with neither it takes every artifact of the run.
+            wanted = [
+                (artifact_keys(block, ("name",)) or artifact_keys(block, ("pattern",)) or ["*"])[0]
+                for block in downloads
+            ]
             for block in blocks:
                 if not any(re.match(r"^\s*(- )?uses:\s*actions/upload-artifact@", l) for l in block):
                     continue
-                name = (artifact_keys(block, ("name",)) or [""])[0]
-                if not any(fnmatch.fnmatchcase(name, k) for keys in wanted for k in keys):
+                # An upload without `name:` is stored as `artifact`.
+                name = (artifact_keys(block, ("name",)) or ["artifact"])[0]
+                if not any(fnmatch.fnmatchcase(name, k) for k in wanted):
                     continue
                 days = artifact_keys(block, ("retention-days",))
                 handoffs.append((path.name, block[0].strip(), days))
