@@ -155,7 +155,7 @@ impl super::AbortOnDrop {
     pub(crate) async fn stop(mut self) {
         self.0.abort();
         // Cancelled is the expected outcome; a panic is reported by the runtime.
-        drop((&mut self.0).await);
+        let _ = &mut self.0;
     }
 }
 
