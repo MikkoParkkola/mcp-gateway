@@ -15,7 +15,7 @@ pub(super) fn span_for(request: &Request<Body>) -> tracing::Span {
     let path = request
         .extensions()
         .get::<MatchedPath>()
-        .map_or("unmatched", MatchedPath::as_str);
+        .map_or(request.uri().path(), MatchedPath::as_str);
     tracing::span!(
         target: "tower_http::trace",
         tracing::Level::DEBUG,
