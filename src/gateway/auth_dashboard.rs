@@ -142,7 +142,6 @@ impl DashboardBootstrap {
             return SessionCheck::Expired;
         }
         if touch == Touch::Yes {
-            times.last_seen = now;
         }
         SessionCheck::Valid
     }
