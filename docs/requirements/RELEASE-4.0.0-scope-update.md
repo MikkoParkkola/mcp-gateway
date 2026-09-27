@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 74
+Approved supplemental criteria: 75
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -101,6 +101,7 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7570.CHART.2 | The Helm chart supports API-key and OIDC auth modes with secrets and persistent storage (B4). | ENTERPRISE |
 | MIK-7570.AUDIT.2 | Direct-route tool calls write the same invocation audit record as the meta route (D2). | ENTERPRISE |
 | MIK-7570.AUDIT.3 | Grant decisions, including refusals, are audited (D3). | ENTERPRISE |
+| MIK-7570.AUDIT.4 | Grant approve and revoke through the grant file and the `identity grants` CLI write a governance audit record carrying the verb, a timestamp and the actor (D3-e). | ENTERPRISE |
 | MIK-7570.METRICS.2 | Security-relevant events are exported as metrics without identities in labels (D4). | ENTERPRISE |
 | MIK-7570.SESSION.1 | Dashboard sessions expire after 30 minutes idle and 8 hours absolute, and logout ends them (E5). | ENTERPRISE |
 | MIK-7570.RECONNECT.1 | A managed personal account whose upstream token is rejected gets at most one forced refresh per token revision and then a reconnect prompt (A11). | ENTERPRISE |
