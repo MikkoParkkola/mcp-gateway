@@ -203,10 +203,8 @@ fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) 
     if found.iter().any(|r| matches!(r, P::ForeignOwner(_))) {
         let _ = writeln!(out, "icacls \"{path}\" /setowner \"{me}\"");
     }
-    // `/grant:r` replaces allow grants only; a deny naming the user survives it.
-    if found.iter().any(|r| matches!(r, P::NoReadWrite)) {
-        let _ = writeln!(out, "icacls \"{path}\" /remove:d \"{me}\"");
-    }
+    // `/grant:r` replaces every explicit entry for the user, a deny included
+    // (W-T10d runs these lines against a planted user deny).
     let _ = writeln!(out, "icacls \"{path}\" /inheritance:r /grant:r \"{me}:F\"");
     for refusal in found {
         if let P::ForeignSid(sid) = refusal {

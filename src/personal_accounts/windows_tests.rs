@@ -634,24 +634,21 @@ fn wt16b_judged_directory_is_held_until_custody() {
 // the open is refused: the open does not follow it.
 #[test]
 fn wt10c_legacy_token_swapped_for_a_link_refuses() {
+    use crate::private_fs::test_support::plant_owner_only;
     let (root, path) = legacy_token("W-T10c");
-    let user = crate::private_fs::test_support::user_sid();
-    icacls(
-        "W-T10c",
-        &path,
-        &["/inheritance:r", "/grant:r", &format!("*{user}:F")],
-    );
+    // Both files owner-only through the native plant (read back), so the
+    // only thing the swap changes is what the open is pointed at.
+    plant_owner_only("W-T10c", &path);
     let target = root.path().join("private_target.json");
     std::fs::copy(&path, &target).unwrap();
-    icacls(
-        "W-T10c",
-        &target,
-        &["/inheritance:r", "/grant:r", &format!("*{user}:F")],
-    );
-    assert!(
-        read_legacy_source(&path).is_ok(),
-        "WT-FIXTURE W-T10c: the private token itself must read"
-    );
+    plant_owner_only("W-T10c", &target);
+    let control = read_legacy_source(&path);
+    if control.is_err() {
+        fixture_fail(
+            "W-T10c",
+            &format!("the private token itself must read: {control:?}"),
+        );
+    }
     let (link, to) = (path.clone(), target.clone());
     instrument::set_hook(Some(Box::new(move |which, p| {
         if which == Hook::BeforeRecordOpen && p == link {
@@ -673,11 +670,7 @@ fn wt10d_remediation_removes_a_user_deny() {
     use std::os::windows::process::CommandExt as _;
     let (_root, path) = legacy_token("W-T10d");
     let user = crate::private_fs::test_support::user_sid();
-    icacls(
-        "W-T10d",
-        &path,
-        &["/inheritance:r", "/grant:r", &format!("*{user}:F")],
-    );
+    crate::private_fs::test_support::plant_owner_only("W-T10d", &path);
     icacls("W-T10d", &path, &["/deny", &format!("*{user}:(WD)")]);
     let text = read_legacy_source(&path)
         .err()
