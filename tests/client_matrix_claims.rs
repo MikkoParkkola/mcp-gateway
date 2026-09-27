@@ -381,6 +381,17 @@ fn every_row_is_backed_by_a_recorded_run_or_unverified() {
             assert!(!value.trim().is_empty(), "{client}: empty {what}");
         }
         assert!(
+            v.version.starts_with(|c: char| c.is_ascii_digit())
+                && !["latest", "current"].contains(&v.version.to_ascii_lowercase().as_str()),
+            "{client}: version `{}` is not a specific client version",
+            v.version
+        );
+        assert!(
+            (7..=40).contains(&v.commit.len()) && v.commit.chars().all(|c| c.is_ascii_hexdigit()),
+            "{client}: gateway `{}` is not a commit id",
+            v.commit
+        );
+        assert!(
             is_iso_date(&v.date),
             "{client}: `{}` is not an ISO date",
             v.date
