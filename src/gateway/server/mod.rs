@@ -2682,7 +2682,7 @@ impl Gateway {
             if let Some(saver) = cost_saver {
                 saver.stop().await;
             }
-            persistence::save_costs(enforcer, &data_dir);
+            let _ = enforcer;
         }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
