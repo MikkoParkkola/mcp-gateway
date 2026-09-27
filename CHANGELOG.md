@@ -24,6 +24,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Added
 
+- `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
+  launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
+  and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
+  backend under a runtime profile is skipped. (#526)
 - **The 3.5.1 upgrade rehearsal runs in CI.** A new `upgrade-rehearsal` job upgrades the
   v3.5.1 release binary to the pull request's build, turns the modern protocol off, rolls back,
   and fails when config, credentials, permissions, mounts or active callers do not survive.
@@ -102,6 +106,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
+  It used to wait out the request timeout and report a timeout, with the child's stderr already
+  discarded. The error now names the exit status and points at the gateway log, where one record
+  carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
+  text redacted. The stderr never goes to MCP clients. (#526)
 - **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
   about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
   thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
