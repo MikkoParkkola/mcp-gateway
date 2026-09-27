@@ -205,7 +205,7 @@ auth:
 server:
   cleartextHttp: tls_terminated_upstream
 audit:
-  existingClaim: mcp-gateway-audit
+  existingClam: mcp-gateway-audit
 config:
   server:
     host: 0.0.0.0
