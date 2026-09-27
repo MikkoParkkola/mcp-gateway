@@ -10,7 +10,9 @@ use std::sync::atomic::Ordering;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::direct_guards_fixture::{Answer, fixture, fixture_built, post_direct, post_meta_invoke};
+use super::direct_guards_fixture::{
+    Answer, fixture, fixture_built, post_direct, post_meta_invoke, post_meta_invoke_nonce,
+};
 use crate::gateway::meta_mcp::MetaMcp;
 
 const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
@@ -309,6 +311,7 @@ async fn t5_signing_refusal_precedes_idempotency() {
     for backend in BACKENDS {
         for require_nonce in [false, true] {
             let fx = fixture(Answer::Ok, |meta| arm_signing(meta, require_nonce)).await;
+            MetaMcp::reset_reservation_attempts();
             for _ in 0..2 {
                 let (_, body) = post_direct(
                     &fx,
@@ -327,6 +330,45 @@ async fn t5_signing_refusal_precedes_idempotency() {
                 );
             }
             assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{backend}");
+            assert_eq!(MetaMcp::reservation_attempts(), 0, "{backend}");
+        }
+    }
+}
+
+/// T5, cached row: a result cached before signing was enabled is not served
+/// once it is. The idempotency cache is shared between an unsigned gateway and
+/// a signing one (same key, same backend), so the entry exists before the
+/// signing gateway is built.
+#[tokio::test]
+async fn t5_signing_refusal_precedes_a_preseeded_cached_result() {
+    for backend in BACKENDS {
+        for require_nonce in [false, true] {
+            let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+            let seed_cache = std::sync::Arc::clone(&cache);
+            let unsigned = fixture(Answer::Ok, move |meta| {
+                meta.enable_idempotency(seed_cache, std::time::Duration::from_secs(300));
+            })
+            .await;
+            let idem = Some("t5-seed");
+            let (_, first) =
+                post_direct(&unsigned, backend, "k-std", "read", json!({}), idem, None).await;
+            assert!(
+                first.get("result").is_some(),
+                "{backend}: seed call: {first}"
+            );
+            let signed_cache = std::sync::Arc::clone(&cache);
+            let signed = fixture(Answer::Ok, move |meta| {
+                meta.enable_idempotency(signed_cache, std::time::Duration::from_secs(300));
+                arm_signing(meta, require_nonce);
+            })
+            .await;
+            let (_, body) =
+                post_direct(&signed, backend, "k-std", "read", json!({}), idem, None).await;
+            assert_eq!(
+                code(&body),
+                Some(-32001),
+                "{backend} nonce={require_nonce}: {body}"
+            );
         }
     }
 }
@@ -345,6 +387,12 @@ async fn t5_guards_signing_off_dispatches_and_gateway_invoke_is_signed() {
         assert!(
             body["result"].get("_signature").is_some(),
             "{backend}: {body}"
+        );
+        let fx = fixture(Answer::Ok, |meta| arm_signing(meta, true)).await;
+        let (_, body) = post_meta_invoke_nonce(&fx, "k-std", backend, "read", "t5-nonce").await;
+        assert!(
+            body["result"].get("_signature").is_some(),
+            "{backend} require_nonce: {body}"
         );
     }
 }

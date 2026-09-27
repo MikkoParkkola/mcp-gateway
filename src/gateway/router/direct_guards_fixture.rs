@@ -138,6 +138,22 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
+    fixture_inner(answer, false, build).await
+}
+
+/// [`fixture`] with the production firewall installed on both the router and
+/// the Meta-MCP (request scanning, response scanning, credential redaction),
+/// as `server/mod.rs` wires it.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
+    fixture_inner(answer, true, |meta| meta).await
+}
+
+async fn fixture_inner(
+    answer: Answer,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![
@@ -179,6 +195,19 @@ pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) ->
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(300),
     );
+    #[cfg(feature = "firewall")]
+    if firewalled {
+        use crate::security::firewall::{Firewall, FirewallConfig};
+        let config = FirewallConfig {
+            enabled: true,
+            scan_requests: true,
+            scan_responses: true,
+            credential_redaction: true,
+            ..FirewallConfig::default()
+        };
+        state_mut.firewall = Some(Arc::new(Firewall::from_config(config.clone(), None)));
+        meta.set_firewall(Some(Arc::new(Firewall::from_config(config, None))));
+    }
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));
     Fx {
@@ -236,6 +265,22 @@ pub(crate) async fn post_meta_invoke(
     });
     set_idem(&mut params, idem);
     send(fx, "/mcp", key, "tools/call", params, session).await
+}
+
+/// [`post_meta_invoke`] carrying a signing `nonce` in the `gateway_invoke`
+/// arguments.
+pub(crate) async fn post_meta_invoke_nonce(
+    fx: &Fx,
+    key: &str,
+    server: &str,
+    tool: &str,
+    nonce: &str,
+) -> (StatusCode, Value) {
+    let params = json!({
+        "name": "gateway_invoke",
+        "arguments": { "server": server, "tool": tool, "arguments": {}, "nonce": nonce },
+    });
+    send(fx, "/mcp", key, "tools/call", params, None).await
 }
 
 async fn send(

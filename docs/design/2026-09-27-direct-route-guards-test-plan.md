@@ -124,19 +124,21 @@ Five differences between the red commit and revision 3, each with its reason:
    channel (the router's `/mcp` path supplies none in a one-shot request). The per-backend route's
    use of `admit_spend_for` is pinned separately by T3 (the route draws on the budget) and by the
    T8 structural check (no route calls spend admission any other way). No test-only seam needed.
-2. Already-shared table populated with live rows on both routes: tool-name validation, authorizer
-   (a key denied `read`), request firewall (shell-injection argument), per-key rate limit (limit 1,
-   second call), and response-firewall redaction (a GitHub-token-shaped result, redacted on both).
+2. Already-shared table populated with live rows that pin the expected outcome on both routes,
+   not only their agreement: tool-name validation and the authorizer (a key denied `read`) are
+   refused with zero dispatches; the per-key rate limit (limit 1) dispatches the first call and
+   refuses the second; with the production firewall installed on router and Meta-MCP
+   (`fixture_firewalled`), a shell-injection argument is refused with zero dispatches and a
+   GitHub-token-shaped result is delivered with the token redacted and the benign text kept.
    Attestation, the invocation audit record and undeclared-key refusal are already pinned on both
    routes by `router/tests/attestation_routes.rs`, `router/direct_audit_tests.rs` and
    `router/r2_identity_keys_tests.rs`; the table cites them rather than duplicate them.
 3. T4 stages the session profile with `session_profiles().set_profile` instead of calling
    `gateway_set_profile`. Equivalent: the tool writes that same store, and the control under test
    is the read through `active_profile`, which both paths share.
-4. T5's "cached before signing" row became "same key twice under signing, both refused, nothing
-   dispatched or cached". Equivalent for the ordering claim: signing cannot be switched on after
-   `MetaMcp` is shared, and the property tested (refusal precedes reservation and cache) is pinned
-   by zero backend calls plus the T9 reservation counter in the T5 main cell.
-5. The signed-`gateway_invoke` guard covers nonce-optional only. Equivalent: `require_nonce` on
-   the meta route is already pinned by `meta_mcp/signing_delivery_tests.rs`; the guard's purpose
-   here is only that the direct-route refusal leaves `gateway_invoke` working.
+4. T5 keeps its cached row: an idempotency cache shared between an unsigned gateway (which seeds a
+   result under the key) and a signing gateway built afterwards, so the entry exists before signing
+   is on; the signing gateway must refuse -32001. The repeated-key row also asserts zero
+   reservation attempts on the keyed requests.
+5. The signed-`gateway_invoke` guard covers both signing configurations: nonce optional, and
+   `require_nonce` with the nonce in the `gateway_invoke` arguments. Both must be signed.
