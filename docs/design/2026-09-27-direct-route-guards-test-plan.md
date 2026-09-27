@@ -8,10 +8,9 @@ only (throwaway PRs for red and mutants).
 
 | File | Holds |
 |---|---|
-| `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T4, T5, T6, T6b, T7, T7b, T9, T11 |
+| `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c (behavioural), T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
 | `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the three parity tables and the structural source check |
-| `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error; T3c source assertion |
-| `src/gateway/meta_mcp/input_bridge` existing bridge tests | T3c behavioural half (bridged round then direct call) |
+| `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error; T3c source assertion (the `BridgeDispatcher::invoke` body calls `admit_spend_for`, not `admit_spend(`) |
 
 T10 (task-worker path) is added by whichever of this change and LIFECYCLE.1 lands second, per the
 agreed chain; it is listed here so it is not lost.
@@ -33,13 +32,30 @@ One router fixture, modelled on `direct_tasks_owner_tests.rs` / `direct_audit_te
 - Meta-route twin: the same arming, called through `POST /mcp` `tools/call gateway_invoke`
   (server `alpha`), used by the parity tables.
 - Every cell asserts the counter. The allowed baseline asserts exactly 1.
+- Backend mode axis: every direct-route control cell (T1-T7b) and the allowed baseline run twice,
+  once against a normal backend and once against a `passthrough: true` backend, because the route
+  forwards passthrough params unsanitised and the guards must sit on both arms of
+  `backend_handler_inner`.
+- Idempotency: cells that exercise replay (T1b, T5 cached row, T11, T3d) send an `Idempotency-Key`
+  and arm the direct-route idempotency store the way `idempotency_settlement_tests.rs` does.
+- Budget figures (T3, T3b, T3c, T3d): tool cost 1.0, key daily limit 5.0, Notify at 80 %. Calls 1-5
+  are admitted and calls 4-5 carry `_cost_warnings`; call 6 is refused -32003 (projected >= 100 %).
+  T3b uses the same enforcer and changes only the backend answer.
+- Profiles (T4): the default profile admits `alpha:*`; a named profile `no-alpha-read` excludes
+  `alpha:read`, set only through `gateway_set_profile` on a real `mcp-session-id`.
+- T9 hook: a `#[cfg(test)]` counter incremented at the `direct_route_idempotency` call in
+  `backend_handler_inner`, before its result is matched (not on the Proceed arm).
 
 ## Red commit
 
 Tests plus signature-only stubs: `dispatch_guards.rs` with the four stage methods returning `Ok`
 / doing nothing, `DISPATCH_CONTROLS` as the six names, `DirectOutcome::from_response` returning a
-fixed Success, `direct_guards.rs` with `run`/`before_dispatch`/`after_dispatch` that pass through.
+a sentinel outcome that matches no row of the adapter table, `direct_guards.rs` with
+`run`/`before_dispatch`/`after_dispatch` that pass through, and the module declarations. Test
+instrumentation in the red commit: the T9 counter hook and the fixture helpers, both `#[cfg(test)]`.
 No production call site changes, so every red cell fails on its assertion, not on compilation.
+CI runs these under the default feature set with `cost-governance` (the budget cells need it); the
+red run must show exactly the red cells below failing and every guard passing.
 
 Expected red (stated reason) versus guards (green at red, pinned for later):
 
@@ -48,16 +64,20 @@ Expected red (stated reason) versus guards (green at red, pinned for later):
 | T1, T2 | counter is 1 (backend called) |
 | T1b | cached result returned instead of -32000 |
 | T3 | call N+1 dispatches; no `_cost_warnings` |
-| T3c | direct call after the bridged round dispatches; source assertion finds `admit_spend(` at :937 |
+| T3c | limit 2.0: an opening call and one bridged round both dispatch and spend 2.0, then a direct call dispatches (should be -32003); the source assertion finds `admit_spend(` in `BridgeDispatcher::invoke` |
 | T4 | refused-profile call dispatches |
 | T5 | `require_nonce` row dispatches; cached-result row returns the cached value |
 | T6 | `is_killed` stays false after N direct failures |
 | T7 | fail-closed contract result delivered (HTTP 200 with result, not error) |
-| T7b | HIGH-finding result delivered; team_shared result not withheld |
+| T7b-i | response inspection `action_mode`, a result carrying a HIGH finding: delivered (should be refused) |
+| T7b-ii | inspection off, context integrity `team_shared`, a result carrying a tool-poisoning payload: delivered (should be withheld) |
+| T11 | the first call's payload-gate refusal is a delivered result today (should be a JSON-RPC error settled into the idempotency entry; the retry must replay it with count still 1) |
 | T8 | G1-G6 rows differ between routes; structural check finds `kill_switch.is_killed` etc. in `invoke_tool_traced` |
 | T9 | reservation hook counter is 1 |
-| adapter table | stub classifies every case as Success |
-| Guards (green at red): T3b, T6b, T11, T8 already-shared table, T5 signing-off and nonce-optional rows, T4 absent/empty header rows, allowed baselines | — |
+| adapter table | the sentinel stub matches no row, so every classification assertion fails |
+| DIRECT.7 | pending a maintainer ruling on the AC wording; T5 covers the fail-closed rule either way |
+| DIRECT.9 | the OWASP self-assessment still carries the meta-layer-only qualifiers (ASI08-ASI10) and the #1452 backlog line; CI's citation check stays green, and the fix commit removes both (document diff reviewed in the final review) |
+| Guards (green at red): T3b, T6b, T11b (a preseeded cached error replays without dispatch), T3d (a successful cached result replays after the budget is exhausted, no dispatch, no spend), T8 already-shared table, T5 signing-off and nonce-optional rows, T4 absent/empty header rows, allowed baselines | — |
 
 ## Mutants (one throwaway PR each, on the fix head)
 
@@ -66,7 +86,16 @@ M3 drop spend recording from `account_dispatch` (T3). M4 drop the profile step (
 `run` after the idempotency reservation (T9, T1b). M6 drop the G7 refusal (T5). M7 skip
 `account_dispatch` on direct (T6, T3). M8 skip `gate_payload` on direct (T7, T7b, T8). M9 re-add an
 inline `admit_spend(` call in `invoke_tool_traced` (T8 structural). M10 route an S4 refusal to the
-dispatch-`Err` arm (T7 status 500).
+dispatch-`Err` arm (T7 status 500). M11 wire the guards only on the sanitised arm, not the
+passthrough arm (every passthrough-mode cell). M12 move `before_dispatch` above the idempotency
+short-circuit (T3d spends or refuses a replay). M13 keep the old profile check inside
+`check_invocation_policy` (T8 structural).
+
+## Structural check scope (T8)
+
+The source check reads `invoke_tool_traced`, `check_invocation_policy`, `accounted_dispatch`,
+`backend_handler_inner` and `direct_guards.rs`, so a primitive left behind in the old profile or
+accounting site is caught as well as a new inline one (M9, M13).
 
 ## Gates before push
 
