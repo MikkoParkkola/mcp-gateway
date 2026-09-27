@@ -4,10 +4,11 @@
 
 **Headline:** a P50 regression is reproduced against **v3.5.0**, the baseline
 `NFR.PERF.1` actually names, at **1.1237 [1.1010, 1.1521]** (k=4, 96.5% coverage,
-n=15) — excluding both 1.0 and the 5% budget. The rise is a **step in a
-42-commit window**, not a ramp. **All numbers are provisional**: the
-pre-registered settledness rule returned DRIFTING. Per-commit attribution
-costs n≈195 against n≈7 for the endpoint and is retired on this host.
+n=15) — excluding both 1.0 and the 5% budget. The largest rise sits in a
+**42-commit window** (idx27→69); paired segment ratios show a second, smaller
+measurable rise at idx69→92. **All numbers are provisional**: the
+pre-registered settledness rule returned DRIFTING. Resolving ~1.7% per-segment
+differences costs n≈195 against n≈7 for the endpoint.
 
 Supersedes the attribution attempt in
 `2026-09-21-nfr-perf-1-bisect-resolution.md`. That bisect's verdict is an
@@ -322,9 +323,9 @@ Supporting, and weaker than it first appears:
 So no correction is applied. What ships instead is a **cross-check**:
 geometric-mean pooling runs always, on the pre-registered secondary subset,
 reported **alongside** the median and never instead of it, with **no interval
-claimed for it** rather than fabricating one. If the two agree, position bias is
-not driving the result — and the check is informative precisely because it could
-have disagreed and did not.
+claimed for it** rather than fabricating one. At n = 6 the two agreed; at final
+`n` they do not (gaps up to 1.67pp, §4.6), so the check is withdrawn and does not
+rule position bias out.
 
 The geometric-mean cancellation requires *complete* rotations. The pre-registered
 secondary window was meant to provide them, but it does not: excluded cycles 7 and
@@ -828,15 +829,18 @@ place. Every correlation in this report names the set it is computed over — se
 This is **not** the load correlation of §6.3, and the two must not be confused —
 §6.3 records that near-miss.
 
-**Exactly one segment is resolvable: idx27→69, at +8.42pp, carrying 68% of the
-total +12.37pp rise.** Everything else is inside the floor, including the
+**Read as differences of pooled medians, one segment is resolvable: idx27→69, at
++8.42pp, carrying 68% of the total +12.37pp rise.** Paired per-cycle segment ratios
+also resolve idx69→92 (`P4/P3` = 1.0382 [1.0174, 1.0514]; Finding 2). On the
+pooled-median reading everything else is inside the floor, including the
 negative idx92→115 segment — so the non-monotonicity (`P4` above `REL`) is
 **not** a resolvable finding and needs no explanation beyond noise.
 
 ### 4.6 Position cross-check
 
-Median against geometric mean on the pre-registered balance-exact subset
-(n=12, most recent multiple of 6):
+Median against geometric mean on the pre-registered secondary subset
+(n=12, most recent multiple of 6; not slot-balanced, because excluded cycles 7
+and 15 fall inside it):
 
 | arm | median | geo-mean | delta |
 |---|---|---|---|
@@ -1021,14 +1025,15 @@ order.
 breath:**
 
 > **G1 passed — and G1 is structurally blind to median position bias in the
-> test arms. The geometric-mean cross-check (§1.3.3) is what covers that
-> class.**
+> test arms. The geometric-mean cross-check (§1.3.3) was meant to cover that
+> class; it is withdrawn at final `n` and its window is not slot-balanced, so
+> nothing in this run covers it.**
 
 The reason is geometric, not statistical. `Aprime` sits at cyclic distance
 `k = NARM/2 = 3` from `A`, and that is the **unique** geometry whose
 median-pooling position bias is ~0 (+0.01% against ±1.7% for every test arm).
-Distance 3 was chosen so the control's separation would match the arms it
-bounds (§1.3); that it is also the one position immune to this particular bias
+Distance 3 was chosen in the belief that it matched the arms' mean separation
+(§1.3; it does not); that it is also the one position immune to this particular bias
 is coincidence, and an unlucky one.
 
 So a `G1` pass cannot see a failure mode that afflicts every arm it is meant to
@@ -1161,8 +1166,8 @@ That window is 42 commits, is the heaviest in the run (107,746 `src` lines
 added, §1.2), and **straddles the 4.0.0 version boundary at index 39**. It is
 not a culprit commit and this design cannot produce one.
 
-**Finding 3 — per-commit attribution is retired on this host, and that is the
-answer to the question that prompted the exercise.**
+**Finding 3 — attributing small per-segment differences is out of reach on this
+host; locating one large step is not.**
 
 From realised scatter (CV 4.83%), using the prior analysis's own formula
 `n = (1.96·CV·k/(effect/2))²` with the asymptotic `k = 1.2533`:
@@ -1177,7 +1182,9 @@ From realised scatter (CV 4.83%), using the prior analysis's own formula
 A factor of ~28 in cost, on a host that yields ~6 cycles an hour under contention,
 so per-commit attribution of small differences is out of reach here. Locating the
 one large step is not: by the same formula an 8.42pp step resolves at n≈8 per
-comparison, so a bisect confined to idx27→69 (about 6 halvings) is feasible. The
+comparison, so a bisect confined to idx27→69 (about 6 halvings) is feasible if the
+rise there is one persistent step; if it is several smaller changes, each needs its
+own resolution and the cost climbs back toward the per-segment figure. The
 2026-09-21 bisect targeted effects near 1.0%, which needs n≈564 here.
 
 **Question 3 — does the regression predate 4.0.0? INCONCLUSIVE.**
@@ -1213,7 +1220,7 @@ that the discipline is real rather than decorative.
 |---|---|---|
 | 1 | The settledness statistic regresses over *all observed* cycles, including those rule (c) rejected for drift — a drift-trend statistic counting cycles rejected for drift (§1.3.1) | Registered version reported. Sensitivity at final `n`: kept-cycles-only slope +0.00316 against the registered +0.00646. Fix registered for the next run. |
 | 2 | Rule (b) is one-sided (`A > 1.25 × median`), so an anomalously *fast* denominator is not excluded (§4a.6) | Registered version reported. Sensitivity: two-sided rule drops no kept cycle. Impact separately measured and negligible — cycle 10's shift was common-mode, all arms 12–18% fast, inter-arm spread 7.8%. |
-| 3 | G1 is structurally blind to median position bias, because `Aprime` sits at `k = NARM/2`, the one distance where that bias vanishes (§5.1) | Stated as a **verdict-level** caveat, not an appendix note. Covered by the geometric-mean cross-check, which read clean at n = 6 (≤0.24pp) and is withdrawn at final `n` (gaps up to 1.67pp, §4.6). |
+| 3 | G1 is structurally blind to median position bias, because `Aprime` sits at `k = NARM/2`, the one distance where that bias vanishes (§5.1) | Stated as a **verdict-level** caveat, not an appendix note. Not covered in this run: the geometric-mean cross-check read clean at n = 6 (≤0.24pp) but is withdrawn at final `n` (gaps up to 1.67pp, §4.6), and its window is not slot-balanced. |
 
 Three further errors were made and corrected *during* the exercise, and are
 recorded in place rather than tidied away:
