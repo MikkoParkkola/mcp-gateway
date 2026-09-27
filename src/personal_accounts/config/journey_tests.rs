@@ -129,6 +129,19 @@ fn check(yaml: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The rewrite in `check` must not hide the rule it steps around: on Windows a
+/// rooted path with no drive is still refused as a store directory.
+#[cfg(windows)]
+#[test]
+fn a_rooted_path_without_a_drive_is_refused_on_windows() {
+    let accounts: AccountsConfig = serde_yaml::from_str(BASE).unwrap();
+    let refused = resolve(Some(&accounts), &Overlay).err().map(|e| e.to_string());
+    assert!(
+        refused.as_deref().is_some_and(|e| e.contains("accounts.store_dir")),
+        "{refused:?}"
+    );
+}
+
 #[track_caller]
 fn refused(yaml: &str, phrase: &str) {
     match check(yaml) {
