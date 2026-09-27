@@ -85,6 +85,7 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
+| 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1695,6 +1696,28 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
+
+## 72. Env files are polled, and a failed reload is retried
+
+A 3.x gateway and earlier 4.0 betas watched each env file's directory, fixed at startup. An
+env file reached through a link (`current/.env` after a release switch, or an env file that
+is itself a symlink) kept reloading from the old target, and no change was seen on NFS or
+FUSE mounts.
+
+In 4.0:
+
+- Every listed env file is re-read every 2 seconds and the config reloads when its content
+  differs from what is loaded. A file that appears later is picked up.
+- A lookup error on an env file (a link loop, a directory the gateway cannot search) fails
+  the load instead of reading as a missing file.
+- After any failed reload, whatever caused it, the reload is retried every 2 seconds until
+  one succeeds. A refused config (a posture refusal, or a field that needs a restart) is
+  re-evaluated each time and refused each time; no backend is started or stopped and nothing
+  is published. Its warning is logged at most once a minute per file unless the error
+  changes.
+
+**Action:** none required. A broken or refused `config.yaml` now stays in retry until it is
+fixed or reverted, so fix it rather than waiting for the next file event.
 
 ## After upgrading
 

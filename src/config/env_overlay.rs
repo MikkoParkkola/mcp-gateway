@@ -514,7 +514,9 @@ impl EnvOverlay {
             self.insert(key, value);
         }
         self.sources.push((path.to_path_buf(), text));
-        tracing::info!("Loaded env file: {}", path.display());
+        // Debug: a failed reload is retried every poll and would repeat this
+        // line; startup logs the resolved list once at INFO instead.
+        tracing::debug!("Loaded env file: {}", path.display());
         Ok(())
     }
 

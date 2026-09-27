@@ -120,9 +120,28 @@ impl EnvPoller {
     }
 }
 
+/// Log an identity-grants read error at ERROR once per minute per distinct
+/// error, else at DEBUG: a failed config reload is retried every poll and
+/// re-reads the grants file each time.
+pub(super) fn report_grants_refusal(
+    limiter: &parking_lot::Mutex<WarnLimiter>,
+    path: &Path,
+    reason: &str,
+) {
+    if limiter.lock().should_warn(path, reason, Instant::now()) {
+        tracing::error!(
+            path = %path.display(),
+            %reason,
+            "Identity-grant reload refused; the live grants still apply"
+        );
+    } else {
+        tracing::debug!(%reason, "Identity-grant reload still refused");
+    }
+}
+
 /// Rate-limits the warning for an env-file reload that keeps failing: per
 /// path, a warning only when that path's error changed or `WARN_EVERY` passed.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct WarnLimiter {
     last: BTreeMap<PathBuf, (String, Instant)>,
 }

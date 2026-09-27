@@ -1449,6 +1449,8 @@ pub struct IdentityGrantSink {
     epoch: Arc<std::sync::atomic::AtomicU64>,
     path: PathBuf,
     lock: tokio::sync::Mutex<()>,
+    /// Throttles an unchanged grants read error: retries re-read the file.
+    read_errors: parking_lot::Mutex<env_poll::WarnLimiter>,
 }
 
 impl IdentityGrantSink {
@@ -1464,6 +1466,7 @@ impl IdentityGrantSink {
             epoch,
             path,
             lock: tokio::sync::Mutex::new(()),
+            read_errors: parking_lot::Mutex::new(env_poll::WarnLimiter::default()),
         }
     }
 }
@@ -1812,13 +1815,12 @@ impl ReloadContext {
         };
 
         let file = match crate::identity_grants::read_identity_grants_file(&sink.path).await {
-            Ok(file) => file,
+            Ok(file) => {
+                *sink.read_errors.lock() = env_poll::WarnLimiter::default();
+                file
+            }
             Err(reason) => {
-                error!(
-                    path = %sink.path.display(),
-                    %reason,
-                    "Identity-grant reload refused; the live grants still apply"
-                );
+                env_poll::report_grants_refusal(&sink.read_errors, &sink.path, &reason);
                 return Some(Err(format!(
                     "identity grants not reloaded from {}: {reason}",
                     sink.path.display()

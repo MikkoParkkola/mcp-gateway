@@ -440,7 +440,12 @@ impl Config {
         home: &dyn HomeResolver,
     ) -> Result<Evaluated> {
         let resolved = Self::prepare(path)?;
-        Self::evaluate(resolved.as_ref(), home, Tolerance::Fail, Expansion::Resolve)
+        let evaluated =
+            Self::evaluate(resolved.as_ref(), home, Tolerance::Fail, Expansion::Resolve)?;
+        if !evaluated.env_paths.as_paths().is_empty() {
+            tracing::info!(env_files = ?evaluated.env_paths.as_paths(), "Env files resolved");
+        }
+        Ok(evaluated)
     }
 
     /// Re-evaluate against env files the running process already recorded.
@@ -757,7 +762,13 @@ impl Config {
     /// Returns [`Error::ConfigValidation`] describing the first violation found.
     pub fn validate_with_env(&self, overlay: &EnvOverlay) -> Result<()> {
         // Port 0 is valid (OS-assigned ephemeral port); u16 caps the top.
-        if self.server.port == 0 {
+        // Once per process: every reload validates, a failed one is retried
+        // every poll, and the bound port only changes on a restart anyway.
+        static PORT_ZERO_WARNED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if self.server.port == 0
+            && !PORT_ZERO_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
             tracing::warn!("Server port is 0; OS will assign an ephemeral port");
         }
         // First, so no other reader touches a plaintext key (E4).
