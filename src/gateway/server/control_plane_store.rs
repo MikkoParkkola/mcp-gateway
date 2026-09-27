@@ -84,7 +84,7 @@ pub(super) fn build_control_plane_store(
     // log's open as a side effect.
     let opened = match source {
         ControlPlaneBaseSource::Explicit => probe_writable(base)
-            .map_err(|e| e.to_string())
+            .map_err(|e| OpenFailure::Other(e.to_string()))
             .and_then(|()| open_store(config, base)),
         ControlPlaneBaseSource::Default => open_store(config, base),
     };
@@ -93,10 +93,15 @@ pub(super) fn build_control_plane_store(
             info!(%path, ?source, "control-plane store opened");
             Ok(Some(store))
         }
-        (Err(error), ControlPlaneBaseSource::Explicit) => Err(Error::Config(format!(
-            "control_plane.store_dir '{path}' could not be opened: {error}"
-        ))),
-        (Err(error), ControlPlaneBaseSource::Default) => {
+        // Another gateway writes this governance log: two writers fork its
+        // chain, so this refuses at any location, never degrades.
+        (Err(OpenFailure::LeaseHeld(error)), _) => {
+            Err(Error::Config(format!("refusing to start: {error}")))
+        }
+        (Err(OpenFailure::Other(error)), ControlPlaneBaseSource::Explicit) => Err(Error::Config(
+            format!("control_plane.store_dir '{path}' could not be opened: {error}"),
+        )),
+        (Err(OpenFailure::Other(error)), ControlPlaneBaseSource::Default) => {
             warn!(
                 %path, ?source, %error,
                 "control-plane store unavailable; governance mutations disabled. Set control_plane.store_dir to a writable directory"
@@ -147,21 +152,34 @@ fn governance_log_config(
         rotation: RotationConfig::governance(
             config.security.transparency_log.rotation.on_disk_full,
         ),
-        lease_wait_secs: crate::security::transparency_log::DEFAULT_LEASE_WAIT_SECS,
+        lease_wait_secs: config.security.transparency_log.lease_wait_secs,
     }
+}
+
+/// Why the store did not open: another writer of its log, or anything else.
+enum OpenFailure {
+    LeaseHeld(String),
+    Other(String),
 }
 
 fn open_store(
     config: &Config,
     base: &Path,
-) -> std::result::Result<Arc<dyn ControlPlaneStore>, String> {
+) -> std::result::Result<Arc<dyn ControlPlaneStore>, OpenFailure> {
     use crate::control_plane::FileControlPlaneStore;
     use crate::security::TransparencyLogger;
+    use crate::security::transparency_log::is_lease_held;
 
     let audit_cfg = Arc::new(governance_log_config(config, base));
-    let audit = TransparencyLogger::open(audit_cfg).map_err(|e| format!("audit log: {e}"))?;
+    let audit = TransparencyLogger::open(audit_cfg).map_err(|e| {
+        if is_lease_held(&e) {
+            OpenFailure::LeaseHeld(e.to_string())
+        } else {
+            OpenFailure::Other(format!("audit log: {e}"))
+        }
+    })?;
     let store = FileControlPlaneStore::open(base.join("store"), Arc::new(audit))
-        .map_err(|e| format!("store: {e}"))?;
+        .map_err(|e| OpenFailure::Other(format!("store: {e}")))?;
     Ok(Arc::new(store))
 }
 

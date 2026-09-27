@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! R3 for the governance log: another writer of its `audit.jsonl` refuses the
-//! start, at the default and at an explicit store location, auth on or off.
-//! A default-location store that cannot open otherwise only warns.
+//! start, at the default and at an explicit store location. The store opens
+//! only with auth on; with auth off there is no governance writer to refuse.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -56,7 +56,13 @@ fn case(auth: bool, explicit: bool) {
     );
     let audit = base(&config, &path).join("audit.jsonl");
     let _holder = hold(&audit);
-    assert_refused(start(&config, &path), &audit);
+    if auth {
+        assert_refused(start(&config, &path), &audit);
+    } else {
+        // Auth off never opens the governance store (no governance writer,
+        // so no second writer): the start proceeds without it.
+        assert_eq!(start(&config, &path), Ok(false));
+    }
 }
 
 #[test]
@@ -65,7 +71,7 @@ fn governance_default_location_refuses_with_auth_on() {
 }
 
 #[test]
-fn governance_default_location_refuses_with_auth_off() {
+fn governance_default_location_with_auth_off_opens_no_writer() {
     case(false, false);
 }
 
@@ -75,7 +81,7 @@ fn governance_explicit_location_refuses_with_auth_on() {
 }
 
 #[test]
-fn governance_explicit_location_refuses_with_auth_off() {
+fn governance_explicit_location_with_auth_off_opens_no_writer() {
     case(false, true);
 }
 

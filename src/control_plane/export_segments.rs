@@ -23,6 +23,8 @@ pub(super) struct Scan {
     pub(super) anchor_found: bool,
     /// Oldest surviving segment, for the skipped-segments count.
     pub(super) oldest: u64,
+    /// A listed file was gone when this pass opened it.
+    pub(super) vanished: bool,
 }
 
 /// The log's files oldest first, each with its segment number; the active
@@ -45,11 +47,7 @@ fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBu
 /// A scan's first listing of the log; the test seams count passes here.
 fn listed(log_path: &Path) -> std::io::Result<Vec<(u64, PathBuf, bool)>> {
     let all = files(log_path, None)?;
-    #[cfg(test)]
-    {
-        EXPORT_PASSES.with(|c| c.set(c.get() + 1));
-        fire(&EXPORT_LISTED);
-    }
+    hook_listed();
     Ok(all)
 }
 
@@ -62,8 +60,40 @@ impl LogExporter {
     /// only from an `audit_segment_opened` record whose
     /// `prev_segment_final_hash` equals it (its HMAC is still checked when a
     /// secret is set), so a forged first line cannot launder a chain start.
+    ///
+    /// A listed file that vanishes mid-scan, or a segment list that changed
+    /// by the end of it, is a live rotation: the scan runs once more, and a
+    /// second disruption is a busy log (`Interrupted`) for the next poll.
+    /// Growth alone leaves the list as it was and is never a rescan.
     pub(super) fn scan(&self, anchor: &str, from: Option<u64>) -> Result<Scan, ExportError> {
-        let all = listed(&self.log_path)?;
+        let mut attempt = 0;
+        loop {
+            let all = listed(&self.log_path)?;
+            let scan = self.scan_once(anchor, from, &all)?;
+            hook_after_scan();
+            let seqs = |f: &[(u64, PathBuf, bool)]| f.iter().map(|x| x.0).collect::<Vec<_>>();
+            let stable = seqs(&all) == seqs(&files(&self.log_path, None)?);
+            if stable && !scan.vanished {
+                return Ok(scan);
+            }
+            if attempt == 1 {
+                return Err(ExportError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "audit log changed during the export scan (a live rotation); retry",
+                )));
+            }
+            attempt += 1;
+        }
+    }
+
+    /// One pass of [`Self::scan`] over `all`, the listing taken for it.
+    #[allow(clippy::too_many_lines)] // one pass of the export stream
+    fn scan_once(
+        &self,
+        anchor: &str,
+        from: Option<u64>,
+        all: &[(u64, PathBuf, bool)],
+    ) -> Result<Scan, ExportError> {
         let mut scan = Scan {
             batch: Vec::new(),
             last_hash: anchor.to_string(),
@@ -72,6 +102,7 @@ impl LogExporter {
             lag: 0,
             anchor_found: anchor == "genesis",
             oldest: all.first().map_or(0, |f| f.0),
+            vanished: false,
         };
         let mut passed = anchor == "genesis";
         let mut running_prev: Option<String> = passed.then(|| "genesis".to_string());
@@ -79,7 +110,10 @@ impl LogExporter {
         for (seq, path, active) in files(&self.log_path, if passed { None } else { from })? {
             let file = match std::fs::File::open(&path) {
                 Ok(f) => f,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    scan.vanished = true;
+                    continue;
+                }
                 Err(e) => return Err(e.into()),
             };
             let mut reader = BufReader::new(file);
@@ -222,3 +256,22 @@ fn fire(hook: &'static std::thread::LocalKey<HookSlot>) {
         f();
     }
 }
+
+/// Test seams: count the pass and fire the listing hook. A no-op otherwise.
+#[cfg(test)]
+fn hook_listed() {
+    EXPORT_PASSES.with(|c| c.set(c.get() + 1));
+    fire(&EXPORT_LISTED);
+}
+
+#[cfg(not(test))]
+const fn hook_listed() {}
+
+/// Test seam fired after a scan pass has read every file.
+#[cfg(test)]
+fn hook_after_scan() {
+    fire(&EXPORT_AFTER_SCAN);
+}
+
+#[cfg(not(test))]
+const fn hook_after_scan() {}

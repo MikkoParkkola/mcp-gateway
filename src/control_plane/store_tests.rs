@@ -580,22 +580,40 @@ fn write_phase_faults_never_tear_the_collection() {
 }
 
 // MIK-6685.STORE.4 — cross-process audit append stays verifiable. Two
-// loggers over the same log file (separate "processes") append via the
-// synced path; the chain must not fork and must pass verify_log.
+// processes may no longer write one audit log at once: the second is refused
+// while the first holds the writer lease. Across a handoff (the first exits,
+// the second starts), synced appends continue the chain and verify_log passes.
 #[test]
 fn cross_process_audit_append_stays_verifiable() {
     let dir = tempfile::tempdir().unwrap();
-    let logger_a = governance_logger(dir.path());
-    let logger_b = governance_logger(dir.path()); // second handle, same file
     let store_dir = dir.path().join("store");
-    let a = FileControlPlaneStore::open(store_dir.clone(), Arc::clone(&logger_a)).unwrap();
-    let b = FileControlPlaneStore::open(store_dir, Arc::clone(&logger_b)).unwrap();
+    let logger_a = governance_logger(dir.path());
+    let refused = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: logger_a.path().to_string_lossy().into_owned(),
+        lease_wait_secs: 0,
+        ..TransparencyLogConfig::default()
+    }))
+    .err()
+    .expect("a second writer of the governance log is refused");
+    assert!(
+        crate::security::transparency_log::is_lease_held(&refused),
+        "{refused}"
+    );
 
-    // Interleave appends across the two handles.
+    let a = FileControlPlaneStore::open(store_dir.clone(), Arc::clone(&logger_a)).unwrap();
     a.append_audit(&audit_event("e1", "alice", ControlPlaneAction::MutateGrant))
         .unwrap();
+    drop(a);
+    drop(logger_a);
+    let logger_b = governance_logger(dir.path());
+    let b = FileControlPlaneStore::open(store_dir.clone(), Arc::clone(&logger_b)).unwrap();
     b.append_audit(&audit_event("e2", "bob", ControlPlaneAction::MutatePolicy))
         .unwrap();
+    drop(b);
+    drop(logger_b);
+    let logger_a = governance_logger(dir.path());
+    let a = FileControlPlaneStore::open(store_dir, Arc::clone(&logger_a)).unwrap();
     a.append_audit(&audit_event(
         "e3",
         "carol",

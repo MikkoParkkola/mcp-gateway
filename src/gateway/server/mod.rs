@@ -1068,6 +1068,11 @@ impl Gateway {
                     transparency_log = Some(logger);
                     info!("Transparency log enabled");
                 }
+                // Two writers of one log fork its chain, so this refuses
+                // whatever the auth setting.
+                Err(e) if crate::security::transparency_log::is_lease_held(&e) => {
+                    return Err(Error::Config(format!("refusing to start: {e}")));
+                }
                 Err(e) if auth_on => {
                     return Err(Error::Config(format!(
                         "auth is enabled, so the audit log (security.transparency_log) must \

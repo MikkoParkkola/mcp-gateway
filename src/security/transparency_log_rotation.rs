@@ -208,7 +208,8 @@ pub(super) fn recover(
             if event.as_deref() == Some(EV_SEALED) {
                 // Crash after the seal, before the rename: finish it.
                 let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                std::fs::rename(path, segments::sealed_path(path, seq))?;
+                let sealed = segments::sealed_path(path, seq);
+                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
                 segments::sync_dir(path)?;
                 open_after_seal(
                     path,
@@ -287,7 +288,10 @@ fn resume_active(
     let counter = hw
         .filter(|h| h.segment_seq == seq)
         .map_or(counter, |h| h.counter.max(counter));
-    let file = OpenOptions::new().append(true).open(path)?;
+    let file = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(segments::ctx("open", path))?;
     Ok(Recovered {
         seg: SegState {
             seq,
@@ -317,7 +321,8 @@ pub(super) fn open_after_seal(
             .create(true)
             .write(true)
             .truncate(true)
-            .open(path)?;
+            .open(path)
+            .map_err(segments::ctx("create", path))?;
         stamp_created(&file)?;
         Ok::<_, io::Error>(file)
     };
@@ -332,7 +337,10 @@ pub(super) fn open_after_seal(
         let hw_counter = hw.map_or(0, |h| h.counter);
         if hw_counter == 0 {
             drop(fresh()?);
-            let file = OpenOptions::new().append(true).open(path)?;
+            let file = OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(segments::ctx("open", path))?;
             return Ok(Recovered {
                 file,
                 counter: 0,
@@ -361,7 +369,10 @@ pub(super) fn open_after_seal(
             &hw.entry_hash,
         )?;
         return Ok(Recovered {
-            file: OpenOptions::new().append(true).open(path)?,
+            file: OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(segments::ctx("open", path))?,
             counter: hw.counter + 1,
             last_entry_hash: hash,
             seg: file_seg(hw.segment_seq),
@@ -390,7 +401,10 @@ pub(super) fn open_after_seal(
     );
     let hash = write_synced(&mut fresh()?, config, fields, counter, &seal_hash)?;
     Ok(Recovered {
-        file: OpenOptions::new().append(true).open(path)?,
+        file: OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(segments::ctx("open", path))?,
         counter,
         last_entry_hash: hash,
         seg: file_seg(seq),
@@ -409,7 +423,11 @@ fn repair_torn_tail(
     newest_sealed: Option<&Segment>,
 ) -> io::Result<()> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(segments::ctx("open", path))?;
     let len = file.metadata()?.len();
     let window = len.min(2 * MAX_TAIL_SCAN_BYTES);
     file.seek(SeekFrom::Start(len - window))?;
@@ -446,7 +464,10 @@ fn repair_torn_tail(
     let dropped = len - keep_len;
     tracing::warn!(bytes = dropped, "audit log: dropped a torn final line");
     if keep_len > 0 && !before.trim().is_empty() {
-        let mut file = OpenOptions::new().append(true).open(path)?;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(segments::ctx("open", path))?;
         let fields = housekeeping(EV_TORN, &[("bytes", dropped.into())]);
         write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
     }

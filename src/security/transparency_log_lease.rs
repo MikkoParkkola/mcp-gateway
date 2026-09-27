@@ -61,19 +61,29 @@ pub(super) fn acquire_with(
     sleep: &mut dyn FnMut(Duration),
     now: &dyn Fn() -> Instant,
 ) -> io::Result<ExclusiveFileLock> {
-    // RED-FIRST STUB: one retry, no window. Replaced by the bounded wait.
     let lock_path = super::segments::sibling(path, "lock");
-    let _ = (now(), wait);
-    if let Some(lease) = ExclusiveFileLock::try_lease(&lock_path)? {
-        return Ok(lease);
+    let start = now();
+    let mut warned = false;
+    loop {
+        if let Some(lease) = ExclusiveFileLock::try_lease(&lock_path)? {
+            return Ok(lease);
+        }
+        if now().duration_since(start) >= wait {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                LeaseHeld {
+                    path: path.to_path_buf(),
+                },
+            ));
+        }
+        if !warned {
+            warned = true;
+            tracing::warn!(
+                path = %path.display(),
+                wait_secs = wait.as_secs(),
+                "waiting for the audit log lease, held by another process"
+            );
+        }
+        sleep(LEASE_RETRY);
     }
-    sleep(LEASE_RETRY);
-    ExclusiveFileLock::try_lease(&lock_path)?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::WouldBlock,
-            LeaseHeld {
-                path: path.to_path_buf(),
-            },
-        )
-    })
 }

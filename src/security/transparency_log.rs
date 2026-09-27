@@ -195,6 +195,8 @@ struct Inner {
 pub struct TransparencyLogger {
     inner: Mutex<Inner>,
     config: Arc<TransparencyLogConfig>,
+    /// The writer lease on `<path>.lock`, held for the logger's lifetime.
+    lease: crate::fs_lock::ExclusiveFileLock,
     #[cfg(test)]
     fail_next_append: std::sync::atomic::AtomicBool,
     #[cfg(test)]
@@ -275,15 +277,14 @@ impl TransparencyLogger {
         // D6 2.6: take `<path>.lock` (another process may be mid-rotation),
         // list the segments before touching the active path, then choose the
         // seed. Genesis only with no active record and no sealed segment.
-        let recovered = {
-            // RED-FIRST STUB: the lease is taken for recovery only, as the
-            // guard was; holding it for the logger's life comes next.
-            let guard = lease::acquire(
-                &path,
-                std::time::Duration::from_secs(config.lease_wait_secs),
-            )?;
-            rotation::recover(&path, &config, &guard, rotation::now_secs(0))?
-        };
+        // The writer lease, held until the logger drops: every rotation,
+        // retention and recovery below runs under it, and a second writer of
+        // this path is refused.
+        let lease = lease::acquire(
+            &path,
+            std::time::Duration::from_secs(config.lease_wait_secs),
+        )?;
+        let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 file: recovered.file,
@@ -292,6 +293,7 @@ impl TransparencyLogger {
                 seg: recovered.seg,
             }),
             config,
+            lease,
             #[cfg(test)]
             hooks: rotation::TestHooks::default(),
             #[cfg(test)]
@@ -577,6 +579,10 @@ fn bounded_read_to_string(path: &Path, max_bytes: u64) -> io::Result<String> {
 ///
 /// Returns `io::Error` if the file cannot be opened, seeked, or read.
 fn read_last_nonempty_line(path: &Path) -> io::Result<Option<String>> {
+    read_last_nonempty_line_raw(path).map_err(segments::ctx("read", path))
+}
+
+fn read_last_nonempty_line_raw(path: &Path) -> io::Result<Option<String>> {
     let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
     if file_len == 0 {

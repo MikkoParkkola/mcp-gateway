@@ -46,6 +46,7 @@ data:
     {{- $rendered := dict "max_segment_bytes" (int64 $rot.maxSegmentBytes) "retain_segments" (int64 $rot.retainSegments) "on_disk_full" $rot.onDiskFull }}
     {{- if $rot.maxSegmentAgeSecs }}{{- $_ := set $rendered "max_segment_age_secs" (int64 $rot.maxSegmentAgeSecs) }}{{- end }}
     {{- $_ := set $tlog "rotation" $rendered }}
+    {{- $_ := set $tlog "lease_wait_secs" (int64 .Values.audit.leaseWaitSecs) }}
     {{- if not .Values.audit.existingClaim }}
     {{- include "mcp-gateway.auditFitsVolume" . }}
     {{- end }}
