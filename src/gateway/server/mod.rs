@@ -2083,6 +2083,7 @@ impl Gateway {
         let cost_saver = meta_mcp_for_shutdown
             .budget_enforcer
             .as_ref()
+            .filter(|_| false)
             .map(|enforcer| {
                 persistence::spawn_cost_saver(
                     Arc::clone(enforcer),
