@@ -287,17 +287,10 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
-        tls_enabled: {
-            let c = state.live_config.get();
-            // Also when a proxy terminates TLS in front: the browser speaks
-            // HTTPS even though this listener does not, and without `Secure` a
-            // downgrade puts the operator's session on the wire.
-            c.mtls.enabled
-                || c.server
-                    .public_url
-                    .as_deref()
-                    .is_some_and(|u| u.starts_with("https://"))
-        },
+        // Also when a proxy terminates TLS in front: the browser speaks HTTPS
+        // even though this listener does not, and without `Secure` a downgrade
+        // puts the operator's session on the wire.
+        tls_enabled: super::auth::cookies_are_secure(&state.live_config.get()),
     }
 }
 
@@ -342,6 +335,20 @@ fn metrics_route(config: &crate::config::Config) -> Router {
     Router::new()
         .route("/metrics", get(handlers::metrics_handler))
         .with_state(token)
+}
+
+/// Routes on the app state that run outside authentication and the E1-f audit
+/// layer, merged after both are applied: dashboard logout (E5), which an
+/// expired session and an audit outage must never block.
+fn unauthenticated_routes() -> Router<Arc<AppState>> {
+    #[cfg(feature = "webui")]
+    {
+        super::ui::session::logout_router()
+    }
+    #[cfg(not(feature = "webui"))]
+    {
+        Router::new()
+    }
 }
 
 /// [`create_router_with`] plus the managed-account handles, which only a
@@ -454,6 +461,7 @@ pub(crate) fn create_router_with_accounts(
     .map(|router| router.with_state(Arc::clone(&state)));
 
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
+        .merge(unauthenticated_routes())
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

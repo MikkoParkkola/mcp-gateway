@@ -78,6 +78,27 @@ impl DashboardSessionConfig {
     ///
     /// Returns [`Error::ConfigValidation`] naming the violated bound.
     pub(crate) fn validate(&self) -> Result<()> {
+        let (idle, absolute) = (self.idle_timeout_secs, self.absolute_timeout_secs);
+        if idle == 0 {
+            return Err(Error::ConfigValidation(
+                "auth.dashboard_session.idle_timeout_secs is 0, which ends every session at \
+                 once; set a positive number of seconds (default 1800)"
+                    .into(),
+            ));
+        }
+        if absolute == 0 {
+            return Err(Error::ConfigValidation(
+                "auth.dashboard_session.absolute_timeout_secs is 0, which ends every session \
+                 at once; set a positive number of seconds (default 28800)"
+                    .into(),
+            ));
+        }
+        if idle > absolute {
+            return Err(Error::ConfigValidation(format!(
+                "auth.dashboard_session.idle_timeout_secs ({idle}) exceeds \
+                 absolute_timeout_secs ({absolute}); the idle limit could never apply"
+            )));
+        }
         Ok(())
     }
 }
@@ -725,61 +746,6 @@ mod api_key_name_tests {
 #[path = "api_key_digest_tests.rs"]
 mod api_key_digest_tests;
 
-/// E5-T9: dashboard session limits that cannot work refuse to load, and the
-/// refusal names the bound it broke.
 #[cfg(test)]
-mod dashboard_session_limits_tests {
-    use super::DashboardSessionConfig;
-
-    fn refusal(idle: u64, absolute: u64) -> String {
-        let mut config = crate::config::Config::default();
-        config.auth.dashboard_session = DashboardSessionConfig {
-            idle_timeout_secs: idle,
-            absolute_timeout_secs: absolute,
-        };
-        config
-            .validate()
-            .expect_err("these limits must not load")
-            .to_string()
-    }
-
-    #[test]
-    fn zero_or_inverted_timeouts_fail_to_load() {
-        let zero_idle = refusal(0, 28_800);
-        assert!(
-            zero_idle.contains("auth.dashboard_session.idle_timeout_secs"),
-            "{zero_idle}"
-        );
-        let zero_absolute = refusal(1800, 0);
-        assert!(
-            zero_absolute.contains("auth.dashboard_session.absolute_timeout_secs"),
-            "{zero_absolute}"
-        );
-        let inverted = refusal(3600, 1800);
-        assert!(
-            inverted.contains("idle_timeout_secs") && inverted.contains("absolute_timeout_secs"),
-            "{inverted}"
-        );
-    }
-
-    #[test]
-    fn defaults_are_thirty_minutes_and_eight_hours() {
-        let d = DashboardSessionConfig::default();
-        assert_eq!(
-            (d.idle_timeout_secs, d.absolute_timeout_secs),
-            (1800, 28_800)
-        );
-        crate::config::Config::default()
-            .validate()
-            .expect("the defaults load");
-    }
-
-    #[test]
-    fn a_misspelled_limit_is_refused() {
-        let parsed: Result<DashboardSessionConfig, _> = serde_yaml::from_str("idle_timeout: 60\n");
-        assert!(
-            parsed.is_err(),
-            "an unknown key must not silently keep the default"
-        );
-    }
-}
+#[path = "auth_dashboard_session_tests.rs"]
+mod dashboard_session_limits_tests;

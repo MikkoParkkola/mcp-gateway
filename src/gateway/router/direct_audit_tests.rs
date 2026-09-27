@@ -152,7 +152,7 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: false,
-        dashboard_session: Default::default(),
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
     }
 }
 

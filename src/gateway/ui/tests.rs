@@ -148,7 +148,7 @@ fn render_contains_doctype_and_meta_refresh() {
     let ds = default_state(vec![healthy_backend("alpha", 5, Some(20))]);
     let html = DashboardRenderer::render(&ds);
     assert!(html.contains("<!DOCTYPE html>"));
-    assert!(html.contains(r#"http-equiv="refresh" content="5""#));
+    assert!(html.contains(r#"http-equiv="refresh" content="5;url=/dashboard?poll=1""#));
 }
 
 #[test]

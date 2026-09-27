@@ -40,7 +40,6 @@ pub use api_key::ResolvedApiKey;
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-#[cfg_attr(not(test), allow(unused_imports))] // red commit only
 pub(crate) use dashboard::{Now, SessionCheck, SessionLimits, Touch};
 
 /// Type alias for our rate limiter
@@ -597,33 +596,90 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
         if !state.dashboard_bootstrap.consume(&candidate) {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
-                "Bootstrap link is invalid or already used. Restart the gateway \
-                 for a fresh link.",
+                "Bootstrap link is invalid or already used. Run `mcp-gateway \
+                 dashboard-link` for a fresh one.",
             ));
         }
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
-        let handle = state.dashboard_bootstrap.issue_session();
-        // `Secure` whenever this listener speaks TLS. Without it a downgrade
-        // puts the cookie on the wire; with a plain-HTTP loopback listener the
-        // attribute would stop the cookie being sent at all, so it is
-        // conditional rather than unconditional.
-        let secure = if state.tls_enabled { " Secure;" } else { "" };
+        let limits = session_limits(state);
+        let handle = state
+            .dashboard_bootstrap
+            .issue_session_at(Now::read(), &limits);
+        // The cookie lives exactly as long as the server will honour it, so a
+        // browser never keeps presenting a handle the server already dropped.
+        let max_age = limits.absolute.as_secs();
         Some(axum::response::IntoResponse::into_response((
             axum::http::StatusCode::SEE_OTHER,
             [
                 (axum::http::header::LOCATION, "/dashboard".to_string()),
                 (
                     axum::http::header::SET_COOKIE,
-                    format!(
-                        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; \
-                         Path=/; Max-Age=86400"
-                    ),
+                    session_cookie(&handle, max_age, state.tls_enabled),
                 ),
             ],
         )))
     }
+}
+
+/// The session limits in force now: read from the live config, so a reload
+/// applies to sessions already open.
+fn session_limits(state: &AuthState) -> SessionLimits {
+    SessionLimits::from(&state.live_config.get().auth.dashboard_session)
+}
+
+/// The `Set-Cookie` value for `handle`; an empty handle with `max_age` 0
+/// clears it.
+///
+/// `Secure` whenever this listener speaks TLS, or a proxy terminates it in
+/// front. Without it a downgrade puts the cookie on the wire; with a
+/// plain-HTTP loopback listener the attribute would stop the cookie being sent
+/// at all, so it is conditional rather than unconditional.
+pub(crate) fn session_cookie(handle: &str, max_age: u64, secure: bool) -> String {
+    let secure = if secure { " Secure;" } else { "" };
+    format!(
+        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; Path=/; Max-Age={max_age}"
+    )
+}
+
+/// Whether browsers reach this gateway over HTTPS, so its cookies must be
+/// `Secure`: a TLS listener, or a `public_url` behind a TLS-terminating proxy.
+pub(crate) fn cookies_are_secure(config: &crate::config::Config) -> bool {
+    config.mtls.enabled
+        || config
+            .server
+            .public_url
+            .as_deref()
+            .is_some_and(|u| u.starts_with("https://"))
+}
+
+/// The answer to a dashboard session that has ended: its own message and a
+/// clearing cookie, rather than a "Missing credential" that sends the operator
+/// looking for a header a browser cannot send.
+fn session_ended_response(secure: bool) -> Response {
+    let mut response = bearer_unauthorized_response(
+        "Dashboard session expired or ended; run `mcp-gateway dashboard-link` for a new link.",
+    );
+    if let Ok(value) = session_cookie("", 0, secure).parse() {
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    response
+}
+
+/// The dashboard's own background refreshes: the `/ui` interval sends the
+/// header, and the `/dashboard` meta refresh targets `?poll=1`. Such a request
+/// is checked but never extends a session. The marker can only fail to extend
+/// one, so a forged or stripped marker cannot lengthen a session.
+fn is_poll(request: &Request<Body>) -> bool {
+    request.headers().contains_key("x-mcp-gateway-poll")
+        || (request.uri().path() == "/dashboard"
+            && request
+                .uri()
+                .query()
+                .is_some_and(|q| q.split('&').any(|p| p == "poll=1")))
 }
 
 /// The identity a validated dashboard session carries.
@@ -739,21 +795,69 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
+    // An opaque dashboard session, validated against this process's store
+    // rather than treated as a credential.
+    let mut dead_session = false;
+    if let Some(handle) = session_cookie_value(request.headers()) {
+        let touch = if is_poll(&request) {
+            Touch::No
+        } else {
+            Touch::Yes
+        };
+        let limits = session_limits(&state);
+        match state
+            .dashboard_bootstrap
+            .check_session(&handle, Now::read(), &limits, touch)
+        {
+            SessionCheck::Valid => {
+                request.extensions_mut().insert(dashboard_client());
+                return next.run(request).await;
+            }
+            // D4 (MIK-7570.METRICS.2) counts `session_expired` here; an
+            // unknown handle is not an expiry and is not counted.
+            SessionCheck::Expired | SessionCheck::Unknown => dead_session = true,
+        }
+    }
+    if dead_session {
+        // A dead handle answers for itself, unless the request carries
+        // something else to decide it: a bearer beside a stale cookie (an API
+        // client must not be locked out by it), a fresh bootstrap link (the
+        // operator is re-entering, exactly when a stale cookie is present), or
+        // a public path, which needs no credential at all.
+        let has_bearer = request
+            .headers()
+            .contains_key(axum::http::header::AUTHORIZATION);
+        let is_bootstrap = request.uri().path() == "/dashboard"
+            && request.uri().query().and_then(bootstrap_param).is_some();
+        if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
+            return session_ended_response(state.tls_enabled);
+        }
+    }
+    let secure = state.tls_enabled;
+    let mut response = authenticate_request(state, request, next).await;
+    if dead_session && let Ok(value) = session_cookie("", 0, secure).parse() {
+        // The browser drops the dead handle instead of presenting it forever.
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    response
+}
+
+/// The middleware past the session cookie: public paths, the bootstrap link
+/// and presented credentials.
+async fn authenticate_request(
+    state: AuthState,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    let auth_config = &state.auth_config;
     let path = request.uri().path();
 
     // A public path skips the credential REQUIREMENT, not the credential. An
     // operator who presents their admin token to `/mcp` — a public path on the
     // starter config, so ordinary tools stay open — was handed the public
     // identity and lost the management tools their token pays for.
-    // An opaque dashboard session, validated against this process's store
-    // rather than treated as a credential.
-    if let Some(handle) = session_cookie_value(request.headers())
-        && state.dashboard_bootstrap.session_is_valid(&handle)
-    {
-        request.extensions_mut().insert(dashboard_client());
-        return next.run(request).await;
-    }
-
     if auth_config.is_public_path(path)
         && let Some(presented) = presented_credential(request.headers())
     {

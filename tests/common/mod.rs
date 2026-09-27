@@ -293,6 +293,6 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
         public_paths: Vec::new(),
         client_circuit_breaker: None,
         single_user: false,
-        dashboard_session: Default::default(),
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     }
 }

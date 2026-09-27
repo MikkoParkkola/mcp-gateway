@@ -122,6 +122,8 @@ const LIMITS: SessionLimits = SessionLimits {
     absolute: ABSOLUTE,
 };
 const SEC: Duration = Duration::from_secs(1);
+/// One second short of the idle limit.
+const JUST_IDLE: Duration = Duration::from_secs(1799);
 
 /// `t0` moved forward by `by` on both clocks.
 fn at(t0: Now, by: Duration) -> Now {
@@ -160,7 +162,7 @@ fn idle_session_expires() {
 #[test]
 fn active_session_hits_absolute_limit() {
     let (b, h, t0) = issued();
-    let step = IDLE - SEC;
+    let step = JUST_IDLE;
     let mut elapsed = step;
     while elapsed <= ABSOLUTE {
         assert_eq!(
@@ -182,11 +184,11 @@ fn active_session_hits_absolute_limit() {
 fn touched_session_stays_valid() {
     let (b, h, t0) = issued();
     assert_eq!(
-        b.check_session(&h, at(t0, IDLE - SEC), &LIMITS, Touch::Yes),
+        b.check_session(&h, at(t0, JUST_IDLE), &LIMITS, Touch::Yes),
         SessionCheck::Valid
     );
     assert_eq!(
-        b.check_session(&h, at(t0, IDLE * 2 - SEC * 2), &LIMITS, Touch::Yes),
+        b.check_session(&h, at(t0, JUST_IDLE * 2), &LIMITS, Touch::Yes),
         SessionCheck::Valid,
         "the idle clock restarts at each activity check"
     );

@@ -32,6 +32,8 @@ const LINK: &str = "/ui/api/dashboard-link";
 const POLL_HEADER: &str = "x-mcp-gateway-poll";
 const IDLE: Duration = Duration::from_secs(1800);
 const MIN: Duration = Duration::from_secs(60);
+/// A minute short of the idle limit.
+const NEARLY_IDLE: Duration = Duration::from_secs(1740);
 
 fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -378,7 +380,7 @@ async fn expired_cookie_gets_session_expired_401() {
 async fn poll_marked_requests_do_not_extend() {
     let (state, _dir) = fixture().await;
     let h = issue(&state);
-    age(&state, &h, IDLE - MIN);
+    age(&state, &h, NEARLY_IDLE);
     assert!(is_admin_view(&send(&state, poll(STATUS, &h)).await));
     let page = send(&state, get("/dashboard?poll=1", Some(&h))).await;
     assert_eq!(page.status, StatusCode::OK, "{}", page.body);
@@ -415,7 +417,7 @@ async fn dashboard_meta_refresh_targets_poll_url() {
 async fn unmarked_activity_extends() {
     let (state, _dir) = fixture().await;
     let h = issue(&state);
-    age(&state, &h, IDLE - MIN);
+    age(&state, &h, NEARLY_IDLE);
     assert!(is_admin_view(&send(&state, get(STATUS, Some(&h))).await));
     age(&state, &h, MIN * 2);
     assert!(
@@ -438,7 +440,7 @@ async fn delivery_check_does_not_touch() {
     );
     let held = crate::gateway::auth::live::held_credential(&headers);
 
-    age(&state, &h, IDLE - MIN);
+    age(&state, &h, NEARLY_IDLE);
     assert!(
         crate::gateway::auth::live::current_client(&auth, held.as_ref())
             .await

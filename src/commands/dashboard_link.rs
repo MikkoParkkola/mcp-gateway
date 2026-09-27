@@ -5,8 +5,6 @@
 //!
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
-// Red commit only: the stubs have no caller yet.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::process::ExitCode;
 
@@ -18,8 +16,16 @@ pub(crate) const TOKEN_ENV: &str = "MCP_GATEWAY_TOKEN";
 /// # Errors
 ///
 /// A message naming [`TOKEN_ENV`] when it is unset or blank.
-pub(crate) fn read_token(_lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
-    Err(String::new())
+pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    lookup(TOKEN_ENV)
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{TOKEN_ENV} is not set. Export the gateway's bearer token or an admin API \
+                 key in {TOKEN_ENV}; it is never read from the command line."
+            )
+        })
 }
 
 /// Ask the gateway at `base` for a fresh link.
@@ -27,13 +33,43 @@ pub(crate) fn read_token(_lookup: impl Fn(&str) -> Option<String>) -> Result<Str
 /// # Errors
 ///
 /// A message carrying the gateway's status or the transport failure.
-pub(crate) async fn fetch_link(_base: &str, _token: &str) -> Result<String, String> {
-    Err(String::new())
+pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String> {
+    let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(&endpoint)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the gateway at {base}: {e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let reason = body["error"].as_str().unwrap_or("no reason given");
+        return Err(format!("the gateway answered {status}: {reason}"));
+    }
+    body["link"]
+        .as_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| "the gateway's answer carried no link".to_string())
 }
 
 /// Run the command against the gateway at `base`.
-pub async fn run_dashboard_link_command(_base: &str) -> ExitCode {
-    ExitCode::FAILURE
+pub async fn run_dashboard_link_command(base: &str) -> ExitCode {
+    let result = match read_token(|name| std::env::var(name).ok()) {
+        Ok(token) => fetch_link(base, &token).await,
+        Err(message) => Err(message),
+    };
+    match result {
+        Ok(link) => {
+            println!("{link}");
+            eprintln!("Opens once, from this machine only.");
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("dashboard-link: {message}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[cfg(test)]

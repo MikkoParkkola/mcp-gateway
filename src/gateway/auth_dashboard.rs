@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The dashboard bootstrap value and the browser sessions it opens.
-// Red commit only: the stubs have no production caller yet.
-#![cfg_attr(not(test), allow(dead_code))]
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
 /// A one-time value that exchanges for a dashboard session.
@@ -14,9 +14,38 @@ use std::time::{Duration, Instant, SystemTime};
 /// This value is single-use and dies with the process.
 #[derive(Debug)]
 pub struct DashboardBootstrap {
-    value: std::sync::Mutex<Option<String>>,
-    /// Opaque handles issued to browsers, valid for this process only.
-    sessions: std::sync::Mutex<std::collections::HashSet<String>>,
+    value: Mutex<Option<String>>,
+    /// Opaque handles issued to browsers, valid for this process only, with
+    /// when each was issued and last used. `ponytail:` one mutex over the map;
+    /// a dashboard has a handful of sessions, not thousands.
+    sessions: Mutex<HashMap<String, SessionTimes>>,
+}
+
+/// When a session was issued and when it last saw operator activity.
+#[derive(Debug, Clone, Copy)]
+struct SessionTimes {
+    issued: Now,
+    last_seen: Now,
+}
+
+impl SessionTimes {
+    /// Past the idle or the absolute limit, by either clock.
+    fn expired(&self, now: Now, limits: &SessionLimits) -> bool {
+        exceeds(self.last_seen, now, limits.idle) || exceeds(self.issued, now, limits.absolute)
+    }
+}
+
+/// `true` when more than `limit` separates `since` from `now` on EITHER clock.
+///
+/// The monotonic clock stops while the host sleeps, so it alone would let a
+/// laptop wake overnight to a live session; the wall clock can be stepped, so
+/// it alone would let a backward step extend one. A wall clock that reads
+/// earlier than `since` counts as no time passed, and the monotonic clock
+/// still decides.
+fn exceeds(since: Now, now: Now, limit: Duration) -> bool {
+    let mono = now.mono.saturating_duration_since(since.mono);
+    let wall = now.wall.duration_since(since.wall).unwrap_or_default();
+    mono > limit || wall > limit
 }
 
 impl DashboardBootstrap {
@@ -27,35 +56,44 @@ impl DashboardBootstrap {
     /// opaque handle is meaningless anywhere but this process and expires with
     /// it. Kept in memory: a dashboard session is not worth persisting, and
     /// nothing on disk means nothing to steal from disk.
-    pub fn issue_session(&self) -> String {
-        use rand::RngExt;
-        let bytes: [u8; 32] = rand::rng().random();
-        let handle =
-            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+    pub(crate) fn issue_session_at(&self, now: Now, limits: &SessionLimits) -> String {
+        let handle = random_value();
         if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.insert(handle.clone());
+            // Sweep on issue: the only way the map grows, so it is the one
+            // place that has to shrink it.
+            sessions.retain(|_, times| !times.expired(now, limits));
+            sessions.insert(
+                handle.clone(),
+                SessionTimes {
+                    issued: now,
+                    last_seen: now,
+                },
+            );
         }
         handle
     }
 
-    /// `true` when this handle was issued by this process and is still valid.
+    /// A session issued now under the default limits. Test fixtures only.
+    #[cfg(test)]
+    pub fn issue_session(&self) -> String {
+        self.issue_session_at(Now::read(), &SessionLimits::default())
+    }
+
+    /// `true` when `handle` is live now under the default limits, without
+    /// counting as activity. Test fixtures only.
+    #[cfg(test)]
     #[must_use]
     pub fn session_is_valid(&self, handle: &str) -> bool {
-        self.sessions
-            .lock()
-            .is_ok_and(|sessions| sessions.contains(handle))
+        self.check_session(handle, Now::read(), &SessionLimits::default(), Touch::No)
+            == SessionCheck::Valid
     }
 
     /// Mint a fresh single-use value.
     #[must_use]
     pub fn new() -> Self {
-        use rand::RngExt;
-        let bytes: [u8; 32] = rand::rng().random();
-        let value =
-            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
         Self {
-            value: std::sync::Mutex::new(Some(value)),
-            sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+            value: Mutex::new(Some(random_value())),
+            sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -81,45 +119,86 @@ impl DashboardBootstrap {
         }
     }
 
-    /// Mint a session at `now`, sweeping entries already past `limits`.
-    pub(crate) fn issue_session_at(&self, _now: Now, _limits: &SessionLimits) -> String {
-        self.issue_session()
-    }
-
     /// Whether `handle` is a live session at `now`.
+    ///
+    /// An expired handle is removed by the check that finds it. `Touch::Yes`
+    /// restarts the idle clock of a valid session; `Touch::No` checks without
+    /// extending, for background refreshes and delivery re-checks.
     pub(crate) fn check_session(
         &self,
         handle: &str,
-        _now: Now,
-        _limits: &SessionLimits,
-        _touch: Touch,
+        now: Now,
+        limits: &SessionLimits,
+        touch: Touch,
     ) -> SessionCheck {
-        if self.session_is_valid(handle) {
-            SessionCheck::Valid
-        } else {
-            SessionCheck::Unknown
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return SessionCheck::Unknown;
+        };
+        let Some(times) = sessions.get_mut(handle) else {
+            return SessionCheck::Unknown;
+        };
+        if times.expired(now, limits) {
+            sessions.remove(handle);
+            return SessionCheck::Expired;
         }
+        if touch == Touch::Yes {
+            times.last_seen = now;
+        }
+        SessionCheck::Valid
     }
 
     /// End the session `handle`; `true` when it existed.
-    pub(crate) fn revoke(&self, _handle: &str) -> bool {
-        false
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn revoke(&self, handle: &str) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|mut sessions| sessions.remove(handle).is_some())
     }
 
     /// Replace any unused bootstrap value with a fresh one and return it.
+    ///
+    /// The old value dies here, so a link printed earlier and leaked since
+    /// (scrollback, a shipped log) stops working the moment a new one exists.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn rearm(&self) -> String {
-        String::new()
+        let fresh = random_value();
+        if let Ok(mut value) = self.value.lock() {
+            *value = Some(fresh.clone());
+        }
+        fresh
     }
 
-    /// Test seam: move both clocks of `handle` back by `by`.
+    /// Test seam: move both clocks of `handle` back by `by`, the same as `by`
+    /// passing with no activity.
     #[cfg(test)]
-    pub(crate) fn backdate(&self, _handle: &str, _by: Duration) {}
+    pub(crate) fn backdate(&self, handle: &str, by: Duration) {
+        let back = |t: Now| Now {
+            mono: t
+                .mono
+                .checked_sub(by)
+                .expect("backdate within the monotonic range"),
+            wall: t.wall - by,
+        };
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(times) = sessions.get_mut(handle)
+        {
+            times.issued = back(times.issued);
+            times.last_seen = back(times.last_seen);
+        }
+    }
 
     /// Test seam: how many sessions the store holds.
     #[cfg(test)]
     pub(crate) fn session_count(&self) -> usize {
         self.sessions.lock().map_or(0, |s| s.len())
     }
+}
+
+/// 32 random bytes, base64url: a bootstrap value or a session handle.
+fn random_value() -> String {
+    use rand::RngExt;
+    let bytes: [u8; 32] = rand::rng().random();
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
 /// How long a dashboard session may live, read from the live config.
@@ -129,6 +208,12 @@ pub(crate) struct SessionLimits {
     pub(crate) idle: Duration,
     /// Longest life from issue.
     pub(crate) absolute: Duration,
+}
+
+impl Default for SessionLimits {
+    fn default() -> Self {
+        Self::from(&crate::config::DashboardSessionConfig::default())
+    }
 }
 
 impl From<&crate::config::DashboardSessionConfig> for SessionLimits {
