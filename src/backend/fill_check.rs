@@ -68,6 +68,9 @@ impl Replay {
             Error::Transport(m) => (Error::Transport, m.clone()),
             Error::TransportPermanent(m) => (Error::TransportPermanent, m.clone()),
             Error::TransportConnect(m) => (Error::TransportConnect, m.clone()),
+            Error::Config(m) => (Error::Config, m.clone()),
+            Error::ConfigValidation(m) => (Error::ConfigValidation, m.clone()),
+            Error::OAuth(m) => (Error::OAuth, m.clone()),
             other if is_transport_failure(other) => (Error::Transport, other.to_string()),
             _ => return None,
         };
@@ -202,6 +205,8 @@ pub(super) async fn run_bounded<T>(
     let latency = started.elapsed();
     match &result {
         Ok(_) => entry.failsafe.record_success(latency),
+        // Reachable, list unreadable: the backend answered (text U, A3).
+        Err(e) if !is_transport_failure(e) => entry.failsafe.record_success(latency),
         Err(e) => {
             entry
                 .failsafe
@@ -227,6 +232,11 @@ pub(crate) fn is_transport_failure(error: &Error) -> bool {
             | Error::Http(_)
             | Error::Io(_)
             | Error::Tls(_)
+            // The backend could not be started as this caller: the dispatch
+            // would fail with the same error, so the call gets it too.
+            | Error::Config(_)
+            | Error::ConfigValidation(_)
+            | Error::OAuth(_)
     )
 }
 

@@ -190,6 +190,8 @@ impl Backend {
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);
+            // A readable list is proof the slot recovered: end its cooldown.
+            *entry.tools_fill_failed_at.lock() = None;
         });
     }
 }

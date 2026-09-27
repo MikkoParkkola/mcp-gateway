@@ -676,12 +676,11 @@ async fn drain_list_pages(
             return Err(Error::json_rpc(error.code, error.message));
         }
         let Some(mut result) = response.result else {
-            if page == 0 {
-                break;
-            }
-            // Neither `result` nor `error` mid-drain says nothing about the
-            // list's shape: a transient page failure, so keep the last
-            // complete catalogue (design E).
+            // Neither `result` nor `error` says nothing about the list's
+            // shape, on the first page too (F13: an empty first page would
+            // read as a complete list and refuse every tool as absent): a
+            // transient page failure, so keep the last complete catalogue
+            // (design E).
             return Err(Error::json_rpc(
                 -32603,
                 format!("{} page {} returned no result", family.method, page + 1),

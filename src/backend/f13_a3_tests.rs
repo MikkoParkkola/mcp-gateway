@@ -56,3 +56,108 @@ async fn a3_t5_standard_forwards_a_transport_failure() {
     let answer = check(&backend, "edit", &undeclared()).await;
     assert!(matches!(answer, Ok(None)), "{answer:?}");
 }
+
+/// Review fold: under `standard`, a reachable backend whose list is unreadable
+/// still gets its call. The list failure is not a breaker failure (the backend
+/// answered), so a threshold-1 breaker stays closed. Mutant M22 (record every
+/// fill error on the breaker) reddens it.
+#[tokio::test(start_paused = true)]
+async fn a3_t6_an_unreadable_list_does_not_trip_the_breaker() {
+    let lister = Lister::new(Mode::Fail);
+    let reset = Duration::from_secs(60);
+    let backend = backend(
+        InputSchemaEnforcement::Standard,
+        &hair_trigger(reset),
+        &lister,
+    );
+    let answer = check(&backend, "edit", &undeclared()).await;
+    assert!(matches!(answer, Ok(None)), "{answer:?}");
+    assert!(
+        !backend.is_circuit_tripped(),
+        "an answered list opened the breaker"
+    );
+}
+
+/// Review fold: a backend that cannot be started as this caller (config or
+/// OAuth) answers as the dispatch would, variant kept across the cooldown.
+/// Mutant M23 (drop the start-failure variants) reddens it.
+#[test]
+fn a3_t7_start_failures_answer_as_the_dispatch() {
+    use crate::backend::fill_check::{Replay, is_transport_failure};
+    for error in [
+        crate::Error::Config("profile rejected".into()),
+        crate::Error::ConfigValidation("bad url".into()),
+        crate::Error::OAuth("token store unavailable".into()),
+    ] {
+        assert!(is_transport_failure(&error), "{error:?}");
+        let replay = Replay::of(&error).expect("replayed");
+        let message = error.to_string();
+        let kept = message.split(": ").nth(1).unwrap_or(&message);
+        assert!(format!("{replay:?}").contains(kept), "{replay:?}");
+    }
+}
+
+/// Review fold: a readable direct-route list ends the slot's fill cooldown, so
+/// the next cold call lists again instead of fast-failing. Mutant M24 (keep
+/// the stamp in `remember_listed_tools`) reddens it.
+#[tokio::test(start_paused = true)]
+async fn a3_t8_a_direct_list_ends_the_cooldown() {
+    let lister = Lister::new(Mode::Down);
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    let _ = check(&backend, "edit", &undeclared()).await;
+    // An empty readable list: stored (ending the cooldown), then discardable.
+    backend.remember_listed_tools(None, false, &[]).await;
+    backend.invalidate_tools_cache();
+    lister.set(Mode::Serve);
+    let answer = check(&backend, "edit", &undeclared()).await;
+    assert!(matches!(answer, Ok(Some(_))), "{answer:?}");
+    assert_eq!(
+        lister.lists(),
+        2,
+        "the cold call fast-failed after a direct list"
+    );
+}
+
+/// A `tools/list` answer with neither `result` nor `error`.
+struct Bare;
+
+#[async_trait]
+impl crate::transport::Transport for Bare {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        let mut bare = JsonRpcResponse::success(RequestId::Number(1), json!(null));
+        bare.result = None;
+        Ok(bare)
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Review fold: a result-less first page is unreadable (text U), not a
+/// complete empty list (text A for every tool). Mutant M25 (restore the
+/// page-0 `break`) reddens it.
+#[tokio::test]
+async fn a3_t9_a_resultless_first_page_is_unreadable() {
+    let backend = Arc::new(Backend::new(
+        "f13",
+        BackendConfig::default(),
+        &no_breaker(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(Bare));
+    let answer = check(&backend, "edit", &undeclared()).await;
+    assert_eq!(
+        answer.expect("text U is a result"),
+        Some(TEXT_UNAVAILABLE.to_owned())
+    );
+}
