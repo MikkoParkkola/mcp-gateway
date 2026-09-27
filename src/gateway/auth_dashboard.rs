@@ -31,7 +31,7 @@ struct SessionTimes {
 impl SessionTimes {
     /// Past the idle or the absolute limit, by either clock.
     fn expired(&self, now: Now, limits: &SessionLimits) -> bool {
-        exceeds(self.last_seen, now, limits.idle) || exceeds(self.issued, now, limits.absolute)
+        exceeds(self.issued, now, limits.absolute)
     }
 }
 
