@@ -506,17 +506,23 @@ mod win_privileged {
         let launcher = format!(
             "$c = New-Object System.Management.Automation.PSCredential('{user}', \
              (ConvertTo-SecureString '{pass}' -AsPlainText -Force)); \
-             Start-Process powershell -Credential $c -WorkingDirectory '{w}' -Wait \
-             -ArgumentList '-NoProfile','-Command',\"{s}\"",
+             $p = Start-Process powershell -Credential $c -WorkingDirectory '{w}' -Wait -PassThru \
+             -LoadUserProfile -RedirectStandardError '{e}' \
+             -ArgumentList '-NoProfile','-Command',\"{s}\"; exit $p.ExitCode",
             w = base.display(),
+            e = base.join("stderr.txt").display(),
             s = script.replace('"', "`\"")
         );
         let exit = std::process::Command::new("powershell")
             .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", &launcher])
             .status();
-        if !exit.is_ok_and(|s| s.success()) {
-            fixture_fail(row, "Start-Process -Credential failed");
+        let stderr = std::fs::read_to_string(base.join("stderr.txt")).unwrap_or_default();
+        if !exit.as_ref().is_ok_and(std::process::ExitStatus::success) {
+            fixture_fail(
+                row,
+                &format!("Start-Process -Credential failed: {exit:?} {stderr}"),
+            );
         }
         let text = std::fs::read_to_string(&result).unwrap_or_default();
         if text.contains("S-1-5-32-544") {

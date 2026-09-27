@@ -44,12 +44,12 @@ fn wt1b_objects_are_private_at_the_instant_of_creation() {
             .push((path.display().to_string(), inspection));
     }
     let root = tempfile::tempdir().unwrap();
-    *crate::win_acl::AFTER_CREATE.lock().unwrap() = Some(record);
+    crate::win_acl::AFTER_CREATE.with(|h| h.set(Some(record)));
     let dir = root.path().join("store");
     create_dir_private(&dir).unwrap();
     let dir_sddl = super::test_support::read_sddl("W-T1b", &dir);
     let _file = private_file_in(&dir, "record.json");
-    *crate::win_acl::AFTER_CREATE.lock().unwrap() = None;
+    crate::win_acl::AFTER_CREATE.with(|h| h.set(None));
     let seen = std::mem::take(&mut *SEEN.lock().unwrap());
     assert_eq!(
         seen.len(),

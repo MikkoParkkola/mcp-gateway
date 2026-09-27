@@ -52,6 +52,7 @@ RED = {
     "wt22_durability_calls_are_made": "W-T22",
     "wt23_directory_at_record_name_refuses": "W-T23",
     "wt24_record_is_judged_on_the_open_handle": "W-T24",
+    "wt6_symlink_record_refuses": "W-T6",
 }
 # Regression guards: already true of the permissive stage, must pass.
 GUARDS = {
@@ -63,36 +64,40 @@ GUARDS = {
     "wt21_foreign_deny_ace_is_accepted", "wt22b_sync_file_really_flushes",
     "wt25_create_refuses_an_existing_name",
 }
-# May skip (with its marker) where symlinks need a privilege.
-OPTIONAL = {"wt6_symlink_record_refuses": "W-T6"}
+
 
 
 def main() -> int:
-    text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+    """`LOG` checks a red run; `LOG --mutant ROW [ROW...]` checks a mutant run:
+    the named rows must fail with their marker, every other row and guard pass."""
+    args = sys.argv[1:]
+    killers = set(args[args.index("--mutant") + 1:]) if "--mutant" in args else None
+    text = open(args[0], encoding="utf-8", errors="replace").read()
     status = {}
     for name, result in re.findall(r"^test (\S+) \.\.\. (ok|FAILED|ignored)", text, re.M):
         status[name.rsplit("::", 1)[-1]] = result
     blocks = dict(re.findall(r"^---- (\S+) stdout ----\n(.*?)(?=^---- |\Z)", text, re.M | re.S))
     output = {k.rsplit("::", 1)[-1]: v for k, v in blocks.items()}
     problems = []
-    if "WT-FIXTURE" in text:
-        problems += [f"fixture failure: {line.strip()}" for line in text.splitlines() if "WT-FIXTURE" in line]
-    for test, row in {**RED, **OPTIONAL}.items():
+    # No row may skip in a red or mutant run: an unexecuted row proves nothing.
+    problems += [f"skipped: {l.strip()}" for l in text.splitlines() if "WT-SKIP" in l]
+    problems += [f"fixture failure: {l.strip()}" for l in text.splitlines() if "WT-FIXTURE" in l]
+    for test, row in RED.items():
+        must_fail = killers is None or row in killers
         got = status.get(test)
-        if test in OPTIONAL and f"WT-SKIP {row}" in text:
-            continue
-        if got != "FAILED":
+        if must_fail and got != "FAILED":
             problems.append(f"{row} {test}: expected FAILED, got {got}")
-        elif f"WT-ASSERT {row}" not in output.get(test, ""):
+        elif must_fail and f"WT-ASSERT {row}" not in output.get(test, ""):
             problems.append(f"{row} {test}: failed without its WT-ASSERT marker")
+        elif not must_fail and got != "ok":
+            problems.append(f"{row} {test}: expected ok under this mutant, got {got}")
     for test in GUARDS:
         if status.get(test) != "ok":
             problems.append(f"guard {test}: expected ok, got {status.get(test)}")
     for p in problems:
         print(p)
-    print(f"{len(RED) + len(OPTIONAL)} red rows, {len(GUARDS)} guards, {len(problems)} problems")
+    print(f"{len(RED)} red tests, {len(GUARDS)} guards, {len(problems)} problems")
     return 1 if problems else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

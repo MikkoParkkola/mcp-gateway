@@ -281,15 +281,15 @@ pub(crate) fn private_descriptor(kind: ObjectKind, user: &Sid) -> io::Result<Own
 #[cfg(test)]
 pub(crate) type AfterCreateHook = fn(&Path, Option<&File>);
 #[cfg(test)]
-pub(crate) static AFTER_CREATE: std::sync::Mutex<Option<AfterCreateHook>> =
-    std::sync::Mutex::new(None);
+thread_local! {
+    /// Per thread, so parallel tests never observe each other's creations.
+    pub(crate) static AFTER_CREATE: std::cell::Cell<Option<AfterCreateHook>> =
+        const { std::cell::Cell::new(None) };
+}
 
 pub(crate) fn after_create(path: &Path, file: Option<&File>) {
     #[cfg(test)]
-    if let Some(hook) = *AFTER_CREATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
+    if let Some(hook) = AFTER_CREATE.with(std::cell::Cell::get) {
         hook(path, file);
     }
     #[cfg(not(test))]

@@ -48,18 +48,55 @@ fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
-/// Owner and DACL of `path` as SDDL (group excluded: Windows supplies it).
+/// Owner and DACL of `path` in the SDDL shape the plants use, with every SID
+/// in numeric form. `GetSecurityDescriptorSddlForm` prints aliases (`LA`, `BA`)
+/// and adds auto-inherit flags, so the descriptor is rebuilt from `Get-Acl`'s
+/// SID-typed accessors instead.
 pub(crate) fn read_sddl(row: &str, path: &Path) -> String {
-    powershell(&format!(
-        "(Get-Acl -LiteralPath {}).GetSecurityDescriptorSddlForm('Owner, Access')",
-        quoted(path)
-    ))
-    .unwrap_or_else(|e| fixture_fail(row, &format!("Get-Acl failed: {e}")))
+    let script = format!(
+        "$a = Get-Acl -LiteralPath {p}; $s = [System.Security.Principal.SecurityIdentifier]; \
+         $raw = $a.GetSecurityDescriptorSddlForm('Access'); \
+         $o = 'O:' + $a.GetOwner($s).Value; \
+         if ($raw -match 'NO_ACCESS_CONTROL') {{ $o + 'D:' + ($(if ($a.AreAccessRulesProtected) {{ 'P' }} else {{ '' }})) + 'NO_ACCESS_CONTROL'; exit }}; \
+         $d = 'D:' + $(if ($a.AreAccessRulesProtected) {{ 'P' }} else {{ '' }}); \
+         foreach ($r in $a.GetAccessRules($true, $true, $s)) {{ \
+           $t = if ($r.AccessControlType -eq 'Allow') {{ 'A' }} else {{ 'D' }}; \
+           $f = ''; if ($r.InheritanceFlags -band 1) {{ $f += 'CI' }}; if ($r.InheritanceFlags -band 2) {{ $f += 'OI' }}; \
+           if ($r.IsInherited) {{ $f += 'ID' }}; \
+           $m = [int]$r.FileSystemRights; $g = switch ($m) {{ 2032127 {{ 'FA' }} 1179785 {{ 'FR' }} 1179817 {{ 'FR' }} default {{ '0x{{0:x}}' -f $m }} }}; \
+           $d += '(' + $t + ';' + $f + ';' + $g + ';;;' + $r.IdentityReference.Value + ')' }}; \
+         $o + $d",
+        p = quoted(path)
+    );
+    powershell(&script).unwrap_or_else(|e| fixture_fail(row, &format!("Get-Acl failed: {e}")))
+}
+
+/// Compare two descriptors semantically: owner, protection, and the ACE set
+/// (order-free, flags normalised to a sorted form).
+fn same_descriptor(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        let mut p = parse_sddl(s);
+        for ace in &mut p.aces {
+            let mut flags: Vec<String> = ace
+                .1
+                .as_bytes()
+                .chunks(2)
+                .map(|c| String::from_utf8_lossy(c).into_owned())
+                .collect();
+            flags.sort();
+            ace.1 = flags.concat();
+        }
+        p.aces.sort();
+        let null = s.contains("NO_ACCESS_CONTROL");
+        (p, null)
+    };
+    norm(a) == norm(b)
 }
 
 /// Set an exact owner + DACL, then read it back and require `expect_back`
 /// (the literal the row depends on) before the store is ever invoked.
 pub(crate) fn plant_sddl(row: &str, path: &Path, sddl: &str, expect_back: &str) {
+    let expect_back = &numeric_aliases(expect_back);
     powershell(&format!(
         "$a = Get-Acl -LiteralPath {p}; $a.SetSecurityDescriptorSddlForm('{sddl}'); \
          Set-Acl -LiteralPath {p} -AclObject $a",
@@ -67,7 +104,7 @@ pub(crate) fn plant_sddl(row: &str, path: &Path, sddl: &str, expect_back: &str) 
     ))
     .unwrap_or_else(|e| fixture_fail(row, &format!("Set-Acl {sddl} failed: {e}")));
     let back = read_sddl(row, path);
-    if back != expect_back {
+    if !same_descriptor(&back, expect_back) {
         fixture_fail(
             row,
             &format!("planted {sddl}, read back {back}, wanted {expect_back}"),
@@ -84,6 +121,13 @@ pub(crate) fn plant_any(row: &str, path: &Path, sddl: &str) -> String {
     ))
     .unwrap_or_else(|e| fixture_fail(row, &format!("Set-Acl {sddl} failed: {e}")));
     read_sddl(row, path)
+}
+
+/// The well-known aliases the plants use, in numeric form.
+fn numeric_aliases(sddl: &str) -> String {
+    sddl.replace("O:BA", "O:S-1-5-32-544")
+        .replace(";;;BU)", ";;;S-1-5-32-545)")
+        .replace(";;;WD)", ";;;S-1-1-0)")
 }
 
 /// Run `icacls` with `args` on `path`.
@@ -131,7 +175,12 @@ pub(crate) fn parse_sddl(sddl: &str) -> Parsed {
 /// owner-only ACE the design creates.
 pub(crate) fn assert_owner_only(row: &str, path: &Path, dir: bool) {
     let user = user_sid();
-    let got = parse_sddl(&read_sddl(row, path));
+    let mut got = parse_sddl(&read_sddl(row, path));
+    for ace in &mut got.aces {
+        if ace.1 == "CIOI" {
+            ace.1 = "OICI".into();
+        }
+    }
     let flags = if dir { "OICI" } else { "" };
     let want = Parsed {
         owner: user.clone(),

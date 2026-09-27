@@ -67,7 +67,7 @@ Expected outcomes, one table for every run kind:
 |---|---|---|---|
 | all W-T rows except those below | FAIL with own `WT-ASSERT` marker | pass | the mapped rows FAIL with their marker |
 | W-T17, W-T21, W-T22b, W-T25 (regression guards) | pass | pass | FAIL under M17 / M22 / M23 / M31 |
-| W-T6 | FAIL, or a logged skip if `mklink` lacks the privilege | pass or logged skip | not a mutant target (M3 uses W-T5) |
+| W-T6 | FAIL (a skip fails the checker, §15) | pass | FAIL under M3 |
 | fixture tests that only needed the store to open | pass (evidence item 2 is complete) | pass | pass |
 
 ## 3. Rows
@@ -156,7 +156,7 @@ Existing suites and Windows (verified at `src/personal_accounts/tests.rs:516-557
 |---|---|---|
 | M1 | P2: accept any ALLOWED SID | W-T2, W-T4 |
 | M2 | descriptor without `SE_DACL_PROTECTED` | W-T1 |
-| M3 | drop REPARSE_POINT attribute check | W-T5 |
+| M3 | drop REPARSE_POINT attribute check | W-T6 (see §15) |
 | M4 | lexical prefix accepts `UNC` | W-T7 |
 | M5 | task-store privacy predicate `-> true` | W-T4 (task record and lease rows) |
 | M6 | drop P4 | W-T11 |
@@ -239,7 +239,8 @@ runs the full Windows job including the privileged step.
   `MOVEFILE_WRITE_THROUGH` / `FlushFileBuffers` contracts plus the fault suites (§5).
 - Administrator bypass: out of the model by design (root analogue).
 - W-T6 may skip where symlink creation needs Developer Mode; junctions (W-T5) cover
-  the reparse rule without privilege, and M3 is assigned to W-T5.
+  the reparse rule without privilege. M3 is assigned to W-T6, which CI runs with
+  symlink creation enabled (§15).
 
 ## 8. Evidence to record
 
@@ -341,3 +342,26 @@ per-case tests, W-T24 red reason and the W-T12b fallback row.
 Probe amendments (design §4.1): W-T20 red reason restated from E2 (std rename succeeds
 over an open reader); retry triggers on errors 5 and 32; W-T16a expects 32 and W-T16
 expects 5 for ancestors (E6); W-T12 is primary (E5), W-T12b unused; M32 applies (E1).
+
+## 15. Amendment after the stage-B red run (CI run 36306353238)
+
+Two rows were green under the permissive stubs, so they are not red evidence:
+
+- W-T5 (junction in the store path): the existing R3 walk (`storage.rs` `validate_path`)
+  already refuses any non-directory component, and a junction reports as a symlink to
+  `symlink_metadata`. The junction rule held before this change.
+- W-T16 (ancestor swap while a store is open): the store's own custody sidecar handles,
+  open for the store lifetime, already make every ancestor un-renameable (probe E6:
+  ancestors refuse with error 5 even to a metadata-only handle).
+
+Both move to the regression-guard set: they must pass in the red run and in every mutant
+run, and a later change that breaks either still fails CI. Consequences:
+
+| Item | Before | After |
+|---|---|---|
+| W-T5 | red row, proof of M3 | regression guard |
+| W-T16 | red row | regression guard; W-T16a (store directory itself, no sidecar) stays red and carries M15/M16 |
+| M3 (drop the REPARSE_POINT attribute check) | reddens W-T5 | reddens W-T6 (symlink record, judged on the handle). W-T6 must run, not skip: the CI job enables symlink creation first, and a `WT-SKIP W-T6` in the red run or the M3 run fails the checker |
+
+W-T6's red status under the stubs is confirmed by the next red run and recorded here
+before the fix commit.
