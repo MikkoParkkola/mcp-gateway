@@ -58,7 +58,7 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
-- CI: the container image build and CodeQL scanning run once per merge to the release branch instead of on every pull-request push (image inputs still build on the pull request; pull requests into `main` are unchanged). Maintainer `throwaway/` test runs use a dedicated self-hosted arm64 runner that admits only same-repository branches.
+- CI: the container image build and CodeQL scanning run once per merge to the release branch instead of on every pull-request push (image inputs still build on the pull request; pull requests into `main` are unchanged). Maintainer `throwaway/` test runs use a dedicated self-hosted arm64 runner that admits only same-repository branches. Mutation proofs run as one batched workflow per pull request, with a per-mutant RED / SURVIVED / VOID result.
 - A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
   refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
   idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)

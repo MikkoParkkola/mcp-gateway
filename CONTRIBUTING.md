@@ -189,6 +189,9 @@ image when it changes `Dockerfile`, `.dockerignore`, `Cargo.toml`, `Cargo.lock`,
 `deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything.
 Maintainer `throwaway/` branches (red-first and mutation-proof runs, never merged) run only the
 test suite, on the project's own arm64 runner; see `scripts/ci/trusted-runner/`.
+Mutation proofs are batched: push `throwaway/mutants-<pr>` as the pull request's head plus one
+commit adding `.mutants/manifest.tsv` and the patches; one run of the Mutants workflow classifies
+every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).
 
 ## Architecture Decisions
 
