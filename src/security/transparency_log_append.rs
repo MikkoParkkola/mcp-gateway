@@ -150,6 +150,7 @@ impl TransparencyLogger {
         let bytes = format!("{line}\n");
         let good = inner.file.metadata()?.len();
         let path = self.path();
+        let _again = crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?;
         let written = self
             .injected_write(inner, bytes.as_bytes())
             .unwrap_or_else(|| inner.file.write_all(bytes.as_bytes()))
