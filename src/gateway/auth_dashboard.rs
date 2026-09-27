@@ -163,7 +163,9 @@ impl DashboardBootstrap {
     pub(crate) fn rearm(&self) -> String {
         let fresh = random_value();
         if let Ok(mut value) = self.value.lock() {
-            *value = Some(fresh.clone());
+            if value.is_none() {
+                *value = Some(fresh.clone());
+            }
         }
         fresh
     }
