@@ -173,7 +173,7 @@ fn open_store(
     let audit_cfg = Arc::new(governance_log_config(config, base));
     let audit = TransparencyLogger::open(audit_cfg).map_err(|e| {
         if is_lease_held(&e) {
-            OpenFailure::LeaseHeld(e.to_string())
+            OpenFailure::Other(e.to_string())
         } else {
             OpenFailure::Other(format!("audit log: {e}"))
         }
