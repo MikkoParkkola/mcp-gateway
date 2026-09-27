@@ -54,7 +54,7 @@ accounts:
       hmac_secret_ref: env:OWUI_ROUTE_HMAC
       allowed_api_key_names: [owui]
 "#,
-        env_path.display()
+        env_path.display().to_string().replace('\'', "''")
     ))
     .unwrap();
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
@@ -230,7 +230,7 @@ accounts:
       hmac_secret_ref: env:OWUI_LAPTOP_HMAC
       allowed_api_key_names: [owui]
 "#,
-        env_path.display()
+        env_path.display().to_string().replace('\'', "''")
     ))
     .unwrap();
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));

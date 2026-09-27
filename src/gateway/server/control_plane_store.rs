@@ -199,7 +199,8 @@ mod tests {
 
     fn auth_on_with_store_dir(store_dir: &str) -> String {
         format!(
-            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: '{store_dir}'\n"
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: f6-test-token\ncontrol_plane:\n  store_dir: '{}'\n",
+            store_dir.replace('\'', "''")
         )
     }
 
@@ -357,12 +358,17 @@ mod tests {
             "transparency_log:\n    enabled: true\n",
             &format!(
                 "transparency_log:\n    enabled: true\n    path: '{}'\n",
-                inv.display()
+                inv.display().to_string().replace('\'', "''")
             ),
         );
         let yaml = format!(
             "{base}  export:\n    enabled: true\n    sink_path: '{sink}'\n",
-            sink = data.path().join("sink.ndjson").display(),
+            sink = data
+                .path()
+                .join("sink.ndjson")
+                .display()
+                .to_string()
+                .replace('\'', "''"),
         );
         let (config, path) = load(cfg_dir.path(), &yaml);
         // A corrupt cursor makes the governance exporter's open fail, which is
