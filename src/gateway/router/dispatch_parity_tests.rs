@@ -277,7 +277,10 @@ async fn t8_already_shared_request_firewall_holds_on_both_routes() {
 }
 
 /// Response firewall: the result is delivered with the credential redacted and
-/// the benign text kept.
+/// the benign text kept, the same shape on both routes. A tool result is
+/// inspected under `PreserveInputRequired` on the meta route (`router/handlers.rs`),
+/// which blocks only when `inputRequests` or `requestState` change, and under
+/// `Redact` on the per-backend route; content redaction is in place on both.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn t8_already_shared_response_redaction_holds_on_both_routes() {

@@ -43,6 +43,9 @@ pub(crate) enum Answer {
     /// Success, `isError: false`, whose text is the given payload (response
     /// inspection and context-integrity cells).
     Text(&'static str),
+    /// The first `tools/call` asks the client a question (`input_required`);
+    /// every later call succeeds. Drives a bridged input round (T3c).
+    AskOnce,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -64,7 +67,29 @@ impl Transport for CountingBackend {
         if method == "tools/list" {
             return Ok(JsonRpcResponse::success(id, json!({"tools": []})));
         }
-        self.calls.fetch_add(1, Ordering::SeqCst);
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if matches!(self.answer, Answer::AskOnce) {
+            return Ok(if n == 0 {
+                JsonRpcResponse::success(
+                    id,
+                    json!({
+                        "resultType": "input_required",
+                        "inputRequests": {
+                            "k1": {
+                                "method": "elicitation/create",
+                                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+                            }
+                        },
+                        "requestState": "backend-state-1"
+                    }),
+                )
+            } else {
+                JsonRpcResponse::success(
+                    id,
+                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                )
+            });
+        }
         match &self.answer {
             Answer::Ok => Ok(JsonRpcResponse::success(
                 id,
@@ -83,6 +108,7 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
+            Answer::AskOnce => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": text}], "isError": false}),

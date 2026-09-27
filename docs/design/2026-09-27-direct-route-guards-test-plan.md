@@ -8,7 +8,7 @@ only (throwaway PRs for red and mutants).
 
 | File | Holds |
 |---|---|
-| `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c, T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
+| `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c (HTTP, via the test-only seam), T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
 | `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the three parity tables and the structural source check |
 | `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error; T3c source assertion (the `BridgeDispatcher::invoke` body calls `admit_spend_for`, not `admit_spend(`) |
 
@@ -114,22 +114,21 @@ hygiene.
 
 Five differences between the red commit and revision 3, each with its reason:
 
-1. T3c runs on the input-bridge harness, as a child module of `src/gateway/meta_mcp/tests.rs`
-   (`bridge_budget_tests.rs`), reusing its scripted backend and accepting channel. The opening call
-   and one bridged round are driven through `MetaMcp::invoke_tool` with the `k-budget` caller
-   (limit 2.5, cost 1.0), then the next admission for that key goes through the shared spend
-   stage `admit_spend_for` and must be refused -32003. It stops at the stage rather than an HTTP
-   call because the harness has no router: `MetaMcp::invoke_tool` is `pub(super)`
-   (`meta_mcp/invoke.rs`) and the HTTP fixture cannot drive a bridged round without a live client
-   channel (the router's `/mcp` path supplies none in a one-shot request). The per-backend route's
-   use of `admit_spend_for` is pinned separately by T3 (the route draws on the budget) and by the
-   T8 structural check (no route calls spend admission any other way). No test-only seam needed.
+1. T3c runs on the router fixture with one test-only seam (maintainer decision): a
+   `#[cfg(test)] pub(crate)` wrapper `MetaMcp::invoke_tool_for_test` over `invoke_tool`, which is
+   `pub(super)`. The fixture backend asks once (`Answer::AskOnce`), a test channel accepts, and the
+   opening call plus one bridged round are driven on the same `MetaMcp` the router serves (limit
+   2.5, cost 1.0, spend 2.0). The per-backend HTTP call with the same key must then be refused
+   -32003 with no further dispatch. Production visibility is unchanged.
 2. Already-shared table populated with live rows that pin the expected outcome on both routes,
    not only their agreement: tool-name validation and the authorizer (a key denied `read`) are
    refused with zero dispatches; the per-key rate limit (limit 1) dispatches the first call and
    refuses the second; with the production firewall installed on router and Meta-MCP
    (`fixture_firewalled`), a shell-injection argument is refused with zero dispatches and a
-   GitHub-token-shaped result is delivered with the token redacted and the benign text kept.
+   GitHub-token-shaped result is delivered with the token redacted and the benign text kept, the
+   same shape on both routes: a tool result is inspected under `PreserveInputRequired` on the meta
+   route, which blocks only when `inputRequests` or `requestState` change (`Immutable`, which
+   blocks any change, applies to bridge challenges only).
    Attestation, the invocation audit record and undeclared-key refusal are already pinned on both
    routes by `router/tests/attestation_routes.rs`, `router/direct_audit_tests.rs` and
    `router/r2_identity_keys_tests.rs`; the table cites them rather than duplicate them.

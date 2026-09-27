@@ -108,4 +108,16 @@ impl MetaMcp {
     pub(crate) fn reset_reservation_attempts() {
         RESERVATION_ATTEMPTS.with(|count| count.set(0));
     }
+
+    /// Test-only entry to `invoke_tool` for router cells that must drive a
+    /// meta-layer exchange (a bridged input round) on the same `MetaMcp` an
+    /// HTTP fixture serves (MIK-7597 T3c). Compiled only under `cfg(test)`.
+    pub(crate) async fn invoke_tool_for_test(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
+        self.invoke_tool(args, session_id, caller).await
+    }
 }

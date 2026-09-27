@@ -356,12 +356,24 @@ async fn t5_signing_refusal_precedes_a_preseeded_cached_result() {
                 first.get("result").is_some(),
                 "{backend}: seed call: {first}"
             );
+            let (_, replay) =
+                post_direct(&unsigned, backend, "k-std", "read", json!({}), idem, None).await;
+            assert_eq!(
+                replay["result"], first["result"],
+                "{backend}: seed is cached"
+            );
+            assert_eq!(
+                unsigned.calls.load(Ordering::SeqCst),
+                1,
+                "{backend}: replayed"
+            );
             let signed_cache = std::sync::Arc::clone(&cache);
             let signed = fixture(Answer::Ok, move |meta| {
                 meta.enable_idempotency(signed_cache, std::time::Duration::from_secs(300));
                 arm_signing(meta, require_nonce);
             })
             .await;
+            MetaMcp::reset_reservation_attempts();
             let (_, body) =
                 post_direct(&signed, backend, "k-std", "read", json!({}), idem, None).await;
             assert_eq!(
@@ -369,6 +381,9 @@ async fn t5_signing_refusal_precedes_a_preseeded_cached_result() {
                 Some(-32001),
                 "{backend} nonce={require_nonce}: {body}"
             );
+            assert_eq!(body["error"]["message"].as_str(), Some(SIGNING_REFUSAL));
+            assert_eq!(signed.calls.load(Ordering::SeqCst), 0, "{backend}");
+            assert_eq!(MetaMcp::reservation_attempts(), 0, "{backend}");
         }
     }
 }
@@ -388,12 +403,22 @@ async fn t5_guards_signing_off_dispatches_and_gateway_invoke_is_signed() {
             body["result"].get("_signature").is_some(),
             "{backend}: {body}"
         );
+        assert_eq!(
+            body["result"]["content"][0]["text"], "ok",
+            "{backend}: {body}"
+        );
+        assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{backend}");
         let fx = fixture(Answer::Ok, |meta| arm_signing(meta, true)).await;
         let (_, body) = post_meta_invoke_nonce(&fx, "k-std", backend, "read", "t5-nonce").await;
         assert!(
             body["result"].get("_signature").is_some(),
             "{backend} require_nonce: {body}"
         );
+        assert_eq!(
+            body["result"]["content"][0]["text"], "ok",
+            "{backend}: {body}"
+        );
+        assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{backend}");
     }
 }
 
@@ -541,4 +566,79 @@ async fn t11b_a_cached_error_replays_without_dispatch() {
         let _ = post_direct(&fx, backend, "k-std", "read", json!({}), idem, None).await;
         assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{backend}");
     }
+}
+
+/// Accepts every question a bridged round asks.
+struct AcceptingChannel;
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        Ok(
+            json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"account": "work"}}}),
+        )
+    }
+}
+
+/// T3c (DIRECT.2). A bridged input round and a per-backend route call draw on
+/// one key budget. Limit 2.5 at 1.0 a call: the opening call and one bridged
+/// round (driven on the same `MetaMcp` the router serves) dispatch; the direct
+/// HTTP call with the same key is then refused -32003 without dispatching.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn t3c_a_bridged_round_and_a_direct_call_share_one_budget() {
+    let fx = {
+        let (enforcer, registry) = budget(2.5);
+        fixture_built(Answer::AskOnce, move |meta| {
+            meta.with_cost_governance(enforcer, registry)
+        })
+        .await
+    };
+    let channel = AcceptingChannel;
+    let declared = crate::protocol::meta::classify_request(
+        Some(&json!({
+            "_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+            }
+        })),
+        None,
+    )
+    .declared_capabilities();
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        api_key_name: Some("k-budget"),
+        era: crate::protocol::meta::Era::Legacy,
+        input_capabilities: declared,
+        channel: &channel,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    fx.state
+        .meta_mcp
+        .invoke_tool_for_test(
+            &json!({"server": "alpha", "tool": "read", "arguments": {}}),
+            Some("session-t3c"),
+            &ctx,
+        )
+        .await
+        .expect("the opening call and the bridged round fit the budget");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        2,
+        "opening call plus bridged round"
+    );
+    assert!((key_spend(&fx) - 2.0).abs() < f64::EPSILON, "spent 2.0");
+
+    let (_, body) = post_direct(&fx, "alpha", "k-budget", "read", json!({}), None, None).await;
+    assert_eq!(code(&body), Some(-32003), "{body}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        2,
+        "the direct call dispatched"
+    );
 }
