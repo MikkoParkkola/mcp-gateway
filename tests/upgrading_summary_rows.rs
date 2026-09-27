@@ -264,6 +264,11 @@ fn intro_lists_cover_every_item() {
     );
     let explained = intro_span("The rest of the list has no startup notice.", "**Items ");
     let no_notice = numbers_after_item(explained);
+    let both: Vec<_> = notice.intersection(&no_notice).collect();
+    assert!(
+        both.is_empty(),
+        "items listed both with a startup notice and without one: {both:?}"
+    );
     for n in refuses.iter().chain(&notice).chain(&no_notice) {
         assert!(
             sections.contains(n),

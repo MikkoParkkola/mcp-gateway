@@ -1799,7 +1799,10 @@ result: 3.x reads `key` and not `key_sha256` (item 41), and reads a `file:` secr
 literal text `file:...` (item 44). The upgrade leaves the 3.x token files in place — its
 migration prints the notice and stamps the version, and touches no credential
 (`migrate_4_0_0_release_notice` in `src/commands/upgrade.rs`). A rollback therefore picks those
-files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
+files back up rather than prompting again, unless the tokens expired in the meantime, or a
+credential migrated with `mcp-gateway accounts migrate-credentials` was refreshed on 4.0 against
+a provider that rotates refresh tokens: that refresh retires the copy in the old file, and 3.x
+has to authorize again (item 1). What 4.0.0
 wrote under the per-issuer key is simply not read by 3.x.
 
 Within 4.0, a rollback to an earlier beta is unsupported once a managed account has had a
