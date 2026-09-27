@@ -9,8 +9,8 @@ only (throwaway PRs for red and mutants).
 | File | Holds |
 |---|---|
 | `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c (HTTP, via the test-only seam), T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
-| `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the three parity tables and the structural source check |
-| `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error; T3c source assertion (the `BridgeDispatcher::invoke` body calls `admit_spend_for`, not `admit_spend(`) |
+| `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the parity tables, the structural source check, and T3c's source assertion (the bridged round calls `admit_spend_for`) |
+| `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error |
 
 T10 (task-worker path) is added by whichever of this change and LIFECYCLE.1 lands second, per the
 agreed chain; it is listed here so it is not lost.

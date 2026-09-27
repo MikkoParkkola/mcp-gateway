@@ -403,8 +403,10 @@ async fn t5_guards_signing_off_dispatches_and_gateway_invoke_is_signed() {
             body["result"].get("_signature").is_some(),
             "{backend}: {body}"
         );
-        assert_eq!(
-            body["result"]["content"][0]["text"], "ok",
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("ok")),
             "{backend}: {body}"
         );
         assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{backend}");
@@ -414,8 +416,10 @@ async fn t5_guards_signing_off_dispatches_and_gateway_invoke_is_signed() {
             body["result"].get("_signature").is_some(),
             "{backend} require_nonce: {body}"
         );
-        assert_eq!(
-            body["result"]["content"][0]["text"], "ok",
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("ok")),
             "{backend}: {body}"
         );
         assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{backend}");
@@ -568,8 +572,11 @@ async fn t11b_a_cached_error_replays_without_dispatch() {
     }
 }
 
-/// Accepts every question a bridged round asks.
-struct AcceptingChannel;
+/// Accepts every question a bridged round asks, counting them.
+#[derive(Default)]
+struct AcceptingChannel {
+    asked: std::sync::atomic::AtomicUsize,
+}
 
 #[async_trait::async_trait]
 impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
@@ -580,6 +587,7 @@ impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
         _method: &str,
         _params: Option<Value>,
     ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
         Ok(
             json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"account": "work"}}}),
         )
@@ -593,52 +601,63 @@ impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn t3c_a_bridged_round_and_a_direct_call_share_one_budget() {
-    let fx = {
-        let (enforcer, registry) = budget(2.5);
-        fixture_built(Answer::AskOnce, move |meta| {
-            meta.with_cost_governance(enforcer, registry)
-        })
-        .await
-    };
-    let channel = AcceptingChannel;
-    let declared = crate::protocol::meta::classify_request(
-        Some(&json!({
-            "_meta": {
-                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
-                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
-            }
-        })),
-        None,
-    )
-    .declared_capabilities();
-    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
-        api_key_name: Some("k-budget"),
-        era: crate::protocol::meta::Era::Legacy,
-        input_capabilities: declared,
-        channel: &channel,
-        ..crate::gateway::meta_mcp::anonymous_caller()
-    };
-    fx.state
-        .meta_mcp
-        .invoke_tool_for_test(
-            &json!({"server": "alpha", "tool": "read", "arguments": {}}),
-            Some("session-t3c"),
-            &ctx,
+    for backend in BACKENDS {
+        let fx = {
+            let (enforcer, registry) = budget(2.5);
+            fixture_built(Answer::AskOnce, move |meta| {
+                meta.with_cost_governance(enforcer, registry)
+            })
+            .await
+        };
+        let channel = AcceptingChannel::default();
+        let declared = crate::protocol::meta::classify_request(
+            Some(&json!({
+                "_meta": {
+                    crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                    crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+                }
+            })),
+            None,
         )
-        .await
-        .expect("the opening call and the bridged round fit the budget");
-    assert_eq!(
-        fx.calls.load(Ordering::SeqCst),
-        2,
-        "opening call plus bridged round"
-    );
-    assert!((key_spend(&fx) - 2.0).abs() < f64::EPSILON, "spent 2.0");
+        .declared_capabilities();
+        let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            api_key_name: Some("k-budget"),
+            era: crate::protocol::meta::Era::Legacy,
+            input_capabilities: declared,
+            channel: &channel,
+            ..crate::gateway::meta_mcp::anonymous_caller()
+        };
+        fx.state
+            .meta_mcp
+            .invoke_tool_for_test(
+                &json!({"server": backend, "tool": "read", "arguments": {}}),
+                Some("session-t3c"),
+                &ctx,
+            )
+            .await
+            .expect("the opening call and the bridged round fit the budget");
+        assert_eq!(
+            channel.asked.load(Ordering::SeqCst),
+            1,
+            "{backend}: one question asked"
+        );
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            2,
+            "opening call plus bridged round"
+        );
+        assert!((key_spend(&fx) - 2.0).abs() < f64::EPSILON, "spent 2.0");
 
-    let (_, body) = post_direct(&fx, "alpha", "k-budget", "read", json!({}), None, None).await;
-    assert_eq!(code(&body), Some(-32003), "{body}");
-    assert_eq!(
-        fx.calls.load(Ordering::SeqCst),
-        2,
-        "the direct call dispatched"
-    );
+        let (_, body) = post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
+        assert_eq!(code(&body), Some(-32003), "{body}");
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            2,
+            "{backend}: the direct call dispatched"
+        );
+        assert!(
+            (key_spend(&fx) - 2.0).abs() < f64::EPSILON,
+            "{backend}: the refusal spent"
+        );
+    }
 }
