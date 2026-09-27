@@ -26,6 +26,20 @@ fn committed() -> (tempfile::TempDir, super::StoreConfig) {
     (root, settings)
 }
 
+// W-T1 (initial authority): the authority `initialize` writes is owner-only
+// before any commit replaces it (a commit rewrites it through the private
+// writer, which would hide an initial write that inherited its DACL).
+#[test]
+fn wt1_initial_authority_is_owner_only() {
+    let (_root, settings, store) = empty_store(8);
+    drop(store);
+    assert_owner_only(
+        "W-T1/initial-authority.json",
+        &settings.authority_dir.join("authority.json"),
+        false,
+    );
+}
+
 // W-T1 (store level): every object the store creates is owner-only.
 #[test]
 fn wt1_store_objects_are_owner_only() {
