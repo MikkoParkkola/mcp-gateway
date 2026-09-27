@@ -38,7 +38,7 @@ separate questions, and the options below answer different ones:
 | `auth.api_keys` | yes | `api_key:<name>`, one per key | the key's `backends`, `allowed_tools`, `denied_tools` | [API keys](DEPLOYMENT.md#api-keys) |
 | `key_server` (OIDC) | yes, with an exchanged or delegated token | `(issuer, sub)` from your identity provider | `key_server.policies`, first match wins | [MULTI_USER.md](MULTI_USER.md#1-who-is-calling) |
 | `security.caller_identity` headers | no: only names the user behind an already admitted request | the header subject, or a Cloudflare Access `sub` | identity grants for personal capabilities; backend reach stays the admitting credential's | [Caller identity headers](identity_grants.md#caller-identity-headers) |
-| `mtls` client certificates | yes, with `mtls.require_client_cert` | first SAN URI, else CN | mTLS policy | [TLS / mTLS](DEPLOYMENT.md#tls--mtls) |
+| `mtls` client certificates | yes, with `mtls.require_client_certs` | first SAN URI, else CN | mTLS policy | [TLS / mTLS](DEPLOYMENT.md#tls--mtls) |
 
 Which to pick:
 
