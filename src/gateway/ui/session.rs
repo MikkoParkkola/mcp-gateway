@@ -35,7 +35,7 @@ pub fn logout_router() -> Router<Arc<AppState>> {
 
 /// Revoke the presented session server-side and clear the cookie. Idempotent:
 /// an unknown, expired or absent handle gets the same answer.
-async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+pub(super) async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let ended = session_cookie_value(&headers)
         .is_some_and(|handle| state.dashboard_bootstrap.revoke(&handle));
     // The one audit write that does not fail closed: refusing to revoke a
