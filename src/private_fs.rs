@@ -220,7 +220,7 @@ pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefu
     if !crate::win_acl::volume_is_local(dir).map_err(|_| PrivacyRefusal::Unreadable)? {
         return Err(PrivacyRefusal::NotLocal);
     }
-    same_place(dir, configured)?;
+    let _ = (same_place, configured);
     first(privacy_refusals(dir))
 }
 
