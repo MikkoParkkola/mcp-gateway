@@ -29,7 +29,7 @@ Desktop, Windsurf and Zed count as not installed.
 |---|---|---|---|---|
 | Claude Code | `claude-code` | `mcpServers` | `~/.claude.json` | Verified: 2.1.280, 2026-09-23, owner Mikko Parkkola, gateway `e3c8645f`, streamable HTTP ([run](release/verify/2026-09-23-claude-code-2.1.280.md)). The run loaded the server with `--mcp-config`, so it did not exercise `~/.claude.json` |
 | Claude Desktop | `claude-desktop` | `mcpServers` | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Linux `~/.config/Claude/claude_desktop_config.json`, Windows `~/AppData/Roaming/Claude/claude_desktop_config.json` | Unverified |
-| Cursor | `cursor` | `mcpServers` | `.cursor/mcp.json` in the workspace | Unverified |
+| Cursor | `cursor` | `servers` | `.cursor/mcp.json` in the workspace | Unverified |
 | VS Code Copilot | `vs-code-copilot` | `servers` | `.vscode/mcp.json` in the workspace | Unverified |
 | Windsurf (Devin Desktop) | `windsurf` | `mcpServers` | `~/.codeium/windsurf/mcp_config.json` | Unverified |
 | Cline | `cline` | `mcpServers` | `.cline/mcp_servers.json` in the workspace | Unverified |
