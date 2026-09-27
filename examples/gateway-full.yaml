@@ -66,8 +66,7 @@ auth:
 #     key_id: "default"
 #     shared_secret: "${MCP_GATEWAY_TRANSPARENCY_SECRET}"   # optional HMAC per entry
 #     # One gateway process writes a log path; a second is refused at startup
-#     # after waiting this long for a restarting predecessor to exit.
-#     lease_wait_secs: 10
+#     # after waiting up to 10 s for a restarting predecessor to exit.
 #     # The log rotates into sealed segments (UPGRADING-4.0 item 49).
 #     rotation:
 #       max_segment_bytes: 67108864   # 1 MiB..128 MiB

@@ -40,10 +40,6 @@ pub struct TransparencyLogConfig {
     pub shared_secret: String,
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: crate::security::audit_rotation_config::RotationConfig,
-    /// Seconds to wait at startup for the log's writer lease while another
-    /// process still holds it (a supervisor restart overlapping the old
-    /// process). 0 refuses at once. Default: 10.
-    pub lease_wait_secs: u64,
 }
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -53,7 +49,6 @@ impl std::fmt::Debug for TransparencyLogConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransparencyLogConfig")
             .field("enabled", &self.enabled)
-            .field("lease_wait_secs", &self.lease_wait_secs)
             .field("path", &self.path)
             .field("key_id", &self.key_id)
             .field("rotation", &self.rotation)
@@ -77,7 +72,6 @@ impl Default for TransparencyLogConfig {
             key_id: "default".to_string(),
             shared_secret: String::new(),
             rotation: crate::security::audit_rotation_config::RotationConfig::default(),
-            lease_wait_secs: crate::security::transparency_log::DEFAULT_LEASE_WAIT_SECS,
         }
     }
 }
@@ -92,7 +86,6 @@ impl From<&TransparencyLogConfig> for crate::security::transparency_log::Transpa
             key_id: c.key_id.clone(),
             shared_secret: c.shared_secret.clone(),
             rotation: c.rotation.clone(),
-            lease_wait_secs: c.lease_wait_secs,
         }
     }
 }

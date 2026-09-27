@@ -48,12 +48,11 @@ async fn audit_log_open_failure_with_auth_off_still_starts() {
 async fn refused_while_leased(auth: bool) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("audit.jsonl");
-    let mut held = crate::security::transparency_log::TransparencyLogConfig {
+    let held = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
         path: path.to_string_lossy().into_owned(),
         ..Default::default()
     };
-    held.lease_wait_secs = 0;
     let _holder =
         crate::security::transparency_log::TransparencyLogger::open(std::sync::Arc::new(held))
             .expect("the first writer opens");
@@ -62,7 +61,6 @@ async fn refused_while_leased(auth: bool) {
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
     config.security.transparency_log.enabled = true;
     config.security.transparency_log.path = path.to_string_lossy().into_owned();
-    config.security.transparency_log.lease_wait_secs = 0;
     let gateway = Gateway::new(config).await.expect("the config is valid");
     let err = match gateway.build_meta_mcp().await {
         Ok(_) => panic!("auth={auth}: started beside another writer of the log"),

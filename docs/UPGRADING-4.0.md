@@ -1303,8 +1303,8 @@ fork the chain. `audit verify` and `audit show` only read and take no lease, so 
 a running gateway.
 
 A restart where the supervisor starts the new process before the old one has exited waits for
-the lease: `security.transparency_log.lease_wait_secs` (default `10`; `0` refuses at once). Match
-it to your supervisor's shutdown grace period; a Kubernetes pod's default is 30 seconds. Replicas
+the lease for up to 10 seconds, then refuses; the wait is not configurable in 4.0. Stop the old
+gateway first when its shutdown can take longer. Replicas
 must not share a log path: use one replica per volume, or put the pod name in the path. The Helm
 chart deploys with the Recreate strategy when the audit log is on a persistent volume, so the
 old pod exits before the new one starts.

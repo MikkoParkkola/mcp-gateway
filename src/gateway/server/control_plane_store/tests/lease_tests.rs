@@ -15,15 +15,13 @@ fn hold(audit: &Path) -> TransparencyLogger {
     TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: audit.to_string_lossy().into_owned(),
-        lease_wait_secs: 0,
         ..Default::default()
     }))
     .expect("the first writer opens")
 }
 
 fn yaml(auth: bool, store_dir: Option<&Path>) -> String {
-    let mut y =
-        String::from("security:\n  transparency_log:\n    enabled: true\n    lease_wait_secs: 0\n");
+    let mut y = String::from("security:\n  transparency_log:\n    enabled: true\n");
     if auth {
         y.push_str("auth:\n  enabled: true\n  bearer_token: f6-test-token\n");
     }
@@ -84,17 +82,4 @@ fn governance_explicit_location_refuses_with_auth_on() {
 #[test]
 fn governance_explicit_location_with_auth_off_opens_no_writer() {
     case(false, true);
-}
-
-/// The governance logger inherits `lease_wait_secs` (a non-default value, so
-/// a hard-coded default cannot pass).
-#[test]
-fn governance_log_inherits_the_lease_wait() {
-    let cfg_dir = tempfile::tempdir().unwrap();
-    let (config, _) = load(
-        cfg_dir.path(),
-        "security:\n  transparency_log:\n    enabled: true\n    lease_wait_secs: 3\n",
-    );
-    let gov = super::super::governance_log_config(&config, cfg_dir.path());
-    assert_eq!(gov.lease_wait_secs, 3);
 }

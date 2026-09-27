@@ -73,9 +73,6 @@ audit:
     retainSegments: 12
     onDiskFull: expire_oldest   # or: refuse
     # maxSegmentAgeSecs: 0      # optional, rendered only when set
-  # Seconds a starting gateway waits for the log's writer lease while the
-  # previous process still holds it. Keep it under the pod's shutdown grace.
-  leaseWaitSecs: 10
 
 configVolume:
   # Decimal, because `--set` and some YAML readers do not take octal: 288 is

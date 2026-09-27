@@ -125,12 +125,10 @@ pub struct TransparencyLogConfig {
     pub shared_secret: String,
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: RotationConfig,
-    /// Seconds to wait at open for the writer lease (see `lease`).
-    pub lease_wait_secs: u64,
 }
 
-/// Default `lease_wait_secs`: long enough for a supervisor restart to let the
-/// old process exit; a Kubernetes grace period can need more.
+/// How long open waits for the writer lease: long enough for a supervisor
+/// restart to let the old process exit. Not configurable in 4.0.
 pub(crate) const DEFAULT_LEASE_WAIT_SECS: u64 = 10;
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -140,7 +138,6 @@ impl std::fmt::Debug for TransparencyLogConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransparencyLogConfig")
             .field("enabled", &self.enabled)
-            .field("lease_wait_secs", &self.lease_wait_secs)
             .field("path", &self.path)
             .field("key_id", &self.key_id)
             .field("rotation", &self.rotation)
@@ -164,7 +161,6 @@ impl Default for TransparencyLogConfig {
             key_id: "default".to_string(),
             shared_secret: String::new(),
             rotation: RotationConfig::default(),
-            lease_wait_secs: DEFAULT_LEASE_WAIT_SECS,
         }
     }
 }
@@ -266,6 +262,17 @@ impl TransparencyLogger {
     /// Returns an `io::Error` if the parent directory cannot be created, if
     /// the file cannot be opened, or if the last existing line is malformed.
     pub fn open(config: Arc<TransparencyLogConfig>) -> io::Result<Self> {
+        Self::open_with_wait(
+            config,
+            std::time::Duration::from_secs(DEFAULT_LEASE_WAIT_SECS),
+        )
+    }
+
+    /// [`Self::open`] with the lease wait given (tests refuse at once).
+    pub(crate) fn open_with_wait(
+        config: Arc<TransparencyLogConfig>,
+        wait: std::time::Duration,
+    ) -> io::Result<Self> {
         let path = expand_tilde(&config.path);
 
         if let Some(parent) = path.parent()
@@ -280,10 +287,7 @@ impl TransparencyLogger {
         // The writer lease, held until the logger drops: every rotation,
         // retention and recovery below runs under it, and a second writer of
         // this path is refused.
-        let lease = lease::acquire(
-            &path,
-            std::time::Duration::from_secs(config.lease_wait_secs),
-        )?;
+        let lease = lease::acquire(&path, wait)?;
         let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
         Ok(Self {
             inner: Mutex::new(Inner {

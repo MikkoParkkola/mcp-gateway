@@ -36,7 +36,6 @@ fn write_log(path: &Path) {
         key_id: "cli".into(),
         shared_secret: String::new(),
         rotation,
-        lease_wait_secs: 0,
     }))
     .unwrap();
     let mut i = 0;

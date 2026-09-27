@@ -3,7 +3,6 @@
 //! The writer lease: one logger per path, for its whole lifetime, with a
 //! bounded wait for a restart overlap and no file lock on the append path.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::lease::{LEASE_RETRY, acquire_with};
@@ -26,16 +25,15 @@ fn rotate_n(l: &TransparencyLogger, path: &std::path::Path, n: u64) {
 use super::segments::sibling;
 use super::*;
 
-fn cfg_wait(path: &std::path::Path, wait: u64) -> Arc<TransparencyLogConfig> {
-    let mut c = (*cfg(path, 2, false)).clone();
-    c.lease_wait_secs = wait;
-    Arc::new(c)
+/// Open `path` waiting up to `wait` seconds for the lease.
+fn open_wait(path: &std::path::Path, wait: u64) -> io::Result<TransparencyLogger> {
+    TransparencyLogger::open_with_wait(cfg(path, 2, false), Duration::from_secs(wait))
 }
 
 /// Assert a second open of `path` is refused as `LeaseHeld`, naming it.
 #[track_caller]
 fn assert_refused(path: &std::path::Path) {
-    match TransparencyLogger::open(cfg(path, 2, false)) {
+    match open_wait(path, 0) {
         Ok(_) => panic!("a second logger opened a leased path"),
         Err(e) => {
             assert!(is_lease_held(&e), "wrong error kind: {e}");
@@ -88,7 +86,7 @@ fn lease_child_process() {
     let Ok(path) = std::env::var(CHILD) else {
         return;
     };
-    let code = match TransparencyLogger::open(cfg(std::path::Path::new(&path), 2, false)) {
+    let code = match open_wait(std::path::Path::new(&path), 0) {
         Ok(_) => 0,
         Err(e) if is_lease_held(&e) => 3,
         Err(_) => 4,
@@ -134,7 +132,7 @@ fn a_restart_overlap_inside_the_window_starts() {
         drop(l);
     });
     let t = Instant::now();
-    let second = TransparencyLogger::open(cfg_wait(&path, 2));
+    let second = open_wait(&path, 2);
     let waited = t.elapsed();
     holder.join().unwrap();
     assert!(second.is_ok(), "{:?}", second.err());
@@ -155,9 +153,7 @@ fn a_holder_past_the_window_is_refused_after_the_wait() {
     let path = log_path(&dir);
     let _l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     let t = Instant::now();
-    let e = TransparencyLogger::open(cfg_wait(&path, 1))
-        .err()
-        .expect("refused");
+    let e = open_wait(&path, 1).err().expect("refused");
     let waited = t.elapsed();
     assert!(is_lease_held(&e), "{e}");
     assert!(
@@ -182,7 +178,7 @@ fn a_zero_wait_refuses_at_once() {
     let p = path.clone();
     std::thread::spawn(move || {
         let t = Instant::now();
-        let refused = TransparencyLogger::open(cfg_wait(&p, 0)).err();
+        let refused = open_wait(&p, 0).err();
         let _ = tx.send((refused, t.elapsed()));
     });
     let (refused, took) = rx
@@ -201,7 +197,7 @@ fn an_unopenable_lease_file_fails_at_once_and_is_not_lease_held() {
     let path = log_path(&dir);
     std::fs::create_dir(sibling(&path, "lock")).unwrap();
     let t = Instant::now();
-    let e = TransparencyLogger::open(cfg_wait(&path, 5))
+    let e = open_wait(&path, 5)
         .err()
         .expect("a directory is not a lease file");
     assert!(!is_lease_held(&e), "{e}");
@@ -261,19 +257,10 @@ fn a_non_contention_error_mid_wait_returns_unchanged() {
     assert!(!is_lease_held(&e), "{e}");
 }
 
-/// The default wait is 10 s, in the file config and the runtime copy, and a
-/// configured value carries through the conversion.
+/// The wait `open` uses is 10 s (not configurable in 4.0).
 #[test]
 fn the_default_wait_is_ten_seconds() {
-    fn parse<T: serde::de::DeserializeOwned>(_like: &T, yaml: &str) -> T {
-        serde_yaml::from_str(yaml).unwrap()
-    }
-    let file = crate::config::Config::default().security.transparency_log;
-    assert_eq!(file.lease_wait_secs, 10);
-    let runtime: TransparencyLogConfig = (&file).into();
-    assert_eq!(runtime.lease_wait_secs, 10);
-    let parsed = parse(&file, "lease_wait_secs: 3\n");
-    assert_eq!(TransparencyLogConfig::from(&parsed).lease_wait_secs, 3);
+    assert_eq!(DEFAULT_LEASE_WAIT_SECS, 10);
 }
 
 /// R4: with the lease held, no append path takes a file lock: one attempt,

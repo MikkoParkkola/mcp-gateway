@@ -591,7 +591,6 @@ fn cross_process_audit_append_stays_verifiable() {
     let refused = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: logger_a.path().to_string_lossy().into_owned(),
-        lease_wait_secs: 0,
         ..TransparencyLogConfig::default()
     }))
     .err()

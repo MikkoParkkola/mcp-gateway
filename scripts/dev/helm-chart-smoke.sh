@@ -355,7 +355,6 @@ echo "== helm_default_fits_size_limit =="
 # cannot fit the 1Gi emptyDir must refuse to render.
 d6="$("$HELM" template t "$CHART" 2>&1)" || fail "default render fails the audit volume guard: $d6"
 grep -qE '^ +retain_segments: 12$' <<<"$d6" || fail "default retain_segments is not 12"
-grep -qE '^ +lease_wait_secs: 10$' <<<"$d6" || fail "default lease_wait_secs is not 10"
 grep -qE '^ +max_segment_bytes: 67108864$' <<<"$d6" || fail "default max_segment_bytes is not 64Mi"
 grep -qE '^ +on_disk_full: expire_oldest$' <<<"$d6" || fail "default on_disk_full is not expire_oldest"
 if out="$("$HELM" template t "$CHART" --set audit.rotation.retainSegments=20 2>&1)"; then

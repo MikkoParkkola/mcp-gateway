@@ -11,5 +11,5 @@ The audit log uses at most (retainSegments + 1) x maxSegmentBytes + 1Mi =
 {{ .Values.audit.existingClaim }}. A governance log under
 control_plane.store_dir uses at most 80 MiB more. See UPGRADING-4.0 item 49.
 One pod writes the audit log; a second writer of the same volume is refused at startup
-after waiting {{ .Values.audit.leaseWaitSecs }}s for the old pod to exit.
+after waiting 10s for the old pod to exit.
 {{- end }}

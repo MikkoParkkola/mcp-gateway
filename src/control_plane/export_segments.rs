@@ -42,7 +42,7 @@ fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBu
         .collect();
     // An absent active file (a log never written) is not listed, so it is
     // an empty scan rather than a vanish on every poll.
-    if log_path.exists() {
+    if log_path.try_exists()? {
         out.push((active_seq, log_path.to_path_buf(), true));
     }
     Ok(out)

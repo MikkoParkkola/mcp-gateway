@@ -34,7 +34,6 @@ fn logger(path: &Path) -> Arc<TransparencyLogger> {
                 max_segment_bytes: 4096,
                 ..RotationConfig::default()
             },
-            lease_wait_secs: 0,
             ..TransparencyLogConfig::default()
         }))
         .expect("open log"),

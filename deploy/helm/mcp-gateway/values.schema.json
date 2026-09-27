@@ -152,11 +152,6 @@
             "onDiskFull": {"type": "string", "enum": ["expire_oldest", "refuse"]},
             "maxSegmentAgeSecs": {"type": "integer", "minimum": 0}
           }
-        },
-        "leaseWaitSecs": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Seconds a starting gateway waits for the audit log's writer lease while the previous process still holds it; 0 refuses at once."
         }
       }
     },

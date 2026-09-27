@@ -152,7 +152,6 @@ fn governance_log_config(
         rotation: RotationConfig::governance(
             config.security.transparency_log.rotation.on_disk_full,
         ),
-        lease_wait_secs: config.security.transparency_log.lease_wait_secs,
     }
 }
 
