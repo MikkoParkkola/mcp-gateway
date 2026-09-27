@@ -87,7 +87,6 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
         .and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = saved {
         // Best effort: the scratch may not exist if the open itself failed.
-        let _ = std::fs::remove_file(&tmp);
         return Err(crate::Error::Config(format!("Failed to save costs: {e}")));
     }
     tracing::info!(path = %path.display(), "Saved cost data");
