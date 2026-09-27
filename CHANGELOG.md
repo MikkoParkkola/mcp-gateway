@@ -122,7 +122,9 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
   carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
-  text redacted. The stderr never goes to MCP clients. (#526)
+  text redacted. The stderr never goes to MCP clients. A build without the `firewall` feature has
+  no credential recogniser, so it logs a withheld marker instead of the text. `doctor
+  --start-stdio` caps a whole start at 15 s. (#526, #1568)
 - **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
   about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
   thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
