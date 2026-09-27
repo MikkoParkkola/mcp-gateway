@@ -62,6 +62,8 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require every job to run on a GitHub-hosted runner
         run: scripts/ci/check-hosted-runners.sh
+      - name: Validate the trusted runner's admission rules
+        run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
