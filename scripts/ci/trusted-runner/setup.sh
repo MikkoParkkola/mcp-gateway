@@ -36,6 +36,9 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 [[ $(id -u) -eq 0 ]] || { echo "run as root" >&2; exit 1; }
 [[ $(uname -m) == aarch64 ]] || { echo "expects an aarch64 host" >&2; exit 1; }
 : "${RUNNER_TOKEN:?set RUNNER_TOKEN to a fresh registration token}"
+for tool in /usr/bin/python3 /usr/bin/git curl sha256sum mkfs.ext4 systemd-escape; do
+  command -v "$tool" >/dev/null || { echo "missing $tool; install it first" >&2; exit 1; }
+done
 
 # 1. User with no supplementary groups.
 if ! id "$USER_NAME" >/dev/null 2>&1; then
@@ -64,9 +67,13 @@ if [[ ! -x $RUNNER_DIR/config.sh ]]; then
   rm -f -- "$tarball"
   chown -R "$USER_NAME:$USER_NAME" "$RUNNER_DIR"
   "$RUNNER_DIR/bin/installdependencies.sh"
-  sudo -u "$USER_NAME" --preserve-env=RUNNER_TOKEN bash -c "cd '$RUNNER_DIR' && ./config.sh --unattended \
-    --url '$REPO_URL' --token \"\$RUNNER_TOKEN\" --name '$RUNNER_NAME' --labels '$LABEL' \
+  # The runner reads ACTIONS_RUNNER_INPUT_<OPTION> for any option left off the
+  # command line, so the token never appears in a process listing.
+  export ACTIONS_RUNNER_INPUT_TOKEN=$RUNNER_TOKEN
+  sudo -u "$USER_NAME" --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN bash -c "cd '$RUNNER_DIR' && ./config.sh --unattended \
+    --url '$REPO_URL' --name '$RUNNER_NAME' --labels '$LABEL' \
     --no-default-labels --work '$HOME_DIR/_work' --disableupdate --replace"
+  unset ACTIONS_RUNNER_INPUT_TOKEN
 fi
 # Read-only to the runner from here on (group read for its own credentials).
 chown -R "root:$USER_NAME" "$RUNNER_DIR"

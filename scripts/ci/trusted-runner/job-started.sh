@@ -39,7 +39,7 @@ decide() {
   if [[ $event != pull_request ]]; then
     echo "reject: event $event"; return
   fi
-  python3 - "$payload" "$REPO" "$BASE" <<'PY'
+  /usr/bin/python3 - "$payload" "$REPO" "$BASE" <<'PY'
 import json, sys
 path, repo, base = sys.argv[1:4]
 try:

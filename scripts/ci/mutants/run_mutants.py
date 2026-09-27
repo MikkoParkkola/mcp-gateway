@@ -126,6 +126,17 @@ def evidence(output: str) -> list[str]:
     return [ln.rstrip() for ln in output.splitlines() if EVIDENCE_RE.search(ln)][:EVIDENCE_LINES]
 
 
+FAILED_TEST_RE = re.compile(r"^test (.+) \.\.\. FAILED$")
+DOCTEST_NAME_RE = re.compile(r" - .* \(line \d+\)$")
+
+
+def doctest_compile_failure(output: str) -> bool:
+    """True when every failing test is a doctest and rustdoc reported a compile error:
+    `--no-run` does not build doctests, so this is a compile failure, not a kill."""
+    failing = [m.group(1) for m in map(FAILED_TEST_RE.match, output.splitlines()) if m]
+    return bool(failing) and all(DOCTEST_NAME_RE.search(n) for n in failing) and "error[E" in output
+
+
 def classify_test(run: Outcome) -> Verdict:
     """Classifies a mutant's test run. A timeout is judged by the wrapper's flag,
     whatever exit code the killed process left (124, 137, 1, ...)."""
@@ -133,6 +144,8 @@ def classify_test(run: Outcome) -> Verdict:
     if run.timed_out:
         return Verdict("VOID", "timeout", executed)
     if run.exit != 0 and failed:
+        if doctest_compile_failure(run.output):
+            return Verdict("VOID", "doctest-compile", executed)
         return Verdict("RED", "named test failed", executed, evidence(run.output))
     if run.exit == 0 and executed >= 1:
         return Verdict("SURVIVED", "tests passed on the mutant", executed)
@@ -173,6 +186,13 @@ def run_cmd(cmd: list[str], limit: int, log: Path) -> Outcome:
             else:
                 os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
+        if os.name != "nt":
+            # Descendants that outlived a normal exit (a test that spawned a
+            # server, say) die with the group before the tree is reverted.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         buf.seek(0)
         output = buf.read()
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -244,7 +264,10 @@ def run(platform: str, out: Path) -> int:
         key = tuple(row.args)
         if key not in baselines:
             n = len(baselines)
-            baselines[key] = classify_baseline(run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"baseline-{n}.log"))
+            try:
+                baselines[key] = classify_baseline(run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"baseline-{n}.log"))
+            finally:
+                revert()
         verdict = baselines[key]
         if verdict is None:
             try:
@@ -292,6 +315,12 @@ def self_test() -> int:
     red = ("running 1 test\ntest t ... FAILED\n\nfailures:\n\n---- t stdout ----\n"
            "thread 't' panicked at src/x.rs:9:5:\nassertion `left == right` failed\n  left: 1\n right: 2\n\n"
            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out\n")
+    doc_compile = ("running 1 test\ntest src/lib.rs - add (line 3) ... FAILED\n\nfailures:\n\n"
+                   "---- src/lib.rs - add (line 3) stdout ----\nerror[E0308]: mismatched types\n\n"
+                   "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
+    doc_red = ("running 1 test\ntest src/lib.rs - add (line 3) ... FAILED\n\nfailures:\n\n"
+               "---- src/lib.rs - add (line 3) stdout ----\nassertion `left == right` failed\n\n"
+               "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
     crash = "running 1 test\nerror: test failed, to rerun pass `--lib`\nprocess didn't exit successfully (signal: 11, SIGSEGV)\n"
     cases = [
         ("killed mutant", classify_test(Outcome(101, empty + red, False)), "RED"),
@@ -303,6 +332,8 @@ def self_test() -> int:
         ("timeout, SIGKILL exit 137", classify_test(Outcome(137, ok, True)), "VOID"),
         ("timeout, killed by signal", classify_test(Outcome(-9, "", True)), "VOID"),
         ("FAILED summary but exit 0", classify_test(Outcome(0, red, False)), "SURVIVED"),
+        ("doctest does not compile", classify_test(Outcome(101, doc_compile, False)), "VOID"),
+        ("doctest assertion fails", classify_test(Outcome(101, doc_red, False)), "RED"),
         ("red baseline", classify_baseline(Outcome(101, red, False)), "VOID"),
         ("baseline runs nothing", classify_baseline(Outcome(0, ignored, False)), "VOID"),
         ("baseline timeout", classify_baseline(Outcome(137, "", True)), "VOID"),
