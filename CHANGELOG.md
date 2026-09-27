@@ -19,8 +19,9 @@ and cached results, notifications and subscriptions stay per caller. SSO `role_m
 rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
 with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
 with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read, an unresolved secret or, with auth
-on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+unrecognised config key, a config file other users can read (Unix only), an unresolved secret
+(except `server.metrics_token`, which warns and keeps `/metrics` closed) or, with auth on, cleartext
+HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
 ### Added
 
@@ -113,6 +114,8 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
+  command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
