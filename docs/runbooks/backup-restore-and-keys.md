@@ -63,9 +63,12 @@ persistent storage, so point those settings at a volume you mount yourself.
 
 ## Taking a backup
 
-1. **Stop the gateway, or take one atomic snapshot that covers both `accounts.store_dir` and
-   `accounts.authority_dir`.** If the two are on different volumes and the volumes cannot be
-   snapshotted together at one instant, stop the gateway. The accounts store and its
+1. **Stop the gateway, or take one atomic snapshot that covers every location in the first
+   table.** If they are on different volumes that cannot be snapshotted together at one
+   instant, stop the gateway. Two sets break when copied piece by piece from a running
+   gateway. Each audit log, its sealed segments and its `.hwm` must come from one instant: a
+   `.hwm` that runs ahead of the copied tail, or a segment sealed between two copies, makes the
+   restored log fail verification as tampered. And the accounts store and its
    authority are checked against each other: every record is sealed together with the
    authority's `store_epoch` and the versions it lists for that record. A copy of the store
    from one moment and the authority from another fails as "personal account credential
