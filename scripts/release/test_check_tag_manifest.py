@@ -3,6 +3,7 @@
 """Regression tests for the tag/manifest publish gate and its channel predicate."""
 
 import contextlib
+import fnmatch
 import importlib.util
 import io
 import itertools
@@ -738,6 +739,34 @@ def gate_steps(workflow, job):
         if any(line.strip() in ("id: meta", "- id: meta") for line in block)
         and any(runs(command, TAG_GATE) for command in joined(block))
     ]
+
+
+# `gh api repos/MikkoParkkola/mcp-gateway/actions/permissions/artifact-and-log-retention`
+# reports `days: 14`. upload-artifact clamps `retention-days` to that value.
+HANDOFF_RETENTION_DAYS = 14
+
+
+def artifact_keys(block, keys):
+    """The values of `keys` under a step's `with:`, in order.
+
+    Read under `with:` only: the step's own `name:` is a label, and taking it
+    for the artifact name would match nothing or, worse, the wrong artifact.
+    """
+    found, depth = [], None
+    for line in block:
+        indent = len(line) - len(line.lstrip())
+        if re.match(r"^\s*(- )?with:\s*$", line):
+            depth = indent + (2 if line.lstrip().startswith("- ") else 0)
+            continue
+        if depth is None:
+            continue
+        if indent <= depth:
+            depth = None
+            continue
+        match = re.match(r"^\s*(\w[\w-]*):\s*(.+?)\s*$", line)
+        if match and match.group(1) in keys:
+            found.append(match.group(2).strip("'\""))
+    return found
 
 
 class WorkflowWiring(unittest.TestCase):
@@ -2126,6 +2155,52 @@ class WorkflowWiring(unittest.TestCase):
             if not TAG_EXPRESSION.search(line):
                 continue
             self.assertRegex(line, permitted, raw_line)
+
+    def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
+        # An artifact a later job of the same run downloads is that job's only
+        # input. Once it expires, re-running that job publishes nothing
+        # (release.yml copies whatever it finds) or fails its download, and the
+        # only recovery is a rebuild. So each handoff is kept for exactly the
+        # repository's artifact retention setting, HANDOFF_RETENTION_DAYS:
+        # shorter loses re-run days for nothing, and longer is clamped to the
+        # setting without a word, so the workflow would promise a window it
+        # does not have. The setting is not readable from a unit test; if it
+        # changes, change the constant and RELEASING.md rule 4 with it. The key
+        # must be written out: an unset one inherits the setting silently.
+        handoffs = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            blocks = steps(path.name)
+            downloads = [
+                b for b in blocks
+                if any(re.match(r"^\s*(- )?uses:\s*actions/download-artifact@", l) for l in b)
+            ]
+            if not downloads:
+                continue
+            # A download naming neither `name:` nor `pattern:` takes every
+            # artifact of the run, so every upload is a handoff.
+            wanted = [artifact_keys(block, ("name", "pattern")) or ["*"] for block in downloads]
+            for block in blocks:
+                if not any(re.match(r"^\s*(- )?uses:\s*actions/upload-artifact@", l) for l in block):
+                    continue
+                name = (artifact_keys(block, ("name",)) or [""])[0]
+                if not any(fnmatch.fnmatchcase(name, k) for keys in wanted for k in keys):
+                    continue
+                days = artifact_keys(block, ("retention-days",))
+                handoffs.append((path.name, block[0].strip(), days))
+        # release.yml's binaries, ci.yml's and docker.yml's image digests. One
+        # missing means the scan stopped seeing a handoff, not that it went
+        # away; a count across all workflows would let a new one elsewhere
+        # hide the loss.
+        for workflow in ("release.yml", "ci.yml", "docker.yml"):
+            self.assertIn(workflow, {h[0] for h in handoffs}, handoffs)
+        wrong = [
+            f"{workflow}: {step} retention-days {days or 'unset'}"
+            for workflow, step, days in handoffs
+            if days != [str(HANDOFF_RETENTION_DAYS)]
+        ]
+        self.assertEqual(
+            wrong, [], f"handoff retention is not the repository's {HANDOFF_RETENTION_DAYS} days"
+        )
 
 
 # The smoke gate is a shell script, not a workflow, so it is read directly.
