@@ -262,8 +262,9 @@ pub(super) fn spawn_rewatch_task(
                     }
                     // After a stalled read the interval is ready again at once
                     // and select picks at random, so shutdown is checked here:
-                    // it then waits at most one poll wait. Not `biased`, which
-                    // would let constant directory wakes starve the poll.
+                    // a stalled read then delays it by at most one poll wait.
+                    // Not `biased`, which would let constant directory wakes
+                    // starve the poll.
                     if !matches!(
                         shutdown.try_recv(),
                         Err(tokio::sync::broadcast::error::TryRecvError::Empty)

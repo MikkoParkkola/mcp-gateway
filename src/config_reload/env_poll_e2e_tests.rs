@@ -278,8 +278,10 @@ const T20_RUNS: usize = 20;
 
 /// T20: shutdown sent while a stalled env read is in flight ends the rewatch
 /// task when that tick returns, with no further tick started, though the
-/// poll interval is ready again every tick.
-#[tokio::test]
+/// poll interval is ready again every tick. Current-thread on purpose: the
+/// test and the task share one thread, which is what makes "the task is
+/// parked inside the tick" hold when the send happens.
+#[tokio::test(flavor = "current_thread")]
 async fn t20_shutdown_during_a_stalled_env_read_starts_no_further_tick() {
     use super::watch_chain::{CHAIN_RETRY, named_config_path, spawn_rewatch_task};
     let wait = Duration::from_millis(50);
