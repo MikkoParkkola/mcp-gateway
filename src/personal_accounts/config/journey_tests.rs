@@ -118,10 +118,17 @@ fn without_hosted() -> String {
 /// Parse, then the structural pass, then the enabled-store resolution: the
 /// same order `Config::validate_with_env` runs them in.
 fn check(yaml: &str) -> Result<(), String> {
-    // A leading `/` is not an absolute path on Windows, so the fixture's
+    // A leading `/` is not an absolute path on Windows, so the fixture's two
     // store directories get a drive there; the rule under test is unchanged.
     #[cfg(windows)]
-    let yaml = &yaml.replace(": /srv/", ": C:/srv/");
+    let yaml = &yaml
+        .replace("\nstore_dir: /", "\nstore_dir: C:/")
+        .replace("\nauthority_dir: /", "\nauthority_dir: C:/");
+    check_raw(yaml)
+}
+
+/// `check` without the Windows fixture rewrite.
+fn check_raw(yaml: &str) -> Result<(), String> {
     let accounts: AccountsConfig = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
     validate_descriptors(Some(&accounts)).map_err(|e| e.to_string())?;
     resolve(Some(&accounts), &Overlay)
@@ -134,10 +141,11 @@ fn check(yaml: &str) -> Result<(), String> {
 #[cfg(windows)]
 #[test]
 fn a_rooted_path_without_a_drive_is_refused_on_windows() {
-    let accounts: AccountsConfig = serde_yaml::from_str(BASE).unwrap();
-    let refused = resolve(Some(&accounts), &Overlay).err().map(|e| e.to_string());
+    let refused = check_raw(BASE);
     assert!(
-        refused.as_deref().is_some_and(|e| e.contains("accounts.store_dir")),
+        refused
+            .as_ref()
+            .is_err_and(|e| e.contains("accounts.store_dir")),
         "{refused:?}"
     );
 }
