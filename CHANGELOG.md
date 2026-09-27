@@ -118,6 +118,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   published a release with no binaries or failed to find the digests. They now last the
   repository's 14-day artifact retention, and a CI check keeps every such handoff there.
 
+- **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
+  row let a release pass while the burnup still listed it as held. A test also pins the
+  approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
+  cannot leave its approval behind.
+
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
