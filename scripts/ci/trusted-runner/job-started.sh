@@ -23,18 +23,59 @@ readonly MIN_FREE_GIB=${MCPGW_RUNNER_MIN_FREE_GIB:-30}
 # Prints "admit" or "reject: <reason>" for an event payload file.
 # Arguments: repository, event name, event payload path.
 decide() {
-  echo admit
+  local repository=$1 event=$2 payload=$3
+  if [[ $repository != "$REPO" ]]; then
+    echo "reject: repository $repository"; return
+  fi
+  if [[ $event != pull_request ]]; then
+    echo "reject: event $event"; return
+  fi
+  python3 - "$payload" "$REPO" "$BASE" <<'PY'
+import json, sys
+path, repo, base = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as f:
+        pr = json.load(f)["pull_request"]
+    head_repo = (pr.get("head") or {}).get("repo") or {}
+    head_ref = (pr.get("head") or {}).get("ref") or ""
+    base_ref = (pr.get("base") or {}).get("ref") or ""
+except Exception as exc:  # any unreadable payload is a rejection
+    print(f"reject: unreadable event payload ({exc.__class__.__name__})")
+    sys.exit(0)
+if head_repo.get("full_name") != repo:
+    print(f"reject: head repository {head_repo.get('full_name')!r}")
+elif base_ref != base:
+    print(f"reject: base branch {base_ref!r}")
+elif not head_ref.startswith("throwaway/"):
+    print(f"reject: head branch {head_ref!r}")
+else:
+    print("admit")
+PY
 }
 
 free_gib() {
-  echo 0
+  df -Pk "$1" | awk 'NR == 2 { print int($4 / 1048576) }'
 }
 
+# Walks up from this shell to the Runner.Worker that is running the job.
 worker_pid() {
+  local pid=$$ comm
+  while [[ $pid -gt 1 ]]; do
+    comm=$(cat "/proc/$pid/comm" 2>/dev/null || true)
+    if [[ $comm == Runner.Worker ]]; then
+      echo "$pid"; return 0
+    fi
+    pid=$(awk '/^PPid:/ { print $2 }' "/proc/$pid/status" 2>/dev/null || echo 1)
+  done
   return 1
 }
 
 reject() {
+  echo "::error::trusted runner refused this job: $1" >&2
+  local pid
+  if pid=$(worker_pid); then
+    kill -TERM "$pid" || true
+  fi
   exit 1
 }
 

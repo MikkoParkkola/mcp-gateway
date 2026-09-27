@@ -182,6 +182,14 @@ Allowed clippy exceptions (in `Cargo.toml`): `module_name_repetitions`, `must_us
 
 Smaller PRs are reviewed faster. For large changes, open an issue first.
 
+**What runs where.** Every pull request runs the CI workflow. The container image build and
+CodeQL code scanning run once per merge, on the push to the release branch (and on `main` and
+tags), not on each pull-request push; a pull request into the release branch still builds the
+image when it changes `Dockerfile`, `.dockerignore`, `Cargo.toml`, `Cargo.lock`,
+`deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything.
+Maintainer `throwaway/` branches (red-first and mutation-proof runs, never merged) run only the
+test suite, on the project's own arm64 runner; see `scripts/ci/trusted-runner/`.
+
 ## Architecture Decisions
 
 Changes affecting public API, config schema, new dependencies, transport protocols, or security features should be discussed in a GitHub issue before implementation. Design docs live in `docs/design/`.
