@@ -272,3 +272,32 @@ fn u16_a_lookup_error_on_a_recorded_absent_path_differs() {
     link_loop(dir.path(), "a.env");
     assert_eq!(env_poll(&overlay, &paths), Some(p));
 }
+
+/// U17: a path listed twice and rewritten between the two loads differs
+/// while any load disagrees with the disk.
+#[test]
+fn u17_a_duplicated_path_differs_while_one_load_is_stale() {
+    let (_d, p) = one_file("K=1\n");
+    let mut overlay = EnvOverlay::default();
+    overlay.apply_file(&p).unwrap();
+    write(&p, "K=2\n");
+    overlay.apply_file(&p).unwrap();
+    let paths = vec![p.clone(), p.clone()];
+    assert_eq!(env_poll(&overlay, &paths), Some(p));
+}
+
+/// U18: a path recorded both absent and loaded (it appeared between two
+/// loads) differs, whether the file is now present or missing.
+#[test]
+fn u18_a_path_recorded_absent_and_loaded_differs() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("a.env");
+    let mut overlay = EnvOverlay::default();
+    overlay.apply_file(&p).unwrap();
+    write(&p, "K=1\n");
+    overlay.apply_file(&p).unwrap();
+    let paths = vec![p.clone(), p.clone()];
+    assert_eq!(env_poll(&overlay, &paths), Some(p.clone()));
+    std::fs::remove_file(&p).unwrap();
+    assert_eq!(env_poll(&overlay, &paths), Some(p));
+}

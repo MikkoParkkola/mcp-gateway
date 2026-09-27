@@ -9,11 +9,12 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::ReloadTrigger;
-use crate::config::EnvOverlay;
+use crate::config::{EnvOverlay, LiveEnv};
 
 /// How often the recorded env files are read and compared.
 pub(super) const ENV_POLL: Duration = Duration::from_secs(2);
@@ -77,6 +78,48 @@ pub(super) fn report_reloaded(path: &Path, outcome: &super::ReloadOutcome) {
     );
 }
 
+/// The poll's state between ticks.
+pub(super) struct EnvPoller {
+    env: Arc<LiveEnv>,
+    reloads: Arc<EnvReloadCounts>,
+    /// The last path that differed, kept until a tick finds none.
+    last_differing: Option<PathBuf>,
+}
+
+impl EnvPoller {
+    pub(super) fn new(env: Arc<LiveEnv>, reloads: Arc<EnvReloadCounts>) -> Self {
+        Self {
+            env,
+            reloads,
+            last_differing: None,
+        }
+    }
+
+    /// The path to trigger a reload for this tick, if any.
+    pub(super) async fn tick(&mut self) -> Option<PathBuf> {
+        let applied = self.env.get();
+        let paths = self.env.env_paths().as_paths().to_vec();
+        // Off the async workers: on NFS or FUSE a read can stall.
+        let differs = tokio::task::spawn_blocking(move || env_poll(&applied, &paths))
+            .await
+            .ok()
+            .flatten();
+        match differs {
+            Some(path) => {
+                self.last_differing = Some(path.clone());
+                Some(path)
+            }
+            // The file is back at the loaded bytes, but the reload it caused
+            // failed and may have carried a valid config edit: retry it once.
+            None if self.reloads.failed.load(Ordering::SeqCst) => self.last_differing.take(),
+            None => {
+                self.last_differing = None;
+                None
+            }
+        }
+    }
+}
+
 /// Rate-limits the warning for an env-file reload that keeps failing: per
 /// path, a warning only when that path's error changed or `WARN_EVERY` passed.
 #[derive(Default)]
@@ -104,9 +147,20 @@ impl WarnLimiter {
 pub(super) struct EnvReloadCounts {
     pub(super) attempts: std::sync::atomic::AtomicUsize,
     pub(super) warns: std::sync::atomic::AtomicUsize,
+    /// Whether the last reload, whatever triggered it, failed.
+    failed: std::sync::atomic::AtomicBool,
 }
 
 impl EnvReloadCounts {
+    /// Record how a reload ended. A success clears every path's warning
+    /// state, so a failure that comes back is warned about at once.
+    pub(super) fn settled(&self, limiter: &mut WarnLimiter, ok: bool) {
+        self.failed.store(!ok, Ordering::SeqCst);
+        if ok {
+            *limiter = WarnLimiter::default();
+        }
+    }
+
     /// Count a reload that an `EnvFile` trigger started.
     pub(super) fn count_attempt(&self, trigger: &ReloadTrigger) {
         if matches!(trigger, ReloadTrigger::EnvFile(_)) {

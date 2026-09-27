@@ -419,15 +419,23 @@ impl EnvOverlay {
     /// a lookup error (a link loop, a denied directory), an unreadable or
     /// refused file, or a path this overlay neither loaded nor found missing
     /// (a failed load) always differs.
+    ///
+    /// A path listed more than once is unchanged only when every recorded
+    /// load of it agrees with the disk: one stale load still differs.
     pub(crate) fn differs_on_disk(&self, path: &Path) -> bool {
+        let was_absent = self.absent.iter().any(|p| p == path);
+        let mut loaded = self.sources.iter().filter(|(p, _)| p == path);
         // The same absence test `apply_file` makes, so the two agree.
         match path.try_exists() {
-            Ok(false) => return !self.absent.iter().any(|p| p == path),
+            Ok(false) => return !was_absent || loaded.next().is_some(),
             Err(_) => return true,
             Ok(true) => {}
         }
         match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
-            Ok(text) => !self.sources.iter().any(|(p, t)| p == path && *t == text),
+            Ok(text) => {
+                let mut loaded = loaded.peekable();
+                was_absent || loaded.peek().is_none() || loaded.any(|(_, t)| *t != text)
+            }
             Err(_) => true,
         }
     }

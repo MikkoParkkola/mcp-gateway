@@ -243,7 +243,10 @@ mod real_watcher {
             tx,
             shutdown.subscribe(),
             retry_every,
-            Arc::new(crate::config::LiveEnv::default()),
+            crate::config_reload::env_poll::EnvPoller::new(
+                Arc::new(crate::config::LiveEnv::default()),
+                Arc::default(),
+            ),
             Duration::from_secs(3600),
         );
         Harness {
@@ -633,7 +636,10 @@ mod real_watcher {
             tx,
             shutdown.subscribe(),
             super::super::CHAIN_RETRY,
-            Arc::new(crate::config::LiveEnv::default()),
+            crate::config_reload::env_poll::EnvPoller::new(
+                Arc::new(crate::config::LiveEnv::default()),
+                Arc::default(),
+            ),
             Duration::from_secs(3600),
         );
         assert!(

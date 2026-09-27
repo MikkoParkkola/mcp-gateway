@@ -25,6 +25,7 @@ fn retarget(link: &Path, target: &Path) {
 struct Started {
     watcher: ConfigWatcher,
     env: Arc<LiveEnv>,
+    live: Arc<super::LiveConfig>,
     _shutdown: tokio::sync::broadcast::Sender<()>,
 }
 
@@ -39,9 +40,10 @@ fn start(root: &Path, env_paths: Vec<PathBuf>) -> Started {
         ResolvedEnvFiles::new(env_paths, false),
     ));
     let (shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let live = Arc::new(super::LiveConfig::new(Config::default()));
     let watcher = ConfigWatcher::start(
         cfg,
-        Arc::new(super::LiveConfig::new(Config::default())),
+        Arc::clone(&live),
         Arc::new(crate::backend::BackendRegistry::new()),
         &Config::default(),
         Arc::clone(&env),
@@ -52,6 +54,7 @@ fn start(root: &Path, env_paths: Vec<PathBuf>) -> Started {
     Started {
         watcher,
         env,
+        live,
         _shutdown: shutdown,
     }
 }
@@ -143,6 +146,69 @@ async fn p3_a_failing_env_file_is_retried_warned_once_and_recovers() {
 
     write_owner_only(&path, "MCP_GW_T1286_P3=fixed\n").unwrap();
     reaches(&g.env, "MCP_GW_T1286_P3", "fixed", 3).await;
+
+    // The same failure again within the minute: the success reset the
+    // limiter, so it is warned about at once.
+    write_owner_only(&path, "MCP_GW_T1286_P3=\"unterminated\n").unwrap();
+    let warned = tokio::time::timeout(Duration::from_secs(3), async {
+        while counts.warns.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        warned.is_ok(),
+        "a failure after a successful reload must warn again"
+    );
+}
+
+fn description(live: &super::LiveConfig) -> Option<String> {
+    live.get()
+        .routing_profiles
+        .get("p")
+        .map(|p| p.description.clone())
+}
+
+/// Wait up to `secs` for the live config's profile to read `want`.
+async fn describes(live: &super::LiveConfig, want: &str, secs: u64) {
+    let got = tokio::time::timeout(Duration::from_secs(secs), async {
+        while description(live).as_deref() != Some(want) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        got.is_ok(),
+        "the live config never read {want:?} within {secs} s; it reads {:?}",
+        description(live)
+    );
+}
+
+/// P4: a valid config edit that failed together with a broken env file is
+/// applied once the env file is put back, with no further config edit.
+#[tokio::test]
+async fn p4_a_config_edit_that_failed_with_a_broken_env_file_applies_when_it_is_restored() {
+    let root = tempfile::tempdir().unwrap();
+    let env_path = root.path().join("a.env");
+    write_owner_only(&env_path, "MCP_GW_T1286_P4=ok\n").unwrap();
+    let g = start(root.path(), vec![env_path.clone()]);
+    describes(&g.live, "x", 5).await;
+
+    write_owner_only(&env_path, "MCP_GW_T1286_P4=\"unterminated\n").unwrap();
+    write_owner_only(
+        root.path().join("gateway.yaml"),
+        "routing_profiles:\n  p:\n    description: \"two\"\n",
+    )
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        description(&g.live).as_deref(),
+        Some("x"),
+        "premise: the combined reload failed and applied nothing"
+    );
+
+    write_owner_only(&env_path, "MCP_GW_T1286_P4=ok\n").unwrap();
+    describes(&g.live, "two", 3).await;
 }
 
 /// ENVFILE.19 (rewritten): the running poll reads exactly the recorded paths.

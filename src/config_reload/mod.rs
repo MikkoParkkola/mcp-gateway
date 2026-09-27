@@ -1085,6 +1085,7 @@ impl ConfigWatcher {
         // One resolve as soon as the watches are live: a retarget that landed
         // between resolving the chain and installing them is followed.
         wake_rx.mark_changed();
+        let env_reloads = Arc::new(env_poll::EnvReloadCounts::default());
         watch_chain::spawn_rewatch_task(
             config_path.clone(),
             Arc::clone(&chain),
@@ -1092,13 +1093,12 @@ impl ConfigWatcher {
             event_tx,
             shutdown_rx.resubscribe(),
             watch_chain::CHAIN_RETRY,
-            Arc::clone(&env),
+            env_poll::EnvPoller::new(Arc::clone(&env), Arc::clone(&env_reloads)),
             env_poll::POLL_EVERY,
         );
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
-        let env_reloads = Arc::new(env_poll::EnvReloadCounts::default());
 
         Self::spawn_reload_task(
             config_path,
@@ -1220,7 +1220,9 @@ impl ConfigWatcher {
                             last_event = None;
                             env_poll::log_trigger(&trigger);
                             env_reloads.count_attempt(&trigger);
-                            match (ctx.reload_outcome().await, &trigger) {
+                            let result = ctx.reload_outcome().await;
+                            env_reloads.settled(&mut env_warns, result.is_ok());
+                            match (result, &trigger) {
                                 (Ok(outcome), ReloadTrigger::EnvFile(path)) => {
                                     env_poll::report_reloaded(path, &outcome);
                                 }
