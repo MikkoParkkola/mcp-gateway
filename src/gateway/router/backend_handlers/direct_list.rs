@@ -45,6 +45,11 @@ pub(super) async fn drain(
 ) -> crate::Result<JsonRpcResponse> {
     let mut tools = Vec::new();
     let mut cursor: Option<Value> = None;
+    // Readable only if every page carried a result and some page a `tools`
+    // array, as the metadata fill requires. An unreadable list is answered as
+    // before but never cached: as a complete empty list it would refuse every
+    // `tools/call` as absent.
+    let (mut every_result, mut any_array) = (true, false);
     for _ in 0..DIRECT_LIST_MAX_PAGES {
         let mut page_params = params
             .filter(|p| p.is_object())
@@ -68,8 +73,10 @@ pub(super) async fn drain(
         if page.error.is_some() {
             return Ok(page);
         }
+        every_result &= page.result.is_some();
         let result = page.result.unwrap_or(Value::Null);
         if let Some(items) = result.get("tools").and_then(Value::as_array) {
+            any_array = true;
             tools.extend(items.iter().cloned());
         }
         match result.get("nextCursor") {
@@ -77,9 +84,11 @@ pub(super) async fn drain(
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
                 let credential = !propagated_headers.is_empty();
-                backend
-                    .remember_listed_tools(identity_key, credential, &tools)
-                    .await;
+                if every_result && any_array {
+                    backend
+                        .remember_listed_tools(identity_key, credential, &tools)
+                        .await;
+                }
                 return Ok(JsonRpcResponse::success(
                     id.clone(),
                     json!({ "tools": tools }),

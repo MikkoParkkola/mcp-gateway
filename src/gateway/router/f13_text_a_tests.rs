@@ -84,3 +84,46 @@ async fn f13_text_a_is_exact_on_both_routes_and_meta_adds_only_a_hint() {
         assert!(!text.contains("retry"), "text A must not say retry: {text}");
     }
 }
+
+/// POST `body` to `uri` anonymously; the parsed JSON-RPC response.
+async fn post(router: &axum::Router, uri: &str, body: Value) -> Value {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+/// Review fold: a direct `tools/list` whose result carries no `tools` array
+/// is answered but not cached, so the slot stays cold and the next call lists
+/// and is judged. Mutant M37 (cache it anyway) reddens it: the slot then holds
+/// a complete empty list, and a declared call is refused with text A.
+#[tokio::test]
+async fn f13_a_malformed_direct_list_leaves_the_slot_cold() {
+    let fx = cold(InputSchemaEnforcement::Closed, ListMode::Serve).await;
+    fx.rec.serve(Value::Null);
+    let list = json!({"jsonrpc": "2.0", "id": 43, "method": "tools/list"});
+    let listed = post(&fx.router, "/mcp/edits", list).await;
+    assert_eq!(listed["result"]["tools"], json!([]), "{listed}");
+    assert_eq!(
+        fx.rec.lists(),
+        1,
+        "the direct list did not reach the backend"
+    );
+
+    fx.rec
+        .serve(json!([{"name": "edit", "inputSchema": {"type": "object"}}]));
+    let call = json!({"jsonrpc": "2.0", "id": 44, "method": "tools/call",
+        "params": {"name": "edit", "arguments": {}}});
+    let body = post(&fx.router, "/mcp/edits", call).await;
+    assert!(
+        !body.to_string().contains(&text_a("edit")),
+        "judged absent: {body}"
+    );
+    assert_eq!(fx.rec.lists(), 2, "the call did not list the cold slot");
+    assert_eq!(fx.rec.calls(), 1, "the declared call was not forwarded");
+}

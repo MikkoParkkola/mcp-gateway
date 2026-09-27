@@ -71,7 +71,7 @@ impl Rec {
         self.calls.lock().len()
     }
 
-    fn serve(&self, tools: Value) {
+    pub(super) fn serve(&self, tools: Value) {
         *self.tools.lock() = Some(tools);
     }
 
