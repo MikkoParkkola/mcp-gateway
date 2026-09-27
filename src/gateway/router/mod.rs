@@ -457,7 +457,7 @@ pub(crate) fn create_router_with_accounts(
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         // Method and route only (#1529). Routes merged below are outside it.
-        .layer(TraceLayer::new_for_http().make_span_with(trace_span::span_for))
+        .layer(TraceLayer::new_for_http())
         .with_state(state);
 
     // Merge key server routes (unauthenticated) if enabled
