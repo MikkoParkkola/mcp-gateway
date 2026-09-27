@@ -286,7 +286,11 @@ embeds no commit SHA, so the source revision is established by comparing build
 on both sides — blob ids from `git ls-tree -r 88e160d2` locally, `git
 hash-object` on the bench-host tree. That is what earns
 `build_sha_confidence: measured` for these two, and it is the check the earlier
-pass could not make.
+pass could not make. `measured` here covers `src/` and the Cargo manifests only:
+three files the binary embeds from outside `src/`
+(`capabilities/knowledge/weather_current.yaml`,
+`capabilities/knowledge/public_holidays.yaml`,
+`benchmarks/discovery_response_fixture.json`) were not hashed on the bench host.
 
 ### Scenarios 1, 3 and 5 — assumption, corroborated separately
 

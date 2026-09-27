@@ -534,7 +534,7 @@ third.
 
 Two figures in this paragraph were wrong until 2026-09-21 and are corrected rather than
 quietly dropped. It read "`NFR.PERF.1` is PARTIAL because the harness it would be graded
-against produces no end-to-end percentile"; the powered run now records one, but the
+against produces no end-to-end percentile"; the powered run now records one (an end-to-end P50 and P99), but the
 row stays PARTIAL and non-blocking (row `NFR.PERF.1` above). It also called `NFR.SEC.7` "the group's only blocking row", which stopped being
 true when `NFR.PKG.1` began blocking. Its cross-reference to section 4 as "lines 204-253"
 was stale too — that section now spans lines 265-316 of
