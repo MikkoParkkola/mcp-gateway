@@ -9,6 +9,7 @@ Start with the [README](../README.md); this directory is the depth behind it.
 | [QUICKSTART](QUICKSTART.md) | First run, first backend, first tool call |
 | [ARCHITECTURE](ARCHITECTURE.md) | How a request reaches a backend and comes back |
 | [DEPLOYMENT](DEPLOYMENT.md) | Containers, Kubernetes, and the production posture |
+| [TEAM_DEPLOYMENT](TEAM_DEPLOYMENT.md) | One gateway for several people: authentication, TLS, isolation, audit log, Helm chart |
 | [OAUTH_CONFIG](OAUTH_CONFIG.md) | Authorizing backends that speak OAuth |
 | [REMOTE_BACKENDS](REMOTE_BACKENDS.md) | Reaching backends that are not local processes |
 | [WEBHOOKS](WEBHOOKS.md) | Inbound events |

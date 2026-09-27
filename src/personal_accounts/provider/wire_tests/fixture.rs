@@ -391,6 +391,12 @@ fn certificates() -> (
     let ca_key = KeyPair::generate().expect("fixture CA key");
     let mut ca_params = CertificateParams::new(Vec::new()).expect("fixture CA params");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    // A subject of its own. rcgen gives the CA and the leaf the same default
+    // name, and a leaf whose subject equals its issuer's reads as self-issued:
+    // the Windows chain engine then fails it as TRUST_E_CERT_SIGNATURE.
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "wire fixture CA");
     let ca_certificate = ca_params
         .clone()
         .self_signed(&ca_key)
@@ -398,8 +404,12 @@ fn certificates() -> (
     let issuer = Issuer::new(ca_params, ca_key);
 
     let leaf_key = KeyPair::generate().expect("fixture leaf key");
-    let leaf = CertificateParams::new(vec![HOST.to_string()])
-        .expect("fixture leaf params")
+    let mut leaf_params =
+        CertificateParams::new(vec![HOST.to_string()]).expect("fixture leaf params");
+    leaf_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, HOST);
+    let leaf = leaf_params
         .signed_by(&leaf_key, &issuer)
         .expect("the fixture CA signs the leaf");
 

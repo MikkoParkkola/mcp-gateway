@@ -790,6 +790,9 @@ Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) 
 
 ## Authentication for Production
 
+Deploying for more than one person? Start with the
+[team deployment guide](TEAM_DEPLOYMENT.md); it links back to the sections below.
+
 **The gateway refuses to start when its tools can be called without a
 credential and it can be reached from off this machine.** The refusal happens
 before a listener is opened, because any caller who reaches such a gateway can
