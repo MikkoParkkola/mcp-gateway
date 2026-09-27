@@ -315,3 +315,72 @@ async fn identity_grants_reload_refused_keeps_live() {
     );
     assert_eq!(epoch.load(Ordering::Acquire), epoch_before);
 }
+
+/// L3: a grants file that stays unreadable across retried reloads logs its
+/// ERROR once, and a successful read in between resets that, so the next
+/// failure is logged again (#1286: a failed reload is retried every poll).
+#[test]
+fn l3_an_unchanged_grants_read_error_is_logged_once_until_a_read_succeeds() {
+    use crate::test_log_capture::{count, records};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("identity-grants.json");
+    crate::gateway::test_helpers::write_owner_only(&path, "not json").expect("write");
+    let (_store, _epoch, sink) = live_store(&path);
+    let reload = ctx(sink);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            for _ in 0..5 {
+                assert!(matches!(
+                    reload.reload_identity_grants().await,
+                    Some(Err(_))
+                ));
+            }
+            write_grants(&path, &[grant("g1", "alice", "cal")]);
+            assert!(matches!(reload.reload_identity_grants().await, Some(Ok(_))));
+            crate::gateway::test_helpers::write_owner_only(&path, "not json").expect("write");
+            assert!(matches!(
+                reload.reload_identity_grants().await,
+                Some(Err(_))
+            ));
+        });
+    });
+    assert_eq!(
+        count(&logs, "ERROR", "Identity-grant reload refused"),
+        2,
+        "once for the five unchanged failures, once after the reset"
+    );
+}
+
+/// L4: a grants reload lock held across retried reloads logs "busy" once,
+/// not on every retry.
+#[test]
+fn l4_a_busy_grants_lock_is_logged_once_across_retries() {
+    use crate::test_log_capture::{count, records};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("identity-grants.json");
+    write_grants(&path, &[grant("g1", "alice", "cal")]);
+    let (_store, _epoch, sink) = live_store(&path);
+    let reload = ctx(Arc::clone(&sink));
+    // Paused: each attempt waits out the lock timeout without real time.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            let _held = sink.lock.lock().await;
+            for _ in 0..3 {
+                assert!(matches!(
+                    reload.reload_identity_grants().await,
+                    Some(Err(_))
+                ));
+            }
+        });
+    });
+    assert_eq!(count(&logs, "ERROR", "Identity-grant reload busy"), 1);
+}

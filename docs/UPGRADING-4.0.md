@@ -1712,8 +1712,9 @@ In 4.0:
   the load instead of reading as a missing file.
 - After any failed reload, whatever caused it, the reload is retried every 2 seconds until
   one succeeds. A refused config (a posture refusal, or a field that needs a restart) is
-  re-evaluated each time and refused each time; no backend is started or stopped and nothing
-  is published. Its warning is logged at most once a minute per file unless the error
+  re-evaluated each time and refused each time; no backend is started or stopped and the
+  refused config is not published. The identity-grants file is reloaded on its own at each
+  attempt, as on any reload, and a changed grants file still takes effect. Its warning is logged at most once a minute per file unless the error
   changes.
 
 **Action:** none required. A broken or refused `config.yaml` now stays in retry until it is

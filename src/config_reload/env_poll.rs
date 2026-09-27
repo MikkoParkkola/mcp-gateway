@@ -139,6 +139,16 @@ pub(super) fn report_grants_refusal(
     }
 }
 
+/// Log that the grants reload lock was busy, throttled like a read error:
+/// every retried config reload tries the grants reload first.
+pub(super) fn report_grants_busy(limiter: &parking_lot::Mutex<WarnLimiter>, path: &Path) {
+    if limiter.lock().should_warn(path, "busy", Instant::now()) {
+        tracing::error!(path = %path.display(), "Identity-grant reload busy");
+    } else {
+        tracing::debug!("Identity-grant reload still busy");
+    }
+}
+
 /// Rate-limits the warning for an env-file reload that keeps failing: per
 /// path, a warning only when that path's error changed or `WARN_EVERY` passed.
 #[derive(Debug, Default)]

@@ -53,7 +53,7 @@ use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, Watch
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use std::fmt::Write as _;
 
@@ -1807,7 +1807,7 @@ impl ReloadContext {
         // operator retries instead of inspecting a grants file that is fine.
         let Ok(_grants_guard) = tokio::time::timeout(RELOAD_LOCK_WAIT, sink.lock.lock()).await
         else {
-            error!(path = %sink.path.display(), "Identity-grant reload busy");
+            env_poll::report_grants_busy(&sink.read_errors, &sink.path);
             return Some(Err(
                 "identity grants reload busy: another grant reload is in progress; retry"
                     .to_string(),
