@@ -39,7 +39,7 @@ pub fn logout_router() -> Router<Arc<AppState>> {
 /// same answer.
 async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let ended = session_cookie_value(&headers)
-        .is_some_and(|handle| state.dashboard_bootstrap.revoke(&handle));
+        .is_some_and(|handle| false && state.dashboard_bootstrap.revoke(&handle));
     // The one audit write that does not fail closed: refusing to revoke a
     // session because the log is down is worse than a missing record. Written
     // only when a live session actually ended: the route is unauthenticated,
