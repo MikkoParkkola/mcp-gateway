@@ -795,7 +795,6 @@ jobs:
           # Read by docker-manifest. Kept for the repository's 14-day retention
           # cap so a failed manifest job can be retried without rebuilding the
           # legs (RELEASING.md rule 4).
-          retention-days: 14
           if-no-files-found: error
 
   docker-manifest:
