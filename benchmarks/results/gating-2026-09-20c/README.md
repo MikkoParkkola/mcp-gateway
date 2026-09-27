@@ -90,8 +90,8 @@ C is `5e557e08`, an ancestor of `origin/main`.
 
 ## What D and E priced
 
-C→D is **+2.3% p50** (0.7321 → 0.7491). That is the modern-protocol-era cost the D cell was
-built to measure, and it has never been produced before. Both cells take the same
+C→D is **+2.3% p50** (0.7321 → 0.7491). The D cell was built to measure the modern-protocol-era
+cost, and this run cannot isolate it. Both cells take the same
 `SyncAdmission::Unprotected` arm — C via `!is_modern`, D via the read-only exemption. But
 this run used a fixed cell order: D and E ran after every A, B and C rep (randomised order
 came later, in `609e7ef95`). So the +2.3% mixes protocol handling with run position and
