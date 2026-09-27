@@ -269,7 +269,7 @@ impl MetaMcp {
                 tool = tool_name,
                 "Surfaced tool missing from the shared catalogue; confirming it as unclassified"
             );
-            return Some(Classification::Unclassified(server.to_owned()));
+            return None;
         };
         let destructive = tool
             .annotations
