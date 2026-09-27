@@ -850,11 +850,15 @@
     },
     {
       "id": "MIK-7325.RETRY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/meta_mcp/retry_input_tests.rs",
+        "tests/mik_7212_mrtr_component_acs.rs",
+        "src/protocol/mrtr.rs"
+      ],
+      "note": "Graded 2026-09-27 (#1333; design tier3 \u00a74). A tools/call carrying inputResponses without the requestState this gateway issued is refused -32602 before dispatch (RetryFields::solicited_input_responses, src/protocol/mrtr.rs) and the idempotency key is released; honest retries forward as before. Every InputRequiredResult the gateway sends carries a minted requestState, and MRTR client rule 2 requires the echo. Green: CI run 36278530662 at c34c83d33. Red first: CI run 36233671506. Mutants: #1479 job 108495632538, #1480 108495641546, #1481 108495662575, #1482 108495677852."
     },
     {
       "id": "MIK-7547.SLOTS.1",
