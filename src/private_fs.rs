@@ -130,6 +130,9 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
             // store unusable (fail closed), never readable by someone else.
             Ace::Denied { flags, mask, sid } => {
                 inherited |= flags & INHERITED != 0;
+                if sid != user {
+                    found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
+                }
                 user_denied |= sid == user
                     && flags & INHERIT_ONLY == 0
                     && mask & (READ_WRITE | GENERIC_ALL | GENERIC_READ_WRITE) != 0;
