@@ -665,7 +665,7 @@ async fn redeem_retry(
 ) -> Result<OutboundRetry> {
     use crate::protocol::continuation::ContinuationError;
 
-    let input_responses = caller.retry.input_responses.clone();
+    let input_responses = caller.retry.solicited_input_responses()?;
     let Some(token) = caller.retry.request_state.as_deref() else {
         return Ok(OutboundRetry {
             request_state: None,

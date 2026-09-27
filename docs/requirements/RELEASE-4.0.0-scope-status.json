@@ -850,11 +850,15 @@
     },
     {
       "id": "MIK-7325.RETRY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/meta_mcp/retry_input_tests.rs",
+        "tests/mik_7212_mrtr_component_acs.rs",
+        "src/protocol/mrtr.rs"
+      ],
+      "note": "Graded 2026-09-27 (#1333; design tier3 \u00a74). A tools/call carrying inputResponses without the requestState this gateway issued is refused -32602 before dispatch (RetryFields::solicited_input_responses, src/protocol/mrtr.rs) and the idempotency key is released; honest retries forward as before. Every InputRequiredResult the gateway sends carries a minted requestState, and MRTR client rule 2 requires the echo. Green: CI run 36278530662 at c34c83d33. Red first: CI run 36233671506. Mutants: #1479 job 108495632538, #1480 108495641546, #1481 108495662575, #1482 108495677852."
     },
     {
       "id": "MIK-7547.SLOTS.1",
@@ -931,11 +935,15 @@
     },
     {
       "id": "MIK-7570.OWASP.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "docs/OWASP_AGENTIC_AI_COMPLIANCE.md",
+        "scripts/dev/check-owasp-citations.py",
+        "scripts/dev/test_check_owasp_citations.py"
+      ],
+      "note": "Graded 2026-09-27 (#1443). The self-assessment was audited claim by claim against the request path: two claimed controls were not wired (tool-descriptor validator, grant-collision check; GitHub #1441), and kill switch, cost budget and seven more controls run only in meta dispatch (GitHub #1452). The document now cites only request-path controls, states default-on versus opt-in, scopes meta-only controls, adds the 4.0 multi-user controls and reads 3/10 COVERED, 7/10 PARTIAL. scripts/dev/check-owasp-citations.py fails CI when it cites a missing path or a validation command that matches no test. Green: CI run 36275066707 at fe47b9bda. Red first: CI run 36245602186 (stale src/security/ssrf.rs). Mutant: run 36270553668 (stale path re-added, check red). Two independent reviews of the rewrite and of each delta: SHIP."
     },
     {
       "id": "MIK-7570.PAGING.1",
@@ -969,6 +977,19 @@
       "blocked_on": "none",
       "evidence": [],
       "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+    },
+    {
+      "id": "MIK-7596.OWNER.1",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/router/backend_handlers.rs",
+        "src/gateway/router/direct_tasks_owner_tests.rs",
+        "docs/UPGRADING-4.0.md",
+        "docs/design/2026-09-26-f1-direct-route-tasks-refusal.md"
+      ],
+      "note": "Graded 2026-09-27 (F1, #1442, merged in #1453 as 46161901e). Red-first CI Tests run 36270945741 (throwaway #1450, tests only): the four refusal cells failed on 'reached the backend' (tasks/get, tasks/cancel, tasks/update, subscriptions/listen with taskIds); the forwarding control and the 403-order cell passed. Green CI run 36275265621 at 92dac2fb3: 40 jobs passed, 3 skipped. Mutants: tasks/get forward restored (#1454, run 36271263350) reddened caller_b_tasks_get_for_a_task_never_reaches_backend; tasks/cancel forward restored (#1455, run 36271265917) reddened caller_b_tasks_cancel_for_a_task_never_reaches_backend. Two independent reviews on design and final code. UPGRADING-4.0 item 67."
     }
   ],
   "decisions": [

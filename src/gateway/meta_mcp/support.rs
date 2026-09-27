@@ -581,5 +581,9 @@ mod tests;
 mod idempotency_caller_scope_tests;
 
 #[cfg(test)]
+#[path = "retry_input_tests.rs"]
+mod retry_input_tests;
+
+#[cfg(test)]
 #[path = "cache_principal_tests.rs"]
 mod cache_principal_tests;

@@ -24,6 +24,15 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Added
 
+- `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
+  launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
+  and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
+  backend under a runtime profile is skipped. (#526)
+- **The 3.5.1 upgrade rehearsal runs in CI.** A new `upgrade-rehearsal` job upgrades the
+  v3.5.1 release binary to the pull request's build, turns the modern protocol off, rolls back,
+  and fails when config, credentials, permissions, mounts or active callers do not survive.
+  `scripts/release/nfr_upgrade_1_rehearsal.sh` now exits 1 when any check fails.
+
 - **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
   reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
   by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket
@@ -48,6 +57,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   burst (about 8 minutes) runs nightly and on a PR labelled `mrtr7b-full-burst`. (MIK-7479.STDIO.1)
 
 ### Changed
+
+- A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+  refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
+  idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
 
 - **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
   identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
@@ -102,6 +115,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   file (a link loop, a directory the gateway cannot search) now fails the load instead of
   reading as a missing file. See `docs/DEPLOYMENT.md`. (#1286)
 
+- **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
+  It used to wait out the request timeout and report a timeout, with the child's stderr already
+  discarded. The error now names the exit status and points at the gateway log, where one record
+  carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
+  text redacted. The stderr never goes to MCP clients. (#526)
 - **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
   about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
   thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
@@ -157,6 +175,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   it ran `cargo check` only. (#524)
 
 ### Security
+
+- **The OWASP self-assessment matches the shipped controls.** It had claimed a
+  tool-descriptor validator and a grant-collision check that never run on a request, a removed
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
+  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
+  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  Withholding poisoned tool descriptors is tracked in #1441.
 
 - **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
   `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
@@ -1048,12 +1073,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   than handed to the client, bound to the caller and the original request, and
   redeemable once.
 
-  **Retry forwarding is not implemented in this release.** The minting,
-  sealing and single-use ledger exist and are tested; unsealing a continuation
-  and forwarding the retry to the backend does not. A well-formed retry is
-  refused with `-32602` and "retry forwarding is not available on this build"
-  rather than being run as a fresh call, because running it fresh would repeat
-  whatever the first attempt already did. MIK-7325 owns the forwarding path.
+  **A retry is forwarded through the sealed continuation.** The gateway opens
+  the `requestState` it minted, checks that it is bound to this caller and this
+  request, spends it once, and sends the backend's own state and the client's
+  answers upstream beside `arguments`. Answers without that `requestState` are
+  refused with `-32602` rather than run as a fresh call, because running it
+  fresh would repeat whatever the first attempt already did.
 
 - **`tools/call` no longer drops a retry's `inputResponses` and
   `requestState`.** Both were silently discarded, so an elicitation could never
