@@ -86,7 +86,7 @@ upgrading a running deployment.
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
-| 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always on identity-propagating backends, and on others while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
+| 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1731,8 +1731,9 @@ different shared list let a destructive task call run without confirmation.
 In 4.0:
 
 - On a backend with `identity_propagation`, every modern task-augmented call to a surfaced tool
-  is confirmed. The prompt says the tool could not be classified rather than calling it
-  destructive.
+  from a caller with a verified identity is confirmed. The prompt says the tool could not be
+  classified rather than calling it destructive. A caller with no verified identity runs on the
+  shared tool list, so it is classified from that list like any other backend.
 - On other backends, a surfaced tool missing from the shared tool list (an upstream that refuses
   an anonymous `tools/list`, or before warm-start finishes) is confirmed the same way, with a
   warning in the log naming the server and tool.
