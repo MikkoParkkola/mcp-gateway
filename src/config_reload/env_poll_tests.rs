@@ -358,7 +358,7 @@ fn u20_a_config_file_failure_primes_the_limiter_for_its_retries() {
     let counts = super::EnvReloadCounts::default();
     let mut limiter = WarnLimiter::default();
     let config = PathBuf::from("/cfg.yaml");
-    counts.settled(&mut limiter, Some("E"), &ReloadTrigger::ConfigFile, &config);
+    counts.settled(&mut limiter, Some("E"), &ReloadTrigger::ConfigFile);
     counts.report_failure(&mut limiter, &ReloadTrigger::Retry(config), "E");
     assert_eq!(
         counts.warns.load(std::sync::atomic::Ordering::SeqCst),
@@ -486,7 +486,6 @@ async fn u21_no_env_files_starts_no_read_and_still_retries() {
         &mut WarnLimiter::default(),
         Some("E"),
         &ReloadTrigger::ConfigFile,
-        Path::new("/cfg.yaml"),
     );
     assert!(matches!(
         poller.tick(Duration::from_secs(1)).await,
@@ -497,4 +496,56 @@ async fn u21_no_env_files_starts_no_read_and_still_retries() {
         0,
         "no env files, no read"
     );
+}
+
+/// U23: after a config-file failure, a retry under a still-differing env
+/// file with the same error does not warn again; a different error does.
+#[test]
+fn u23_an_env_file_retry_of_a_config_failure_does_not_warn_again() {
+    use super::super::ReloadTrigger;
+    let counts = super::EnvReloadCounts::default();
+    let mut limiter = WarnLimiter::default();
+    let env = ReloadTrigger::EnvFile(PathBuf::from("/a.env"));
+    counts.settled(&mut limiter, Some("E"), &ReloadTrigger::ConfigFile);
+    counts.report_failure(&mut limiter, &env, "E");
+    let warns = || counts.warns.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(warns(), 0, "the same error was already warned about");
+    counts.report_failure(&mut limiter, &env, "E2");
+    assert_eq!(warns(), 1, "a different error is new information");
+}
+
+/// A spawn that always fails, like a process out of threads.
+fn failing_spawn(_: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    Err(std::io::Error::other("no threads"))
+}
+
+/// U22 and L10: when a read cannot be started, a failed reload is still
+/// retried, and the failure is warned about once, not every tick.
+#[test]
+fn u22_l10_a_read_that_cannot_start_still_retries_and_warns_once() {
+    use super::super::ReloadTrigger;
+    use crate::test_log_capture::{count, records};
+    let reloads = std::sync::Arc::new(super::EnvReloadCounts::default());
+    reloads.settled(
+        &mut WarnLimiter::default(),
+        Some("E"),
+        &ReloadTrigger::ConfigFile,
+    );
+    let mut poller = super::EnvPoller::new(one_env_file(), reloads, PathBuf::from("/cfg.yaml"))
+        .with_spawn(failing_spawn);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            for _ in 0..3 {
+                assert!(matches!(
+                    poller.tick(Duration::from_secs(1)).await,
+                    Some(ReloadTrigger::Retry(_))
+                ));
+            }
+        });
+    });
+    assert_eq!(count(&logs, "WARN", "cannot start an env-file read"), 1);
 }

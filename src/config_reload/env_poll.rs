@@ -81,6 +81,18 @@ pub(super) fn report_reloaded(path: &Path, outcome: &super::ReloadOutcome) {
 /// What one poll reads: the first recorded path that differs.
 type PollRead = fn(&EnvOverlay, &[PathBuf]) -> Option<PathBuf>;
 
+/// How a poll starts its read off the async workers.
+type SpawnRead = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// A detached thread, not `spawn_blocking`: a read stalled on NFS or FUSE
+/// must not hold the runtime's shutdown, which waits for blocking tasks.
+fn spawn_detached(read: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("env-poll".into())
+        .spawn(read)
+        .map(drop)
+}
+
 pub(super) struct EnvPoller {
     env: Arc<LiveEnv>,
     reloads: Arc<EnvReloadCounts>,
@@ -91,7 +103,10 @@ pub(super) struct EnvPoller {
     pending: Option<tokio::sync::oneshot::Receiver<Option<PathBuf>>>,
     /// Whether the pending read has already been warned about.
     stalled: bool,
+    /// Whether a failure to start a read has already been warned about.
+    spawn_failed: bool,
     read: PollRead,
+    spawn: SpawnRead,
     /// Ticks started, for tests that count loop iterations.
     #[cfg(all(test, target_os = "linux"))]
     ticks: Arc<std::sync::atomic::AtomicUsize>,
@@ -105,7 +120,9 @@ impl EnvPoller {
             config,
             pending: None,
             stalled: false,
+            spawn_failed: false,
             read: env_poll,
+            spawn: spawn_detached,
             #[cfg(all(test, target_os = "linux"))]
             ticks: Arc::default(),
         }
@@ -115,6 +132,21 @@ impl EnvPoller {
     #[cfg(all(test, target_os = "linux"))]
     pub(super) fn ticks(&self) -> Arc<std::sync::atomic::AtomicUsize> {
         Arc::clone(&self.ticks)
+    }
+
+    /// Replace how a read is started, so a test can make it fail.
+    #[cfg(test)]
+    pub(super) fn with_spawn(mut self, spawn: SpawnRead) -> Self {
+        self.spawn = spawn;
+        self
+    }
+
+    /// A retry while the last reload has failed, else nothing.
+    fn retry_if_failed(&self) -> Option<ReloadTrigger> {
+        self.reloads
+            .failed
+            .load(Ordering::SeqCst)
+            .then(|| ReloadTrigger::Retry(self.config.clone()))
     }
 
     /// Replace the read, so a test can make it stall.
@@ -131,11 +163,7 @@ impl EnvPoller {
         self.ticks.fetch_add(1, Ordering::SeqCst);
         if self.pending.is_none() && self.env.env_paths().as_paths().is_empty() {
             // No env files, the default: nothing to read, so no thread.
-            return self
-                .reloads
-                .failed
-                .load(Ordering::SeqCst)
-                .then(|| ReloadTrigger::Retry(self.config.clone()));
+            return self.retry_if_failed();
         }
         let mut read = if let Some(read) = self.pending.take() {
             read
@@ -143,15 +171,23 @@ impl EnvPoller {
             let (tx, rx) = tokio::sync::oneshot::channel();
             let (applied, paths) = (self.env.get(), self.env.env_paths().as_paths().to_vec());
             let poll = self.read;
-            // A detached thread, not `spawn_blocking`: a read stalled on NFS
-            // or FUSE must not hold the runtime's shutdown, which waits for
-            // blocking tasks.
-            std::thread::Builder::new()
-                .name("env-poll".into())
-                .spawn(move || {
-                    let _ = tx.send(poll(&applied, &paths));
-                })
-                .ok()?;
+            let started = (self.spawn)(Box::new(move || {
+                let _ = tx.send(poll(&applied, &paths));
+            }));
+            if let Err(error) = started {
+                // No read this tick, but a failed reload is still retried.
+                // Warned once until a read starts again.
+                if !self.spawn_failed {
+                    tracing::warn!(
+                        %error,
+                        "Config watcher: cannot start an env-file read; env-file changes are \
+                         not detected until one starts"
+                    );
+                }
+                self.spawn_failed = true;
+                return self.retry_if_failed();
+            }
+            self.spawn_failed = false;
             rx
         };
         let Ok(result) = tokio::time::timeout(wait, &mut read).await else {
@@ -177,10 +213,7 @@ impl EnvPoller {
             // A failed reload may have carried a valid config edit that no
             // later change will trigger again (the env file was put back):
             // retry every tick until one succeeds.
-            None if self.reloads.failed.load(Ordering::SeqCst) => {
-                Some(ReloadTrigger::Retry(self.config.clone()))
-            }
-            None => None,
+            None => self.retry_if_failed(),
         }
     }
 }
@@ -219,14 +252,20 @@ pub(super) fn report_grants_busy(limiter: &parking_lot::Mutex<WarnLimiter>, path
 #[derive(Debug, Default)]
 pub(super) struct WarnLimiter {
     last: BTreeMap<PathBuf, (String, Instant)>,
+    /// A config-file failure its own arm already warned about. Its retries
+    /// run under the config path or, while an env file still differs, under
+    /// that file's path; either way the same error stays quiet.
+    primed: Option<(String, Instant)>,
 }
 
 impl WarnLimiter {
     /// Whether this failure of `path` should be logged at warn (else debug).
     pub(super) fn should_warn(&mut self, path: &Path, error: &str, now: Instant) -> bool {
-        let warn = self.last.get(path).is_none_or(|(last_error, at)| {
-            last_error != error || now.duration_since(*at) >= WARN_EVERY
-        });
+        let fresh = |(last_error, at): &(String, Instant)| {
+            last_error == error && now.duration_since(*at) < WARN_EVERY
+        };
+        let warn =
+            !self.last.get(path).is_some_and(fresh) && !self.primed.as_ref().is_some_and(fresh);
         if warn {
             self.last
                 .insert(path.to_path_buf(), (error.to_owned(), now));
@@ -255,20 +294,20 @@ impl EnvReloadCounts {
     /// Record how a reload ended. A success clears every path's warning
     /// state, so a failure that comes back is warned about at once.
     ///
-    /// A config-file failure is recorded under `config`, the key its retries
-    /// use, so the first retry does not repeat the warning it already logged.
+    /// A config-file failure primes the limiter with its error, so its first
+    /// retry, under the config path or a still-differing env file, does not
+    /// repeat the warning its own arm already logged.
     pub(super) fn settled(
         &self,
         limiter: &mut WarnLimiter,
         error: Option<&str>,
         trigger: &ReloadTrigger,
-        config: &Path,
     ) {
         self.failed.store(error.is_some(), Ordering::SeqCst);
         match (error, trigger) {
             (None, _) => *limiter = WarnLimiter::default(),
             (Some(error), ReloadTrigger::ConfigFile) => {
-                limiter.should_warn(config, error, Instant::now());
+                limiter.primed = Some((error.to_owned(), Instant::now()));
             }
             (Some(_), _) => {}
         }
