@@ -247,8 +247,10 @@ pub(super) fn report_grants_busy(limiter: &parking_lot::Mutex<WarnLimiter>, path
     }
 }
 
-/// Rate-limits the warning for an env-file reload that keeps failing: per
-/// path, a warning only when that path's error changed or `WARN_EVERY` passed.
+/// Rate-limits the warning for a reload the poll retries: a failure warns
+/// unless it repeats, within `WARN_EVERY`, the latest warning that concerns
+/// it, which is that path's own last warning or the latest config-file
+/// failure, whichever came later.
 #[derive(Debug, Default)]
 pub(super) struct WarnLimiter {
     last: BTreeMap<PathBuf, (String, Instant)>,

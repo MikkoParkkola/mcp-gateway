@@ -550,8 +550,8 @@ fn u22_l10_a_read_that_cannot_start_still_retries_and_warns_once() {
     assert_eq!(count(&logs, "WARN", "cannot start an env-file read"), 1);
 }
 
-/// U24: a prime answers only the next failure. After a config-file failure
-/// E1 and a retry failing with E2, E1 coming back is a change and warns.
+/// U24: after a config-file failure E1 and a retry failing with E2, E1
+/// coming back is a change from the latest warning, E2, and warns.
 #[test]
 fn u24_an_error_that_changes_back_after_a_prime_warns_again() {
     use super::super::ReloadTrigger;
