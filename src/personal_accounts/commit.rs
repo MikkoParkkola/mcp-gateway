@@ -71,7 +71,10 @@ pub(in crate::personal_accounts) mod next_scratch {
         QUEUE.with(|q| q.borrow_mut().push(suffix.to_owned()));
     }
     pub(super) fn take() -> Option<String> {
-        QUEUE.with(|q| (!q.borrow().is_empty()).then(|| q.borrow_mut().remove(0)))
+        QUEUE.with(|q| {
+            let mut queue = q.borrow_mut();
+            (!queue.is_empty()).then(|| queue.remove(0))
+        })
     }
 }
 
@@ -79,7 +82,8 @@ pub(in crate::personal_accounts) mod next_scratch {
 /// name (a crash, another writer) is someone else's file: skipped, never
 /// written or removed.
 fn create_scratch(dir: &Path, name: &str) -> Result<(fs::File, std::path::PathBuf), AccountError> {
-    const ATTEMPTS: usize = 4;
+    // Windows redraws (test plan W-T26); unix keeps its single attempt.
+    const ATTEMPTS: usize = if cfg!(windows) { 4 } else { 1 };
     for _ in 0..ATTEMPTS {
         let tmp = dir.join(scratch_name(name)?);
         match open_private(&tmp) {

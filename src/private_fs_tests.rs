@@ -139,6 +139,25 @@ fn wt8b_read_only_ace_refuses() {
     assert_eq!(got, Err(PrivacyRefusal::NoReadWrite), "WT-ASSERT W-T8b");
 }
 
+// W-T8c: an inherit-only grant applies to children only, so it does not
+// satisfy P3 on the object itself.
+#[test]
+fn wt8c_inherit_only_grant_refuses() {
+    let user = user_sid();
+    let sddl = format!("O:{user}D:P(A;IO;FA;;;{user})(A;;FR;;;{user})");
+    let got = judged_after_plant("W-T8c", &sddl, &sddl);
+    assert_eq!(got, Err(PrivacyRefusal::NoReadWrite), "WT-ASSERT W-T8c");
+}
+
+// W-T8d: a deny naming the user that takes away write fails P3.
+#[test]
+fn wt8d_user_deny_refuses() {
+    let user = user_sid();
+    let sddl = format!("O:{user}D:P(D;;FW;;;{user})(A;;FA;;;{user})");
+    let got = judged_after_plant("W-T8d", &sddl, &sddl);
+    assert_eq!(got, Err(PrivacyRefusal::NoReadWrite), "WT-ASSERT W-T8d");
+}
+
 // W-T11: only P4 fails (owner BUILTIN\Administrators).
 #[test]
 fn wt11_foreign_owner_refuses() {

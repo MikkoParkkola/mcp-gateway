@@ -22,10 +22,11 @@ use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJEC
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION, AddAccessAllowedAceEx,
     CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce, GetLengthSid,
-    GetSecurityDescriptorControl, GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor,
-    IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
-    SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetSecurityDescriptorControl, GetSecurityDescriptorLength, GetTokenInformation, InitializeAcl,
+    InitializeSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
+    SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+    TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -390,10 +391,20 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
     let owner = if owner.is_null() {
         None
     } else {
-        // SAFETY: contract 3/4 — an owner SID inside the live descriptor. Its
-        // length is not known before validation, so the header bound is the
-        // maximum SID size (8 + 4 * 255).
-        Some(unsafe { copy_sid(owner.cast::<u8>().cast_const(), SID_HEADER + 4 * 255) }?)
+        // The owner SID lies inside the self-relative descriptor, so the
+        // readable range ends where the descriptor does.
+        // SAFETY: contract 4 — `guard` keeps a valid descriptor alive.
+        let sd_len = unsafe { GetSecurityDescriptorLength(guard.0) } as usize;
+        let avail = (guard.0 as usize)
+            .checked_add(sd_len)
+            .and_then(|end| end.checked_sub(owner as usize))
+            .filter(|_| owner as usize >= guard.0 as usize)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "owner outside descriptor")
+            })?;
+        // SAFETY: contract 3/4 — `avail` bytes from `owner` lie inside the live
+        // descriptor.
+        Some(unsafe { copy_sid(owner.cast::<u8>().cast_const(), avail) }?)
     };
     let aces = if dacl.is_null() {
         None
