@@ -49,7 +49,7 @@ fn config(env: &std::path::Path, shape: Shape) -> crate::config::Config {
     };
     serde_yaml::from_str(&format!(
         r#"
-env_files: ["{env}"]
+env_files: ['{env}']
 auth:
   enabled: true
   public_paths: []
