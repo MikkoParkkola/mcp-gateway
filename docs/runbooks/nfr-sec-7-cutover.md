@@ -123,8 +123,9 @@ a binary swap plus a symlink flip.
 > git diff --name-only <staged-sha>..origin/docs/ranking-1-release-line -- src/ Cargo.toml Cargo.lock
 > ```
 >
-> is non-empty. Fetch first: a stale local ref prints nothing and would pass a build that is
-> already behind. Six of the seven commits above were documentation and changed nothing the
+> is non-empty. Fetch first, and treat a failed `git fetch` or `git diff` as "re-stage", not
+> as an empty answer: a stale local ref prints nothing and would pass a build that is already
+> behind. Six of the seven commits above were documentation and changed nothing the
 > binary carries; one was #707 and changed everything. If that command prints nothing, the
 > staged artifact is current for this criterion and the cutover proceeds.
 
@@ -350,8 +351,10 @@ against it.
 - `<provenance>` is `provenance: 5d25f104 is in v3.5.1` for option A, and
   `provenance unavailable: v4.0.0 is not a tag in this repository` for a pre-tag 4.0.0
   build. It is corroboration; it does not change the exit code.
-- For the checker, any 4xx satisfies the negative half and a `2xx`/`3xx` or a `5xx` fails
-  it; condition 3 still requires 403 from the two guards. No `--header`
+- For the origin and host probes the checker accepts any 4xx as the negative half, since
+  neither sets `refusal_status`; a `2xx`/`3xx` or a `5xx` fails it. A control that sets
+  `refusal_status` must refuse with exactly that status. Condition 3 still requires 403
+  from the two guards. No `--header`
   is needed — `tools/list` answers unauthenticated on this install.
 - `/health` is the check the drift checker cannot make: its positive half answers 200
   even if only a handful of the 32 backends came up.
