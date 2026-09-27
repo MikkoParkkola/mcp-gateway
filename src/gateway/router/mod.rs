@@ -290,10 +290,9 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
-        // Also when a proxy terminates TLS in front: the browser speaks HTTPS
-        // even though this listener does not, and without `Secure` a downgrade
-        // puts the operator's session on the wire.
-        tls_enabled: super::auth::cookies_are_secure(&state.live_config),
+        // The listener's own TLS (restart-only). An HTTPS `public_url` in front
+        // is read live per response (`auth::cookie_secure`).
+        tls_enabled: state.live_config.running().mtls.enabled,
     }
 }
 

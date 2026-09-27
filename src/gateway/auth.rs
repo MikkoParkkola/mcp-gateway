@@ -550,6 +550,20 @@ pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> boo
             .is_some_and(|u| u.starts_with("https://"))
 }
 
+/// Whether a session cookie set or cleared now must be `Secure`: the listener
+/// speaks TLS, or the live config names an HTTPS `public_url` (a reload may add
+/// or remove one, so it is read per response, never snapshotted).
+pub(crate) fn cookie_secure(state: &AuthState) -> bool {
+    state.tls_enabled || cookies_are_secure(&state.live_config)
+}
+
+/// Who a dashboard-session action is attributed to in the audit log: the same
+/// identity the middleware gives a valid session.
+#[cfg(feature = "webui")]
+pub(crate) fn dashboard_session_who() -> crate::security::audit::AuditWho {
+    crate::security::audit::AuditWho::from_request(Some(&dashboard_client()), None)
+}
+
 /// The answer to a dashboard session that has ended: its own message and a
 /// clearing cookie, rather than a "Missing credential" that sends the operator
 /// looking for a header a browser cannot send.
@@ -655,7 +669,8 @@ pub struct AuthState {
     pub key_server: Option<Arc<KeyServer>>,
     /// Single-use value that opens the dashboard from a printed link.
     pub dashboard_bootstrap: Arc<DashboardBootstrap>,
-    /// Whether this listener speaks TLS, so the session cookie can be `Secure`.
+    /// Whether this listener speaks TLS, so the session cookie is `Secure`.
+    /// A live HTTPS `public_url` also makes it `Secure` (`cookie_secure`).
     pub tls_enabled: bool,
     /// The live config, whose `control_plane.role_mapping` confers admin per
     /// request (E1-a).
@@ -715,10 +730,10 @@ pub async fn auth_middleware(
         let is_bootstrap = request.uri().path() == "/dashboard"
             && request.uri().query().and_then(bootstrap_param).is_some();
         if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
-            return session_ended_response(state.tls_enabled);
+            return session_ended_response(cookie_secure(&state));
         }
     }
-    let secure = state.tls_enabled;
+    let secure = cookie_secure(&state);
     let mut response = authenticate_request(state, request, next).await;
     // The browser drops the dead handle instead of presenting it forever,
     // unless this response already set a fresh one (a redeemed link): a

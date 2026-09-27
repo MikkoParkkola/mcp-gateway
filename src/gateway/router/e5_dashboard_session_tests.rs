@@ -315,6 +315,10 @@ async fn logout_writes_one_admin_action_record() {
         .filter(|e| e["event"] == "admin_action" && e.to_string().contains(LOGOUT))
         .count();
     assert_eq!(records, 1, "one logout record: {raw}");
+    assert!(
+        raw.contains("dashboard_session"),
+        "the record names the dashboard session that logged out: {raw}"
+    );
     assert!(!raw.contains(&h), "the handle never reaches the log");
 
     // The route is unauthenticated, so attempts that end nothing write nothing.
@@ -763,4 +767,25 @@ async fn the_link_names_the_running_listener_not_a_pending_reload() {
         link.starts_with(&format!("http://127.0.0.1:{port}/dashboard?bootstrap=")),
         "{link}"
     );
+}
+
+/// Removing an HTTPS `public_url` by reload stops marking new cookies
+/// `Secure`, so a link minted afterwards over plain HTTP still signs in.
+#[tokio::test]
+async fn cookie_security_follows_a_reloaded_public_url() {
+    let (state, _dir) = fixture().await;
+    reload(&state, |c| {
+        c.server.public_url = Some("https://gw.example".to_string());
+    });
+    let value = state.dashboard_bootstrap.peek().expect("startup value");
+    let out = send(&state, redeem(&value, None)).await;
+    assert!(out.set_cookie().contains("Secure"), "{}", out.set_cookie());
+
+    reload(&state, |c| c.server.public_url = None);
+    let link = mint(&state, Some(ADMIN_KEY), None).await;
+    assert_eq!(link.status, StatusCode::OK, "{}", link.body);
+    let value = bootstrap_value(link.json()["link"].as_str().unwrap_or_default());
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    assert!(!out.set_cookie().contains("Secure"), "{}", out.set_cookie());
 }

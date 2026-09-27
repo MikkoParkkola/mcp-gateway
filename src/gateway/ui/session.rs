@@ -18,10 +18,11 @@ use serde_json::json;
 
 use super::errors::{admin_auth_required, flat_error};
 use crate::gateway::auth::{
-    AuthenticatedClient, cookies_are_secure, session_cookie, session_cookie_value,
+    AuthenticatedClient, cookies_are_secure, dashboard_session_who, session_cookie,
+    session_cookie_value,
 };
 use crate::gateway::router::AppState;
-use crate::security::audit::{AuditEnvelope, AuditWho, CredentialKind};
+use crate::security::audit::{AuditEnvelope, CredentialKind};
 
 /// Path of the logout route.
 pub const LOGOUT_PATH: &str = "/dashboard/logout";
@@ -47,7 +48,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         let mut fields = serde_json::Map::new();
         fields.insert("route".into(), LOGOUT_PATH.into());
         fields.insert("method".into(), "POST".into());
-        let envelope = AuditEnvelope::ok(AuditWho::from_request(None, None));
+        let envelope = AuditEnvelope::ok(dashboard_session_who());
         if let Err(error) = log.append_admin_action("admin_ui", fields, &envelope) {
             tracing::warn!(%error, "Dashboard logout not recorded; the session was still revoked");
         }
