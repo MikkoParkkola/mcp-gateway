@@ -53,7 +53,10 @@ PUSH_STEP = (
     "        with:\n"
     "          name: image-digest-${{ matrix.arch }}\n"
     "          path: digests/${{ matrix.arch }}\n"
-    "          retention-days: 1\n"
+    "          # Read by the manifest job. Kept for the repository's 14-day retention\n"
+    "          # cap so a failed manifest job can be retried without rebuilding the\n"
+    "          # legs (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
     "          if-no-files-found: error\n"
 )
 
@@ -1285,6 +1288,53 @@ CASES += [
      SYFT_IF.replace("'refs/tags/v')\n", "'refs/tags/v') || github.event_name == 'workflow_dispatch'\n"), CAUGHT),
     ("sign-guard-split-across-a-disjunct", "ci.yml", SIGN_IF,
      SIGN_IF.replace("&& startsWith(github.ref, 'refs/tags/v')", "&& (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')"), CAUGHT),
+]
+
+
+# Job-handoff retention. Each anchor carries the comment line only its own
+# site has, so it names one upload and not the other two.
+RELEASE_KEEP = (
+    "          # workflow says what actually takes effect (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
+)
+CI_KEEP = (
+    "          path: digests/\n"
+    "          # Read by docker-manifest. Kept for the repository's 14-day retention\n"
+    "          # cap so a failed manifest job can be retried without rebuilding the\n"
+    "          # legs (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
+)
+DOCKER_KEEP = (
+    "          # Read by the manifest job. Kept for the repository's 14-day retention\n"
+    "          # cap so a failed manifest job can be retried without rebuilding the\n"
+    "          # legs (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
+)
+CASES += [
+    ("release-handoff-expires-in-a-day", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace(": 14", ": 1"), CAUGHT),
+    ("ci-digest-handoff-expires-in-a-day", "ci.yml", CI_KEEP,
+     CI_KEEP.replace(": 14", ": 1"), CAUGHT),
+    ("docker-digest-handoff-expires-in-a-day", "docker.yml", DOCKER_KEEP,
+     DOCKER_KEEP.replace(": 14", ": 1"), CAUGHT),
+    ("release-handoff-one-day-short", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace(": 14", ": 13"), CAUGHT),
+    # Past the repository setting the value is clamped, so the file would
+    # promise a re-run window that does not exist.
+    ("release-handoff-past-the-repository-cap", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace(": 14", ": 30"), CAUGHT),
+    # Unset inherits a repository setting nobody reviews.
+    ("release-handoff-retention-unset", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace("          retention-days: 14\n", ""), CAUGHT),
+    # Outside `with:` the action never sees the key.
+    ("ci-digest-retention-moved-out-of-with", "ci.yml",
+     "        with:\n          name: image-digests-${{ matrix.arch }}\n" + CI_KEEP,
+     "        retention-days: 14\n        with:\n          name: image-digests-${{ matrix.arch }}\n"
+     + CI_KEEP.replace("          retention-days: 14\n", ""), CAUGHT),
+    # The scan must keep finding every handoff: a download it can no longer
+    # match drops one silently, and the per-workflow guard is what says so.
+    ("ci-digest-download-renamed", "ci.yml",
+     "          pattern: image-digests-*\n", "          pattern: image-digest-leg-*\n", CAUGHT),
 ]
 
 
