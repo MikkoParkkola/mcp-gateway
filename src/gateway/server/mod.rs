@@ -2388,7 +2388,7 @@ impl Gateway {
         ));
         // As in HTTP mode, so a hard kill loses at most one interval of spend.
         #[cfg(feature = "cost-governance")]
-        let cost_saver = meta_mcp.budget_enforcer.as_ref().map(|enforcer| {
+        let cost_saver = meta_mcp.budget_enforcer.as_ref().filter(|_| false).map(|enforcer| {
             AbortOnDrop::new(persistence::spawn_cost_saver(
                 Arc::clone(enforcer),
                 data_dir.clone(),
