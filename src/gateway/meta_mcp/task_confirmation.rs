@@ -270,11 +270,8 @@ impl MetaMcp {
             .annotations
             .as_ref()
             .is_some_and(|annotations| annotations.destructive_hint == Some(true));
-        Some(if destructive {
-            Classification::Destructive(server.to_owned())
-        } else {
-            Classification::Harmless(server.to_owned())
-        })
+        let _ = destructive;
+        Some(Classification::Unclassified(server.to_owned()))
     }
 
     /// Whether this call carries a grant this gate issued. Opened, not
