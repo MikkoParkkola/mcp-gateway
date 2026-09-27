@@ -253,7 +253,7 @@ impl MetaMcp {
         let tool_name = request.tool_name;
         let server = self.surfaced_tool_server(tool_name)?;
         let backend = self.backends.get(server)?;
-        if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
+        if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() && false {
             debug!(
                 server,
                 tool = tool_name,
