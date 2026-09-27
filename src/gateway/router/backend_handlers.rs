@@ -461,6 +461,23 @@ async fn dispatch_in_scope(
     response
 }
 
+/// Whether a direct-route request reaches task state.
+///
+/// Every `tasks/*` method, in any letter case, because a backend that matches
+/// names loosely acts on a case variant as the real method; plus
+/// `subscriptions/listen` naming `taskIds`. KEEP IN STEP with
+/// `reaches_tasks_extension` in `router/handlers.rs`: a task-reaching method
+/// added there and not here is forwarded here without an owner check.
+/// The one intended difference: `tools/call` carrying `task` still forwards;
+/// task creation on this route is separate work (LIFECYCLE.1).
+fn is_task_method(method: &str, params: Option<&Value>) -> bool {
+    method
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("tasks/"))
+        || (method.eq_ignore_ascii_case("subscriptions/listen")
+            && params.is_some_and(|p| p.get("taskIds").is_some()))
+}
+
 /// Backend handler (POST /mcp/{name})
 pub(super) async fn backend_handler(
     State(state): State<Arc<AppState>>,
@@ -489,7 +506,7 @@ pub(super) async fn backend_handler(
     let mut call = None;
     let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
     match call {
-        Some(call) => direct_audit::record(&state, &name, call, answer),
+        Some(call) => direct_audit::record(&state, &name, call, answer).await,
         None => answer,
     }
 }
@@ -695,6 +712,20 @@ async fn backend_handler_inner(
     // For requests, id is guaranteed to exist
     let id = id.expect("id should exist for non-notification requests");
 
+    // F1 (#1442): task access is never forwarded. Callers sharing this
+    // backend's static credential are one principal to it, so a forwarded
+    // `tasks/get` or `tasks/cancel` would read or cancel another caller's
+    // task. The owner-checked task arms serve `/mcp` only. Refused before
+    // propagation, attestation and idempotency, so a refusal mints nothing.
+    if is_task_method(&method, params.as_ref()) {
+        return build_http_error_response(
+            Some(id),
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            format!("{method} is not served on /mcp/{{name}}; use /mcp"),
+            StatusCode::OK,
+        );
+    }
+
     // MIK-7272.SUB.4 §P3: an unusable retry field is refused with -32602 here,
     // the same answer route 1 gives at `router/handlers.rs:1223`. Refused after
     // the notification branch above, which has no id to answer with. Silently
@@ -755,6 +786,8 @@ async fn backend_handler_inner(
     // default session bucket — passthrough forwards the caller's own credential
     // inline and is gated to trusted internals).
     let mut identity_key: Option<String> = None;
+    // A11-e′: the managed lease the headers were released under, for the 401 site.
+    let mut managed = None;
     let mut typed = None;
     let propagated_headers: Vec<(String, String)> = if isolation_guarded {
         // Fetched once so both the passthrough-vs-minting branch below and the
@@ -793,12 +826,13 @@ async fn backend_handler_inner(
         } else {
             match state
                 .meta_mcp
-                .resolve_propagation_credential(&name, verified_identity.as_ref())
+                .resolve_propagation_credential_held(&name, verified_identity.as_ref())
                 .await
             {
-                Ok((headers, binding)) => {
+                Ok((headers, binding, held)) => {
                     // Bind the upstream session bucket to this caller (MIK-6784).
                     identity_key = binding;
+                    managed = held;
                     Ok(headers)
                 }
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
@@ -842,16 +876,17 @@ async fn backend_handler_inner(
                         );
                     }
                     if let Err(audit_err) = audit_identity_propagation(
-                        state.transparency_log.as_deref(),
+                        state.transparency_log.as_ref(),
                         "idp_mint",
                         &subject,
                         &name,
                         audience,
                         None,
-                    ) {
-                        // CWE-209: the audit error can carry the transparency-log
-                        // filesystem path / IO error. Keep it in the server log
-                        // only; return a generic client-facing message.
+                    )
+                    .await
+                    {
+                        // CWE-209: the audit error can name a filesystem path; it
+                        // stays in the server log, the client gets a generic message.
                         warn!(
                             backend = %name,
                             error = %audit_err,
@@ -868,19 +903,18 @@ async fn backend_handler_inner(
                 headers
             }
             Err(e) => {
-                // The request is already being refused on identity-propagation
-                // grounds; an audit-write failure here does not change that
-                // outcome (unlike the mint path above, which is fail-closed on
-                // the audit write itself) — but it must not be silently
-                // dropped, so it is logged.
+                // Refused either way: unlike the mint path above, a failed audit
+                // write here is logged rather than failing the call closed.
                 if let Err(audit_err) = audit_identity_propagation(
-                    state.transparency_log.as_deref(),
+                    state.transparency_log.as_ref(),
                     "idp_refuse",
                     &subject,
                     &name,
                     audience,
                     Some(&e),
-                ) {
+                )
+                .await
+                {
                     warn!(
                         backend = %name,
                         error = %audit_err,
@@ -919,6 +953,15 @@ async fn backend_handler_inner(
     // same shape as the isolation guard above. A broken stream forces re-issue
     // with a NEW request id, so without this the duplicate side effect lands
     // twice on the one route that never reaches `invoke_tool_traced`.
+    // One answer for a dispatched failure, used by whichever arm dispatches.
+    let failed = DirectFailure {
+        state: &state,
+        name: &name,
+        id: id.clone(),
+        client: client.as_ref(),
+        identity: verified_identity.as_ref(),
+        managed: managed.as_ref(),
+    };
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1007,19 +1050,9 @@ async fn backend_handler_inner(
                         settle_direct_idempotency(idem_reservation.as_mut(), &response);
                         build_http_response(&response, StatusCode::OK)
                     }
-                    Err(e) => {
-                        record_client_failure(&state, client.as_ref());
-                        error!(backend = %name, error = %e, "Backend request failed");
-                        let response =
-                            JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        // Dispatched failures settle as terminal: a transport
-                        // failure after the backend acted is indistinguishable
-                        // from one before it (ADR-012 consequence 1). A failure
-                        // the gateway raised before dispatch is the exception —
-                        // see `settle_direct_failure`.
-                        settle_direct_failure(idem_reservation.as_mut(), &e, &response);
-                        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
-                    }
+                    // Settled as terminal unless raised before dispatch
+                    // (ADR-012 consequence 1; see `settle_direct_failure`).
+                    Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
                 };
             }
             Err(rejection) => return rejection,
@@ -1080,16 +1113,9 @@ async fn backend_handler_inner(
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             build_http_response(&response, StatusCode::OK)
         }
-        Err(e) => {
-            record_client_failure(&state, client.as_ref());
-            error!(backend = %name, error = %e, "Backend request failed");
-            let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-            // Without this the reservation is dropped unsettled, which releases
-            // the key and lets a retry re-execute a side effect the backend may
-            // already have performed (ADR-012 consequence 1).
-            settle_direct_failure(idem_reservation.as_mut(), &e, &response);
-            build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        // Settled, never dropped: an unsettled reservation releases the key and
+        // lets a retry re-execute a side effect (ADR-012 consequence 1).
+        Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
     }
 }
 
@@ -1363,7 +1389,9 @@ pub(super) async fn costs_handler(
 }
 
 mod direct_audit;
+mod direct_failure;
 mod direct_list;
+use direct_failure::DirectFailure;
 
 #[cfg(test)]
 mod tests;
@@ -1372,85 +1400,4 @@ mod tests;
 mod idempotency_settlement_tests;
 
 #[cfg(test)]
-mod direct_route_scope_tests {
-    use std::sync::Mutex;
-
-    use async_trait::async_trait;
-
-    use super::*;
-    use crate::backend::Backend;
-    use crate::config::BackendConfig;
-    use crate::protocol::RequestId;
-    use crate::transport::Transport;
-
-    /// Records the params as the backend would see them on the wire.
-    struct Recorder(Mutex<Option<Value>>);
-
-    #[async_trait]
-    impl Transport for Recorder {
-        async fn request(
-            &self,
-            _method: &str,
-            params: Option<Value>,
-        ) -> crate::Result<JsonRpcResponse> {
-            *self.0.lock().unwrap() = params;
-            Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})))
-        }
-
-        async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
-            Ok(())
-        }
-
-        fn is_connected(&self) -> bool {
-            true
-        }
-
-        async fn close(&self) -> crate::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn recording_backend() -> (Arc<Backend>, Arc<Recorder>) {
-        let backend = Arc::new(Backend::new(
-            "direct",
-            BackendConfig::default(),
-            &crate::config::FailsafeConfig::default(),
-            std::time::Duration::from_secs(5),
-        ));
-        let recorder = Arc::new(Recorder(Mutex::new(None)));
-        backend.set_transport_for_test(recorder.clone() as Arc<dyn Transport>);
-        (backend, recorder)
-    }
-
-    /// `POST /mcp/{name}` is a client request like any other, so the token the
-    /// backend sees must be the gateway's own. The mint no-ops outside a
-    /// request scope, so dropping the wrapper here would be silent -- this row
-    /// is what makes it loud.
-    #[tokio::test]
-    async fn a_call_on_this_route_sends_the_backend_a_minted_token() {
-        let (backend, recorder) = recording_backend();
-
-        dispatch_in_scope(
-            &backend,
-            "tools/call",
-            &RequestId::Number(1),
-            Some(json!({ "name": "t", "_meta": { "progressToken": 7 } })),
-            &[],
-            None,
-        )
-        .await
-        .expect("the recording transport answers");
-
-        let sent = recorder.0.lock().unwrap().clone().expect("params recorded");
-        let token = &sent["_meta"]["progressToken"];
-        assert_ne!(
-            token,
-            &json!(7),
-            "the caller's own token reached the backend"
-        );
-        assert!(
-            token.as_str().is_some_and(|t| t.starts_with("gw-")),
-            "backend was sent {token:?}"
-        );
-    }
-}
+mod direct_route_scope_tests;

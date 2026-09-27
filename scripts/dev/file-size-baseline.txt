@@ -29,7 +29,6 @@
 1603 src/protocol_revision_telemetry.rs
 1573 src/gateway/ui/control_plane.rs
 1497 src/gateway/proxy.rs
-1483 src/security/transparency_log.rs
 1464 src/capability/definition/tests.rs
 1460 src/idempotency.rs
 1450 src/gateway/router/backend_handlers.rs
@@ -59,7 +58,6 @@
 1086 src/gateway/server/warmstart.rs
 1086 src/oauth/client/tests.rs
 1040 src/main_tests.rs
-1024 src/control_plane/export.rs
 1020 tests/nfr_obs_3_era_observability.rs
 1018 tests/mik_7272_sub4_adr012_acs.rs
 1006 src/protocol/messages.rs

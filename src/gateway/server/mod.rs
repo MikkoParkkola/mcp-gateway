@@ -25,6 +25,7 @@ mod signing_allocation_tests;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_nonce;
+mod stdio_writer;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 mod tools_changed;
@@ -41,7 +42,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
@@ -1049,13 +1050,7 @@ impl Gateway {
         // into this chain without going through `MetaMcp` (MIK-6740).
         let mut transparency_log: Option<Arc<crate::security::TransparencyLogger>> = None;
         if self.config.security.transparency_log.enabled {
-            use crate::security::transparency_log::TransparencyLogConfig;
-            let tl_cfg = Arc::new(TransparencyLogConfig {
-                enabled: self.config.security.transparency_log.enabled,
-                path: self.config.security.transparency_log.path.clone(),
-                key_id: self.config.security.transparency_log.key_id.clone(),
-                shared_secret: self.config.security.transparency_log.shared_secret.clone(),
-            });
+            let tl_cfg = Arc::new((&self.config.security.transparency_log).into());
             // Auth on: the log is required (D1-a) and a failed append
             // withholds the call's result (D1-f).
             let auth_on = self.config.auth.enabled;
@@ -1435,12 +1430,10 @@ impl Gateway {
                     }
                 }
 
+                // Readiness waits on this (MIK-7268); refusals are reported below.
+                cap_backend_for_load.mark_initial_scan_complete();
                 if total_caps > 0 {
-                    info!(
-                        capabilities = total_caps,
-                        name = %capability_name,
-                        "Capability backend ready"
-                    );
+                    info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
                 }
 
                 if refused.is_empty() {
@@ -2251,8 +2244,30 @@ impl Gateway {
     /// # Panics
     ///
     /// Panics if RSA key pair generation fails on all retry attempts.
-    #[allow(clippy::too_many_lines)]
     pub async fn run_stdio(self) -> Result<()> {
+        let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
+        self.run_stdio_on(
+            stdin,
+            stdout,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::run_stdio`] over any pipe pair. Test builds may pass a gate the
+    /// `initialize` response waits on before it is queued (MIK-7387.STDIO.2).
+    #[allow(clippy::too_many_lines)]
+    async fn run_stdio_on<R, W>(
+        self,
+        input: R,
+        output: W,
+        #[cfg(test)] initialize_gate: Option<Arc<tokio::sync::Semaphore>>,
+    ) -> Result<()>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         info!(
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
@@ -2354,6 +2369,7 @@ impl Gateway {
                     refused.join("; ")
                 )));
             }
+            cap_backend.mark_initial_scan_complete();
             meta_mcp.set_capabilities(cap_backend);
         }
 
@@ -2390,7 +2406,7 @@ impl Gateway {
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
         // ── Read → dispatch → write loop ────────────────────────────────────
-        let mut reader = BufReader::new(tokio::io::stdin()).lines();
+        let mut reader = BufReader::new(input).lines();
 
         // One writer, owning stdout (design §1). Every producer — responses,
         // notifications, outbound bridged requests — queues here and never
@@ -2401,7 +2417,7 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(Self::run_stdout_writer(tokio::io::stdout(), queue));
+        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2566,6 +2582,8 @@ impl Gateway {
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
                 let channel = Arc::clone(&channel);
                 let writer = writer.clone();
+                #[cfg(test)]
+                let gate = initialize_gate.clone().filter(|_| !spawned);
                 async move {
                     let response = Self::dispatch_streaming_notifications(
                         Box::pin(Self::dispatch_single_with_sink(
@@ -2584,6 +2602,10 @@ impl Gateway {
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
+                    #[cfg(test)]
+                    if let Some(gate) = gate {
+                        drop(gate.acquire().await);
+                    }
                     if let Some(response) = response {
                         send_frame(&writer, response).await;
                     }
@@ -2701,55 +2723,6 @@ impl Gateway {
                 "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
             );
         }
-    }
-
-    /// Drain `queue` onto `sink`, closing the queue once the sink is gone.
-    ///
-    /// A dead sink ends the writer: staying open would let the dispatch tasks
-    /// keep executing requests whose answers are already being thrown away.
-    /// Closing the queue makes every producer's `send` fail and `is_closed`
-    /// true, which is the signal the read loop stops admitting on.
-    async fn run_stdout_writer<W: tokio::io::AsyncWrite + Unpin>(
-        mut sink: W,
-        mut queue: tokio::sync::mpsc::Receiver<serde_json::Value>,
-    ) {
-        while let Some(frame) = queue.recv().await {
-            if !Self::write_response(&mut sink, &frame).await {
-                queue.close();
-                break;
-            }
-        }
-    }
-
-    /// Write a JSON-RPC response to stdout followed by a newline.
-    /// `false` when the frame did not reach `stdout`, which the stdio writer
-    /// reads as "the pipe is gone" rather than "this one frame was lost".
-    async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
-        stdout: &mut W,
-        value: &serde_json::Value,
-    ) -> bool {
-        let serialized = match serde_json::to_string(value) {
-            Ok(s) => s,
-            Err(e) => {
-                // Serialisation is this frame's problem, not the pipe's.
-                warn!(error = %e, "Failed to serialize response");
-                return true;
-            }
-        };
-        debug!(response_len = serialized.len(), "stdio: writing response");
-        if let Err(e) = stdout.write_all(serialized.as_bytes()).await {
-            warn!(error = %e, "Failed to write to stdout");
-            return false;
-        }
-        if let Err(e) = stdout.write_all(b"\n").await {
-            warn!(error = %e, "Failed to write newline to stdout");
-            return false;
-        }
-        if let Err(e) = stdout.flush().await {
-            warn!(error = %e, "Failed to flush stdout");
-            return false;
-        }
-        true
     }
 
     /// Run `fut` inside a notification scope, writing each notification the
@@ -2996,7 +2969,7 @@ impl Gateway {
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
             },
-        );
+        ).await;
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }
@@ -3868,7 +3841,7 @@ mod tests {
             enabled: true,
             path: log_path.to_string_lossy().into_owned(),
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("open transparency log");
         logger

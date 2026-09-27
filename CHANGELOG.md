@@ -24,6 +24,15 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Added
 
+- `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
+  launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
+  and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
+  backend under a runtime profile is skipped. (#526)
+- **The 3.5.1 upgrade rehearsal runs in CI.** A new `upgrade-rehearsal` job upgrades the
+  v3.5.1 release binary to the pull request's build, turns the modern protocol off, rolls back,
+  and fails when config, credentials, permissions, mounts or active callers do not survive.
+  `scripts/release/nfr_upgrade_1_rehearsal.sh` now exits 1 when any check fails.
+
 - **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
   reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
   by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket
@@ -49,6 +58,27 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+  refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
+  idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
+
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
+- **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
+  the startup capability scan has read every directory, so a pod or container is no longer
+  sent traffic while its catalogue is empty; the admin `/health` view adds
+  `capability_backend.loaded`. The compose healthcheck probes `/readyz`, and the example
+  `Gateway` runtime profile probes `/readyz` and `/livez`. UPGRADING-4.0 §65.
+
+- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
+  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
+  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
+  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
+  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
+  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
+  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
 - **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
   `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
   `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
@@ -73,9 +103,29 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   template, and the outcome; bodies and queries are never logged. With auth on
   they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
   item 51.
+- **A backend that refuses a managed personal account's token (HTTP 401) forces one refresh of
+  that token**, then answers with the reconnect offer when the provider has revoked the grant,
+  or with `recovery.error_code` `UPSTREAM_AUTH_REJECTED` (`retry: true`) or
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` (`retry: false`). At most one forced refresh per token
+  revision, recorded durably. A 401 or 403 from an HTTP backend is no longer retried. A downgrade
+  to an earlier 4.0 beta after a forced refresh is unsupported. See UPGRADING-4.0 item 61.
+  (A11, MIK-7570.RECONNECT.1)
 
 ### Fixed
 
+- **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
+  It used to wait out the request timeout and report a timeout, with the child's stderr already
+  discarded. The error now names the exit status and points at the gateway log, where one record
+  carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
+  text redacted. The stderr never goes to MCP clients. (#526)
+- **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
+  about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
+  thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
+  Release builds were not affected.
+- **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
+  durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
+  non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
+  handed a `client_id` that another writer then replaced on disk. The lock is now `LockFileEx`.
 - **An error result is never replayed from a cache.** The response cache and the capability
   cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
   refusals, and served them to every call with the same key for the whole TTL (60 s by default).
@@ -93,6 +143,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   the backend for all tenants. It is now `Rate limit exceeded for backend 'x'` (code
   still -32000, recovery hint `RATE_LIMITED`), is not sampled by the error budgets, and leaves
   `mcp_backend_circuit_state` alone. See `docs/UPGRADING-4.0.md` item 53 (F23).
+- **Config reload follows a symlinked config across directories.** A link retargeted to a
+  file in a directory the gateway was not watching reloaded once and then missed every later
+  write, serving the old config silently; a directory the link left stayed watched forever. The
+  watcher now follows the whole link chain on every change, including a Kubernetes ConfigMap's
+  `..data` swap, a Capistrano-style `current` directory link retargeted by rename or by
+  `rm` and `ln -s`, and reads the new release on reload. Limits are listed in DEPLOYMENT
+  under "What triggers a config reload". (#453)
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
@@ -116,6 +173,19 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   it ran `cargo check` only. (#524)
 
 ### Security
+
+- **The OWASP self-assessment matches the shipped controls.** It had claimed a
+  tool-descriptor validator and a grant-collision check that never run on a request, a removed
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
+  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
+  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  Withholding poisoned tool descriptors is tracked in #1441.
+
+- **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
+  `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
+  so callers sharing a backend could read or cancel each other's tasks. These methods now
+  answer JSON-RPC -32601 and never reach the backend; `POST /mcp` still serves tasks.
+  See UPGRADING-4.0 item 67 (#1442).
 
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
@@ -1001,12 +1071,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   than handed to the client, bound to the caller and the original request, and
   redeemable once.
 
-  **Retry forwarding is not implemented in this release.** The minting,
-  sealing and single-use ledger exist and are tested; unsealing a continuation
-  and forwarding the retry to the backend does not. A well-formed retry is
-  refused with `-32602` and "retry forwarding is not available on this build"
-  rather than being run as a fresh call, because running it fresh would repeat
-  whatever the first attempt already did. MIK-7325 owns the forwarding path.
+  **A retry is forwarded through the sealed continuation.** The gateway opens
+  the `requestState` it minted, checks that it is bound to this caller and this
+  request, spends it once, and sends the backend's own state and the client's
+  answers upstream beside `arguments`. Answers without that `requestState` are
+  refused with `-32602` rather than run as a fresh call, because running it
+  fresh would repeat whatever the first attempt already did.
 
 - **`tools/call` no longer drops a retry's `inputResponses` and
   `requestState`.** Both were silently discarded, so an elicitation could never

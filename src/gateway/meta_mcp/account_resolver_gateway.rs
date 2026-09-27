@@ -138,7 +138,7 @@ fn leaked_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
             enabled: true,
             path,
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("logger opens"),
     )
@@ -274,6 +274,47 @@ pub(in super::super) async fn execute(
     // what make a crossed cache entry observable.
     let args = json!({ "tool": format!("{server}:read"), "arguments": { "folder": "inbox" } });
     meta.code_mode_execute(&args, Some("fixture-session"), &context)
+        .await
+}
+
+/// A client that accepts every question it is asked (A11 bridged cells).
+struct AcceptingChannel;
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> std::result::Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        Ok(json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"ok": true}}}))
+    }
+}
+
+/// [`execute`] for a legacy client that declared elicitation and answers
+/// every question, through `invoke_tool`, so a backend's `input_required`
+/// result is bridged and the call is re-dispatched with the answers (A11).
+pub(in super::super) async fn execute_bridged(
+    meta: &MetaMcp,
+    server: &str,
+    caller_identity: Option<&VerifiedIdentity>,
+) -> crate::Result<Value> {
+    let mut context = caller(caller_identity);
+    context.channel = &AcceptingChannel;
+    context.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({
+            "_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+            }
+        })),
+        None,
+    )
+    .declared_capabilities();
+    let args = json!({"server": server, "tool": "read", "arguments": {"folder": "inbox"}});
+    meta.invoke_tool(&args, Some("fixture-session"), &context)
         .await
 }
 

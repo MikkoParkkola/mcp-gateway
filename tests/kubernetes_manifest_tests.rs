@@ -512,10 +512,49 @@ fn shipped_probes_never_read_backend_health() {
 /// hosts, so `localhost` drew a 403 and the image reported itself unhealthy.
 #[test]
 fn container_healthchecks_dial_loopback_by_address() {
-    for (name, text) in [("Dockerfile", DOCKERFILE), ("compose", COMPOSE)] {
-        assert!(text.contains("http://127.0.0.1:39400/livez"), "{name}");
+    // Compose routes on readiness (`depends_on: service_healthy`) and never
+    // restarts on unhealthy; the image healthcheck stays on liveness because
+    // Swarm replaces an unhealthy task (MIK-7268).
+    for (name, text, path) in [
+        ("Dockerfile", DOCKERFILE, "livez"),
+        ("compose", COMPOSE, "readyz"),
+    ] {
+        assert!(
+            text.contains(&format!("http://127.0.0.1:39400/{path}")),
+            "{name}"
+        );
         assert!(!text.contains("localhost:39400/health"), "{name}");
     }
+}
+
+/// MIK-7268.READY.3: the runtime profile the shipped `Gateway` references
+/// probes readiness on `/readyz`, which waits for the capability catalogue,
+/// and liveness on `/livez`, which never restarts a pod for a slow scan.
+#[test]
+fn example_gateway_runtime_profile_probes_readiness() {
+    let docs = docs(include_str!(
+        "../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+    ));
+    let gateway = docs
+        .iter()
+        .find(|d| str_at(d, &["kind"]) == "Gateway")
+        .expect("example Gateway");
+    let profile_name = str_at(gateway, &["spec", "runtimeProfileRef"]);
+    let profile = docs
+        .iter()
+        .find(|d| {
+            str_at(d, &["kind"]) == "RuntimeProfile"
+                && str_at(d, &["metadata", "name"]) == profile_name
+        })
+        .expect("the Gateway's RuntimeProfile");
+    assert_eq!(
+        str_at(profile, &["spec", "health", "readinessPath"]),
+        "/readyz"
+    );
+    assert_eq!(
+        str_at(profile, &["spec", "health", "livenessPath"]),
+        "/livez"
+    );
 }
 
 /// The container `args` the enterprise-alpha Deployment hands the image.
