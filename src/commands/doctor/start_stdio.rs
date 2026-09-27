@@ -84,7 +84,7 @@ pub(super) async fn start_stdio_backend(
     let log = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
     // The backend's own timeout bounds each request inside `start`; the cap
     // bounds the whole start, spawn and handshake included.
-    let started = tokio::time::timeout(START_CAP, transport.start().with_subscriber(log)).await;
+    let started = tokio::time::timeout(backend.timeout, transport.start().with_subscriber(log)).await;
     let _ = transport.close().await;
     Some(match started {
         Ok(Ok(())) => {
