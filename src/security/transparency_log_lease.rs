@@ -65,7 +65,7 @@ pub(super) fn acquire_with(
     let start = now();
     let mut warned = false;
     loop {
-        if let Some(lease) = ExclusiveFileLock::try_lease(&lock_path)? {
+        if let Ok(Some(lease)) = ExclusiveFileLock::try_lease(&lock_path) {
             return Ok(lease);
         }
         if now().duration_since(start) >= wait {
