@@ -23,13 +23,17 @@ chart sets `HOME=/var/lib/mcp-gateway`, so there it is `/var/lib/mcp-gateway/.mc
 | Accounts keys | The keys that seal both of the above | `accounts.keys` (`env:` or `file:` references) and `accounts.current_key_id` | Every sealed grant is unreadable, with no way back |
 | OAuth backend tokens | One token file per backend and issuer | `~/.mcp-gateway/oauth/` under the home directory, even when `MCP_GATEWAY_CONFIG_DIR` is set | Each OAuth backend authorizes again |
 | Audit (transparency) log | The hash-chained tool-call and `admin_action` records | `security.transparency_log.path` (`~/.mcp-gateway/transparency/transparency.jsonl`; `/var/lib/mcp-gateway/audit/transparency.jsonl` in the chart) | Audit history is gone. The log is required with auth on |
+| SIEM export cursors | How far each log has been exported, only when SIEM export is on | Next to each exported log, named `<log stem>.export-cursor.json` (`transparency.export-cursor.json`, and `audit.export-cursor.json` in `control_plane.store_dir`) | The whole log is exported again |
 | Governance store | Control-plane policy, revocations and its own `audit.jsonl` | `control_plane.store_dir` (default: next to the config file, else `~/.mcp-gateway/control-plane`) | Policy edits and revocations are lost |
 | Identity grants | Local identity-grant rows | `security.identity_grants.path` (`~/.mcp-gateway/identity-grants.yaml`) | Every local grant is lost |
 | Task store | Tasks of the 2026-07-28 tasks extension, kept for `tasks.default_ttl_ms` (24 hours) | `tasks.store_dir` (`~/.mcp-gateway/tasks`) | Open task handles stop resolving |
 | Cost spend | Today's cost-governance spend, saved every 5 minutes | `<data dir>/costs.json` | Budgets restart at zero for the day |
-| Firewall audit | Firewall decisions as NDJSON, when configured | `firewall.audit_log` (off by default) | That history is gone |
+| Search ranking usage | Tool usage counts that rank search results | `<data dir>/usage.json` | Search ranking starts from no usage history |
+| Tool transitions | Which tool tends to follow which, used to predict the next call | `<data dir>/transitions.json` | Predictions start from no history |
+| Protocol-revision telemetry | The restart-safe window counting which MCP revisions clients speak | `<data dir>/protocol-revision-telemetry/window.json` | The measurement window starts again empty |
+| Firewall audit | Firewall decisions as NDJSON, when configured | `security.firewall.audit_log` (off by default) | That history is gone |
 | mTLS material | Server certificate and key, CA, CRL | `mtls.server_cert`, `server_key`, `ca_cert`, `crl_path` | Clients cannot connect until certificates are reissued |
-| Configuration | `gateway.yaml`, env files, capability files with their `sha256:` pins | where you keep them | The gateway does not start as it was |
+| Configuration | `gateway.yaml`, env files, capability files with their `sha256:` pins, and every file a `file:` secret reference names (for example `auth.bearer_token`, `auth.api_keys[].key_sha256`, `key_server.admin_token`, `accounts.keys`, `server.metrics_token`) | where you keep them, each `file:` target at its original path and mode | The gateway does not start as it was: an unresolved secret reference fails the load (UPGRADING-4.0 item 40), except `server.metrics_token`, which logs a warning and leaves `/metrics` answering 401 |
 
 Also in the data directory: `version.stamp` (the last version that ran). Losing it only means
 the one-time upgrade notice prints again. Package caches under `pkg-cache/` are downloaded again
@@ -59,7 +63,9 @@ persistent storage, so point those settings at a volume you mount yourself.
 
 ## Taking a backup
 
-1. **Stop the gateway, or take an atomic snapshot of the volume.** The accounts store and its
+1. **Stop the gateway, or take one atomic snapshot that covers both `accounts.store_dir` and
+   `accounts.authority_dir`.** If the two are on different volumes and the volumes cannot be
+   snapshotted together at one instant, stop the gateway. The accounts store and its
    authority are checked against each other: every record is sealed together with the
    authority's `store_epoch` and the versions it lists for that record. A copy of the store
    from one moment and the authority from another fails as "personal account credential
@@ -124,7 +130,12 @@ id is missing from `accounts.keys` fails as "personal account credential authent
 and if the authority is the one affected, the whole store fails. A key you have to retire, for
 example because it leaked, can be removed safely only when every account has been written since
 the new key became current, and 4.0.0 has no command that lists which records still name an old
-key id. If that cannot be shown: stop the gateway, empty `accounts.store_dir` and
+key id. The hosted connection journeys in `accounts.authority_dir/journeys.json` need the same
+care: that file is re-sealed only when the journey table changes, and while it names a removed
+key every journey operation is refused. A journey lives at most 15 minutes and a missing file
+reads as no journeys, so when removing the old key, stop the gateway and delete that one file;
+only connections started in the last 15 minutes have to be started again. If the accounts
+themselves cannot be shown to be re-sealed: stop the gateway, empty `accounts.store_dir` and
 `accounts.authority_dir`, remove the old key id, run `mcp-gateway accounts init-store --config
 <path>`, start the gateway, and have users reconnect their accounts.
 
@@ -149,4 +160,4 @@ if step 3 slips.
 | OAuth backend tokens | Delete the backend's file under `~/.mcp-gateway/oauth/` and let the backend authorize again |
 | Key-server tokens | Restart; every issued token is dropped with the process |
 | mTLS certificates and CRL | Replace the files and restart; there is no live reload |
-| Audit log HMAC (`security.transparency_log` `key_id` and `shared_secret`) | A log is verified with one secret, so one log cannot hold entries signed with two. Stop the gateway, archive the current log file together with its old `key_id` and `shared_secret`, point `security.transparency_log.path` at a new file (or move the old one away), set the new `key_id` and `shared_secret`, and restart |
+| Audit log HMAC (`security.transparency_log` `key_id` and `shared_secret`) | A log is verified with one secret, so one log cannot hold entries signed with two. Stop the gateway, archive the current log file together with its old `key_id` and `shared_secret`, point `security.transparency_log.path` at a new file (or move the old one away), set the new `key_id` and `shared_secret`, and restart. The governance log `<control_plane.store_dir>/audit.jsonl` is signed with the same `key_id` and `shared_secret`, so archive and move it away in the same stop, and with SIEM export on, move each log's `.export-cursor.json` with it |
