@@ -89,6 +89,8 @@ pub(super) struct EnvPoller {
     /// A read that has not finished yet, awaited again on the next tick
     /// instead of starting another.
     pending: Option<tokio::sync::oneshot::Receiver<Option<PathBuf>>>,
+    /// Whether the pending read has already been warned about.
+    stalled: bool,
     read: PollRead,
 }
 
@@ -99,6 +101,7 @@ impl EnvPoller {
             reloads,
             config,
             pending: None,
+            stalled: false,
             read: env_poll,
         }
     }
@@ -131,11 +134,23 @@ impl EnvPoller {
             rx
         };
         let Ok(result) = tokio::time::timeout(wait, &mut read).await else {
-            // Still reading: check the same read again next tick.
+            // Still reading: check the same read again next tick. Warned once
+            // per stall, because env-file changes go unseen until it ends.
+            if !self.stalled {
+                tracing::warn!(
+                    "Config watcher: an env-file read has not finished; env-file changes are \
+                     not detected until it does"
+                );
+            }
+            self.stalled = true;
             self.pending = Some(read);
             return None;
         };
-        let differs = result.ok().flatten();
+        self.stalled = false;
+        let differs = result.unwrap_or_else(|_| {
+            tracing::warn!("Config watcher: an env-file read ended without a result");
+            None
+        });
         match differs {
             Some(path) => Some(ReloadTrigger::EnvFile(path)),
             // A failed reload may have carried a valid config edit that no

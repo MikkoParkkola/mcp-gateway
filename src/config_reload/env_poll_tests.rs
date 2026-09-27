@@ -302,8 +302,12 @@ fn u18_a_path_recorded_absent_and_loaded_differs() {
     assert_eq!(env_poll(&overlay, &paths), Some(p));
 }
 
+/// How many times `stalled_read` has started. Only U19 uses it.
+static STALLED_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// A poll read that never finishes in time, like a stalled NFS mount.
 fn stalled_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
+    STALLED_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     std::thread::sleep(Duration::from_secs(10));
     None
 }
@@ -318,7 +322,7 @@ async fn u19_a_stalled_read_returns_within_the_wait() {
         PathBuf::from("/cfg.yaml"),
     )
     .with_read(stalled_read);
-    for _ in 0..2 {
+    for _ in 0..3 {
         let tick = tokio::time::timeout(
             Duration::from_secs(2),
             poller.tick(Duration::from_millis(100)),
@@ -329,6 +333,11 @@ async fn u19_a_stalled_read_returns_within_the_wait() {
             "a stalled read must not hold the tick"
         );
     }
+    assert_eq!(
+        STALLED_READS.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a stalled read is awaited again, never started twice: at most one thread"
+    );
 }
 
 /// U20: a failed config-file reload is recorded under the config path, so
@@ -346,4 +355,35 @@ fn u20_a_config_file_failure_primes_the_limiter_for_its_retries() {
         0,
         "the retry repeats the config-file failure's warning"
     );
+}
+
+/// A second stalled read, kept apart from `stalled_read` so U19's count
+/// stays exact when the two tests run in parallel.
+fn stalled_read_for_l7(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
+    std::thread::sleep(Duration::from_secs(10));
+    None
+}
+
+/// L7: a stalled read is warned about once, not on every tick.
+#[test]
+fn l7_a_stalled_read_is_warned_about_once() {
+    use crate::test_log_capture::{count, records};
+    let mut poller = super::EnvPoller::new(
+        std::sync::Arc::default(),
+        std::sync::Arc::default(),
+        PathBuf::from("/cfg.yaml"),
+    )
+    .with_read(stalled_read_for_l7);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            for _ in 0..3 {
+                assert!(poller.tick(Duration::from_millis(50)).await.is_none());
+            }
+        });
+    });
+    assert_eq!(count(&logs, "WARN", "env-file read has not finished"), 1);
 }
