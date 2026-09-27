@@ -177,6 +177,14 @@ fn jittered(bound: Duration) -> Duration {
 /// Transient network and I/O errors are retryable; protocol/config errors
 /// signal a permanent failure that retrying will not fix.
 fn is_retryable(error: &Error) -> bool {
+    // A typed credential refusal (401, 403) repeats with the same credential,
+    // exactly as in the backend retry policy (A11-g).
+    if let Error::Http(e) = error
+        && e.status()
+            .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal)
+    {
+        return false;
+    }
     // `TransportPermanent` is deliberately absent: it is the transport saying
     // the configuration cannot work, and a retry loop is the wrong answer to
     // that. Plain `Transport` stays retryable, because it means "failed, cause
@@ -385,6 +393,27 @@ mod tests {
         assert!(result.is_err());
         // Should have stopped after the first attempt
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// A11-g: a typed credential refusal is never retried by a chain step,
+    /// while a typed 429 still is.
+    fn typed_status(status: u16) -> Error {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        Error::Http(
+            reqwest::Response::from(response)
+                .error_for_status()
+                .expect_err("a fixture status is non-2xx"),
+        )
+    }
+
+    #[test]
+    fn a_typed_credential_refusal_is_not_retried_but_429_is() {
+        assert!(!is_retryable(&typed_status(401)));
+        assert!(!is_retryable(&typed_status(403)));
+        assert!(is_retryable(&typed_status(429)));
     }
 
     #[test]

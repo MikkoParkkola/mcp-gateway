@@ -930,11 +930,17 @@
     },
     {
       "id": "MIK-7570.RECONNECT.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/personal_accounts/service.rs",
+        "src/personal_accounts/refusal.rs",
+        "src/gateway/meta_mcp/upstream_401_tests.rs",
+        "src/personal_accounts/service_rejection_tests.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-27 (A11, #1184). A backend 401 on a managed personal account forces at most one refresh per token revision, marked durably before the provider is asked (PersonalAccountStore::claim_forced_refresh); invalid_grant fences the account and answers with the reconnect offer; otherwise recovery.error_code UPSTREAM_AUTH_REJECTED (retry true) or UPSTREAM_AUTH_REJECTED_PERSISTENT (retry false). Routes: gateway_invoke, REST capabilities, /mcp/{name}, bridged elicitation continuations. Typed 401/403 are not retried. Green: CI run 36278430449 and Docker run 36278430283 at f74a4b020. Red first: CI run 36215247513 (21 A11 cells failed, 5,816 others passed) and run 36228386951 (T19, T21). Mutation, one mutant per CI run, each red on its named cells: rest-site 36234423467, fence-without-idp 36234426666, no-stale-check 36244830030, no-forced-revision 36244833548, mark-after-success 36234429677, mark-in-memory 36234431844, mcp-no-lease 36234434230, direct-no-lease 36279633141, direct-helper-late-arm-only 36230190042, meta-no-mark-check 36244837055, recheck-no-ptr-eq 36279627281, rejection-no-seal 36279630528, body-text-401 36230181315, failsafe-retry-all-http 36244840205, chain-no-short-circuit 36230184149, expiry-writes-mark 36230252890, serialize-null 36279620571, rest-multi-user-only 36279624035, continuation-no-park 36230187045, type-session-expiry 36244843485. UPGRADING-4.0 item 61."
     },
     {
       "id": "MIK-7570.OWASP.1",
