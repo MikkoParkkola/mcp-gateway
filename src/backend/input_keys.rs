@@ -91,7 +91,7 @@ impl Backend {
             count("input_schema_fetch_skipped_a3");
             return Ok(unavailable(mode));
         }
-        let (tools, completeness) = match self.tools_for_check(identity_key, headers).await {
+        let (tools, completeness) = match self.tools_for_check(identity_key, &[]).await {
             Ok(fetched) => fetched,
             // Raised only by the fill's own failsafe gate: no transport
             // constructs either variant.
