@@ -54,7 +54,21 @@ impl ExclusiveFileLock {
         Ok(Self { file })
     }
 
-    #[cfg(not(unix))]
+    /// Windows: an owner-only sidecar shared for read and write (never
+    /// delete), so a contender can open it and meet the lock itself.
+    #[cfg(windows)]
+    pub(crate) fn try_acquire(lock_path: &Path) -> io::Result<Self> {
+        use crate::private_fs::{Share, create_file_private};
+        let file = match create_file_private(lock_path, Share::LockSidecar) {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                OpenOptions::new().read(true).write(true).open(lock_path)?
+            }
+            other => other?,
+        };
+        Ok(Self { file })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn try_acquire(_lock_path: &Path) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

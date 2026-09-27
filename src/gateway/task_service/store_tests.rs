@@ -27,6 +27,8 @@ mod admission;
 mod durability;
 mod qualification;
 mod support;
+#[cfg(windows)]
+mod windows;
 use support::*;
 
 #[tokio::test]

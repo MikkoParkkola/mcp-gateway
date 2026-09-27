@@ -24,7 +24,7 @@ async fn openwebui_assertion_is_checked_after_real_gateway_authentication() {
     )).unwrap();
     let config: crate::config::Config = serde_yaml::from_str(&format!(
         r#"
-env_files: ["{}"]
+env_files: ['{}']
 auth:
   enabled: true
   public_paths: []
@@ -197,7 +197,7 @@ async fn installations_sharing_one_header_each_verify_with_their_own_key() {
     .unwrap();
     let config: crate::config::Config = serde_yaml::from_str(&format!(
         r#"
-env_files: ["{}"]
+env_files: ['{}']
 auth:
   enabled: true
   public_paths: []

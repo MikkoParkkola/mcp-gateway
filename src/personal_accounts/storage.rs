@@ -12,15 +12,12 @@ use super::{
     AccountError, AccountKey, AccountLookup, Authority, GrantRecord, PersonalAccountStore,
     StoreConfig,
 };
-#[cfg(unix)]
 use super::{AuthorityEntry, GrantState, GrantVersion};
-#[cfg(unix)]
 use sha2::{Digest as _, Sha256};
+use std::fs;
 #[cfg(unix)]
-use std::fs::{self, File, OpenOptions};
-#[cfg(unix)]
+use std::fs::File;
 use std::io::Read as _;
-#[cfg(unix)]
 use std::path::{Component, Path};
 
 // The durable writers. A child module so it reads these private helpers
@@ -58,11 +55,8 @@ pub(super) mod journey;
 const TOKEN_SCHEMA: &str = "personal_accounts.v1";
 const TOKEN_DOMAIN: &[u8] = b"mcp-gateway/account-token-aad/v1";
 const RECORD_BYTES: usize = 262_144;
-#[cfg(unix)]
 const AUTHORITY_SCHEMA: &str = "personal_accounts.authority.v1";
-#[cfg(unix)]
 const AUTHORITY_FILE: &str = "authority.json";
-#[cfg(unix)]
 const LOCK_FILE: &str = ".personal-accounts.lock";
 
 /// Versioned ciphertext envelope; no credential appears in outer JSON fields.
@@ -250,7 +244,6 @@ fn open_bytes(
     Ok(opened.to_vec())
 }
 
-#[cfg(unix)]
 fn validate_config(config: &StoreConfig) -> Result<(), AccountError> {
     if config.instance_id.is_empty()
         || config.current_key_id.is_empty()
@@ -275,18 +268,21 @@ fn validate_config(config: &StoreConfig) -> Result<(), AccountError> {
     validate_path(&config.authority_dir)
 }
 
-#[cfg(unix)]
 fn validate_path(path: &Path) -> Result<(), AccountError> {
     if !path.is_absolute()
-        || path
-            .components()
-            .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+        || path.components().any(|part| {
+            !matches!(part, Component::RootDir | Component::Normal(_)) && !prefix_allowed(&part)
+        })
     {
         return Err(AccountError::InvalidConfiguration);
     }
     let mut current = std::path::PathBuf::new();
     for part in path.components() {
         current.push(part);
+        // A bare drive prefix (`C:`, `\\?\C:`) names a volume, not a directory.
+        if matches!(part, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
             Ok(_) => return Err(AccountError::InvalidConfiguration),
@@ -338,7 +334,41 @@ fn sync_directory(path: &Path) -> Result<(), AccountError> {
         .map_err(|_| AccountError::StorageUnavailable)
 }
 
+/// A FIFO must reach the regular-file check instead of blocking inside open.
 #[cfg(unix)]
+fn open_nofollow(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        )
+        .open(path)
+}
+
+/// Not a regular file, or reachable by group or other.
+#[cfg(unix)]
+fn not_private(_file: &File, metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0
+}
+
+#[cfg(unix)]
+fn prefix_allowed(_part: &Component<'_>) -> bool {
+    false
+}
+
+// The Windows side of the same custody rules (design §2.3).
+#[cfg(windows)]
+#[path = "storage_windows.rs"]
+mod platform;
+#[cfg(windows)]
+use platform::{
+    create_directory, not_private, open_nofollow, prefix_allowed, private_directory, sync_directory,
+};
+
 fn claim_store(
     config: &StoreConfig,
 ) -> Result<
@@ -365,19 +395,6 @@ fn claim_store(
 /// (`storage.rs:135`). A child module sees its ancestors' private items, so one
 /// helper here reaches both with no visibility widening anywhere, and there is
 /// one definition of the length rather than one per caller.
-/// No durable writers exist on this target, so no generation is ever spent.
-///
-/// The whole `commit` family already refuses here -- `commit_grant` returns
-/// `InvalidConfiguration` on a non-unix target -- and the migration reaches
-/// this before it reaches that refusal, so the answer is the same category one
-/// step earlier. Returning an error rather than a value keeps a platform with
-/// no durable store from minting identifiers for records it cannot write.
-#[cfg(not(unix))]
-pub(super) fn random_hex() -> Result<String, AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(unix)]
 pub(super) fn random_hex() -> Result<String, AccountError> {
     let mut bytes = [0_u8; 16];
     SystemRandom::new()
@@ -386,7 +403,6 @@ pub(super) fn random_hex() -> Result<String, AccountError> {
     Ok(hex::encode(bytes))
 }
 
-#[cfg(unix)]
 fn empty_authority(config: &StoreConfig) -> Result<Authority, AccountError> {
     let mut epoch = [0_u8; 16];
     SystemRandom::new()
@@ -400,7 +416,6 @@ fn empty_authority(config: &StoreConfig) -> Result<Authority, AccountError> {
     })
 }
 
-#[cfg(unix)]
 fn authority_aad(key_id: &str, instance_id: &str) -> Result<Vec<u8>, AccountError> {
     encode_fields(
         b"mcp-gateway/account-authority-aad/v1",
@@ -408,7 +423,6 @@ fn authority_aad(key_id: &str, instance_id: &str) -> Result<Vec<u8>, AccountErro
     )
 }
 
-#[cfg(unix)]
 fn require_empty(path: &Path) -> Result<(), AccountError> {
     for entry in fs::read_dir(path).map_err(|_| AccountError::StorageUnavailable)? {
         let entry = entry.map_err(|_| AccountError::StorageUnavailable)?;
@@ -419,7 +433,6 @@ fn require_empty(path: &Path) -> Result<(), AccountError> {
     Ok(())
 }
 
-#[cfg(unix)]
 pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, AccountError> {
     validate_config(&config)?;
     create_directory(&config.store_dir)?;
@@ -457,30 +470,19 @@ pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, Ac
     })
 }
 
-#[cfg(unix)]
 pub(super) fn open(config: StoreConfig) -> Result<PersonalAccountStore, AccountError> {
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     validate_config(&config)?;
     private_directory(&config.store_dir)?;
     private_directory(&config.authority_dir)?;
     // Acquire both lifetime locks before inspecting authority. Open never creates
     // an epoch or substitutes empty authority for missing or invalid state.
     let (record_lock, authority_lock) = claim_store(&config)?;
-    // A FIFO must reach the regular-file check instead of blocking inside open.
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
-                .bits()
-                .cast_signed(),
-        )
-        .open(config.authority_dir.join(AUTHORITY_FILE))
+    let file = open_nofollow(&config.authority_dir.join(AUTHORITY_FILE))
         .map_err(|_| AccountError::StorageUnavailable)?;
     let metadata = file
         .metadata()
         .map_err(|_| AccountError::StorageUnavailable)?;
-    if !metadata.is_file()
-        || metadata.permissions().mode() & 0o077 != 0
+    if not_private(&file, &metadata)
         || metadata.len()
             > u64::try_from(config.max_authority_bytes)
                 .map_err(|_| AccountError::InvalidConfiguration)?
@@ -531,7 +533,6 @@ pub(super) fn open(config: StoreConfig) -> Result<PersonalAccountStore, AccountE
 /// The authenticated manifest entry's own version, validated before any use.
 /// Its four fields are what a tombstone discloses, so they are checked whether
 /// or not a ciphertext pointer survives.
-#[cfg(unix)]
 fn entry_version(entry: &AuthorityEntry) -> Result<GrantVersion, AccountError> {
     if !lower_hex(&entry.generation, 32)
         || !lower_hex(&entry.descriptor_revision, 64)
@@ -552,7 +553,6 @@ fn entry_version(entry: &AuthorityEntry) -> Result<GrantVersion, AccountError> {
 /// on the first hyphen means any path, dot segment or foreign digest fails the
 /// equality below, so an authenticated pointer is refused before it selects a
 /// file rather than after opening one.
-#[cfg(unix)]
 fn accepted_basename(basename: &str, digest: &str) -> Result<(), AccountError> {
     let named = basename
         .strip_suffix(".json")
@@ -574,7 +574,6 @@ fn accepted_basename(basename: &str, digest: &str) -> Result<(), AccountError> {
 /// is bounded exactly like the current one, because any configured key may have
 /// sealed the record being read and its id is not known until the file is open.
 /// Nothing here restricts a key id; a longer one simply raises the bound.
-#[cfg(unix)]
 fn record_file_limit(config: &StoreConfig) -> Result<usize, AccountError> {
     let ciphertext = RECORD_BYTES
         .checked_add(16 + 2)
@@ -603,27 +602,15 @@ fn record_file_limit(config: &StoreConfig) -> Result<usize, AccountError> {
 /// Read one accepted candidate. A symlink, FIFO, directory, group- or
 /// world-readable mode, oversize file or missing file is a physical-storage
 /// failure. None of them is absence, and none may block the caller.
-#[cfg(unix)]
 fn read_record(config: &StoreConfig, path: &Path) -> Result<Vec<u8>, AccountError> {
     read_bounded(path, record_file_limit(config)?)?.ok_or(AccountError::StorageUnavailable)
 }
 
 /// The bounded private-file reader behind `read_record` and `journeys.json`.
 /// `None` is reserved for a missing file; every other refusal is an error.
-#[cfg(unix)]
 fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, AccountError> {
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
     let bound = u64::try_from(limit).map_err(|_| AccountError::InvalidConfiguration)?;
-    // A FIFO must reach the regular-file check instead of blocking inside open.
-    let opened = OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path);
+    let opened = open_nofollow(path);
     let file = match opened {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -632,7 +619,7 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, AccountErr
     let metadata = file
         .metadata()
         .map_err(|_| AccountError::StorageUnavailable)?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 || metadata.len() > bound {
+    if not_private(&file, &metadata) || metadata.len() > bound {
         return Err(AccountError::StorageUnavailable);
     }
     let mut encoded = Vec::new();
@@ -648,7 +635,6 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, AccountErr
 /// Open the one accepted candidate this entry names, and no other file. The
 /// manifest's exact envelope digest is checked before decryption, and the
 /// decrypted record must agree with the manifest's version afterwards.
-#[cfg(unix)]
 fn connected_record(
     config: &StoreConfig,
     authority: &Authority,
@@ -695,7 +681,6 @@ fn connected_record(
 /// Resolve one exact account against the authenticated manifest. A missing
 /// entry is the only absence: retained, orphaned or replayed ciphertext never
 /// grants authority, and nothing here initializes, adopts or searches.
-#[cfg(unix)]
 pub(super) fn lookup(
     config: &StoreConfig,
     authority: &Authority,
@@ -723,7 +708,6 @@ pub(super) fn lookup(
 /// both may still hold a live provider token. `None` for every other state, and
 /// for a named record that is missing or not authentic: a revoke must still
 /// tombstone an account whose ciphertext is gone.
-#[cfg(unix)]
 pub(super) fn retained_record(
     config: &StoreConfig,
     authority: &Authority,
@@ -739,34 +723,4 @@ pub(super) fn retained_record(
     }
     let version = entry_version(entry).ok()?;
     connected_record(config, authority, entry, &version, digest, account).ok()
-}
-
-#[cfg(not(unix))]
-pub(super) fn retained_record(
-    _config: &StoreConfig,
-    _authority: &Authority,
-    _digest: &str,
-    _account: &AccountKey,
-) -> Option<GrantRecord> {
-    None
-}
-
-#[cfg(not(unix))]
-pub(super) fn lookup(
-    _config: &StoreConfig,
-    _authority: &Authority,
-    _digest: &str,
-    _account: &AccountKey,
-) -> Result<AccountLookup, AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(not(unix))]
-pub(super) fn initialize(_config: StoreConfig) -> Result<PersonalAccountStore, AccountError> {
-    Err(AccountError::InvalidConfiguration)
-}
-
-#[cfg(not(unix))]
-pub(super) fn open(_config: StoreConfig) -> Result<PersonalAccountStore, AccountError> {
-    Err(AccountError::InvalidConfiguration)
 }
