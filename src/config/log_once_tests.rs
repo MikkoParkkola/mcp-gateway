@@ -58,3 +58,22 @@ fn l6_dormant_declared_agents_are_logged_once_across_reloads() {
     });
     assert_eq!(count(&logs, "WARN", "dormant while"), 1);
 }
+
+/// L5b: a rule edited in place (same index, issuer and kind of match, a
+/// different group) grants something new, so it warns again.
+#[test]
+fn l5b_an_admin_rule_edited_in_place_warns_again() {
+    let parse = |group: &str| -> crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig {
+        serde_yaml::from_str(&format!(
+            "rules: [{{issuer: 'https://l5b.issuer.example', group: {group}, role: admin}}]"
+        ))
+        .expect("rule parses")
+    };
+    let (ops, everyone) = (parse("ops"), parse("everyone"));
+    let logs = records(|| {
+        ops.validate().expect("valid");
+        everyone.validate().expect("valid");
+        everyone.validate().expect("valid");
+    });
+    assert_eq!(count(&logs, "WARN", "https://l5b.issuer.example"), 2);
+}

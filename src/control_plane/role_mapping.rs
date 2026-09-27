@@ -195,8 +195,10 @@ impl ControlPlaneRoleMappingConfig {
                 } else {
                     "email"
                 };
-                // Once per rule per process: every reload validates.
-                let key = format!("role_mapping:{i}:{}:{discriminator}", rule.issuer);
+                // Once per rule per process: every reload validates. Keyed on
+                // the whole rule, so a grant edited in place warns again. The
+                // key is only compared in memory, never logged.
+                let key = format!("role_mapping:{i}:{rule:?}");
                 if crate::config::log_once::first_time(&key) {
                     tracing::warn!(
                         "control_plane.role_mapping rule {i} (issuer {}, {discriminator}) now \

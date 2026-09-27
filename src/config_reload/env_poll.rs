@@ -129,6 +129,14 @@ impl EnvPoller {
     pub(super) async fn tick(&mut self, wait: std::time::Duration) -> Option<ReloadTrigger> {
         #[cfg(test)]
         self.ticks.fetch_add(1, Ordering::SeqCst);
+        if self.pending.is_none() && self.env.env_paths().as_paths().is_empty() {
+            // No env files, the default: nothing to read, so no thread.
+            return self
+                .reloads
+                .failed
+                .load(Ordering::SeqCst)
+                .then(|| ReloadTrigger::Retry(self.config.clone()));
+        }
         let mut read = if let Some(read) = self.pending.take() {
             read
         } else {

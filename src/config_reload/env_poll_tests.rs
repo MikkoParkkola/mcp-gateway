@@ -450,3 +450,41 @@ fn l9_a_new_stall_after_recovery_is_warned_about_again() {
     });
     assert_eq!(count(&logs, "WARN", "env-file read has not finished"), 2);
 }
+
+/// Reads started by `counted_read`. Only U21 uses it.
+static COUNTED_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn counted_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
+    COUNTED_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    None
+}
+
+/// U21: with no env files (the default) a tick starts no read thread, and
+/// still retries a failed reload.
+#[tokio::test]
+async fn u21_no_env_files_starts_no_read_and_still_retries() {
+    use super::super::ReloadTrigger;
+    let reloads = std::sync::Arc::new(super::EnvReloadCounts::default());
+    let mut poller = super::EnvPoller::new(
+        std::sync::Arc::default(),
+        std::sync::Arc::clone(&reloads),
+        PathBuf::from("/cfg.yaml"),
+    )
+    .with_read(counted_read);
+    assert!(poller.tick(Duration::from_secs(1)).await.is_none());
+    reloads.settled(
+        &mut WarnLimiter::default(),
+        Some("E"),
+        &ReloadTrigger::ConfigFile,
+        Path::new("/cfg.yaml"),
+    );
+    assert!(matches!(
+        poller.tick(Duration::from_secs(1)).await,
+        Some(ReloadTrigger::Retry(_))
+    ));
+    assert_eq!(
+        COUNTED_READS.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no env files, no read"
+    );
+}
