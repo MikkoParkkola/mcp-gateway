@@ -141,3 +141,15 @@ Five differences between the red commit and revision 3, each with its reason:
    reservation attempts on the keyed requests.
 5. The signed-`gateway_invoke` guard covers both signing configurations: nonce optional, and
    `require_nonce` with the nonce in the `gateway_invoke` arguments. Both must be signed.
+
+## Amendment 2 (G8, DIRECT.10)
+
+- T12 (DIRECT.10), in `dispatch_parity_tests.rs`: with the production firewall on both layers, a
+  result carrying a credential is refused with -32600 "Response blocked by security firewall" on
+  both routes, one dispatch each. The former T8 redaction guard becomes this red cell: at red the
+  per-backend route delivers the redacted result (CI run 36344395634 recorded the meta refusal).
+- T12b: a keyed direct call whose result is blocked replays the same refusal on retry without
+  dispatching again.
+- The T8 `session_profile` parity row stages the profile on a session minted by `initialize`, not
+  on a client-chosen id the meta route replaces.
+- Mutant M14: `after_dispatch` ignores a Block verdict (T12, T12b red).

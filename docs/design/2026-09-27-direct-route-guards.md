@@ -20,11 +20,14 @@ dispatch through `dispatch_in_scope` :428) skips controls that meta dispatch
 | G4 | Active session profile | `invoke.rs:1089` (`check_invocation_policy`) | only the global tool policy |
 | G5 | Error-budget recording and auto-kill | `invoke.rs:3296` (`record_error_budget` :2566) | failures feed only the client breaker (`backend_handlers.rs:1231`) |
 | G6 | Response contract gate, response inspection, context integrity | `invoke.rs:1383` `apply_response_gates` | only the response firewall |
+| G8 | Response firewall verdict: a Block refuses delivery (-32600 "Response blocked by security firewall") | HTTP delivery inspection on `/mcp` | verdict computed and ignored: `scan_direct_backend_response` (`backend_handlers.rs`) only logs a Warn; a blocked result is delivered after in-place redaction |
 | G7 | Message signing and replay nonce | `signing.rs:185-214`, `finalize_gateway_invoke_response` :219 | no signing envelope exists on this route |
 
 Already shared or equivalent on both routes (no change): auth middleware rate limit and client
 breaker, request firewall and memory scanner, authorizer and tool policy, tool-name validation,
-attestation, idempotency, undeclared-key refusal, invocation audit, response firewall.
+attestation, idempotency, undeclared-key refusal, invocation audit. The response firewall's
+scan and redaction run on both routes, but only meta enforces its Block verdict (G8); an earlier
+revision of this table wrongly listed it as enforced on both.
 Not applicable: `admin_capability_rule` and identity grants apply to the capability provider, which
 `/mcp/{name}` cannot address (`state.backends` holds configured backends only, `server/mod.rs:625`;
 capabilities attach to meta alone, `:1355`). The response cache is a performance feature.
@@ -115,9 +118,24 @@ failures. Every `tools/call` dispatch site on the route goes through these steps
 thread's and the LIFECYCLE.1 worker's, passthrough backends included (S4 then gates the unsanitised
 result; the response scan already runs there).
 
+Session profiles are self-narrowing, not a boundary: the only writers are the caller's own
+`initialize` profile hint (`meta_mcp/mod.rs:1698-1706`) and `gateway_set_profile` on the caller's
+own session (`meta_mcp/mod.rs:2549-2568`); no config, key, admin or policy path assigns a profile
+to another principal, and the operator's only lever is the default profile, which a sessionless
+direct call also receives. Omitting the header therefore only undoes the caller's own choice.
+
 Direct session id: the `mcp-session-id` header when present (`backend_handlers.rs:647`), else none;
 with none (or an empty header) `active_profile` returns the default routing profile, as for a
 sessionless meta call (`meta_mcp/mod.rs:1550`).
+
+### 2.2a G8 response firewall verdict
+
+`DirectRouteGuards::after_dispatch` runs the response scan it already owns and then honours the
+verdict the way the meta route does: a Block (verdict not allowed) replaces the result with the
+same delivery refusal meta returns (`-32600`, "Response blocked by security firewall"), and the
+idempotency entry settles with that refusal, marked as a firewall refusal so a replay keeps its
+type. Warn and Allow deliver the (redacted) result, unchanged from today. The scan stays one
+implementation; only the verdict is newly acted on.
 
 ### 2.3 G7 signing (maintainer decision 2026-09-27)
 
@@ -141,7 +159,9 @@ outside the session's active profile is now refused with the error meta dispatch
 failures count toward the error budget and can auto-kill a backend. Response contract, inspection and
 context-integrity settings now apply to direct-route results. With message signing on, the direct
 route refuses `tools/call` with -32001 and names `gateway_invoke`: clients that call backends directly
-under signing must move to `gateway_invoke` (maintainer decision 2026-09-27: fail closed).
+under signing must move to `gateway_invoke` (maintainer decision 2026-09-27: fail closed). A direct
+result the response firewall blocks is now refused with -32600, as on `gateway_invoke`, instead of
+being delivered redacted.
 
 ## 5. Tests (red first)
 
