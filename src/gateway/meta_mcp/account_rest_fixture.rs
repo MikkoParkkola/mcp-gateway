@@ -223,6 +223,7 @@ pub(super) fn external(id: &str) -> crate::personal_accounts::config::AccountDes
         session_mode: crate::identity_propagation::SessionMode::Stateless,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        max_identity_slots: 64,
     });
     descriptor
 }

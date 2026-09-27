@@ -302,6 +302,7 @@ pub(in super::super) fn external_cfg() -> IdentityPropagationConfig {
         session_mode: crate::identity_propagation::SessionMode::Stateless,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        max_identity_slots: 64,
     }
 }
 

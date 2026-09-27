@@ -26,6 +26,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 mod annotations;
 mod cached_metadata;
 mod era;
+mod identity_slots;
 mod input_keys;
 mod lifecycle;
 mod metadata;
@@ -62,6 +63,9 @@ pub struct Backend {
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
     pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    /// Live `PerUser` slots, capped by `identity_propagation.max_identity_slots`
+    /// (MIK-7547). Each `PerUser` entry holds a lease on it.
+    identity_slots: Arc<identity_slots::IdentitySlots>,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
@@ -266,6 +270,10 @@ mod resend_isolation_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+#[cfg(test)]
+#[path = "identity_slot_cap_tests.rs"]
+mod identity_slot_cap_tests;
 
 #[cfg(test)]
 #[path = "grant_reload_eviction_tests.rs"]

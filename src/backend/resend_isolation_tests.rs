@@ -123,6 +123,7 @@ fn per_user_backend() -> Arc<Backend> {
                 session_mode: SessionMode::PerUser,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
+                max_identity_slots: 64,
             }),
             ..Default::default()
         },

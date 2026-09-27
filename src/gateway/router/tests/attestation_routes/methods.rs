@@ -286,6 +286,7 @@ async fn direct_route_refusal_precedes_identity_minting() {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
         enabled: true,
         ..BackendConfig::default()

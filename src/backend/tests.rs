@@ -241,6 +241,7 @@ fn create_oauth_client_refuses_identity_propagation_backends() {
             session_mode: crate::identity_propagation::SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }
     };
     let mk = |strategy| {
@@ -1721,6 +1722,7 @@ fn per_user_backend(cache_ttl: Duration) -> Backend {
                 session_mode: SessionMode::PerUser,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
+                max_identity_slots: 64,
             }),
             ..Default::default()
         },

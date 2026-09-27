@@ -180,6 +180,7 @@ async fn per_identity_gateway_logging_to(
                 session_mode: SessionMode::PerUser,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
+                max_identity_slots: 64,
             }),
             ..Default::default()
         },
@@ -516,6 +517,7 @@ fn expiring_backend(ttl: Duration) -> (Arc<Backend>, Arc<ChangingCatalogue>) {
                 session_mode: SessionMode::PerUser,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
+                max_identity_slots: 64,
             }),
             ..Default::default()
         },

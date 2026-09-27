@@ -23,6 +23,7 @@ mod passthrough {
             session_mode: SessionMode::PerUser,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }
     }
 
@@ -340,6 +341,7 @@ mod identity_propagation_audit {
             session_mode: SessionMode::PerUser,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         };
         let mut inbound = HeaderMap::new();
         inbound.insert(

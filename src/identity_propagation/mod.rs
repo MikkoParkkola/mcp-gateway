@@ -247,6 +247,19 @@ pub struct IdentityPropagationConfig {
     /// Optional RFC 8693 `scope` requested from the token-exchange endpoint.
     #[serde(default)]
     pub token_exchange_scope: Option<String>,
+    /// Most distinct identities served at once, each with its own connection
+    /// slot (MIK-7547). A new identity past the cap is refused with
+    /// `Error::IdentitySlotsExhausted` until an idle slot is reclaimed; it is
+    /// never served on the shared slot. Must be at least 1.
+    #[serde(default = "default_max_identity_slots")]
+    pub max_identity_slots: usize,
+}
+
+/// Default for [`IdentityPropagationConfig::max_identity_slots`].
+pub const DEFAULT_MAX_IDENTITY_SLOTS: usize = 64;
+
+fn default_max_identity_slots() -> usize {
+    DEFAULT_MAX_IDENTITY_SLOTS
 }
 
 impl IdentityPropagationConfig {
@@ -255,6 +268,7 @@ impl IdentityPropagationConfig {
     ///
     /// # Errors
     /// Returns [`PropagationError::Misconfigured`] when:
+    /// - `max_identity_slots` is 0 (no identity could ever be served);
     /// - the audience is empty (a credential with no audience defeats IDP.3);
     /// - the strategy is one not yet implemented in this build (fail-closed,
     ///   never silently skip propagation for a required backend);
@@ -267,6 +281,11 @@ impl IdentityPropagationConfig {
     /// [`SessionMode`]; there is no implicit shared-session default, so a
     /// misconfigured backend cannot fall back to reusing one session.
     pub fn validate(&self) -> Result<(), PropagationError> {
+        if self.max_identity_slots == 0 {
+            return Err(PropagationError::Misconfigured(
+                "identity_propagation.max_identity_slots must be at least 1 (MIK-7547)".to_string(),
+            ));
+        }
         if self.audience.trim().is_empty() {
             return Err(PropagationError::Misconfigured(
                 "identity_propagation.audience must be non-empty (IDP.3)".to_string(),
@@ -810,6 +829,7 @@ mod tests {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         };
         assert!(cfg.validate().is_err());
 
@@ -822,6 +842,7 @@ mod tests {
             session_mode: SessionMode::PerUser,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         };
         assert!(cfg.validate().is_ok());
 
@@ -835,6 +856,7 @@ mod tests {
             session_mode: SessionMode::PerUser,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         };
         assert!(cfg.validate().is_err());
 
@@ -846,6 +868,7 @@ mod tests {
             session_mode: SessionMode::PerUser,
             token_exchange_endpoint: Some("https://idp.internal/token".to_string()),
             token_exchange_scope: Some("mail.read".to_string()),
+            max_identity_slots: 64,
         };
         assert!(cfg.validate().is_ok());
 
@@ -857,6 +880,7 @@ mod tests {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         };
         assert!(cfg.validate().is_ok());
     }

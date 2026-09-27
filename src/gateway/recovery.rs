@@ -53,6 +53,9 @@ pub enum ErrorCategory {
     NotFound,
     /// The request was rejected because a rate limit was exceeded.
     RateLimited,
+    /// A new identity was refused because the backend already serves its
+    /// configured maximum of distinct identities (MIK-7547).
+    CapacityExhausted,
     /// The backend did not respond within the configured timeout.
     Timeout,
 }
@@ -67,6 +70,8 @@ pub mod error_codes {
     pub const BACKEND_UNREACHABLE: &str = "BACKEND_UNREACHABLE";
     /// The request was rejected because a rate limit was exceeded.
     pub const RATE_LIMITED: &str = "RATE_LIMITED";
+    /// The backend serves its maximum of distinct identities; a new one must wait for an idle slot.
+    pub const IDENTITY_SLOTS_EXHAUSTED: &str = "IDENTITY_SLOTS_EXHAUSTED";
     /// The circuit breaker for the backend is open — requests are being shed.
     pub const CIRCUIT_OPEN: &str = "CIRCUIT_OPEN";
     /// The backend did not respond within the configured timeout.
@@ -204,6 +209,21 @@ pub fn recovery_for(category: ErrorCategory, ctx: RecoveryContext<'_>) -> Recove
             fix_example: None,
             related_tools: ctx.related_tools,
             retry: false,
+        },
+
+        ErrorCategory::CapacityExhausted => RecoveryHint {
+            error_code: error_codes::IDENTITY_SLOTS_EXHAUSTED.to_string(),
+            message: ctx.detail.map_or_else(
+                || format!("Backend '{backend_label}' is at its limit of concurrent identities"),
+                str::to_string,
+            ),
+            suggest: "The backend is at its identity-slot capacity. Retry later, once an idle \
+                      slot is reclaimed, or ask the operator to raise \
+                      identity_propagation.max_identity_slots."
+                .to_string(),
+            fix_example: None,
+            related_tools: ctx.related_tools,
+            retry: true,
         },
 
         ErrorCategory::RateLimited => RecoveryHint {

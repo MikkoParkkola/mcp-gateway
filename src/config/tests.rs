@@ -713,6 +713,7 @@ fn validate_accepts_stateless_signed_assertion_backend() {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
     );
     assert!(
@@ -735,6 +736,7 @@ fn validate_accepts_per_user_session_mode_now_that_pool_ships() {
             session_mode: SessionMode::PerUser,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
     );
     assert!(
@@ -756,6 +758,7 @@ fn validate_rejects_identity_propagation_on_non_http_transport() {
         session_mode: SessionMode::Stateless,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        max_identity_slots: 64,
     });
     backend.transport = TransportConfig::Stdio {
         command: "echo".to_string(),
@@ -783,6 +786,7 @@ fn validate_rejects_empty_audience_backend() {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
     );
     assert!(matches!(
@@ -805,6 +809,7 @@ fn validate_rejects_required_unimplemented_strategy() {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
     );
     assert!(config.validate().is_err());
@@ -825,6 +830,7 @@ fn validate_rejects_token_exchange_without_endpoint() {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
     );
     let err = config.validate().unwrap_err().to_string();
@@ -848,6 +854,7 @@ fn validate_accepts_properly_configured_token_exchange_backend() {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: Some("https://idp.internal/token".to_string()),
             token_exchange_scope: Some("mail.read".to_string()),
+            max_identity_slots: 64,
         }),
     );
     assert!(
@@ -877,6 +884,7 @@ fn validate_rejects_identity_propagation_with_enabled_backend_oauth() {
         session_mode: SessionMode::Stateless,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        max_identity_slots: 64,
     });
     backend.oauth = Some(oauth_cfg(true));
     config.backends.insert("mem".to_string(), backend);
@@ -901,6 +909,7 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
         session_mode: SessionMode::Stateless,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        max_identity_slots: 64,
     });
     backend.oauth = Some(oauth_cfg(false));
     config.backends.insert("mem".to_string(), backend);

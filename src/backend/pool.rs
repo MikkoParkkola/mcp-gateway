@@ -107,6 +107,9 @@ pub(crate) struct PooledEntry {
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
+    /// The identity-slot reservation a `PerUser` entry holds (MIK-7547);
+    /// `None` on the shared slot. Dropped with the entry, which frees the slot.
+    identity_lease: Option<super::identity_slots::SlotLease>,
 }
 
 /// RAII marker for one in-flight client request against a pool slot.
@@ -193,7 +196,18 @@ impl PooledEntry {
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
+            identity_lease: None,
         }
+    }
+
+    /// A pool holding only the canonical shared slot, as every backend starts.
+    pub(super) fn fresh_pool(
+        name: &str,
+        failsafe_config: &crate::config::FailsafeConfig,
+    ) -> dashmap::DashMap<PoolKey, Arc<Self>> {
+        let pool = dashmap::DashMap::new();
+        pool.insert(PoolKey::Shared, Arc::new(Self::new(name, failsafe_config)));
+        pool
     }
 
     /// Mark this slot as used now, deferring its idle eviction.
@@ -279,13 +293,23 @@ impl Backend {
         &self,
         key: &PoolKey,
         under_guard: impl FnOnce(&Arc<PooledEntry>) -> R,
-    ) -> (Arc<PooledEntry>, R) {
+    ) -> crate::Result<(Arc<PooledEntry>, R)> {
         let mut created = false;
         let (entry, out) = {
-            let slot = self.pool.entry(key.clone()).or_insert_with(|| {
-                created = true;
-                Arc::new(PooledEntry::new(&self.name, &self.failsafe_config))
-            });
+            // A new `PerUser` slot reserves an identity slot first, and at the
+            // cap nothing is inserted: the caller is refused, never moved to
+            // `Shared` (MIK-7547). An existing entry is never replaced.
+            let slot = match self.pool.entry(key.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(occupied) => occupied.into_ref(),
+                dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                    let mut entry = PooledEntry::new(&self.name, &self.failsafe_config);
+                    if matches!(key, PoolKey::PerUser { .. }) {
+                        entry.identity_lease = Some(self.reserve_identity_slot()?);
+                    }
+                    created = true;
+                    vacant.insert(Arc::new(entry))
+                }
+            };
             let entry = Arc::clone(slot.value());
             let out = under_guard(&entry);
             (entry, out)
@@ -300,7 +324,7 @@ impl Backend {
             .set(live);
             tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
         }
-        (entry, out)
+        Ok((entry, out))
     }
 
     /// Fetch (or lazily create) the pooled entry for `key`. The `Arc` is cloned
@@ -309,8 +333,12 @@ impl Backend {
     /// Callers that intend to USE the slot's transport want
     /// [`Backend::claim_pooled_entry`] instead: this one hands back an entry the
     /// evictor is still free to remove.
-    pub(super) fn pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
-        self.pooled_entry_with(key, |_| ()).0
+    ///
+    /// # Errors
+    /// [`crate::Error::IdentitySlotsExhausted`] when `key` is a new `PerUser`
+    /// slot and the backend is at its identity-slot cap.
+    pub(super) fn pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
+        self.pooled_entry_with(key, |_| ()).map(|(entry, ())| entry)
     }
 
     /// Fetch (or lazily create) the entry for `key` AND claim one in-flight slot
@@ -327,12 +355,12 @@ impl Backend {
     /// Lock order is shard → transport, matching every other nesting in this
     /// module (`shared_transport`, `stop_all`), so no cycle exists. The read
     /// guard is scoped to the claim itself and never survives to an `.await`.
-    fn claim_pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+    fn claim_pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
         self.pooled_entry_with(key, |entry| {
             let _transport = entry.transport.read();
             entry.in_flight.fetch_add(1, Ordering::SeqCst);
         })
-        .0
+        .map(|(entry, ())| entry)
     }
 
     /// The canonical shared slot's `PooledEntry`. Inserted at construction and
@@ -512,7 +540,7 @@ impl Backend {
 
     #[cfg(test)]
     pub(crate) fn set_transport_for_test(&self, transport: Arc<dyn Transport>) {
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         *entry.transport.write() = Some(transport);
     }
 
@@ -524,7 +552,9 @@ impl Backend {
         key: &PoolKey,
         transport: Arc<dyn Transport>,
     ) {
-        let entry = self.pooled_entry(key);
+        let entry = self
+            .pooled_entry(key)
+            .expect("test slot within the identity cap");
         *entry.transport.write() = Some(transport);
     }
 
@@ -575,7 +605,9 @@ impl Backend {
     /// trip one identity's slot without touching another's.
     #[cfg(test)]
     pub(crate) fn trip_circuit_breaker_for_test_key(&self, key: &PoolKey) {
-        let entry = self.pooled_entry(key);
+        let entry = self
+            .pooled_entry(key)
+            .expect("test slot within the identity cap");
         let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
         for _ in 0..threshold {
             entry
@@ -596,11 +628,11 @@ impl Backend {
     /// Mark the start of a client request against `key`, returning a guard that
     /// protects the slot from being stopped until dropped. The only caller-facing
     /// way to write the idle clock.
-    pub(super) fn begin_activity(&self, key: &PoolKey) -> ActivityGuard {
+    pub(super) fn begin_activity(&self, key: &PoolKey) -> crate::Result<ActivityGuard> {
         self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-        let entry = self.claim_pooled_entry(key);
+        let entry = self.claim_pooled_entry(key)?;
         entry.touch();
-        ActivityGuard::adopt_claimed(entry, true)
+        Ok(ActivityGuard::adopt_claimed(entry, true))
     }
 
     /// Hold the shared slot's transport open for internal work without claiming
@@ -617,6 +649,7 @@ impl Backend {
     /// caller sees a spurious `BackendUnavailable` for a backend that is fine.
     pub(super) fn begin_internal_activity(&self) -> ActivityGuard {
         self.begin_internal_activity_for(&PoolKey::Shared)
+            .expect("the shared slot is never capped")
     }
 
     /// The slot-scoped form of [`Self::begin_internal_activity`].
@@ -627,8 +660,14 @@ impl Backend {
     /// hands back an entry `evict_idle_per_user_entries` is still free to
     /// remove, which would close the transport under the fetch
     /// (MIK-7334.CATALOGUE.1 R3).
-    pub(super) fn begin_internal_activity_for(&self, key: &PoolKey) -> ActivityGuard {
-        ActivityGuard::adopt_claimed(self.claim_pooled_entry(key), false)
+    pub(super) fn begin_internal_activity_for(
+        &self,
+        key: &PoolKey,
+    ) -> crate::Result<ActivityGuard> {
+        Ok(ActivityGuard::adopt_claimed(
+            self.claim_pooled_entry(key)?,
+            false,
+        ))
     }
 
     /// Stop this backend's process if it has been unused past

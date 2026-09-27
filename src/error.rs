@@ -115,6 +115,22 @@ pub enum Error {
     #[error("Rate limit exceeded for backend '{0}'")]
     RateLimited(String),
 
+    /// A new identity was refused a connection slot: the backend already
+    /// serves `max_identity_slots` distinct identities (MIK-7547). Refused
+    /// before dispatch, never on the shared slot, and never sampled into the
+    /// error budgets, so one caller's burst of identities cannot disable the
+    /// backend for the identities it already serves. JSON-RPC code -32000.
+    #[error(
+        "backend '{backend}' is at its limit of {cap} concurrent identities \
+         (identity_propagation.max_identity_slots); retry after idle slots are reclaimed"
+    )]
+    IdentitySlotsExhausted {
+        /// Backend that refused the new identity.
+        backend: String,
+        /// The configured `max_identity_slots`.
+        cap: usize,
+    },
+
     /// Tool not found in any connected backend.
     ///
     /// Carries the tool name that was requested.
@@ -323,6 +339,7 @@ impl Error {
             self,
             Self::CircuitOpen { .. }
                 | Self::RateLimited(_)
+                | Self::IdentitySlotsExhausted { .. }
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
@@ -343,6 +360,7 @@ impl Error {
             Self::BackendUnavailable(_)
             | Self::CircuitOpen { .. }
             | Self::RateLimited(_)
+            | Self::IdentitySlotsExhausted { .. }
             | Self::BackendTimeout(_)
             | Self::Transport(_)
             // A connect failure is the same class on the wire; the variant

@@ -3978,6 +3978,9 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
             },
         ),
         Error::RateLimited(_) => (ErrorCategory::RateLimited, error.to_string()),
+        Error::IdentitySlotsExhausted { .. } => {
+            (ErrorCategory::CapacityExhausted, error.to_string())
+        }
         Error::BackendNotFound(name) | Error::ToolNotFound(name) => {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
@@ -4047,9 +4050,11 @@ impl BudgetOutcome {
                     Self::Success
                 }
             }
-            // The gateway's own limiter refused: the backend was never asked.
-            // Matched on the variant, not on its message (F23).
-            Err(Error::RateLimited(_)) => Self::IgnoredRateLimit,
+            // The gateway's own limiter, or its identity-slot cap, refused: the
+            // backend was never asked. Matched on the variant (F23, MIK-7547).
+            Err(Error::RateLimited(_) | Error::IdentitySlotsExhausted { .. }) => {
+                Self::IgnoredRateLimit
+            }
             Err(error) => {
                 if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
                     Self::IgnoredRateLimit
@@ -4939,6 +4944,7 @@ mod identity_propagation_enforcement_tests {
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }
     }
 
@@ -6011,6 +6017,7 @@ mod identity_propagation_enforcement_tests {
             // `token_exchange::tests::unreachable_endpoint_is_refused`.
             token_exchange_endpoint: Some("https://127.0.0.1:0/token".to_string()),
             token_exchange_scope: Some("mail.read".to_string()),
+            max_identity_slots: 64,
         }
     }
 

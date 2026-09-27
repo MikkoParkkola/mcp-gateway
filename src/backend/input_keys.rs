@@ -78,7 +78,11 @@ impl Backend {
         // The same normalisation a discovery fill applies; the resend set it
         // returns stays with discovery, so this fill grants no retries.
         let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
-        let lease = self.begin_internal_activity_for(&key);
+        // At the identity-slot cap there is no slot to remember into, and the
+        // list is only an optimisation for the next call (MIK-7547).
+        let Ok(lease) = self.begin_internal_activity_for(&key) else {
+            return;
+        };
         let entry = Arc::clone(lease.entry());
         // A store, not a fill: it must not depend on the slot reading as
         // stale, nor queue behind a discovery fill already on the wire.
@@ -137,7 +141,7 @@ mod tests {
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         );
-        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let lease = backend.begin_internal_activity();
         let discovered: crate::protocol::Tool =
             serde_json::from_value(edit_declaring("a")).expect("a tool");
         lease
@@ -186,7 +190,7 @@ mod tests {
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         );
-        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let lease = backend.begin_internal_activity();
         let entry = std::sync::Arc::clone(lease.entry());
         let started = std::sync::Arc::new(tokio::sync::Notify::new());
         let release = std::sync::Arc::new(tokio::sync::Notify::new());

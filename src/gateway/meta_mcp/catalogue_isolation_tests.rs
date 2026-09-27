@@ -202,6 +202,7 @@ async fn per_user_backend() -> Arc<Backend> {
                 session_mode: SessionMode::PerUser,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
+                max_identity_slots: 64,
             }),
             ..Default::default()
         },
@@ -480,6 +481,7 @@ async fn shared_credential_routes_never_reach_an_identity_bound_backend() {
                     session_mode: SessionMode::PerUser,
                     token_exchange_endpoint: None,
                     token_exchange_scope: None,
+                    max_identity_slots: 64,
                 }),
                 ..Default::default()
             },

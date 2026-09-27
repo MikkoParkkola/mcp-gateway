@@ -1399,6 +1399,7 @@ async fn backend_handler_discovery_method_fails_closed_for_required_propagation(
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
         ..BackendConfig::default()
     };
@@ -1467,6 +1468,7 @@ async fn backend_handler_required_mint_without_route_audit_fails_closed_generica
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            max_identity_slots: 64,
         }),
         enabled: true,
         ..BackendConfig::default()

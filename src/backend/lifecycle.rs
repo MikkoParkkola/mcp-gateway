@@ -142,14 +142,8 @@ impl Backend {
             name: name.to_string(),
             config,
             runtime_plan,
-            pool: {
-                let pool = DashMap::new();
-                pool.insert(
-                    PoolKey::Shared,
-                    Arc::new(PooledEntry::new(name, failsafe_config)),
-                );
-                pool
-            },
+            pool: PooledEntry::fresh_pool(name, failsafe_config),
+            identity_slots: Arc::default(),
             failsafe_config: failsafe_config.clone(),
             era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
             unserved_consecutive: AtomicU64::new(0),
@@ -208,7 +202,7 @@ impl Backend {
         const MAX_RACE_RETRIES: u8 = 3;
 
         for _attempt in 0..MAX_RACE_RETRIES {
-            let entry = self.pooled_entry(key);
+            let entry = self.pooled_entry(key)?;
 
             // NOTE: deliberately does NOT touch the idle clocks. `last_used` means
             // "when did a CLIENT last use this backend", and is written only by the
@@ -327,7 +321,7 @@ impl Backend {
     ///
     /// Returns an error if the transport fails to connect or initialize.
     pub async fn start(&self) -> Result<()> {
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         self.start_entry(&PoolKey::Shared, &entry).await?;
         Ok(())
     }
@@ -897,7 +891,7 @@ impl Backend {
             return Ok(RestartOutcome::SkippedStopping);
         }
 
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         let _guard = entry.start_lock.lock().await;
 
         // Re-checked after the await. The lock above normally prevents shutdown

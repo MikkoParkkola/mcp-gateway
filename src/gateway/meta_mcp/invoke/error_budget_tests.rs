@@ -454,3 +454,66 @@ async fn an_open_breaker_still_reports_circuit_open_and_counts() {
         "an open breaker is still a failure sample"
     );
 }
+
+fn identity_slots_exhausted() -> Error {
+    Error::IdentitySlotsExhausted {
+        backend: "mem".to_string(),
+        cap: 64,
+    }
+}
+
+/// MIK-7547 B1: an identity-slot refusal is the gateway protecting a backend,
+/// not the backend failing. It is classified out of the budgets, so a flood of
+/// new identities cannot disable the capability or kill the backend for the
+/// identities it already serves. Recorded well past `min_samples`.
+#[test]
+fn slot_refusal_never_samples_the_error_budget() {
+    let refusal: crate::Result<Value> = Err(identity_slots_exhausted());
+    assert_eq!(BudgetOutcome::of(&refusal), BudgetOutcome::IgnoredRateLimit);
+
+    let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    for _ in 0..50 {
+        m.record_error_budget("mem", "read", BudgetOutcome::of(&refusal));
+    }
+    assert_eq!(m.kill_switch.window_counts("mem"), (0, 0));
+    assert_eq!(
+        m.kill_switch.capability_window_counts("mem", "read"),
+        (0, 0)
+    );
+    assert!(!m.kill_switch.is_capability_disabled("mem", "read"));
+    assert!(!m.kill_switch.is_killed("mem"));
+}
+
+/// MIK-7547 S15: the refusal's wire contract. Clients and alerts match these.
+#[test]
+fn identity_slot_refusal_wire_contract() {
+    let error = identity_slots_exhausted();
+    assert_eq!(
+        error.to_string(),
+        "backend 'mem' is at its limit of 64 concurrent identities \
+         (identity_propagation.max_identity_slots); retry after idle slots are reclaimed"
+    );
+    assert_eq!(error.to_rpc_code(), -32000);
+    assert!(error.is_pre_dispatch(), "refused before any I/O");
+
+    let (category, detail) = super::classify_dispatch_error(&error);
+    assert_eq!(
+        category,
+        crate::gateway::recovery::ErrorCategory::CapacityExhausted
+    );
+    let hint = crate::gateway::recovery::recovery_for(
+        category,
+        crate::gateway::recovery::RecoveryContext {
+            backend: Some("mem"),
+            detail: Some(&detail),
+            ..Default::default()
+        },
+    );
+    assert_eq!(hint.error_code, "IDENTITY_SLOTS_EXHAUSTED");
+    assert!(hint.retry);
+    assert!(
+        hint.suggest.contains("max_identity_slots"),
+        "{}",
+        hint.suggest
+    );
+}

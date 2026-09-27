@@ -32,16 +32,22 @@ impl Backend {
     /// selects the transport. Identity-free readers pass `None` through the
     /// named `*_shared`-style wrappers below, which is how `Shared` stays
     /// reachable without any caller spelling a key.
-    fn tools_slot(&self, binding: Option<&str>) -> Arc<super::pool::PooledEntry> {
-        self.pooled_entry(&self.pool_key_for(binding))
+    ///
+    /// A lookup, never a creation (MIK-7547): a reader asking about an identity
+    /// with no slot gets `None`, read as "nothing cached", and does not spend an
+    /// identity slot on a question.
+    fn tools_slot(&self, binding: Option<&str>) -> Option<Arc<super::pool::PooledEntry>> {
+        match self.pool_key_for(binding) {
+            PoolKey::Shared => Some(self.shared_entry()),
+            key => self.pool.get(&key).map(|entry| Arc::clone(entry.value())),
+        }
     }
 
     /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
     #[must_use]
     pub fn has_cached_tools_for(&self, binding: Option<&str>) -> bool {
         self.tools_slot(binding)
-            .tools_cache
-            .is_fresh(self.cache_ttl)
+            .is_some_and(|slot| slot.tools_cache.is_fresh(self.cache_ttl))
     }
 
     /// The shared slot's freshness. Used by readers that hold no caller.
@@ -66,9 +72,7 @@ impl Backend {
         // between the caller observing emptiness and acting on it, which would
         // turn a backend that had just become discoverable back into an
         // invisible one. The check happens under the cache's own write lock.
-        self.tools_slot(None)
-            .tools_cache
-            .invalidate_if(Vec::is_empty);
+        self.shared_entry().tools_cache.invalidate_if(Vec::is_empty);
     }
 
     /// Number of tools cached on `binding`'s slot (non-blocking, no network I/O).
@@ -77,9 +81,10 @@ impl Backend {
     /// design: it never triggers a refresh.
     #[must_use]
     pub fn cached_tools_count_for(&self, binding: Option<&str>) -> usize {
-        self.tools_slot(binding)
-            .tools_cache
-            .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
+        self.tools_slot(binding).map_or(0, |slot| {
+            slot.tools_cache
+                .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
+        })
     }
 
     /// The shared slot's count.
@@ -91,7 +96,7 @@ impl Backend {
     /// `false` means the shared slot was never populated, not that it is empty.
     #[must_use]
     pub fn cached_tools_known(&self) -> bool {
-        self.tools_slot(None).tools_cache.ever_populated()
+        self.shared_entry().tools_cache.ever_populated()
     }
 
     /// The shared slot's tools and truncated flag under one read guard. The
@@ -99,7 +104,7 @@ impl Backend {
     /// never a truncated list beside a clear flag.
     #[must_use]
     pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
-        let slot = self.tools_slot(None);
+        let slot = self.shared_entry();
         slot.tools_cache.with_cached(|tools| {
             (
                 tools.map_or_else(|| Arc::new(Vec::new()), Arc::clone),
@@ -111,7 +116,7 @@ impl Backend {
     /// Both under one guard; use wherever the two travel together.
     #[must_use]
     pub fn cached_tools_count_and_known(&self) -> (usize, bool) {
-        self.tools_slot(None)
+        self.shared_entry()
             .tools_cache
             .with_cached_and_populated(|tools, populated| {
                 (tools.map_or(0, |tools| tools.len()), populated)
@@ -126,10 +131,12 @@ impl Backend {
     /// back door while the front door is sealed.
     #[must_use]
     pub fn get_cached_tool_names_for(&self, binding: Option<&str>) -> Vec<String> {
-        self.tools_slot(binding).tools_cache.with_cached(|tools| {
-            tools
-                .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
-                .unwrap_or_default()
+        self.tools_slot(binding).map_or_else(Vec::new, |slot| {
+            slot.tools_cache.with_cached(|tools| {
+                tools
+                    .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
+                    .unwrap_or_default()
+            })
         })
     }
 
@@ -142,7 +149,7 @@ impl Backend {
     /// One tool by exact name from `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tool_for(&self, binding: Option<&str>, name: &str) -> Option<Tool> {
-        self.tools_slot(binding).tools_cache.with_cached(|tools| {
+        self.tools_slot(binding)?.tools_cache.with_cached(|tools| {
             tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
         })
     }
@@ -157,8 +164,7 @@ impl Backend {
     #[must_use]
     pub fn get_cached_tools_snapshot_for(&self, binding: Option<&str>) -> Arc<Vec<Tool>> {
         self.tools_slot(binding)
-            .tools_cache
-            .snapshot_shared()
+            .and_then(|slot| slot.tools_cache.snapshot_shared())
             .unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
@@ -228,7 +234,7 @@ impl Backend {
             None => &[],
         };
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
-        let lease = self.begin_internal_activity_for(&key);
+        let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
         select(&entry)
             .get_or_fetch_shared_then(
@@ -344,7 +350,7 @@ impl Backend {
         reason = "direct-route caller lands with the resend plumbing"
     )]
     pub(crate) fn set_resend_permitted(&self, permitted: std::collections::HashSet<String>) {
-        *self.tools_slot(None).resend_permitted.write() = permitted;
+        *self.shared_entry().resend_permitted.write() = permitted;
     }
 
     /// Snapshot of the tools currently recorded as explicitly resend-permitted.
@@ -362,7 +368,7 @@ impl Backend {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
-        self.tools_slot(None).resend_permitted.read().clone()
+        self.shared_entry().resend_permitted.read().clone()
     }
 
     /// # Errors
