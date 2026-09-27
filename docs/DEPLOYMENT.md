@@ -1166,7 +1166,9 @@ history. Without `--url`, the gateway address comes from the config, and a confi
 that fails to load is an error rather than a guess. The command presents no client
 certificate, so on a listener with `mtls.require_client_cert` call the endpoint
 with your client certificate instead:
-`curl --cert client.pem --key client-key.pem --cacert ca.pem -X POST -H "Authorization: Bearer $MCP_GATEWAY_TOKEN" https://127.0.0.1:39400/ui/api/dashboard-link`. Only the static bearer or an admin API
+`printf 'Authorization: Bearer %s' "$MCP_GATEWAY_TOKEN" | curl -H @- --cert client.pem --key client-key.pem --cacert ca.pem -X POST https://127.0.0.1:39400/ui/api/dashboard-link`
+(`printf` is a shell builtin and `-H @-` reads the header from stdin, so the
+token never becomes a process argument). Only the static bearer or an admin API
 key may mint a link: a dashboard session or an SSO login gets `403`. The new link
 keeps every rule above: single use, from this machine only.
 

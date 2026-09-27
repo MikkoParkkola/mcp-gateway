@@ -645,9 +645,13 @@ pub(crate) fn session_cookie(handle: &str, max_age: u64, secure: bool) -> String
 
 /// Whether browsers reach this gateway over HTTPS, so its cookies must be
 /// `Secure`: a TLS listener, or a `public_url` behind a TLS-terminating proxy.
-pub(crate) fn cookies_are_secure(config: &crate::config::Config) -> bool {
-    config.mtls.enabled
-        || config
+///
+/// TLS is read from the RUNNING listener (restart-only); `public_url` from the
+/// live config, which a reload applies.
+pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> bool {
+    live.running().mtls.enabled
+        || live
+            .get()
             .server
             .public_url
             .as_deref()

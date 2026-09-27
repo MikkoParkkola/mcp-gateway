@@ -290,7 +290,7 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
         // Also when a proxy terminates TLS in front: the browser speaks HTTPS
         // even though this listener does not, and without `Secure` a downgrade
         // puts the operator's session on the wire.
-        tls_enabled: super::auth::cookies_are_secure(&state.live_config.get()),
+        tls_enabled: super::auth::cookies_are_secure(&state.live_config),
     }
 }
 

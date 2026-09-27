@@ -52,7 +52,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
             tracing::warn!(%error, "Dashboard logout not recorded; the session was still revoked");
         }
     }
-    let secure = cookies_are_secure(&state.live_config.get());
+    let secure = cookies_are_secure(&state.live_config);
     (
         StatusCode::SEE_OTHER,
         [
@@ -84,8 +84,7 @@ pub(super) async fn dashboard_link(
     if !may_mint {
         return admin_auth_required().into_response();
     }
-    let config = state.live_config.get();
-    if cookies_are_secure(&config) && !state.live_config.running().mtls.enabled {
+    if cookies_are_secure(&state.live_config) && !state.live_config.running().mtls.enabled {
         // The session cookie would be `Secure` over a plain-HTTP loopback
         // listener, and a browser discards it: the link would be spent for
         // nothing. Same refusal as the startup banner's.

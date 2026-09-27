@@ -742,3 +742,23 @@ fn session_limits_are_not_reported_as_restart_only() {
     live.set(wanted);
     assert!(live.pending_restart_fields().contains(&"auth"));
 }
+
+/// A reload that edits the restart-only listener fields changes nothing about
+/// the link: it names the address and scheme this process actually serves.
+#[tokio::test]
+async fn the_link_names_the_running_listener_not_a_pending_reload() {
+    let (state, _dir) = fixture().await;
+    let port = state.live_config.running().server.port;
+    reload(&state, |c| {
+        c.server.host = "10.0.0.5".to_string();
+        c.server.port = port.wrapping_add(1);
+        c.mtls.enabled = true;
+    });
+    let out = mint(&state, Some(ADMIN_KEY), None).await;
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    let link = out.json()["link"].as_str().unwrap_or_default().to_string();
+    assert!(
+        link.starts_with(&format!("http://127.0.0.1:{port}/dashboard?bootstrap=")),
+        "{link}"
+    );
+}
