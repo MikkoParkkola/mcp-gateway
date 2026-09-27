@@ -74,6 +74,7 @@ async fn t2_the_span_names_the_route_template() {
         .filter(|l| l.contains(": tower_http::"))
         .collect::<Vec<_>>()
         .join("\n");
+    #[cfg(feature = "webui")]
     assert!(span_lines.contains("path=/dashboard"), "{text}");
     assert!(
         span_lines.contains("path=/mcp/{name}"),

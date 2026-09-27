@@ -21,6 +21,6 @@ pub(super) fn span_for(request: &Request<Body>) -> tracing::Span {
         tracing::Level::DEBUG,
         "request",
         method = %request.method(),
-        path
+        path = %path
     )
 }
