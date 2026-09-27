@@ -2652,6 +2652,10 @@ impl Gateway {
         } else {
             info!("stdio: EOF reached, shutting down");
         }
+        #[cfg(feature = "cost-governance")]
+        if let Some(enforcer) = &meta_mcp.budget_enforcer {
+            persistence::save_costs(enforcer, &data_dir);
+        }
         // EOF drains, it does not abort (design §6): every request the loop
         // accepted still gets its response. Outstanding prompts are failed
         // first — their answers can only arrive on the pipe that just closed —
@@ -2682,7 +2686,7 @@ impl Gateway {
             if let Some(saver) = cost_saver {
                 saver.stop().await;
             }
-            persistence::save_costs(enforcer, &data_dir);
+            let _ = enforcer;
         }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
