@@ -214,7 +214,8 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
     let who = identity();
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
-    fx.meta
+    let outcome = fx
+        .meta
         .confirm_destructive_task(&TaskConfirmationRequest {
             id: RequestId::Number(7),
             tool_name: TOOL,
@@ -226,7 +227,33 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
             is_modern: true,
             admission: &fx.admission,
         })
+        .await;
+    assert_eq!(fx.mint.0.load(Ordering::SeqCst), 0, "the gate never mints");
+    outcome
+}
+
+/// States that are not confirmation grants: garbage, and an authentic envelope
+/// minted for a backend exchange, which only the purpose check tells apart.
+async fn foreign_states(fx: &Fixture) -> Vec<String> {
+    let payload = fx
+        .meta
+        .continuation
+        .begin_exchange(
+            SERVER.to_string(),
+            None,
+            "fingerprint".to_string(),
+            "digest".to_string(),
+            crate::protocol::continuation::now_unix_secs(),
+        )
         .await
+        .expect("a backend exchange can be held");
+    let envelope = fx
+        .meta
+        .continuation
+        .keyring()
+        .mint(&payload)
+        .expect("a backend envelope mints");
+    vec!["not-a-confirmation-grant".to_string(), envelope]
 }
 
 /// The challenge's prompt, issued key and sealed state, or a panic naming
@@ -265,7 +292,6 @@ async fn propagating_backend_ignores_a_harmless_shared_slot() {
         message.contains(UNCLASSIFIED),
         "unclassified prompt: {message}"
     );
-    assert_eq!(fx.mint.0.load(Ordering::SeqCst), 0, "the gate never mints");
 }
 
 /// T2: nothing cached anywhere on a propagating backend.
@@ -277,7 +303,6 @@ async fn propagating_backend_with_a_cold_shared_slot_is_confirmed() {
         message.contains(UNCLASSIFIED),
         "unclassified prompt: {message}"
     );
-    assert_eq!(fx.mint.0.load(Ordering::SeqCst), 0, "the gate never mints");
 }
 
 /// T3 (guard): an ordinary backend's harmless tool is not the gate's business.
@@ -372,15 +397,17 @@ async fn a_held_grant_is_redeemed_after_the_slot_turns_harmless() {
 #[tokio::test]
 async fn a_foreign_request_state_on_a_harmless_call_is_not_ours() {
     let fx = fixture(BackendConfig::default(), Some(Hint::Harmless)).await;
-    let retry = RetryFields {
-        request_state: Some("not-a-confirmation-grant".to_string()),
-        ..fresh()
-    };
-    let outcome = ask(&fx, &retry, elicitation()).await;
-    assert!(
-        matches!(outcome, TaskConfirmation::NotRequired),
-        "expected NotRequired, got {outcome:?}"
-    );
+    for state in foreign_states(&fx).await {
+        let retry = RetryFields {
+            request_state: Some(state),
+            ..fresh()
+        };
+        let outcome = ask(&fx, &retry, elicitation()).await;
+        assert!(
+            matches!(outcome, TaskConfirmation::NotRequired),
+            "expected NotRequired, got {outcome:?}"
+        );
+    }
 }
 
 /// T11: a requestState that is not a confirmation grant exempts nothing. On a
@@ -388,16 +415,18 @@ async fn a_foreign_request_state_on_a_harmless_call_is_not_ours() {
 #[tokio::test]
 async fn a_foreign_request_state_does_not_exempt_an_unclassified_call() {
     let fx = fixture(propagating(), None).await;
-    let retry = RetryFields {
-        request_state: Some("not-a-confirmation-grant".to_string()),
-        ..fresh()
-    };
-    let outcome = ask(&fx, &retry, elicitation()).await;
-    let TaskConfirmation::Answer(response) = &outcome else {
-        panic!("expected a refusal, got {outcome:?}");
-    };
-    assert!(
-        response.error.is_some(),
-        "refused, not challenged: {response:?}"
-    );
+    for state in foreign_states(&fx).await {
+        let retry = RetryFields {
+            request_state: Some(state),
+            ..fresh()
+        };
+        let outcome = ask(&fx, &retry, elicitation()).await;
+        let TaskConfirmation::Answer(response) = &outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(
+            response.error.is_some(),
+            "refused, not challenged: {response:?}"
+        );
+    }
 }
