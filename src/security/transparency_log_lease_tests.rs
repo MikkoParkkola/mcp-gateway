@@ -176,12 +176,21 @@ fn a_zero_wait_refuses_at_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let _l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
-    let t = Instant::now();
-    let e = TransparencyLogger::open(cfg_wait(&path, 0))
-        .err()
-        .expect("refused");
+    // The second open runs on its own thread: a lease taken as a blocking
+    // lock would wait forever, and this must fail rather than hang.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let p = path.clone();
+    std::thread::spawn(move || {
+        let t = Instant::now();
+        let refused = TransparencyLogger::open(cfg_wait(&p, 0)).err();
+        let _ = tx.send((refused, t.elapsed()));
+    });
+    let (refused, took) = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the second open blocked on the lease instead of refusing");
+    let e = refused.expect("refused");
     assert!(is_lease_held(&e), "{e}");
-    assert!(t.elapsed() < Duration::from_millis(200));
+    assert!(took < Duration::from_millis(200), "{took:?}");
 }
 
 /// T6: a lease file that cannot be opened is its own error, returned at
