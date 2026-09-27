@@ -1235,10 +1235,10 @@ impl ConfigWatcher {
                                     );
                                 }
                                 (Err(e), ReloadTrigger::EnvFile(path))
-                                    if !e.starts_with(SHUTDOWN_ABORTED_ERROR)
-                                        && !is_posture_refusal(&e) =>
+                                    if !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
                                 {
-                                    env_reloads.report_failure(&mut env_warns, path, &e);
+                                    let posture = is_posture_refusal(&e);
+                                    env_reloads.report_failure(&mut env_warns, path, &e, posture);
                                 }
                                 (Err(e), _) if is_posture_refusal(&e) => {
                                     // Its own arm, ahead of the generic one: a

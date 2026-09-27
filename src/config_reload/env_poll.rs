@@ -115,20 +115,32 @@ impl EnvReloadCounts {
     }
 
     /// Log a failed env-file reload: warn when `limiter` allows, else debug.
-    pub(super) fn report_failure(&self, limiter: &mut WarnLimiter, path: &Path, error: &str) {
-        if limiter.should_warn(path, error, Instant::now()) {
-            self.warns.fetch_add(1, Ordering::SeqCst);
+    /// A posture refusal keeps its own wording (a decision about the config,
+    /// not a file to fix) but is throttled like any other retried failure.
+    pub(super) fn report_failure(
+        &self,
+        limiter: &mut WarnLimiter,
+        path: &Path,
+        error: &str,
+        posture_refusal: bool,
+    ) {
+        if !limiter.should_warn(path, error, Instant::now()) {
+            tracing::debug!(
+                path = %path.display(),
+                error = %error,
+                "Config reload: env-file reload still failing"
+            );
+            return;
+        }
+        self.warns.fetch_add(1, Ordering::SeqCst);
+        if posture_refusal {
+            tracing::warn!(path = %path.display(), "Config reload: {error}");
+        } else {
             tracing::warn!(
                 path = %path.display(),
                 error = %error,
                 "Config reload: env file changed but the reload failed; \
                  keeping the current config and retrying every poll"
-            );
-        } else {
-            tracing::debug!(
-                path = %path.display(),
-                error = %error,
-                "Config reload: env-file reload still failing"
             );
         }
     }
