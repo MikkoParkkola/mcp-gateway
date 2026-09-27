@@ -164,7 +164,7 @@ impl EnvPoller {
                 );
             }
             self.stalled = true;
-            self.pending = Some(read);
+            drop(read);
             return None;
         };
         self.stalled = false;
