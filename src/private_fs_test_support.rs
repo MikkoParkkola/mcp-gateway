@@ -48,27 +48,59 @@ fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
-/// Owner and DACL of `path` in the SDDL shape the plants use, with every SID
-/// in numeric form. `GetSecurityDescriptorSddlForm` prints aliases (`LA`, `BA`)
-/// and adds auto-inherit flags, so the descriptor is rebuilt from `Get-Acl`'s
-/// SID-typed accessors instead.
+/// Native plant/read through the Win32 SDDL functions, compiled by PowerShell
+/// at test time. .NET's `Set-Acl` cannot express a NULL DACL or a callback ACE
+/// (it rewrites both into ordinary allow ACEs), and neither can `icacls`.
+/// Independent of `win_acl` by construction: different code, different calls.
+const NATIVE: &str = r#"Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class MgwSd {
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string s, uint rev, out IntPtr sd, out uint len);
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern bool ConvertSecurityDescriptorToStringSecurityDescriptorW(byte[] sd, uint rev, uint info, out IntPtr s, out uint len);
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern bool SetFileSecurityW(string path, uint info, IntPtr sd);
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern bool GetFileSecurityW(string path, uint info, byte[] sd, uint len, out uint need);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
+  const uint OWNER = 1, DACL = 4, PROT = 0x80000000, UNPROT = 0x20000000;
+  public static void Set(string path, string sddl, bool protect) {
+    IntPtr sd; uint n;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out sd, out n)) throw new System.ComponentModel.Win32Exception();
+    try { if (!SetFileSecurityW(path, OWNER | DACL | (protect ? PROT : UNPROT), sd)) throw new System.ComponentModel.Win32Exception(); }
+    finally { LocalFree(sd); }
+  }
+  public static string Get(string path) {
+    uint need; GetFileSecurityW(path, OWNER | DACL, null, 0, out need);
+    byte[] b = new byte[need];
+    if (!GetFileSecurityW(path, OWNER | DACL, b, need, out need)) throw new System.ComponentModel.Win32Exception();
+    IntPtr s; uint n;
+    if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(b, 1, OWNER | DACL, out s, out n)) throw new System.ComponentModel.Win32Exception();
+    try { return Marshal.PtrToStringUni(s); } finally { LocalFree(s); }
+  }
+}
+'@
+function Numeric($d) { [regex]::Replace($d, '(?<=O:|;;;)([A-Z]{2})(?=D:|\)|;|$)', { param($m) try { (New-Object System.Security.Principal.SecurityIdentifier($m.Value)).Value } catch { $m.Value } }) }
+"#;
+
+/// Owner and DACL of `path` as SDDL, every SID numeric (aliases such as `LA`,
+/// `BA`, `WD` translated), read with the native Win32 conversion.
 pub(crate) fn read_sddl(row: &str, path: &Path) -> String {
-    let script = format!(
-        "$a = Get-Acl -LiteralPath {p}; $s = [System.Security.Principal.SecurityIdentifier]; \
-         $raw = $a.GetSecurityDescriptorSddlForm('Access'); \
-         $o = 'O:' + $a.GetOwner($s).Value; \
-         if ($raw -match 'NO_ACCESS_CONTROL') {{ $o + 'D:' + ($(if ($a.AreAccessRulesProtected) {{ 'P' }} else {{ '' }})) + 'NO_ACCESS_CONTROL'; exit }}; \
-         $d = 'D:' + $(if ($a.AreAccessRulesProtected) {{ 'P' }} else {{ '' }}); \
-         foreach ($r in $a.GetAccessRules($true, $true, $s)) {{ \
-           $t = if ($r.AccessControlType -eq 'Allow') {{ 'A' }} else {{ 'D' }}; \
-           $f = ''; if ($r.InheritanceFlags -band 1) {{ $f += 'CI' }}; if ($r.InheritanceFlags -band 2) {{ $f += 'OI' }}; \
-           if ($r.IsInherited) {{ $f += 'ID' }}; \
-           $m = [int]$r.FileSystemRights; $g = switch ($m) {{ 2032127 {{ 'FA' }} 1179785 {{ 'FR' }} 1179817 {{ 'FR' }} default {{ '0x{{0:x}}' -f $m }} }}; \
-           $d += '(' + $t + ';' + $f + ';' + $g + ';;;' + $r.IdentityReference.Value + ')' }}; \
-         $o + $d",
-        p = quoted(path)
-    );
-    powershell(&script).unwrap_or_else(|e| fixture_fail(row, &format!("Get-Acl failed: {e}")))
+    powershell(&format!(
+        "{NATIVE}\nNumeric ([MgwSd]::Get({}))",
+        quoted(path)
+    ))
+    .unwrap_or_else(|e| fixture_fail(row, &format!("reading the descriptor failed: {e}")))
+}
+
+fn native_set(row: &str, path: &Path, sddl: &str) {
+    let protect = sddl.contains("D:P");
+    powershell(&format!(
+        "{NATIVE}\n[MgwSd]::Set({}, '{sddl}', ${protect})",
+        quoted(path)
+    ))
+    .unwrap_or_else(|e| fixture_fail(row, &format!("planting {sddl} failed: {e}")));
 }
 
 /// Compare two descriptors semantically: owner, protection, and the ACE set
@@ -97,12 +129,7 @@ fn same_descriptor(a: &str, b: &str) -> bool {
 /// (the literal the row depends on) before the store is ever invoked.
 pub(crate) fn plant_sddl(row: &str, path: &Path, sddl: &str, expect_back: &str) {
     let expect_back = &numeric_aliases(expect_back);
-    powershell(&format!(
-        "$a = Get-Acl -LiteralPath {p}; $a.SetSecurityDescriptorSddlForm('{sddl}'); \
-         Set-Acl -LiteralPath {p} -AclObject $a",
-        p = quoted(path)
-    ))
-    .unwrap_or_else(|e| fixture_fail(row, &format!("Set-Acl {sddl} failed: {e}")));
+    native_set(row, path, sddl);
     let back = read_sddl(row, path);
     if !same_descriptor(&back, expect_back) {
         fixture_fail(
@@ -114,12 +141,7 @@ pub(crate) fn plant_sddl(row: &str, path: &Path, sddl: &str, expect_back: &str) 
 
 /// Set a descriptor whose read-back Windows may normalise; returns it.
 pub(crate) fn plant_any(row: &str, path: &Path, sddl: &str) -> String {
-    powershell(&format!(
-        "$a = Get-Acl -LiteralPath {p}; $a.SetSecurityDescriptorSddlForm('{sddl}'); \
-         Set-Acl -LiteralPath {p} -AclObject $a",
-        p = quoted(path)
-    ))
-    .unwrap_or_else(|e| fixture_fail(row, &format!("Set-Acl {sddl} failed: {e}")));
+    native_set(row, path, sddl);
     read_sddl(row, path)
 }
 

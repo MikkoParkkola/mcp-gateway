@@ -369,7 +369,7 @@ fn legacy_token(row: &str) -> (tempfile::TempDir, PathBuf) {
     crate::private_fs::test_support::plant_sddl(row, &parent, &sddl, &sddl);
     let path = parent.join("0123456789abcdef_tokens.json");
     std::fs::write(&path, LEGACY).unwrap();
-    icacls(row, &path, &["/setowner", &user]);
+    icacls(row, &path, &["/setowner", &format!("*{user}")]);
     (root, path)
 }
 
@@ -457,6 +457,7 @@ fn wt16_open_store_blocks_ancestor_swap() {
 /// Rows run only by the privileged CI step (`--ignored win_privileged::`).
 mod win_privileged {
     use super::*;
+    use base64::Engine as _;
     use std::fmt::Write as _;
 
     fn env(row: &str, var: &str) -> String {
@@ -476,9 +477,6 @@ mod win_privileged {
         icacls(row, &base, &["/grant", "*S-1-5-32-545:(OI)(CI)RX"]);
         let control = base.join("control.txt");
         std::fs::write(&control, b"control").unwrap();
-        let result = base.join("result.txt");
-        std::fs::write(&result, b"").unwrap();
-        icacls(row, &result, &["/grant", "*S-1-5-32-545:M"]);
         let mut settings = config(&base);
         settings.max_entries = 8;
         let store = PersonalAccountStore::initialize(settings.clone()).unwrap();
@@ -489,42 +487,52 @@ mod win_privileged {
             ("authority", settings.authority_dir.join("authority.json")),
             ("record", record_file(&settings.store_dir)),
         ];
-        let mut script = format!(
-            "whoami /groups | Out-File -Append -LiteralPath '{}';",
-            result.display()
-        );
+        // The child writes nothing to disk: its stdout is the result, so a
+        // launch that never ran cannot be mistaken for a denial.
+        let mut script = String::from("whoami /groups;");
         for (name, path) in &targets {
             let _ = write!(
                 script,
-                "try {{ Get-Content -LiteralPath '{p}' -ErrorAction Stop | Out-Null; \
-                 'READ {name}' | Out-File -Append -LiteralPath '{r}' }} \
-                 catch {{ 'DENIED {name}' | Out-File -Append -LiteralPath '{r}' }};",
+                "try {{ Get-Content -LiteralPath '{p}' -ErrorAction Stop | Out-Null; 'READ {name}' }} \
+                 catch {{ 'DENIED {name}' }};",
                 p = path.display(),
-                r = result.display()
             );
         }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>(),
+        );
         let launcher = format!(
-            "$c = New-Object System.Management.Automation.PSCredential('{user}', \
-             (ConvertTo-SecureString '{pass}' -AsPlainText -Force)); \
-             $p = Start-Process powershell -Credential $c -WorkingDirectory '{w}' -Wait -PassThru \
-             -LoadUserProfile -RedirectStandardError '{e}' \
-             -ArgumentList '-NoProfile','-Command',\"{s}\"; exit $p.ExitCode",
+            "$i = New-Object System.Diagnostics.ProcessStartInfo 'powershell.exe'; \
+             $i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {encoded}'; \
+             $i.UserName = '{user}'; $i.Password = (ConvertTo-SecureString '{pass}' -AsPlainText -Force); \
+             $i.UseShellExecute = $false; $i.LoadUserProfile = $true; $i.WorkingDirectory = '{w}'; \
+             $i.RedirectStandardOutput = $true; $i.RedirectStandardError = $true; \
+             $p = [System.Diagnostics.Process]::Start($i); $o = $p.StandardOutput.ReadToEnd(); \
+             $e = $p.StandardError.ReadToEnd(); $p.WaitForExit(); \
+             $o; if ($e) {{ 'STDERR: ' + $e }}; exit $p.ExitCode",
             w = base.display(),
-            e = base.join("stderr.txt").display(),
-            s = script.replace('"', "`\"")
         );
         let exit = std::process::Command::new("powershell")
             .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", &launcher])
-            .status();
-        let stderr = std::fs::read_to_string(base.join("stderr.txt")).unwrap_or_default();
-        if !exit.as_ref().is_ok_and(std::process::ExitStatus::success) {
+            .output();
+        let text = exit
+            .as_ref()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let stderr = exit
+            .as_ref()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+            .unwrap_or_default();
+        if !exit.as_ref().is_ok_and(|o| o.status.success()) {
             fixture_fail(
                 row,
-                &format!("Start-Process -Credential failed: {exit:?} {stderr}"),
+                &format!("launching the second user failed: {text} {stderr}"),
             );
         }
-        let text = std::fs::read_to_string(&result).unwrap_or_default();
         if text.contains("S-1-5-32-544") {
             fixture_fail(row, "the second user's token holds Administrators");
         }
