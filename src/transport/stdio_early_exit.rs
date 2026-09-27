@@ -164,7 +164,6 @@ pub(super) async fn reply_or_eof<T>(
     eof: impl std::future::Future<Output = ()>,
 ) -> Option<T> {
     tokio::select! {
-        biased;
         reply = reply => Some(reply),
         () = eof => None,
     }
