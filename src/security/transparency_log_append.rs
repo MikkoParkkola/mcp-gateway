@@ -148,8 +148,12 @@ impl TransparencyLogger {
     /// length, so no later record is glued onto a torn line.
     fn write_line(&self, inner: &mut Inner, line: &str, sync: bool) -> io::Result<()> {
         let bytes = format!("{line}\n");
-        let good = inner.file.metadata()?.len();
         let path = self.path();
+        let good = inner
+            .file
+            .metadata()
+            .map_err(segments::ctx("stat", &path))?
+            .len();
         let written = self
             .injected_write(inner, bytes.as_bytes())
             .unwrap_or_else(|| inner.file.write_all(bytes.as_bytes()))

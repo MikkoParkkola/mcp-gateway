@@ -78,7 +78,7 @@ own HOME, so it is refused at render time instead of failing in the cluster. */}
 {{- if ne (toString (dig "server" "modern_protocol" true $cfg)) "false" -}}
 {{- $reasons = append $reasons "config.server.modern_protocol (on unless set false) serves the tasks extension, and each pod has its own task store; set replicaCount: 1, or config.server.modern_protocol: false." -}}
 {{- end -}}
-{{- if .Values.audit.existingClaim -}}
+{{- if and .Values.audit.existingClaim (ne .Values.auth.mode "mesh") -}}
 {{- $reasons = append $reasons "audit.existingClaim: one gateway process writes the audit log on that volume (a second is refused at startup); set replicaCount: 1, or give each replica its own volume." -}}
 {{- end -}}
 {{- join " " $reasons -}}

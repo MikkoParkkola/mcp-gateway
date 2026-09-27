@@ -202,6 +202,11 @@ fn an_unopenable_lease_file_fails_at_once_and_is_not_lease_held() {
         .expect("a directory is not a lease file");
     assert!(!is_lease_held(&e), "{e}");
     assert!(t.elapsed() < Duration::from_millis(500), "it waited");
+    let lock = sibling(&path, "lock").display().to_string();
+    assert!(
+        e.to_string().contains(&format!("audit log: lock {lock}")),
+        "{e}"
+    );
 }
 
 /// The wait loop, without real time: it sleeps `LEASE_RETRY` between

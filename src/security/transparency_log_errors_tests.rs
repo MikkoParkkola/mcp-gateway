@@ -53,7 +53,7 @@ fn rotation_rename_names_the_target() {
                 .err()
         })
         .expect("rotation must fail onto a directory");
-    assert_names(&e, "rename", &path);
+    assert_names(&e, "rename", &sealed_path(&path, 0));
 }
 
 /// Removing an expired segment.
@@ -74,7 +74,7 @@ fn retention_remove_names_the_segment() {
                 .err()
         })
         .expect("retention must fail on a directory");
-    assert_names(&e, "", &oldest);
+    assert_names(&e, "remove", &oldest);
 }
 
 /// Reading a sealed segment during recovery.
