@@ -161,9 +161,10 @@ rest followed.
 **What to do about it, and these are not two constraints but two eras:**
 
 - **This run used rotation**, with `Aprime` at cyclic distance `NARM/2` from `A`
-  (3 of 6), giving a constant 3-slot separation. Each test arm's separation
-  alternates between `d` and `NARM−d`, so an arm at cyclic distance `d` averages
-  `2d(6−d)/6`: 1.67 for `B` and `REL` (d = 1, 5), 2.67 for `P3` and `P4`
+  (3 of 6), giving a constant 3-slot separation. A test arm at cyclic distance
+  `d` sits `d` slots from `A` in `6−d` of the six rotation phases and, after
+  wrap-around, `6−d` slots away in the other `d`, so it averages
+  `(d(6−d) + (6−d)d)/6 = 2d(6−d)/6`: 1.67 for `B` and `REL` (d = 1, 5), 2.67 for `P3` and `P4`
   (d = 2, 4). Only `Aprime` (d = 3) averages 3, so the control's separation
   matches no test arm; the test arms' mean is 2.17.
 - **Future runs should use `RANDOMIZE=1`**, which draws a fresh permutation per
@@ -303,11 +304,11 @@ test arms.** That is a genuine hole in the gate.
 **But the effect is not measurable on this host at this `n`.** The load-bearing
 evidence is a direct measurement with a clear scale:
 
-- **Median and geometric mean agree to ≤0.24pp on live data at n = 6** (withdrawn at final
-  `n`, where the gaps reach 1.67pp, §4.6) for every test arm
-  (largest: `REL`, −0.0024), against the **±1.7%** the noiseless model predicts
-  for the measured profile. The two estimators differ by a factor of ~7 less
-  than the effect would require. At n = 6 this was the number to cite; it is withdrawn at final `n`.
+- **At n = 6, median and geometric mean agreed to ≤0.24pp on live data** for every
+  test arm (largest: `REL`, −0.0024), against the **±1.7%** the noiseless model
+  predicts for the measured profile, a factor of ~7 below what the effect would require.
+- **Withdrawn at final `n`:** the gaps reach 1.67pp (§4.6), so the n = 6 agreement is
+  no longer evidence against position bias.
 
 Supporting, and weaker than it first appears:
 
@@ -583,7 +584,9 @@ printed with a CONFOUNDED warning rather than silently.
   second-guessed.
 - **Secondary: the most recent multiple of `NARM` kept cycles (12 at final `n`).**
   Because excluded cycles 7 and 15 fall inside it, this window is not slot-balanced:
-  rotation phases appear 1 to 3 times each, so it does not cancel a position term. A *suffix*, deliberately. Recency is clock-determined
+  rotation phases appear 1 to 3 times each, so it does not cancel a position term.
+
+  A *suffix*, deliberately. Recency is clock-determined
   and outcome-independent, whereas taking the *earliest* cycles would select
   precisely the transient-contaminated ones and therefore correlate with
   `Aprime/A` — the quantity under test. The choice looks arbitrary and is not.
@@ -800,7 +803,9 @@ seen directly in the denominator.
 ### 4.5 The ladder, against the noise floor
 
 **Resolvable effect at n=15: 6.13%** (`2 · 1.96 · CV · 1.2533 / √n`, CV 4.83%).
-Nothing smaller is distinguishable from noise.
+This floor applies to differences of pooled medians, the reading in the table below;
+nothing smaller is distinguishable from noise on that reading. Paired per-cycle segment
+ratios have their own order-statistic intervals and can resolve less (Finding 2).
 
 | point | idx | `X/A` | segment | delta | clears 6.13% floor? |
 |---|---|---|---|---|---|
@@ -961,8 +966,9 @@ order.
 4. **An arm at first-parent index 38 (`37ddab1e`, the last 3.5.1 commit) — this
    answers question 3 at achievable `n`.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈141 and is out of
    reach. But **locating a step does not require resolving small differences**:
-   the idx27→69 rise is 8.42pp on pooled medians (`P3/B` = 1.1096 paired), which already
-   clears the noise floor. `4.0.0`
+   the idx27→69 rise is 8.42pp as a difference of pooled `X/A` medians (`P3/A` − `B/A`),
+   or +10.96% as the pooled paired per-cycle ratio `P3/B` = 1.1096; the two are
+   different aggregations of the same segment, and both clear the noise floor. `4.0.0`
    opens at **index 39 (`0f04a179`), inside that window**, and that commit changes
    code itself, so the arm goes at index 38: it splits the window exactly at the
    version boundary — a step in idx27→38 predates 4.0.0, a step in idx38→69
@@ -1165,7 +1171,8 @@ largest rise is idx27→69, but idx69→92 is a measurable rise too.
 
 That window is 42 commits, is the heaviest in the run (107,746 `src` lines
 added, §1.2), and **straddles the 4.0.0 version boundary at index 39**. It is
-not a culprit commit and this design cannot produce one.
+not a culprit commit, and this design cannot produce one; a follow-up bisect confined
+to that window can, if the rise there is one persistent step (Finding 3).
 
 **Finding 3 — attributing small per-segment differences is out of reach on this
 host; locating one large step is not.**
@@ -1249,17 +1256,17 @@ its facts are checked.**
 
 ### 6.2 What the sample size can and cannot exclude
 
-**Resolvable effect at n=15: 6.13%.** Anything smaller is INCONCLUSIVE, never
-absent. A wide interval excludes nothing.
+**Resolvable effect at n=15: 6.13%** for differences of pooled medians. Anything
+smaller is INCONCLUSIVE on that reading, never absent. A wide interval excludes nothing.
 
 | question | effect needed | resolved? |
 |---|---|---|
 | self-versus-self control | — | yes, it *is* G1 |
 | is `REL` slower than v3.5.0 at all | ~12% | **yes** |
 | does `REL` breach the 5% budget | ~5% | **yes**, budget excluded by 5.1pp |
-| which segment carries the rise | ~6% | **one** segment only (idx27→69) |
+| which segment carries the rise | ~6% | pooled medians: **one** (idx27→69); paired ratios: idx27→69 and idx69→92 |
 | does the regression predate 4.0.0 | ~1.6% | **no** — INCONCLUSIVE |
-| which commit | ~1.7% | **no**, and not reachable at n≤195 |
+| which commit | ~1.7% | **no** for small per-segment differences (needs n≈195); a single persistent step in idx27→69 could be bisected at n≈8 per comparison |
 
 ### 6.3 Two of this report's own claims did not survive final `n`
 
