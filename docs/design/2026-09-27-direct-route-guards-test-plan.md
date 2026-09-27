@@ -8,10 +8,9 @@ only (throwaway PRs for red and mutants).
 
 | File | Holds |
 |---|---|
-| `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c (direct half), T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
+| `src/gateway/router/direct_guards_tests.rs` (new, declared `#[cfg(test)]` from `router/mod.rs`) | T1, T1b, T2, T3, T3b, T3c, T3d, T4, T5, T6, T6b, T7, T7b-i, T7b-ii, T9, T11, T11b |
 | `src/gateway/router/dispatch_parity_tests.rs` (new) | T8: the three parity tables and the structural source check |
 | `src/gateway/meta_mcp/invoke/dispatch_guards_tests.rs` (new) | adapter unit table (§2.1a of the design), one row per input arm: ok result, `isError: true`, rate limit as `isError: true`, rate limit as JSON-RPC error, rate limit as transport error, other JSON-RPC error, other transport error; T3c source assertion (the `BridgeDispatcher::invoke` body calls `admit_spend_for`, not `admit_spend(`) |
-| existing input-bridge test harness in `src/gateway/meta_mcp/tests.rs` (bridged-budget cells) | T3c bridged half: the opening call and one bridged round spend on an enforcer shared with the HTTP fixture's `AppState` |
 
 T10 (task-worker path) is added by whichever of this change and LIFECYCLE.1 lands second, per the
 agreed chain; it is listed here so it is not lost.
@@ -39,12 +38,15 @@ One router fixture, modelled on `direct_tasks_owner_tests.rs` / `direct_audit_te
   `backend_handler_inner`.
 - Idempotency: cells that exercise replay (T1b, T5 cached row, T11, T11b, T3d) carry the key in
   `params._meta["io.mcp-gateway/idempotency-key"]` (`IDEMPOTENCY_KEY_META`, `src/protocol/mrtr.rs:33`),
-  as `tests/mik_7272_sub4_three_routes.rs` does; this route reads no HTTP header.
+  as `tests/mik_7272_sub4_three_routes.rs` does; this route reads no HTTP header. The replaced
+  `MetaMcp` has idempotency enabled (`enable_idempotency`), which the base fixture leaves off.
 - Budget figures (T3, T3b, T3d): tool cost 1.0, key daily limit 5.0. The enforcer blocks when
   projected spend reaches the limit and notifies at 80 %, so calls 1-4 are admitted, call 4 carries
   `_cost_warnings` (projected 4.0 = 80 %), and call 5 is refused -32003 (projected 5.0 >= 5.0).
-  T3b uses the same enforcer and changes only the backend answer. T3c uses limit 2.5: the opening
-  call and the bridged round (projected 1.0, 2.0) dispatch, then the direct call is refused (3.0).
+  T3b uses the same enforcer and changes only the backend answer. T3c uses limit 2.5, all in `direct_guards_tests.rs` on one `AppState` and one API key: the
+  opening call and one bridged round are driven through `state.meta_mcp` with that key's caller
+  context (projected 1.0, 2.0) and both dispatch; then the direct HTTP call with the same key is
+  refused (3.0).
 - Profiles (T4): the default profile admits `alpha:*`; a named profile `no-alpha-read` excludes
   `alpha:read`, set only through `gateway_set_profile` on a real `mcp-session-id`.
 - T9 hook: a `#[cfg(test)]` counter incremented on entry to `MetaMcp::direct_route_idempotency`
@@ -71,7 +73,7 @@ Expected red (stated reason) versus guards (green at red, pinned for later):
 | T3 | call N+1 dispatches; no `_cost_warnings` |
 | T3c | limit 2.5: an opening call and one bridged round both dispatch and spend 2.0, then a direct call dispatches (should be -32003); the source assertion finds `admit_spend(` in `BridgeDispatcher::invoke` |
 | T4 | refused-profile call dispatches |
-| T5 | the signing-on rows (nonce optional and `require_nonce`) dispatch; the cached-result rows (run under both signing-on configs) return the cached value. At green each refusal is -32001 naming `gateway_invoke`, with zero backend calls and zero reservation attempts (T9 hook) |
+| T5 | the signing-on rows (nonce optional and `require_nonce`) dispatch; the cached-result rows (run under both signing-on configs) return the cached value. At green each refusal is -32001 with the message `message signing is enabled; use gateway_invoke`, with zero backend calls and zero reservation attempts (T9 hook) |
 | T6 | `is_killed` stays false after N direct failures |
 | T7 | fail-closed contract result delivered (HTTP 200 with result, not error) |
 | T7b-i | response inspection `action_mode`, a result carrying a HIGH finding: delivered (should be refused) |

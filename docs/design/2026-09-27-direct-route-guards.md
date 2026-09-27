@@ -147,7 +147,8 @@ under signing must move to `gateway_invoke` (maintainer decision 2026-09-27: fai
 
 The authoritative test list, fixtures, red reasons and mutants are in the companion test plan,
 `docs/design/2026-09-27-direct-route-guards-test-plan.md`. Summary: T1-T11 cover DIRECT.1-7 on the
-direct route (each also against a passthrough backend), T8 is the both-routes parity and structural
+direct route (T1-T7b and T11 also against a passthrough backend; T10, the task-worker path, lands
+with whichever of this change and LIFECYCLE.1 merges second), T8 is the both-routes parity and structural
 check (DIRECT.8), and mutants M1-M13 each redden a named cell. An allowed baseline dispatches exactly
 once in every mode.
 
