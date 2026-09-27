@@ -144,7 +144,7 @@ impl crate::transport::Transport for Wire {
                 rec.lists.fetch_add(1, Ordering::SeqCst);
                 let mode = *rec.mode.lock();
                 match mode {
-                    ListMode::Serve => {}
+                    ListMode::Serve => tokio::task::yield_now().await, // T3 overlap
                     ListMode::Fail => {
                         return Err(crate::Error::BackendUnavailable(
                             "f13 fixture: tools/list fails".to_string(),
