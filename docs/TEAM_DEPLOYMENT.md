@@ -67,7 +67,7 @@ API keys are stored as digests, never as the key:
 ```bash
 KEY="$(openssl rand -base64 32)"              # the key you hand out
 printf %s "$KEY" | mcp-gateway hash-key       # prints sha256:<hex> for key_sha256
-printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>   # exit 0 on a match
+printf %s "$KEY" | mcp-gateway hash-key --verifyy sha256:<hex>   # exit 0 on a match
 ```
 
 Give a key handed to someone temporary an `expires_at`; after that instant the
