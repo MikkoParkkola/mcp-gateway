@@ -67,14 +67,17 @@ async fn call(fx: &Fx, direct: bool, session: Option<&str>) -> Value {
 async fn armed_row(control: &str, direct: bool) -> Seen {
     match control {
         "session_profile" => {
+            // The gateway mints session ids, so bind the profile on one it issued.
             let fx = super::direct_guards_fixture::fixture_built(Answer::Ok, |meta| {
-                let meta = meta.with_profile_registry(deny_read_profiles());
-                meta.session_profiles()
-                    .set_profile("sess-parity", "no-read");
-                meta
+                meta.with_profile_registry(deny_read_profiles())
             })
             .await;
-            let body = call(&fx, direct, Some("sess-parity")).await;
+            let session = super::direct_guards_fixture::initialize(&fx, "k-budget").await;
+            fx.state
+                .meta_mcp
+                .session_profiles()
+                .set_profile(&session, "no-read");
+            let body = call(&fx, direct, Some(&session)).await;
             seen(&fx, &body)
         }
         "error_budget" => {
@@ -276,25 +279,103 @@ async fn t8_already_shared_request_firewall_holds_on_both_routes() {
     }
 }
 
-/// Response firewall: the result is delivered with the credential redacted and
-/// the benign text kept, the same shape on both routes. A tool result is
-/// inspected under `PreserveInputRequired` on the meta route (`router/handlers.rs`),
-/// which blocks only when `inputRequests` or `requestState` change, and under
-/// `Redact` on the per-backend route; content redaction is in place on both.
+/// `alpha` and its passthrough twin: both backend modes share one counter.
+#[cfg(feature = "firewall")]
+const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
+
+#[cfg(feature = "firewall")]
+async fn fw_call(fx: &Fx, direct: bool, backend: &str, idem: Option<&str>) -> (u16, Value) {
+    let (status, body) = if direct {
+        post_direct(fx, backend, "k-std", "read", json!({}), idem, None).await
+    } else {
+        post_meta_invoke(fx, "k-std", backend, "read", json!({}), idem, None).await
+    };
+    (status.as_u16(), body)
+}
+
+/// Asserts the delivery refusal meta returns for a blocked result.
+#[cfg(feature = "firewall")]
+fn assert_blocked(status: u16, body: &Value, at: &str) {
+    assert_eq!(status, 200, "{at}: {body}");
+    assert_eq!(body["error"]["code"], -32600, "{at}: {body}");
+    assert_eq!(
+        body["error"]["message"], "Response blocked by security firewall",
+        "{at}: {body}"
+    );
+}
+
+/// T12 (DIRECT.10): a result carrying a credential is refused on both routes
+/// with the same delivery refusal, after one dispatch. The refusal is excluded
+/// from client accounting: with a breaker that opens after one counted
+/// failure, a second call still reaches the backend.
 #[cfg(feature = "firewall")]
 #[tokio::test]
-async fn t8_already_shared_response_redaction_holds_on_both_routes() {
-    use super::direct_guards_fixture::fixture_firewalled;
-    for direct in [false, true] {
-        let fx = fixture_firewalled(Answer::Text(WITH_SECRET)).await;
-        let body = shared_call(&fx, direct, "k-std", "read", json!({})).await;
-        let text = body["result"].to_string();
-        assert!(text.contains("benign prefix"), "direct={direct}: {body}");
-        assert!(
-            !text.contains(REDACTED_SECRET),
-            "direct={direct}: not redacted: {body}"
+async fn t12_response_firewall_block_refuses_on_both_routes() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        for direct in [false, true] {
+            let at = format!("{backend} direct={direct}");
+            let fx = fixture_firewalled_with(Answer::Text(WITH_SECRET), None, true).await;
+            let (status, body) = fw_call(&fx, direct, backend, None).await;
+            assert_blocked(status, &body, &at);
+            assert!(!body.to_string().contains(REDACTED_SECRET), "{at}: {body}");
+            assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{at}");
+            let (status, body) = fw_call(&fx, direct, backend, None).await;
+            assert_blocked(status, &body, &at);
+            assert_eq!(fx.calls.load(Ordering::SeqCst), 2, "{at}: breaker charged");
+        }
+    }
+}
+
+/// T12b (DIRECT.10): a keyed per-backend call whose result is blocked replays
+/// as the same delivery refusal without dispatching again.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn t12b_blocked_keyed_direct_call_replays_the_refusal() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        let fx = fixture_firewalled_with(Answer::Text(WITH_SECRET), None, true).await;
+        let (status, first) = fw_call(&fx, true, backend, Some("t12b")).await;
+        assert_blocked(status, &first, backend);
+        let (status, replay) = fw_call(&fx, true, backend, Some("t12b")).await;
+        assert_blocked(status, &replay, backend);
+        assert_eq!(replay["error"], first["error"], "{backend}");
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            1,
+            "{backend}: re-dispatched"
         );
-        assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "direct={direct}");
+    }
+}
+
+/// T12c (guard): under a Warn rule a credential-bearing result is delivered
+/// redacted; a clean result (Allow) is delivered unchanged. Both routes, both
+/// backend modes.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn t12c_warn_and_allow_deliver_on_both_routes() {
+    use super::direct_guards_fixture::{fixture_firewalled, fixture_firewalled_with};
+    use crate::security::firewall::FirewallAction;
+    for backend in BACKENDS {
+        for direct in [false, true] {
+            let at = format!("{backend} direct={direct}");
+            let fx = fixture_firewalled_with(
+                Answer::Text(WITH_SECRET),
+                Some(FirewallAction::Warn),
+                false,
+            )
+            .await;
+            let (_, body) = fw_call(&fx, direct, backend, None).await;
+            let text = body["result"].to_string();
+            assert!(text.contains("benign prefix"), "warn {at}: {body}");
+            assert!(!text.contains(REDACTED_SECRET), "warn {at}: {body}");
+            let fx = fixture_firewalled(Answer::Text("benign prefix only")).await;
+            let (_, body) = fw_call(&fx, direct, backend, None).await;
+            assert!(
+                body["result"].to_string().contains("benign prefix only"),
+                "allow {at}: {body}"
+            );
+        }
     }
 }
 

@@ -175,6 +175,32 @@ pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
 }
 
+/// [`fixture_firewalled`] with a firewall rule for `read` and a client
+/// circuit breaker that opens after one counted failure, so a cell can tell a
+/// refusal the gateway excludes from client accounting from one it charges.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_with(
+    answer: Answer,
+    rule: Option<crate::security::firewall::FirewallAction>,
+    breaker: bool,
+) -> Fx {
+    FIREWALL_RULE.with(|r| r.set(rule));
+    CLIENT_BREAKER.with(|b| b.set(breaker));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    FIREWALL_RULE.with(|r| r.set(None));
+    CLIENT_BREAKER.with(|b| b.set(false));
+    fx
+}
+
+// Per-thread knobs `fixture_firewalled_with` sets around one `fixture_inner`
+// call, so the plain fixtures keep their signatures.
+#[cfg(feature = "firewall")]
+thread_local! {
+    static FIREWALL_RULE: std::cell::Cell<Option<crate::security::firewall::FirewallAction>> =
+        const { std::cell::Cell::new(None) };
+    static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 async fn fixture_inner(
     answer: Answer,
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
@@ -195,6 +221,19 @@ async fn fixture_inner(
             },
         ],
         ..Default::default()
+    };
+    #[cfg(feature = "firewall")]
+    let auth = if CLIENT_BREAKER.with(std::cell::Cell::get) {
+        AuthConfig {
+            client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
+                enabled: true,
+                failure_threshold: 1,
+                ..crate::config::CircuitBreakerConfig::default()
+            }),
+            ..auth
+        }
+    } else {
+        auth
     };
     let (mut state, store) = test_router_app_state_with_auth(&auth).await;
     let calls = Arc::new(AtomicUsize::new(0));
@@ -224,11 +263,22 @@ async fn fixture_inner(
     #[cfg(feature = "firewall")]
     if firewalled {
         use crate::security::firewall::{Firewall, FirewallConfig};
+        let rules = FIREWALL_RULE
+            .with(std::cell::Cell::get)
+            .map_or_else(Vec::new, |action| {
+                vec![crate::security::firewall::FirewallRule {
+                    tool_match: "read".to_string(),
+                    action,
+                    reason: None,
+                    scan: Vec::new(),
+                }]
+            });
         let config = FirewallConfig {
             enabled: true,
             scan_requests: true,
             scan_responses: true,
             credential_redaction: true,
+            rules,
             ..FirewallConfig::default()
         };
         state_mut.firewall = Some(Arc::new(Firewall::from_config(config.clone(), None)));
@@ -291,6 +341,37 @@ pub(crate) async fn post_meta_invoke(
     });
     set_idem(&mut params, idem);
     send(fx, "/mcp", key, "tools/call", params, session).await
+}
+
+/// `initialize` on `/mcp` for `key`; returns the session id the gateway
+/// minted (it never adopts a client-chosen one).
+pub(crate) async fn initialize(fx: &Fx, key: &str) -> String {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t8", "version": "1"}
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("initialize mints a session id")
+        .to_string()
 }
 
 /// [`post_meta_invoke`] carrying a signing `nonce` in the `gateway_invoke`
