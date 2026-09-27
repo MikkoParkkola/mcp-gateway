@@ -118,6 +118,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
   the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
   directory no longer write one scratch file between them.
+- **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
+  binaries and image digests handed between jobs expired after a day, so a later re-run
+  published a release with no binaries or failed to find the digests. They now last the
+  repository's 14-day artifact retention, and a CI check keeps every such handoff there.
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
