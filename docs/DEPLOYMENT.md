@@ -1173,7 +1173,9 @@ with your client certificate instead:
 (`printf` is a shell builtin and `-H @-` reads the header from stdin, so the
 token never becomes a process argument). Only the static bearer or an admin API
 key may mint a link: a dashboard session or an SSO login gets `403`. The new link
-keeps every rule above: single use, from this machine only.
+keeps every rule above: single use, from this machine only. A gateway bound to a
+network address (not loopback, not a wildcard) answers `409` and re-arms nothing,
+because a link for that address could never open.
 
 Sessions live in each replica's memory. Serve the dashboard from one replica, or
 put it behind sticky sessions.
