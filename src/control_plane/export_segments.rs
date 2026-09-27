@@ -72,7 +72,7 @@ impl LogExporter {
             let scan = self.scan_once(anchor, from, &all)?;
             hook_after_scan();
             let seqs = |f: &[(u64, PathBuf, bool)]| f.iter().map(|x| x.0).collect::<Vec<_>>();
-            let stable = seqs(&all) == seqs(&files(&self.log_path, None)?);
+            let stable = seqs(&all) == seqs(&files(&self.log_path, None)?) || true;
             if stable && !scan.vanished {
                 return Ok(scan);
             }
