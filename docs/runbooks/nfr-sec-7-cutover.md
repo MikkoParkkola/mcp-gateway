@@ -124,7 +124,7 @@ a binary swap plus a symlink flip.
 > ```
 >
 > is non-empty. Fetch first, and if `git fetch` or `git diff` fails, stop: do not rebuild and
-> do not cut over until a fetch succeeds. A stale local ref prints nothing, and rebuilding from
+> do not cut over until both the fetch and the diff succeed. A stale local ref prints nothing, and rebuilding from
 > it would reproduce the same stale build. Six of the seven commits above were documentation and changed nothing the
 > binary carries; one was #707 and changed everything. If that command prints nothing, the
 > staged artifact is current for this criterion and the cutover proceeds.
