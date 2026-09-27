@@ -144,12 +144,19 @@ Five differences between the red commit and revision 3, each with its reason:
 
 ## Amendment 2 (G8, DIRECT.10)
 
-- T12 (DIRECT.10), in `dispatch_parity_tests.rs`: with the production firewall on both layers, a
-  result carrying a credential is refused with -32600 "Response blocked by security firewall" on
-  both routes, one dispatch each. The former T8 redaction guard becomes this red cell: at red the
-  per-backend route delivers the redacted result (CI run 36344395634 recorded the meta refusal).
-- T12b: a keyed direct call whose result is blocked replays the same refusal on retry without
-  dispatching again.
-- The T8 `session_profile` parity row stages the profile on a session minted by `initialize`, not
-  on a client-chosen id the meta route replaces.
+- T12 (DIRECT.10, red), in `dispatch_parity_tests.rs`, replacing the former T8 response-redaction
+  guard (deleted): with the production firewall on both layers, a result carrying a credential is
+  answered on both routes with HTTP 200, `-32600` "Response blocked by security firewall", the
+  delivery-refusal projection (`excludes_client_accounting`), and one dispatch; run on the normal and
+  passthrough backends. At red the per-backend route delivers the redacted result (CI run
+  36344395634 recorded the meta refusal).
+- T12b (DIRECT.10, red): a keyed per-backend call whose result is blocked replays on retry as the same
+  delivery refusal (status 200, same body, `excludes_client_accounting`) without dispatching again;
+  both backend modes.
+- T12c (guards): with an explicit Warn rule, a credential-bearing result is delivered redacted on both
+  routes; with a clean result (Allow) it is delivered unchanged; both backend modes.
+- T8 `session_profile` parity row: `initialize` on `/mcp`, capture the returned `mcp-session-id`,
+  bind `no-read` on that id with `session_profiles().set_profile`, then send that id on both routes.
+- Expected-red table: T12 and T12b are red cells; T12c and the remaining already-shared rows are
+  guards.
 - Mutant M14: `after_dispatch` ignores a Block verdict (T12, T12b red).

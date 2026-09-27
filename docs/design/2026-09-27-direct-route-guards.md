@@ -130,12 +130,20 @@ sessionless meta call (`meta_mcp/mod.rs:1550`).
 
 ### 2.2a G8 response firewall verdict
 
-`DirectRouteGuards::after_dispatch` runs the response scan it already owns and then honours the
-verdict the way the meta route does: a Block (verdict not allowed) replaces the result with the
-same delivery refusal meta returns (`-32600`, "Response blocked by security firewall"), and the
-idempotency entry settles with that refusal, marked as a firewall refusal so a replay keeps its
-type. Warn and Allow deliver the (redacted) result, unchanged from today. The scan stays one
-implementation; only the verdict is newly acted on.
+`DirectRouteGuards::after_dispatch` takes over the live response-scan call sites
+(`scan_direct_backend_response`, `backend_handlers.rs`) and honours the verdict the way the meta
+route does:
+- The scan runs before `record_client_success`, so a blocked result is not counted as a client
+  success.
+- A Block (verdict not allowed) becomes `Error::ResponseFirewallRefused`, answered with
+  `JsonRpcResponse::delivery_refusal_error` (`protocol/messages.rs`), which is what meta returns:
+  HTTP 200, `-32600`, "Response blocked by security firewall", and the delivery-refusal projection
+  that excludes the call from client accounting.
+- The idempotency entry settles through the existing typed path for that error, so the firewall
+  refusal marker is written by `idempotency.rs` and a replay is served as the same typed refusal;
+  no direct-only marker write.
+- Warn and Allow deliver the (redacted) result, unchanged from today.
+The scan stays one implementation; only the verdict is newly acted on.
 
 ### 2.3 G7 signing (maintainer decision 2026-09-27)
 
@@ -169,7 +177,8 @@ The authoritative test list, fixtures, red reasons and mutants are in the compan
 `docs/design/2026-09-27-direct-route-guards-test-plan.md`. Summary: T1-T11 cover DIRECT.1-7 on the
 direct route (T1-T7b and T11 also against a passthrough backend; T10, the task-worker path, lands
 with whichever of this change and LIFECYCLE.1 merges second), T8 is the both-routes parity and structural
-check (DIRECT.8), and mutants M1-M13 each redden a named cell. An allowed baseline dispatches exactly
+check (DIRECT.8), T12/T12b pin the response-firewall Block on the per-backend route (DIRECT.10), and
+mutants M1-M14 each redden a named cell. An allowed baseline dispatches exactly
 once in every mode.
 
 ## 6. Both-routes parity test (DIRECT.8)
