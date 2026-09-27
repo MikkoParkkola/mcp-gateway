@@ -174,6 +174,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
+- **Task calls to surfaced tools are confirmed unless the gateway knows they are harmless.**
+  The destructive-call confirmation read the shared tool list, which on a backend with
+  `identity_propagation` does not describe the caller's session, so a destructive task call
+  could run unconfirmed. Such calls are now always confirmed there, and elsewhere whenever the
+  tool is missing from the tool list. See UPGRADING-4.0 item 73.
 - **The OWASP self-assessment matches the shipped controls.** It had claimed a
   tool-descriptor validator and a grant-collision check that never run on a request, a removed
   SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
