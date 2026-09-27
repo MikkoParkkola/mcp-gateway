@@ -688,6 +688,8 @@ fn prepare_dir(dir: &Path) -> Result<(), StoreError> {
                 tracing::warn!(path = %dir.display(), "task store directory is not a private directory");
                 return Err(StoreError::UnsafeStore);
             }
+            #[cfg(windows)]
+            platform::judge_store_dir(dir)?;
             Ok(())
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => create_private_dir(dir),

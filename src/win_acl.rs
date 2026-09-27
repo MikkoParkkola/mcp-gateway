@@ -6,11 +6,6 @@
 //! function; callers never see a raw handle, pointer or Win32 type. Each
 //! `unsafe` block names the ADR-016 safety-contract points it relies on.
 #![allow(unsafe_code)]
-// Red stage: the stores reach this module only through permissive stubs.
-#![expect(
-    dead_code,
-    reason = "red stage: private_fs stubs do not call win_acl yet"
-)]
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -558,6 +553,13 @@ pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
 /// (volume serial number, 128-bit file id) of an open file, from
 /// `FILE_ID_INFO`. The 64-bit index in `BY_HANDLE_FILE_INFORMATION` is not
 /// unique on `ReFS`; this one is, on every filesystem that reports ids.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the store tests now; the transparency-log rotation fix (#1528) is the production caller"
+    )
+)]
 pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     let mut info = FILE_ID_INFO::default();
     let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX);

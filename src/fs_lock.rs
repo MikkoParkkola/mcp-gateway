@@ -58,13 +58,35 @@ impl ExclusiveFileLock {
     /// delete), so a contender can open it and meet the lock itself.
     #[cfg(windows)]
     pub(crate) fn try_acquire(lock_path: &Path) -> io::Result<Self> {
-        use crate::private_fs::{Share, create_file_private};
+        use crate::private_fs::{Share, create_file_private, judge_file};
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+        };
         let file = match create_file_private(lock_path, Share::LockSidecar) {
+            // An existing sidecar is judged before it is trusted, exactly as a
+            // unix sidecar with a foreign mode would be refused.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                OpenOptions::new().read(true).write(true).open(lock_path)?
+                let file = OpenOptions::new()
+                    .access_mode(GENERIC_READ | GENERIC_WRITE | READ_CONTROL)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                    .open(lock_path)?;
+                judge_file(&file).map_err(|reason| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("custody lock is not private: {reason:?}"),
+                    )
+                })?;
+                file
             }
             other => other?,
         };
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
+            std::fs::TryLockError::Error(error) => error,
+        })?;
         Ok(Self { file })
     }
 

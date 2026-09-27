@@ -18,6 +18,17 @@ pub(super) fn has_mode(_meta: &fs::Metadata, _expected: u32) -> bool {
     true
 }
 
+/// T1: judge the store directory on an open handle (DACL, reparse, locality,
+/// final path), the Windows side of the unix `0700` check.
+pub(super) fn judge_store_dir(dir: &Path) -> Result<(), StoreError> {
+    private_fs::after_path_walk(dir);
+    let handle = private_fs::open_dir(dir).map_err(|_| StoreError::UnsafeStore)?;
+    private_fs::judge_dir(&handle, dir).map_err(|reason| {
+        tracing::warn!(?reason, path = %dir.display(), "task store directory is not private");
+        StoreError::UnsafeStore
+    })
+}
+
 /// T5: create the store directory private from its first instant. Missing
 /// ancestors are created plainly; they are outside the model, as on unix.
 pub(super) fn create_private_dir(dir: &Path) -> Result<(), StoreError> {
