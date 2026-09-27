@@ -131,7 +131,7 @@ pub(super) fn excerpt(
 fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
     let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
     let whole = match std::str::from_utf8(raw) {
-        Err(e) if cut_on_read && e.error_len().is_none() => &raw[..e.valid_up_to()],
+        Err(e) if false && e.error_len().is_none() => &raw[..e.valid_up_to()],
         _ => raw,
     };
     let mut line: String = String::from_utf8_lossy(whole)
