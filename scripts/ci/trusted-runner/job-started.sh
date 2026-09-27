@@ -7,8 +7,9 @@
 # This, not the workflow's `if:`, is the admission control: a fork's pull
 # request runs its own copy of the workflow and can route any job to the
 # label. The hook is installed root-owned outside anything a job can write,
-# and admits only a same-repo pull request from a `throwaway/` branch into
-# the release line, with enough free disk.
+# and admits only (a) a same-repo pull request from a `throwaway/` branch into
+# the release line, or (b) a push to `throwaway/mutants-<number>` in this repo
+# (the batched mutant workflow; forks cannot push here), with enough free disk.
 #
 # A hook that exits non-zero fails the job but does not stop later
 # `if: always()` steps, so on rejection it first terminates its own
@@ -21,11 +22,19 @@ readonly BASE=docs/ranking-1-release-line
 readonly MIN_FREE_GIB=${MCPGW_RUNNER_MIN_FREE_GIB:-30}
 
 # Prints "admit" or "reject: <reason>" for an event payload file.
-# Arguments: repository, event name, event payload path.
+# Arguments: repository, event name, event payload path, ref.
 decide() {
-  local repository=$1 event=$2 payload=$3
+  local repository=$1 event=$2 payload=$3 ref=${4:-}
   if [[ $repository != "$REPO" ]]; then
     echo "reject: repository $repository"; return
+  fi
+  if [[ $event == push ]]; then
+    if [[ $ref =~ ^refs/heads/throwaway/mutants-[0-9]+$ ]]; then
+      echo admit
+    else
+      echo "reject: push to $ref"
+    fi
+    return
   fi
   if [[ $event != pull_request ]]; then
     echo "reject: event $event"; return
@@ -85,8 +94,8 @@ self_test() {
   trap 'rm -rf -- "$dir"' RETURN
   mk() { printf '{"pull_request":{"head":{"repo":{"full_name":"%s"},"ref":"%s"},"base":{"ref":"%s"}}}' "$1" "$2" "$3" >"$dir/e.json"; }
   check() {
-    local want=$1 repository=$2 event=$3
-    got=$(decide "$repository" "$event" "$dir/e.json")
+    local want=$1 repository=$2 event=$3 ref=${5:-}
+    got=$(decide "$repository" "$event" "$dir/e.json" "$ref")
     if [[ $got != "$want"* ]]; then
       echo "self-test: expected '$want', got '$got' ($4)" >&2; rc=1
     fi
@@ -96,12 +105,18 @@ self_test() {
   mk "$REPO" feature/x "$BASE";     check reject "$REPO" pull_request "same-repo, not throwaway"
   mk "$REPO" throwaway/x main;      check reject "$REPO" pull_request "throwaway into main"
   mk "$REPO" throwaway/x "$BASE";   check reject "$REPO" pull_request_target "pull_request_target"
-  mk "$REPO" throwaway/x "$BASE";   check reject "$REPO" push "push"
+  mk "$REPO" throwaway/x "$BASE";   check reject "$REPO" push "push to a throwaway PR branch" refs/heads/throwaway/x
+  check admit  "$REPO" push "push to a mutant batch branch" refs/heads/throwaway/mutants-1473
+  check reject "$REPO" push "lookalike batch ref" refs/heads/throwaway-mutants-1
+  check reject "$REPO" push "batch ref with a suffix" refs/heads/throwaway/mutants-1/x
+  check reject "$REPO" push "push to the release line" refs/heads/$BASE
+  check reject other/repo push "batch ref in another repository" refs/heads/throwaway/mutants-1
+  check reject "$REPO" workflow_dispatch "dispatch" refs/heads/throwaway/mutants-1
   mk "$REPO" throwaway/x "$BASE";   check reject other/repo pull_request "another repository"
   printf '{"pull_request":{"head":{"repo":null}}}' >"$dir/e.json"
   check reject "$REPO" pull_request "deleted head repository"
   printf 'not json' >"$dir/e.json"; check reject "$REPO" pull_request "unreadable payload"
-  [[ $rc -eq 0 ]] && echo "self-test: 9 admission cases classified as expected"
+  [[ $rc -eq 0 ]] && echo "self-test: 15 admission cases classified as expected"
   return $rc
 }
 
@@ -110,7 +125,7 @@ if [[ ${1:-} == --self-test ]]; then
   exit
 fi
 
-verdict=$(decide "${GITHUB_REPOSITORY:-}" "${GITHUB_EVENT_NAME:-}" "${GITHUB_EVENT_PATH:-/nonexistent}")
+verdict=$(decide "${GITHUB_REPOSITORY:-}" "${GITHUB_EVENT_NAME:-}" "${GITHUB_EVENT_PATH:-/nonexistent}" "${GITHUB_REF:-}")
 [[ $verdict == admit ]] || reject "${verdict#reject: }"
 
 free=$(free_gib "${HOME:?}")

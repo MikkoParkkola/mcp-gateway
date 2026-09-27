@@ -65,6 +65,8 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
+      - name: Validate the mutant batch classifier
+        run: python3 scripts/ci/mutants/run_mutants.py --self-test
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count

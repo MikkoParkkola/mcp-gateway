@@ -1,0 +1,88 @@
+name: Mutants
+
+# Batched mutation proof. A maintainer pushes `throwaway/mutants-<pr>`: the
+# source pull request's head plus one commit that adds `.mutants/` (a manifest
+# and one patch per mutant). Each mutant is applied to a clean tree, its named
+# tests run, and the tree is reverted; one run id then covers every mutant,
+# with a line per mutant in the job summary and the artifact.
+# scripts/ci/mutants/run_mutants.py documents the manifest and the RED /
+# SURVIVED / VOID / ERROR rules.
+#
+# A push trigger, not workflow_dispatch: a dispatch needs this file on the
+# default branch. The CI, Docker and CodeQL push filters never match these
+# branches, so a batch uses no hosted runner unless it has Windows rows.
+on:
+  push:
+    branches: ["throwaway/mutants-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  # Lints are capped, not denied: a mutant that only trips an unused-variable
+  # lint is still a mutant to judge, not a compile failure.
+  RUSTFLAGS: --cap-lints=warn
+
+jobs:
+  plan:
+    name: Plan mutant batch
+    runs-on: mcpgw-trusted-arm64
+    timeout-minutes: 10
+    outputs:
+      has_linux: ${{ steps.plan.outputs.has_linux }}
+      has_windows: ${{ steps.plan.outputs.has_windows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: plan
+        run: python3 scripts/ci/mutants/run_mutants.py plan
+
+  linux:
+    name: Mutants (linux, trusted arm64)
+    needs: plan
+    if: needs.plan.outputs.has_linux == 'true'
+    runs-on: mcpgw-trusted-arm64
+    timeout-minutes: 720
+    env:
+      CARGO_BUILD_JOBS: 6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Run the linux rows
+        run: python3 scripts/ci/mutants/run_mutants.py run --platform linux --out mutants-out
+      - name: Upload the per-mutant results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-${{ github.run_id }}-linux
+          path: mutants-out/
+          if-no-files-found: warn
+
+  windows:
+    name: Mutants (windows)
+    needs: plan
+    if: needs.plan.outputs.has_windows == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Run the windows rows
+        shell: bash
+        run: python scripts/ci/mutants/run_mutants.py run --platform windows --out mutants-out
+      - name: Upload the per-mutant results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-${{ github.run_id }}-windows
+          path: mutants-out/
+          if-no-files-found: warn
