@@ -2130,9 +2130,7 @@ impl Gateway {
         );
 
         #[cfg(feature = "cost-governance")]
-        if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
-            persistence::save_costs(enforcer, &data_dir);
-        }
+        if let Some(ref _enforcer) = meta_mcp_for_shutdown.budget_enforcer {}
 
         // Graceful drain: wait for in-flight requests to complete.
         // The semaphore has 10,000 permits; each in-flight request holds one.
