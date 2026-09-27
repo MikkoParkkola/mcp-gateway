@@ -165,7 +165,7 @@ impl MetaMcp {
             // dispatching with the grant still attached would be refused as
             // the wrong purpose downstream. Any other state is not ours.
             Some(Classification::Harmless(server)) => {
-                if !self.carries_confirmation_grant(request) {
+                if request.retry.request_state.is_none() {
                     return TaskConfirmation::NotRequired;
                 }
                 (server, false)
