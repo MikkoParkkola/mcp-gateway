@@ -109,7 +109,7 @@ pub(super) fn excerpt(
         .iter()
         .chain(env.values())
         .flat_map(|s| s.lines())
-        .map(|s| s.chars().filter(|c| !c.is_control()).collect::<String>())
+        .map(ToString::to_string)
         .map(|s| s.trim().to_string())
         .filter(|s| s.len() >= 4)
         .collect();
