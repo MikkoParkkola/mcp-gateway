@@ -88,7 +88,9 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
             .open(&tmp)
         {
             Ok(file) => break (tmp, file),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(crate::Error::Config(e.to_string()));
+            }
             Err(e) => return Err(crate::Error::Config(format!("Failed to save costs: {e}"))),
         }
     };
