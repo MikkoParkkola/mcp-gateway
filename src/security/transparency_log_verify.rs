@@ -185,6 +185,8 @@ pub(crate) fn verify_segments(
     let mut attempt = 0;
     loop {
         #[cfg(test)]
+        PASSES.with(|c| c.set(c.get() + 1));
+        #[cfg(test)]
         BEFORE_STREAM.with(|h| {
             let taken = h.borrow_mut().take();
             if let Some(f) = taken {
@@ -241,6 +243,8 @@ thread_local! {
     /// prove `.hwm` is read before the stream, not after it.
     pub(crate) static AFTER_STREAM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    /// Reader passes on this thread, so a test can count rescans.
+    pub(crate) static PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One verification pass over the ordered files.

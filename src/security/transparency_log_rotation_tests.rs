@@ -27,6 +27,7 @@ pub(super) fn cfg(path: &Path, retain: u32, signed: bool) -> Arc<TransparencyLog
             retain_segments: retain,
             on_disk_full: OnDiskFull::ExpireOldest,
         },
+        lease_wait_secs: 0,
     })
 }
 

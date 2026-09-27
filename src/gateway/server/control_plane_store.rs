@@ -147,6 +147,7 @@ fn governance_log_config(
         rotation: RotationConfig::governance(
             config.security.transparency_log.rotation.on_disk_full,
         ),
+        lease_wait_secs: crate::security::transparency_log::DEFAULT_LEASE_WAIT_SECS,
     }
 }
 
@@ -177,6 +178,8 @@ mod tests {
     /// The startup outcome a test observes: `Err` is a refusal to start,
     /// `Ok(true)` a gateway serving governance mutation, `Ok(false)` one
     /// serving read-only.
+    mod lease_tests;
+
     fn start(config: &Config, config_path: &Path) -> Result<bool, String> {
         super::build_control_plane_store(
             config,

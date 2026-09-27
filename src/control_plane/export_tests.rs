@@ -408,6 +408,7 @@ fn small_logger(path: &Path, retain: u32, secret: &str) -> Arc<TransparencyLogge
         key_id: "test-key".to_string(),
         shared_secret: secret.to_string(),
         rotation,
+        lease_wait_secs: 0,
     });
     Arc::new(TransparencyLogger::open(cfg).expect("open log"))
 }

@@ -42,6 +42,17 @@ fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBu
     Ok(out)
 }
 
+/// A scan's first listing of the log; the test seams count passes here.
+fn listed(log_path: &Path) -> std::io::Result<Vec<(u64, PathBuf, bool)>> {
+    let all = files(log_path, None)?;
+    #[cfg(test)]
+    {
+        EXPORT_PASSES.with(|c| c.set(c.get() + 1));
+        fire(&EXPORT_LISTED);
+    }
+    Ok(all)
+}
+
 impl LogExporter {
     /// Stream the log from the cursor's segment, skip to `anchor` (or forward
     /// from the first entry when `anchor == "genesis"`), verify + collect up
@@ -52,7 +63,7 @@ impl LogExporter {
     /// `prev_segment_final_hash` equals it (its HMAC is still checked when a
     /// secret is set), so a forged first line cannot launder a chain start.
     pub(super) fn scan(&self, anchor: &str, from: Option<u64>) -> Result<Scan, ExportError> {
-        let all = files(&self.log_path, None)?;
+        let all = listed(&self.log_path)?;
         let mut scan = Scan {
             batch: Vec::new(),
             last_hash: anchor.to_string(),
@@ -188,4 +199,26 @@ fn opened_link(entry: &serde_json::Value) -> Option<String> {
         })
         .flatten()
         .map(str::to_string)
+}
+
+/// A one-shot test hook.
+#[cfg(test)]
+pub(super) type HookSlot = std::cell::RefCell<Option<Box<dyn FnOnce()>>>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once after a scan lists the log's files, before it reads them.
+    pub(super) static EXPORT_LISTED: HookSlot = std::cell::RefCell::new(None);
+    /// Runs once after a scan has read every file.
+    pub(super) static EXPORT_AFTER_SCAN: HookSlot = std::cell::RefCell::new(None);
+    /// Scan passes on this thread, so a test can count rescans.
+    pub(super) static EXPORT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn fire(hook: &'static std::thread::LocalKey<HookSlot>) {
+    let taken = hook.with(|h| h.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
 }

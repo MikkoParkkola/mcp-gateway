@@ -75,6 +75,9 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 // D1-f failure policy and degraded state, split out for the file-size ceiling.
 #[path = "transparency_log_degraded.rs"]
 mod degraded;
+#[path = "transparency_log_lease.rs"]
+mod lease;
+pub use lease::{LeaseHeld, is_lease_held};
 // D6 segment files, rotation and recovery, multi-segment verify.
 #[path = "transparency_log_append.rs"]
 mod append;
@@ -122,7 +125,13 @@ pub struct TransparencyLogConfig {
     pub shared_secret: String,
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: RotationConfig,
+    /// Seconds to wait at open for the writer lease (see `lease`).
+    pub lease_wait_secs: u64,
 }
+
+/// Default `lease_wait_secs`: long enough for a supervisor restart to let the
+/// old process exit; a Kubernetes grace period can need more.
+pub const DEFAULT_LEASE_WAIT_SECS: u64 = 10;
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
 // #323). A derived `Debug` would print the resolved signing secret verbatim
@@ -131,6 +140,7 @@ impl std::fmt::Debug for TransparencyLogConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransparencyLogConfig")
             .field("enabled", &self.enabled)
+            .field("lease_wait_secs", &self.lease_wait_secs)
             .field("path", &self.path)
             .field("key_id", &self.key_id)
             .field("rotation", &self.rotation)
@@ -154,6 +164,7 @@ impl Default for TransparencyLogConfig {
             key_id: "default".to_string(),
             shared_secret: String::new(),
             rotation: RotationConfig::default(),
+            lease_wait_secs: DEFAULT_LEASE_WAIT_SECS,
         }
     }
 }
@@ -265,8 +276,12 @@ impl TransparencyLogger {
         // list the segments before touching the active path, then choose the
         // seed. Genesis only with no active record and no sealed segment.
         let recovered = {
-            let guard =
-                crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?;
+            // RED-FIRST STUB: the lease is taken for recovery only, as the
+            // guard was; holding it for the logger's life comes next.
+            let guard = lease::acquire(
+                &path,
+                std::time::Duration::from_secs(config.lease_wait_secs),
+            )?;
             rotation::recover(&path, &config, &guard, rotation::now_secs(0))?
         };
         Ok(Self {
@@ -724,6 +739,15 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 #[cfg(test)]
 #[path = "transparency_log_bounded_tests.rs"]
 mod bounded_tests;
+#[cfg(test)]
+#[path = "transparency_log_errors_tests.rs"]
+mod errors_tests;
+#[cfg(test)]
+#[path = "transparency_log_lease_tests.rs"]
+mod lease_tests;
+#[cfg(test)]
+#[path = "transparency_log_reader_tests.rs"]
+mod reader_tests;
 #[cfg(test)]
 #[path = "transparency_log_recovery_tests.rs"]
 mod recovery_tests;
