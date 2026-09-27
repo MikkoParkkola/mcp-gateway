@@ -489,8 +489,8 @@ async fn expired_cookie_on_public_path_passes() {
 #[tokio::test]
 async fn reload_changes_limits() {
     let (state, _dir) = fixture().await;
-    reload(&state, |c| c.auth.dashboard_session.idle_timeout_secs = 600);
     let h = issue(&state);
+    reload(&state, |c| c.auth.dashboard_session.idle_timeout_secs = 600);
     age(&state, &h, Duration::from_secs(601));
     assert_eq!(
         send(&state, get(STATUS, Some(&h))).await.status,
@@ -500,9 +500,11 @@ async fn reload_changes_limits() {
 
     reload(&state, |c| {
         c.auth.dashboard_session.idle_timeout_secs = 1800;
-        c.auth.dashboard_session.absolute_timeout_secs = 3600;
     });
     let h = issue(&state);
+    reload(&state, |c| {
+        c.auth.dashboard_session.absolute_timeout_secs = 3600;
+    });
     for _ in 0..2 {
         age(&state, &h, Duration::from_secs(1700));
         assert!(is_admin_view(&send(&state, get(STATUS, Some(&h))).await));
@@ -634,4 +636,16 @@ async fn only_a_static_admin_credential_may_mint_a_link() {
         before,
         "a refused mint changes nothing"
     );
+}
+
+/// A gateway bound to a network address cannot hand out a link: redemption
+/// needs a loopback peer, so the link could never open.
+#[tokio::test]
+async fn no_link_is_minted_for_a_network_bind() {
+    let (state, _dir) = fixture().await;
+    reload(&state, |c| c.server.host = "10.0.0.5".to_string());
+    let before = state.dashboard_bootstrap.peek();
+    let out = mint(&state, Some(ADMIN_KEY), None).await;
+    assert_eq!(out.status, StatusCode::CONFLICT, "{}", out.body);
+    assert_eq!(state.dashboard_bootstrap.peek(), before, "nothing re-armed");
 }

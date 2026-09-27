@@ -1152,12 +1152,16 @@ session was still live, and it works while the audit log is unavailable.
 To sign in again without a restart:
 
 ```bash
-MCP_GATEWAY_TOKEN=<bearer token or admin API key> mcp-gateway dashboard-link
+read -rs MCP_GATEWAY_TOKEN && export MCP_GATEWAY_TOKEN   # paste the bearer or an admin API key
+mcp-gateway dashboard-link
 ```
 
 It calls `POST /ui/api/dashboard-link`, which replaces any unused link and
-returns a new one. The credential is read from the environment only, so it stays
-out of shell history and process listings. Only the static bearer or an admin API
+returns a new one. The credential is read from the environment, never from an
+argument, so it does not appear in the command line other users can list; read
+it as above rather than typing it into the command, which would put it in shell
+history. Without `--url`, the gateway address comes from the config, and a config
+that fails to load is an error rather than a guess. Only the static bearer or an admin API
 key may mint a link: a dashboard session or an SSO login gets `403`. The new link
 keeps every rule above: single use, from this machine only.
 

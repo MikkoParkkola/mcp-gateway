@@ -93,6 +93,18 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
+    let host = config.server.host.as_str();
+    let wildcard = matches!(host, "0.0.0.0" | "::" | "");
+    if !wildcard && !crate::gateway::router::is_loopback_bind(host) {
+        // Redemption accepts only a loopback peer, and a browser reaching a
+        // concrete network address is not one: the link could never open.
+        return flat_error(
+            StatusCode::CONFLICT,
+            "server.host is a network address, and a dashboard link opens only from \
+             a loopback connection. Bind loopback or a wildcard address to use it.",
+        )
+        .into_response();
+    }
     let value = state.dashboard_bootstrap.rearm();
     let scheme = if config.mtls.enabled { "https" } else { "http" };
     let authority = loopback_authority(&config.server.host, config.server.port);

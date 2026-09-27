@@ -103,13 +103,19 @@ async fn run() -> ExitCode {
             commands::run_stats_command(&effective_url).await
         }
         Some(Command::DashboardLink { url }) => {
-            let effective_url = resolve_stats_url(
+            let base = commands::dashboard_link_base(
                 url,
-                config_path.as_deref(),
+                || Config::load(config_path.as_deref()).map_err(|e| e.to_string()),
                 port_override,
                 host_override.as_deref(),
             );
-            commands::run_dashboard_link_command(&effective_url).await
+            match base {
+                Ok(base) => commands::run_dashboard_link_command(&base).await,
+                Err(message) => {
+                    eprintln!("dashboard-link: {message}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Some(Command::Validate {
             paths,

@@ -835,8 +835,18 @@ pub async fn auth_middleware(
     }
     let secure = state.tls_enabled;
     let mut response = authenticate_request(state, request, next).await;
-    if dead_session && let Ok(value) = session_cookie("", 0, secure).parse() {
-        // The browser drops the dead handle instead of presenting it forever.
+    // The browser drops the dead handle instead of presenting it forever,
+    // unless this response already set a fresh one (a redeemed link): a
+    // second `Set-Cookie` for the same name would delete the new session.
+    let sets_session = response
+        .headers()
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .any(|v| v.as_bytes().starts_with(SESSION_COOKIE.as_bytes()));
+    if dead_session
+        && !sets_session
+        && let Ok(value) = session_cookie("", 0, secure).parse()
+    {
         response
             .headers_mut()
             .append(axum::http::header::SET_COOKIE, value);

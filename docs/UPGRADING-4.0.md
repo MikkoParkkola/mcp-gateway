@@ -1718,7 +1718,8 @@ In 4.0:
   still honoured, and on a public path the request proceeds as unauthenticated.
 - `mcp-gateway dashboard-link` asks the running gateway for a fresh single-use link, so
   signing in again needs no restart. It reads the static bearer token or an admin API key
-  from `MCP_GATEWAY_TOKEN`. The link still opens only from the machine running the gateway.
+  from `MCP_GATEWAY_TOKEN`, never from an argument. The link still opens only from the
+  machine running the gateway, so a gateway bound to a network address answers 409.
   The endpoint behind it, `POST /ui/api/dashboard-link`, refuses a dashboard session and an
   SSO login with 403.
 

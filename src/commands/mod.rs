@@ -36,7 +36,7 @@ pub use add_remove::{run_add_command, run_get_command, run_list_command, run_rem
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;
-pub use dashboard_link::run_dashboard_link_command;
+pub use dashboard_link::{dashboard_link_base, run_dashboard_link_command};
 pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};
 pub use hash_key::run_hash_key_command;
 pub use identity::run_identity_command;

@@ -28,6 +28,40 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
         })
 }
 
+/// The gateway to ask: `--url` when given, otherwise the listener the config
+/// describes (`https` when it serves TLS).
+///
+/// Unlike `stats`, a config that fails to load is an error, not a fallback to
+/// the default address: this command sends an admin credential, and a guessed
+/// address may belong to something else.
+///
+/// # Errors
+///
+/// The config load failure, when no `--url` was given.
+pub fn dashboard_link_base(
+    url: Option<String>,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+) -> Result<String, String> {
+    if let Some(url) = url {
+        return Ok(url);
+    }
+    let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --url"))?;
+    if let Some(port) = port_override {
+        config.server.port = port;
+    }
+    if let Some(host) = host_override {
+        config.server.host = host.to_string();
+    }
+    let base = super::default_stats_url(&config.server.host, config.server.port);
+    Ok(if config.mtls.enabled {
+        base.replacen("http://", "https://", 1)
+    } else {
+        base
+    })
+}
+
 /// Ask the gateway at `base` for a fresh link.
 ///
 /// # Errors
@@ -37,6 +71,7 @@ pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String
     let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
     let response = reqwest::Client::new()
         .post(&endpoint)
+        .timeout(std::time::Duration::from_secs(30))
         .bearer_auth(token)
         .send()
         .await
@@ -75,6 +110,33 @@ pub async fn run_dashboard_link_command(base: &str) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{TOKEN_ENV, fetch_link, read_token};
+
+    #[test]
+    fn the_base_url_never_falls_back_past_a_config_that_failed_to_load() {
+        use super::dashboard_link_base;
+        let explicit =
+            dashboard_link_base(Some("http://h:1".into()), || Err("x".into()), None, None);
+        assert_eq!(
+            explicit.as_deref(),
+            Ok("http://h:1"),
+            "--url wins without a load"
+        );
+
+        let failed = dashboard_link_base(None, || Err("bad yaml".into()), None, None)
+            .expect_err("a config that fails to load is not replaced by defaults");
+        assert!(
+            failed.contains("bad yaml") && failed.contains("--url"),
+            "{failed}"
+        );
+
+        let mut config = mcp_gateway::config::Config::default();
+        config.server.port = 4100;
+        let plain = dashboard_link_base(None, || Ok(config.clone()), None, None);
+        assert_eq!(plain.as_deref(), Ok("http://127.0.0.1:4100"));
+        config.mtls.enabled = true;
+        let tls = dashboard_link_base(None, || Ok(config.clone()), Some(4200), None);
+        assert_eq!(tls.as_deref(), Ok("https://127.0.0.1:4200"));
+    }
 
     #[test]
     fn the_token_comes_from_the_named_variable_only() {
