@@ -349,6 +349,8 @@ fn wt20_external_holder_never_released() {
         );
         assert_eq!(attempts, 4, "WT-ASSERT W-T20/B: attempts");
         drop(holder);
+        // Release custody first: a reopen beside a live store is refused.
+        drop(store);
         assert!(
             matches!(reopen(&settings).lookup(&alice()), Ok(AccountLookup::Connected(r)) if r.token_revision == first.token_revision),
             "WT-ASSERT W-T20/B: the refused refresh was acknowledged"
