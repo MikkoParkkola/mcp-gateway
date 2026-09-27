@@ -87,6 +87,7 @@ mod resource_prompt_scope_tests;
 mod sso_admin_tests;
 #[cfg(test)]
 mod tests;
+mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
 #[cfg(test)]
@@ -453,7 +454,8 @@ pub(crate) fn create_router_with_accounts(
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        // Method and route only (#1529). Routes merged below are outside it.
+        .layer(TraceLayer::new_for_http().make_span_with(trace_span::span_for))
         .with_state(state);
 
     // Merge key server routes (unauthenticated) if enabled
