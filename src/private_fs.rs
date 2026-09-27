@@ -134,7 +134,7 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
                     && flags & INHERIT_ONLY == 0
                     && mask & (READ_WRITE | GENERIC_ALL | GENERIC_READ_WRITE) != 0;
             }
-            Ace::Other { ace_type } => found.push(PrivacyRefusal::OtherAceType(*ace_type)),
+            Ace::Other { .. } => {}
         }
     }
     if !read_write || user_denied {
