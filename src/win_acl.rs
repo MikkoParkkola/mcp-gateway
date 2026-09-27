@@ -332,7 +332,7 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
             GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
             share_mode,
             &raw const attrs,
-            CREATE_NEW,
+            2,
             FILE_FLAG_OPEN_REPARSE_POINT,
             std::ptr::null_mut(),
         )
