@@ -18,8 +18,8 @@ use crate::win_acl::{Ace, Inspection, Sid};
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, READ_CONTROL,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
 };
 
 pub(crate) use crate::win_acl::Share;
@@ -155,13 +155,41 @@ fn attributes(file: &File) -> Result<u32, PrivacyRefusal> {
         .map_err(|_| PrivacyRefusal::Unreadable)
 }
 
-/// `\\?\C:\x` and `C:\x` name the same place; compare case-insensitively.
-fn normalised(path: &Path) -> String {
-    let text = path.display().to_string();
-    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
-    text.trim_end_matches('\\')
-        .replace('/', "\\")
-        .to_lowercase()
+/// Re-walk `configured` after the store directory is open: every existing
+/// component must still be a plain directory (no reparse point), and the path
+/// must still resolve to the very directory the handle holds. This is what
+/// catches an ancestor swapped for a junction between the first walk and the
+/// open (design R2-1). Comparing identities, not path strings, keeps 8.3 short
+/// names (`RUNNER~1`) from reading as a different place.
+fn same_place(dir: &File, configured: &Path) -> Result<(), PrivacyRefusal> {
+    // `absolute` resolves `.`/`..` and a relative path the same way the
+    // original open did.
+    let wanted = std::path::absolute(configured).map_err(|_| PrivacyRefusal::PathMismatch)?;
+    let mut prefix = PathBuf::new();
+    let mut last = None;
+    for part in wanted.components() {
+        prefix.push(part);
+        if matches!(part, Component::Prefix(_) | Component::RootDir) {
+            continue;
+        }
+        let handle = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&prefix)
+            .map_err(|_| PrivacyRefusal::PathMismatch)?;
+        if attributes(&handle)? & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(PrivacyRefusal::PathMismatch);
+        }
+        last = Some(handle);
+    }
+    let last = last.ok_or(PrivacyRefusal::PathMismatch)?;
+    let held = crate::win_acl::file_identity(dir).map_err(|_| PrivacyRefusal::Unreadable)?;
+    let now = crate::win_acl::file_identity(&last).map_err(|_| PrivacyRefusal::Unreadable)?;
+    if held != now {
+        return Err(PrivacyRefusal::PathMismatch);
+    }
+    Ok(())
 }
 
 /// Judge an open directory handle against reparse, locality, the configured
@@ -177,12 +205,7 @@ pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefu
     if !crate::win_acl::volume_is_local(dir).map_err(|_| PrivacyRefusal::Unreadable)? {
         return Err(PrivacyRefusal::NotLocal);
     }
-    let actual: PathBuf =
-        crate::win_acl::final_path(dir).map_err(|_| PrivacyRefusal::Unreadable)?;
-    let wanted = std::path::absolute(configured).unwrap_or_else(|_| configured.to_path_buf());
-    if normalised(&actual) != normalised(&wanted) {
-        return Err(PrivacyRefusal::PathMismatch);
-    }
+    same_place(dir, configured)?;
     first(privacy_refusals(dir))
 }
 

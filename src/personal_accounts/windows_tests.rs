@@ -417,8 +417,12 @@ fn wt10b_legacy_token_remediation_works() {
         "WT-ASSERT W-T10b: the refusal printed no icacls commands: {text}"
     );
     for command in commands {
+        // Verbatim, as a user pastes it: cmd does not parse the escaped
+        // quotes `Command::args` would add around the embedded `"`s.
+        use std::os::windows::process::CommandExt as _;
         let ran = std::process::Command::new("cmd")
-            .args(["/C", command])
+            .arg("/C")
+            .raw_arg(command)
             .status();
         if !ran.is_ok_and(|s| s.success()) {
             fixture_fail("W-T10b", &format!("remediation command failed: {command}"));

@@ -32,10 +32,20 @@ pub(super) fn files(path: &Path) -> BTreeMap<String, Vec<u8>> {
             let entry = entry.unwrap();
             (
                 entry.file_name().to_str().unwrap().to_owned(),
-                fs::read(entry.path()).unwrap(),
+                read_bytes(&entry.path()),
             )
         })
         .collect()
+}
+
+/// An empty file's bytes are known without a read. On Windows the empty lease
+/// file sits under a whole-file byte-range lock while the store is open, and
+/// that lock refuses even a read of an empty file (`ERROR_LOCK_VIOLATION`).
+fn read_bytes(path: &Path) -> Vec<u8> {
+    if fs::metadata(path).unwrap().len() == 0 {
+        return Vec::new();
+    }
+    fs::read(path).unwrap()
 }
 
 pub(super) async fn open(path: &Path) -> TaskStore {
@@ -79,7 +89,7 @@ pub(super) fn manifest(root: &Path) -> Manifest {
                 },
                 mode,
                 inode,
-                bytes: kind.is_file().then(|| fs::read(path).unwrap()),
+                bytes: kind.is_file().then(|| read_bytes(path)),
                 target: kind.is_symlink().then(|| fs::read_link(path).unwrap()),
             },
         );

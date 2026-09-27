@@ -27,8 +27,8 @@ pub(crate) struct ExclusiveFileLock {
     // nothing reads the field; holding it open for the guard's lifetime IS
     // the lock.
     #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "on non-unix the open handle is the lock")
+        not(any(unix, windows)),
+        expect(dead_code, reason = "only the unix and Windows paths read the handle")
     )]
     file: File,
 }
@@ -116,6 +116,16 @@ impl Drop for ExclusiveFileLock {
         // File close alone leaves a fork/dup reference holding the same lock.
         // Drop cannot return an unlock error; File still closes without panic.
         let _ = rustix::fs::flock(&self.file, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
+/// Windows releases a closed handle's byte-range locks "when resources allow",
+/// not at close, so a reopen right after a drop can still meet the old lock.
+/// Unlocking first makes the release synchronous.
+#[cfg(windows)]
+impl Drop for ExclusiveFileLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
     }
 }
 
