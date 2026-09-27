@@ -115,7 +115,7 @@ async fn serve(
     let task = tokio::spawn(async move {
         drop(gateway.run_stdio_on(input, output, gate).await);
     });
-    // The config and data directory is returned so it outlives the serving task.
+    // The config and data directory are returned so they outlive the serving task.
     (client, seen, task, dir)
 }
 

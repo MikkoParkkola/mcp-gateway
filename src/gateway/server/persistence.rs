@@ -116,7 +116,8 @@ pub(super) fn spawn_cost_saver(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
-        // The first tick is immediate: nothing has been spent yet.
+        // Consume the immediate first tick, so the first save comes one
+        // interval after start rather than before anything is spent.
         interval.tick().await;
         let stopped = async move {
             match shutdown {
