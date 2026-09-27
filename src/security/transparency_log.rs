@@ -285,6 +285,9 @@ impl TransparencyLogger {
             std::time::Duration::from_secs(config.lease_wait_secs),
         )?;
         let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
+        drop(lease);
+        let own = segments::sibling(&path, &format!("m{}", Arc::as_ptr(&config) as usize));
+        let lease = crate::fs_lock::ExclusiveFileLock::try_lease(&own)?.expect("own lease");
         Ok(Self {
             inner: Mutex::new(Inner {
                 file: recovered.file,
