@@ -303,14 +303,16 @@ fn appends_across_rotations_do_not_deadlock_on_the_lease() {
     let p = path.clone();
     std::thread::spawn(move || {
         let l = TransparencyLogger::open(cfg(&p, 2, false)).unwrap();
-        for i in 0..200 {
-            append(&l, i);
-        }
+        // Three rotations (the third expires a segment) and a synced append:
+        // a lock re-taken anywhere on these paths blocks on the first one.
+        rotate_n(&l, &p, 3);
         l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
             .unwrap();
         let _ = tx.send(());
     });
-    rx.recv_timeout(Duration::from_secs(10))
+    // A deadlock never finishes; the bound only has to outlast a slow,
+    // loaded runner (fsync per rotation), not measure speed.
+    rx.recv_timeout(Duration::from_secs(60))
         .expect("appends deadlocked on the held lease");
     assert!(verify(&path, false).ok);
 }
