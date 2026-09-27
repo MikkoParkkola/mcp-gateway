@@ -265,6 +265,7 @@ mod principal_derives_from_the_credential {
             public_paths: vec![],
             client_circuit_breaker: None,
             single_user: false,
+            dashboard_session: Default::default(),
         })
     }
 

@@ -48,12 +48,13 @@ pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
     CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdempotencyConfig,
-    IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
+    IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig,
+    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
+    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
+    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecurityConfig, StreamingConfig, TasksConfig, ToolContractConfig,
+    WebhookConfig, api_key_digest_spec,
 };
 pub(crate) use features::{api_key_expired, parse_api_key_digest};
 
@@ -762,6 +763,7 @@ impl Config {
         }
         // First, so no other reader touches a plaintext key (E4).
         self.auth.validate_api_key_material(overlay)?;
+        self.auth.dashboard_session.validate()?;
         // The router caps every body at this (C8), so 0 would refuse all of them.
         if self.server.max_body_size == 0 {
             return Err(Error::ConfigValidation(

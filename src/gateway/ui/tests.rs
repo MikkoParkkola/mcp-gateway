@@ -273,3 +273,30 @@ fn dashboard_state_serializes_to_json() {
     assert!(json.contains("\"session_summary\""));
     assert!(json.contains("\"cache_stats\""));
 }
+
+/// E5-T12d (MIK-7570.SESSION.1): the `/ui` page's 5-second refresh marks its
+/// requests as polls, and only that refresh does, so an unattended tab ends at
+/// the idle limit while a click still counts as activity.
+///
+/// A source pin: the suite has no JS runtime. It follows the flag from the
+/// interval through both refresh functions to the one place the header is set.
+#[test]
+fn ui_interval_refresh_is_marked_as_a_poll() {
+    let html = INDEX_HTML;
+    assert!(html.contains("setInterval(() => refreshAll(true), 5000)"));
+    assert!(!html.contains("setInterval(refreshAll, 5000)"));
+    assert!(html.contains("function refreshAll(poll = false)"));
+    assert!(html.contains("refreshDashboard(poll);"));
+    assert!(html.contains("refreshControlPlane(poll);"));
+    assert!(html.contains("async function refreshDashboard(poll = false)"));
+    assert!(html.contains("apiFetch('/ui/api/status', {}, poll)"));
+    assert!(html.contains("async function refreshControlPlane(poll = false)"));
+    assert!(html.contains("apiFetch('/ui/api/control-plane', {}, poll)"));
+    assert!(html.contains("async function apiFetch(url, opts = {}, poll = false)"));
+    assert!(html.contains("...(poll ? { 'X-Mcp-Gateway-Poll': '1' } : {})"));
+    assert_eq!(
+        html.matches("X-Mcp-Gateway-Poll").count(),
+        1,
+        "the marker is set in one place, behind the flag"
+    );
+}

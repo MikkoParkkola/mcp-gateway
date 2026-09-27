@@ -42,6 +42,44 @@ pub struct AuthConfig {
     /// overrides this hint (see [`AuthConfig::implies_multi_user`]).
     #[serde(default)]
     pub single_user: bool,
+    /// How long a dashboard browser session lives (MIK-7570.SESSION.1).
+    #[serde(default)]
+    pub dashboard_session: DashboardSessionConfig,
+}
+
+/// Lifetime of a dashboard browser session.
+///
+/// A session ends after `idle_timeout_secs` without operator activity, or
+/// `absolute_timeout_secs` after it was opened, whichever comes first. The
+/// dashboard's own 5-second refresh is not activity. Read on every check, so a
+/// reload applies to sessions already open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DashboardSessionConfig {
+    /// Seconds without activity before a session ends (default 1800).
+    pub idle_timeout_secs: u64,
+    /// Seconds from sign-in before a session ends in any case (default 28800).
+    pub absolute_timeout_secs: u64,
+}
+
+impl Default for DashboardSessionConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: 1800,
+            absolute_timeout_secs: 28_800,
+        }
+    }
+}
+
+impl DashboardSessionConfig {
+    /// Refuse a zero limit, and an idle limit longer than the absolute one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidation`] naming the violated bound.
+    pub(crate) fn validate(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 // Manual `Debug` that redacts the bearer token and API keys (CWE-532, mirrors
@@ -58,6 +96,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("public_paths", &self.public_paths)
             .field("client_circuit_breaker", &self.client_circuit_breaker)
             .field("single_user", &self.single_user)
+            .field("dashboard_session", &self.dashboard_session)
             .finish()
     }
 }
@@ -75,6 +114,7 @@ impl Default for AuthConfig {
             public_paths: default_public_paths(),
             client_circuit_breaker: None,
             single_user: false,
+            dashboard_session: DashboardSessionConfig::default(),
         }
     }
 }
@@ -684,3 +724,62 @@ mod api_key_name_tests {
 #[cfg(test)]
 #[path = "api_key_digest_tests.rs"]
 mod api_key_digest_tests;
+
+/// E5-T9: dashboard session limits that cannot work refuse to load, and the
+/// refusal names the bound it broke.
+#[cfg(test)]
+mod dashboard_session_limits_tests {
+    use super::DashboardSessionConfig;
+
+    fn refusal(idle: u64, absolute: u64) -> String {
+        let mut config = crate::config::Config::default();
+        config.auth.dashboard_session = DashboardSessionConfig {
+            idle_timeout_secs: idle,
+            absolute_timeout_secs: absolute,
+        };
+        config
+            .validate()
+            .expect_err("these limits must not load")
+            .to_string()
+    }
+
+    #[test]
+    fn zero_or_inverted_timeouts_fail_to_load() {
+        let zero_idle = refusal(0, 28_800);
+        assert!(
+            zero_idle.contains("auth.dashboard_session.idle_timeout_secs"),
+            "{zero_idle}"
+        );
+        let zero_absolute = refusal(1800, 0);
+        assert!(
+            zero_absolute.contains("auth.dashboard_session.absolute_timeout_secs"),
+            "{zero_absolute}"
+        );
+        let inverted = refusal(3600, 1800);
+        assert!(
+            inverted.contains("idle_timeout_secs") && inverted.contains("absolute_timeout_secs"),
+            "{inverted}"
+        );
+    }
+
+    #[test]
+    fn defaults_are_thirty_minutes_and_eight_hours() {
+        let d = DashboardSessionConfig::default();
+        assert_eq!(
+            (d.idle_timeout_secs, d.absolute_timeout_secs),
+            (1800, 28_800)
+        );
+        crate::config::Config::default()
+            .validate()
+            .expect("the defaults load");
+    }
+
+    #[test]
+    fn a_misspelled_limit_is_refused() {
+        let parsed: Result<DashboardSessionConfig, _> = serde_yaml::from_str("idle_timeout: 60\n");
+        assert!(
+            parsed.is_err(),
+            "an unknown key must not silently keep the default"
+        );
+    }
+}

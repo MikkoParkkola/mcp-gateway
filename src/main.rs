@@ -102,6 +102,15 @@ async fn run() -> ExitCode {
             );
             commands::run_stats_command(&effective_url).await
         }
+        Some(Command::DashboardLink { url }) => {
+            let effective_url = resolve_stats_url(
+                url,
+                config_path.as_deref(),
+                port_override,
+                host_override.as_deref(),
+            );
+            commands::run_dashboard_link_command(&effective_url).await
+        }
         Some(Command::Validate {
             paths,
             format,

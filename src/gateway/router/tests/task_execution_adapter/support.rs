@@ -89,6 +89,7 @@ pub(super) fn two_principal_auth() -> AuthConfig {
         public_paths: Vec::new(),
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: Default::default(),
     }
 }
 

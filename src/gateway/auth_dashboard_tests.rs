@@ -108,3 +108,206 @@ fn a_bootstrap_value_is_single_use_and_a_wrong_one_costs_nothing() {
     );
     assert!(!b.consume(&printed), "the real value is spent only once");
 }
+
+// ── MIK-7570.SESSION.1: idle and absolute expiry (E5) ──────────────────
+
+use std::time::Duration;
+
+use super::{Now, SessionCheck, SessionLimits, Touch};
+
+const IDLE: Duration = Duration::from_secs(1800);
+const ABSOLUTE: Duration = Duration::from_secs(28_800);
+const LIMITS: SessionLimits = SessionLimits {
+    idle: IDLE,
+    absolute: ABSOLUTE,
+};
+const SEC: Duration = Duration::from_secs(1);
+
+/// `t0` moved forward by `by` on both clocks.
+fn at(t0: Now, by: Duration) -> Now {
+    Now {
+        mono: t0.mono + by,
+        wall: t0.wall + by,
+    }
+}
+
+/// A store with one session issued at `t0`.
+fn issued() -> (DashboardBootstrap, String, Now) {
+    let b = DashboardBootstrap::new();
+    let t0 = Now::read();
+    let handle = b.issue_session_at(t0, &LIMITS);
+    (b, handle, t0)
+}
+
+/// E5-T1: no activity for longer than the idle limit ends the session, and
+/// the check that says so removes it.
+#[test]
+fn idle_session_expires() {
+    let (b, h, t0) = issued();
+    assert_eq!(
+        b.check_session(&h, at(t0, IDLE + SEC), &LIMITS, Touch::Yes),
+        SessionCheck::Expired,
+        "a session untouched past the idle limit is expired"
+    );
+    assert_eq!(
+        b.check_session(&h, at(t0, IDLE + SEC), &LIMITS, Touch::Yes),
+        SessionCheck::Unknown,
+        "and the expired handle was removed, not kept"
+    );
+}
+
+/// E5-T2: steady activity cannot carry a session past the absolute limit.
+#[test]
+fn active_session_hits_absolute_limit() {
+    let (b, h, t0) = issued();
+    let step = IDLE - SEC;
+    let mut elapsed = step;
+    while elapsed <= ABSOLUTE {
+        assert_eq!(
+            b.check_session(&h, at(t0, elapsed), &LIMITS, Touch::Yes),
+            SessionCheck::Valid,
+            "an active session is valid before the absolute limit ({elapsed:?})"
+        );
+        elapsed += step;
+    }
+    assert_eq!(
+        b.check_session(&h, at(t0, ABSOLUTE + SEC), &LIMITS, Touch::Yes),
+        SessionCheck::Expired,
+        "activity never extends a session past the absolute limit"
+    );
+}
+
+/// E5-T3 (guard, passes today): activity restarts the idle clock.
+#[test]
+fn touched_session_stays_valid() {
+    let (b, h, t0) = issued();
+    assert_eq!(
+        b.check_session(&h, at(t0, IDLE - SEC), &LIMITS, Touch::Yes),
+        SessionCheck::Valid
+    );
+    assert_eq!(
+        b.check_session(&h, at(t0, IDLE * 2 - SEC * 2), &LIMITS, Touch::Yes),
+        SessionCheck::Valid,
+        "the idle clock restarts at each activity check"
+    );
+}
+
+/// E5-T12 (store half): a tab that only polls expires at the idle limit, far
+/// below the absolute cap.
+#[test]
+fn poll_only_tab_expires_at_idle_not_cap() {
+    let (b, h, t0) = issued();
+    let poll = Duration::from_secs(5);
+    let mut elapsed = poll;
+    while elapsed < IDLE {
+        assert_eq!(
+            b.check_session(&h, at(t0, elapsed), &LIMITS, Touch::No),
+            SessionCheck::Valid,
+            "a poll inside the idle limit is answered ({elapsed:?})"
+        );
+        elapsed += poll;
+    }
+    assert_eq!(
+        b.check_session(&h, at(t0, IDLE + SEC), &LIMITS, Touch::No),
+        SessionCheck::Expired,
+        "polls are checked but never extend the idle clock"
+    );
+}
+
+/// E5-T8: issuing sweeps expired entries, so the store cannot grow without
+/// bound.
+#[test]
+fn issue_sweeps_expired_sessions() {
+    let b = DashboardBootstrap::new();
+    let t0 = Now::read();
+    for _ in 0..100 {
+        let _ = b.issue_session_at(t0, &LIMITS);
+    }
+    let _ = b.issue_session_at(at(t0, ABSOLUTE + SEC), &LIMITS);
+    assert_eq!(b.session_count(), 1, "only the fresh session remains");
+}
+
+/// E5-T14: a host suspend stops the monotonic clock; the wall clock still
+/// ends the idle session.
+#[test]
+fn suspended_host_expires_by_wall_clock() {
+    let (b, h, t0) = issued();
+    let woke = Now {
+        mono: t0.mono + SEC,
+        wall: t0.wall + IDLE + SEC,
+    };
+    assert_eq!(
+        b.check_session(&h, woke, &LIMITS, Touch::Yes),
+        SessionCheck::Expired
+    );
+}
+
+/// E5-T14b: the wall clock also enforces the absolute limit on a session that
+/// was active recently by both clocks.
+#[test]
+fn suspended_host_hits_absolute_by_wall_clock() {
+    let (b, h, t0) = issued();
+    // Active until shortly before the suspend, on both clocks.
+    let before = at(t0, Duration::from_secs(60));
+    assert_eq!(
+        b.check_session(&h, before, &LIMITS, Touch::Yes),
+        SessionCheck::Valid
+    );
+    // Idle is widened to the absolute limit, so the wall gap since the last
+    // activity (absolute - 59 s) stays under it: only the absolute
+    // comparison on the wall clock can end this session. Monotonic age is 61 s.
+    let limits = SessionLimits {
+        idle: ABSOLUTE,
+        absolute: ABSOLUTE,
+    };
+    let woke = Now {
+        mono: before.mono + SEC,
+        wall: t0.wall + ABSOLUTE + SEC,
+    };
+    assert_eq!(
+        b.check_session(&h, woke, &limits, Touch::Yes),
+        SessionCheck::Expired,
+        "wall-clock age past the absolute limit ends the session"
+    );
+}
+
+/// A backward wall-clock step cannot revive or extend a session: the
+/// monotonic clock still ends it.
+#[test]
+fn a_backward_wall_step_does_not_extend() {
+    let (b, h, t0) = issued();
+    let stepped_back = Now {
+        mono: t0.mono + IDLE + SEC,
+        wall: t0.wall - Duration::from_secs(3600),
+    };
+    assert_eq!(
+        b.check_session(&h, stepped_back, &LIMITS, Touch::Yes),
+        SessionCheck::Expired
+    );
+}
+
+/// Revocation removes the handle; a second revocation reports nothing.
+#[test]
+fn revoke_ends_a_session_once() {
+    let (b, h, t0) = issued();
+    assert!(b.revoke(&h), "an issued handle is revoked");
+    assert!(!b.revoke(&h), "and only once");
+    assert_eq!(
+        b.check_session(&h, at(t0, SEC), &LIMITS, Touch::Yes),
+        SessionCheck::Unknown
+    );
+}
+
+/// Rearming replaces an unused value: the old one is dead, the new one works
+/// once.
+#[test]
+fn rearm_replaces_an_unused_value() {
+    let b = DashboardBootstrap::new();
+    let old = b.peek().expect("a value is issued at startup");
+    let new = b.rearm();
+    assert!(!new.is_empty(), "rearm returns a value");
+    assert_ne!(old, new, "rearm mints a different value");
+    assert!(!b.consume(&old), "the replaced value no longer redeems");
+    assert!(b.consume(&new), "the new value redeems");
+    assert!(!b.consume(&new), "once");
+}

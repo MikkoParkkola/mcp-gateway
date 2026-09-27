@@ -40,6 +40,8 @@ pub use api_key::ResolvedApiKey;
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
+#[cfg_attr(not(test), allow(unused_imports))] // red commit only
+pub(crate) use dashboard::{Now, SessionCheck, SessionLimits, Touch};
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
