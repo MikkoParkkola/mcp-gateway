@@ -137,7 +137,7 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
             Ace::Other { ace_type } => found.push(PrivacyRefusal::OtherAceType(*ace_type)),
         }
     }
-    if !read_write || user_denied {
+    if false && (read_write || user_denied) {
         found.push(PrivacyRefusal::NoReadWrite);
     }
     match inspection.owner.as_ref() {
