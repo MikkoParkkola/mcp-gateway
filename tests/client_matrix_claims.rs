@@ -271,6 +271,20 @@ fn parse_verified(status: &str) -> Option<Verified> {
     })
 }
 
+/// A concrete version: dot-separated numbers (at least two), optionally
+/// followed by `-` and a pre-release of letters, digits and dots. `2.x`,
+/// `2.1.*`, `latest` and a bare `2` are not concrete.
+fn is_concrete_version(v: &str) -> bool {
+    let (core, pre) = v.split_once('-').unwrap_or((v, ""));
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && pre.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+        && !(v.contains('-') && pre.is_empty())
+}
+
 /// A real calendar date in ISO-8601 form, four-digit year first.
 fn is_iso_date(s: &str) -> bool {
     s.len() == 10 && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
@@ -343,6 +357,13 @@ fn run_field_matching_is_exact() {
     assert!(!has_token("`2.1.280.1`", "2.1.280"));
     assert!(!has_token("`2.1.280+build.1`", "2.1.280"));
     assert!(is_iso_date("2026-09-23"));
+    assert!(is_concrete_version("2.1.280") && is_concrete_version("0.11.4-rc.1"));
+    for placeholder in ["2.x", "2.1.*", "latest", "current", "2", "2.1-"] {
+        assert!(
+            !is_concrete_version(placeholder),
+            "{placeholder} is not concrete"
+        );
+    }
     assert!(!is_iso_date("2026-13-40"));
     let cell = "Verified: 2.1.280, 2026-09-23, owner A, gateway `e3c8645f`, see [notes](other.md) ([run](release/verify/x.md))";
     assert_eq!(parse_verified(cell).unwrap().file, "release/verify/x.md");
@@ -381,8 +402,7 @@ fn every_row_is_backed_by_a_recorded_run_or_unverified() {
             assert!(!value.trim().is_empty(), "{client}: empty {what}");
         }
         assert!(
-            v.version.starts_with(|c: char| c.is_ascii_digit())
-                && !["latest", "current"].contains(&v.version.to_ascii_lowercase().as_str()),
+            is_concrete_version(&v.version),
             "{client}: version `{}` is not a specific client version",
             v.version
         );
@@ -419,6 +439,10 @@ fn every_row_is_backed_by_a_recorded_run_or_unverified() {
         assert!(
             has_token(run_field(&run, "Gateway"), &v.commit),
             "{client}: run gateway commit"
+        );
+        assert!(
+            run_field(&run, "Gateway").contains("4.0.0"),
+            "{client}: the recorded run is not against a 4.0.0 gateway"
         );
         verified += 1;
     }
