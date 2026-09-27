@@ -14,7 +14,9 @@ use tracing::debug;
 use super::Backend;
 use super::annotations::prepare_tool_metadata;
 use super::cached_metadata::CachedMetadata;
-use super::fill_check::{Completeness, FillBound, FillEnd, FillGuard, admit_fill, run_bounded};
+use super::fill_check::{
+    Completeness, FillBound, FillEnd, FillGuard, LIST_FILL_COOLDOWN, admit_fill, run_bounded,
+};
 use super::pool::PoolKey;
 use super::{CACHE_LIST_DRAIN_BUDGET, LIST_MAX_PAGES};
 use crate::Error;
@@ -38,14 +40,12 @@ impl Backend {
     }
 
     /// Whether a stale hit's refresh on `binding`'s slot failed within the
-    /// cooldown (A4); with `stamp`, record such a failure now.
-    pub(super) fn stale_refresh_cooling(&self, binding: Option<&str>, stamp: bool) -> bool {
-        let slot = self.tools_slot(binding);
-        let mut at = slot.tools_refresh_failed_at.lock();
-        if stamp {
-            *at = Some(tokio::time::Instant::now());
-        }
-        at.is_some_and(|at| at.elapsed() < super::fill_check::LIST_FILL_COOLDOWN)
+    /// cooldown (A4), so a stale hit is judged from the held schema at once.
+    pub(super) fn stale_refresh_cooling(&self, binding: Option<&str>) -> bool {
+        self.tools_slot(binding)
+            .tools_refresh_failed_at
+            .lock()
+            .is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
     }
 
     /// Whether `binding`'s slot is in a fill cooldown whose failure was NOT a
@@ -55,9 +55,7 @@ impl Backend {
             .tools_fill_failed_at
             .lock()
             .as_ref()
-            .is_some_and(|(at, replay)| {
-                replay.is_none() && at.elapsed() < super::fill_check::LIST_FILL_COOLDOWN
-            })
+            .is_some_and(|(at, replay)| replay.is_none() && at.elapsed() < LIST_FILL_COOLDOWN)
     }
 
     /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
@@ -264,6 +262,16 @@ impl Backend {
                 || async {
                     // F13: breaker, cooldown, token, in that order, before the
                     // guard is armed, so a refusal here never stamps.
+                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
+                    if family.stale_hit
+                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+                    {
+                        return Err(Error::BackendUnavailable(format!(
+                            "{}: a stale tools refresh failed within the last {}s",
+                            self.name,
+                            LIST_FILL_COOLDOWN.as_secs()
+                        )));
+                    }
                     admit_fill(&entry, &self.name, bound, family.cooldown)?;
                     let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
                     let drained = run_bounded(&entry, &self.name, bound, async {
@@ -292,6 +300,9 @@ impl Backend {
                             transport => FillEnd::Failed { transport },
                         },
                     };
+                    if family.stale_hit && drained.is_err() {
+                        *refresh_failed() = Some(tokio::time::Instant::now());
+                    }
                     if let Some(guard) = guard.as_mut() {
                         guard.end(end);
                     }
@@ -352,7 +363,7 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
-        self.tools_fill(binding, extra_headers, FillBound::DrainBudget)
+        self.tools_fill(binding, extra_headers, FillBound::DrainBudget, false)
             .await
     }
 
@@ -363,6 +374,7 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
         bound: FillBound,
+        stale_hit: bool,
     ) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_for(
             binding,
@@ -373,6 +385,7 @@ impl Backend {
                 list_key: "tools",
                 truncated_flag: Some(tools_truncated_flag),
                 cooldown: true,
+                stale_hit,
             },
             extra_headers,
             bound,
@@ -407,9 +420,10 @@ impl Backend {
         &self,
         binding: Option<&str>,
         headers: &[(String, String)],
+        stale_hit: bool,
     ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
         let limit = self.config.timeout;
-        let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit));
+        let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
         let tools = tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
             .await
             .unwrap_or_else(|_| Err(super::fill_check::list_timeout(&self.name, limit)))?;
@@ -514,6 +528,7 @@ impl Backend {
                 list_key: "resources",
                 truncated_flag: None,
                 cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
             FillBound::DrainBudget,
@@ -561,6 +576,7 @@ impl Backend {
                 list_key: "resourceTemplates",
                 truncated_flag: None,
                 cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
             FillBound::DrainBudget,
@@ -613,6 +629,7 @@ impl Backend {
                 list_key: "prompts",
                 truncated_flag: None,
                 cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
             FillBound::DrainBudget,
@@ -645,6 +662,10 @@ struct ListFamily {
     /// Only the tools family keeps a failure cooldown (F13): a resources or
     /// prompts failure must never make a tools fill fail fast.
     cooldown: bool,
+    /// A stale hit's refresh (A4): it honours `tools_refresh_failed_at` at
+    /// admission, so a caller waiting inside the fill does not retry a
+    /// failure the cooldown already covers, and it stamps that on failure.
+    stale_hit: bool,
 }
 
 /// Drain every `nextCursor` page into one result, then let the caller parse

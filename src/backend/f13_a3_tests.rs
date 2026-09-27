@@ -240,3 +240,25 @@ async fn a4_t2_a_failed_refresh_falls_back_to_the_held_schema() {
         "the second stale hit listed inside the cooldown"
     );
 }
+
+/// A4-T3 (review fold): concurrent stale hits whose refresh fails with an
+/// error that starts no fill cooldown (`Io`) still list once: waiters inside
+/// the fill honour the stale-refresh stamp at admission. Mutant M30 (drop that
+/// admission check) sends one list per waiter.
+#[tokio::test]
+async fn a4_t3_concurrent_stale_hits_refresh_once() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = short_ttl(&lister);
+    let _ = check(&backend, "edit", &json!({"edits": []})).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    lister.set(Mode::Io);
+    let args = undeclared();
+    let calls = (0..8).map(|_| check(&backend, "edit", &args));
+    for held in futures::future::join_all(calls).await {
+        assert!(
+            matches!(held, Ok(Some(ref t)) if t.contains("zzinvented")),
+            "{held:?}"
+        );
+    }
+    assert_eq!(lister.lists(), 2, "each waiter retried the failed refresh");
+}

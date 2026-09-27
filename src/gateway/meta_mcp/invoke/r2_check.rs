@@ -111,15 +111,15 @@ impl MetaMcp {
     /// list is this caller's first request, so a 401 on a managed credential
     /// forces its one refresh here (A11-c); otherwise a cold slot would never
     /// reach the dispatch that refreshes it. `Ok` is the accounted tool
-    /// result and the error text; `Err` is a marked account refusal, for the
-    /// caller's connect offer.
+    /// result and the error it answers; `Err` is a marked account refusal,
+    /// for the caller's connect offer.
     pub(super) async fn answer_refused_fill(
         &self,
         (server, tool): (&str, &str),
         error: Error,
         managed: Option<&crate::personal_accounts::ManagedLease>,
         checked_at: std::time::Instant,
-    ) -> std::result::Result<(Value, String), Error> {
+    ) -> std::result::Result<(Value, Error), Error> {
         let error = match managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
                 managed.after_upstream_401(error).await
@@ -130,12 +130,12 @@ impl MetaMcp {
         if crate::personal_accounts::refusal::marked(&error).is_some() {
             return Err(error);
         }
-        Ok((value, error.to_string()))
+        Ok((value, error))
     }
 
     /// [`Self::answer_refused_fill`] for a bridged round: the error text it
-    /// is refused with, a marked account refusal parked in `parked` as a
-    /// dispatched round's is (A11-c).
+    /// is refused with. Every managed 401, refreshed and marked or not, is
+    /// parked in `parked`, exactly as a dispatched round's is (A11-c).
     pub(super) async fn bridged_refused_fill(
         &self,
         at: (&str, &str),
@@ -144,17 +144,15 @@ impl MetaMcp {
         checked_at: std::time::Instant,
         parked: &parking_lot::Mutex<Option<Error>>,
     ) -> String {
-        match self
+        let parks = managed.is_some() && is_upstream_unauthorized(&error);
+        let (Ok((_, error)) | Err(error)) = self
             .answer_refused_fill(at, error, managed, checked_at)
-            .await
-        {
-            Ok((_, message)) => message,
-            Err(error) => {
-                let message = error.to_string();
-                *parked.lock() = Some(error);
-                message
-            }
+            .await;
+        let message = error.to_string();
+        if parks || crate::personal_accounts::refusal::marked(&error).is_some() {
+            *parked.lock() = Some(error);
         }
+        message
     }
 
     /// Account a check-site fill the slot's failsafe refused, or that failed

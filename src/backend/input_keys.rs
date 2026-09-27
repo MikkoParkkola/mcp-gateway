@@ -93,8 +93,7 @@ impl Backend {
             Ok(self.judge_keys(&cached.input_schema, tool, arguments, mode))
         };
         if let Some(cached) = &cached
-            && (self.has_cached_tools_for(identity_key)
-                || self.stale_refresh_cooling(identity_key, false))
+            && (self.has_cached_tools_for(identity_key) || self.stale_refresh_cooling(identity_key))
         {
             return held(cached);
         }
@@ -105,18 +104,12 @@ impl Backend {
             count("input_schema_fetch_skipped_a3");
             return Ok(unavailable(mode));
         }
-        let (tools, completeness) = match self.tools_for_check(identity_key, headers).await {
+        let fetched = self.tools_for_check(identity_key, headers, cached.is_some());
+        let (tools, completeness) = match fetched.await {
             Ok(fetched) => fetched,
-            Err(e) if cached.is_some() => {
-                // A gate refusal was never attempted: fall back, record nothing.
-                if !matches!(
-                    e,
-                    crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_)
-                ) {
-                    self.stale_refresh_cooling(identity_key, true);
-                }
-                return cached.as_ref().map_or(Ok(None), held);
-            }
+            // A stale hit falls back on any refresh error; the fill stamped
+            // an attempted failure, and a gate refusal records nothing.
+            Err(_) if cached.is_some() => return cached.as_ref().map_or(Ok(None), held),
             // Raised only by the fill's own failsafe gate: no transport
             // constructs either variant.
             Err(e @ (crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_))) => {
