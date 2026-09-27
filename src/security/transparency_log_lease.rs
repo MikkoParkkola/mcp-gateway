@@ -47,9 +47,16 @@ pub(crate) fn is_lease_held(error: &io::Error) -> bool {
 }
 
 /// Take the writer lease for the log at `path`, waiting up to `wait` while
-/// another handle holds it.
+/// another handle holds it. A held lease stays the typed refusal; any other
+/// failure names the lock file (a directory in its place, a read-only volume).
 pub(super) fn acquire(path: &Path, wait: Duration) -> io::Result<ExclusiveFileLock> {
-    acquire_with(path, wait, &mut std::thread::sleep, &Instant::now)
+    acquire_with(path, wait, &mut std::thread::sleep, &Instant::now).map_err(|e| {
+        if is_lease_held(&e) {
+            e
+        } else {
+            super::segments::ctx("lock", &super::segments::sibling(path, "lock"))(e)
+        }
+    })
 }
 
 /// [`acquire`] with the clock and sleeper injected (tests drive the loop

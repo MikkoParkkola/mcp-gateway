@@ -287,15 +287,7 @@ impl TransparencyLogger {
         // The writer lease, held until the logger drops: every rotation,
         // retention and recovery below runs under it, and a second writer of
         // this path is refused.
-        // A held lease stays the typed refusal; any other failure names the
-        // lock file (a directory in its place, a read-only volume).
-        let lease = lease::acquire(&path, wait).map_err(|e| {
-            if is_lease_held(&e) {
-                e
-            } else {
-                segments::ctx("lock", &segments::sibling(&path, "lock"))(e)
-            }
-        })?;
+        let lease = lease::acquire(&path, wait)?;
         let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
         Ok(Self {
             inner: Mutex::new(Inner {

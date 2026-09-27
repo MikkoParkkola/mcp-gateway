@@ -56,9 +56,10 @@ fn rotation_rename_names_the_target() {
     assert_names(&e, "rename", &sealed_path(&path, 0));
 }
 
-/// Removing an expired segment.
+/// Retention over an expired segment that cannot be read (a directory in
+/// its place): the read before the remove fails first, and names it.
 #[test]
-fn retention_remove_names_the_segment() {
+fn retention_names_the_segment() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
@@ -74,7 +75,7 @@ fn retention_remove_names_the_segment() {
                 .err()
         })
         .expect("retention must fail on a directory");
-    assert_names(&e, "remove", &oldest);
+    assert_names(&e, "audit log: read ", &oldest);
 }
 
 /// Reading a sealed segment during recovery.
