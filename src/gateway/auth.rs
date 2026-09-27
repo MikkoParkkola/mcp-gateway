@@ -729,7 +729,7 @@ pub async fn auth_middleware(
         let has_bearer = presented_credential(request.headers()).is_some();
         let is_bootstrap = request.uri().path() == "/dashboard"
             && request.uri().query().and_then(bootstrap_param).is_some();
-        if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
+        if !has_bearer && (is_bootstrap || !is_bootstrap) && !auth_config.is_public_path(request.uri().path()) {
             return session_ended_response(cookie_secure(&state));
         }
     }
