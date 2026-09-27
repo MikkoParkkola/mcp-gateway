@@ -97,6 +97,10 @@ const READ_WRITE: u32 = 0x1 | 0x2;
 const GENERIC_ALL: u32 = 0x1000_0000;
 /// `INHERITED_ACE`.
 const INHERITED: u8 = 0x10;
+/// `INHERIT_ONLY_ACE`: applies to children only, never to the object itself.
+const INHERIT_ONLY: u8 = 0x08;
+/// `GENERIC_READ | GENERIC_WRITE`.
+const GENERIC_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
 
 /// Every rule P1-P5 the descriptor breaks, in the design's reporting order.
 pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusal> {
@@ -106,23 +110,32 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
         return found;
     };
     let mut read_write = false;
+    let mut user_denied = false;
     let mut inherited = false;
     for ace in aces {
         match ace {
             Ace::Allowed { flags, mask, sid } => {
                 inherited |= flags & INHERITED != 0;
-                if sid == user {
-                    read_write |= mask & GENERIC_ALL != 0 || mask & READ_WRITE == READ_WRITE;
-                } else {
+                if sid != user {
                     found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
+                } else if flags & INHERIT_ONLY == 0 {
+                    read_write |= mask & GENERIC_ALL != 0 || mask & READ_WRITE == READ_WRITE;
                 }
             }
-            // A deny only narrows access; it may name anyone.
-            Ace::Denied { flags, .. } => inherited |= flags & INHERITED != 0,
+            // A deny only narrows access; it may name anyone. One naming the
+            // user that takes away read or write fails P3. A deny for a group
+            // the user belongs to is not resolved here: it can only make the
+            // store unusable (fail closed), never readable by someone else.
+            Ace::Denied { flags, mask, sid } => {
+                inherited |= flags & INHERITED != 0;
+                user_denied |= sid == user
+                    && flags & INHERIT_ONLY == 0
+                    && mask & (READ_WRITE | GENERIC_ALL | GENERIC_READ_WRITE) != 0;
+            }
             Ace::Other { ace_type } => found.push(PrivacyRefusal::OtherAceType(*ace_type)),
         }
     }
-    if !read_write {
+    if !read_write || user_denied {
         found.push(PrivacyRefusal::NoReadWrite);
     }
     match inspection.owner.as_ref() {
@@ -282,12 +295,20 @@ pub(crate) fn after_path_walk(path: &Path) {
     hook(Hook::AfterPathWalk, path);
 }
 
+/// Fired by the store open after its directories are judged and before custody
+/// is taken, while only the held directory handles pin them.
+pub(crate) fn after_dir_judged(path: &Path) {
+    hook(Hook::AfterDirJudged, path);
+}
+
 // ---- test instrumentation, shared unchanged by red and fix bodies ----
 
 /// Named observation points (test plan W-T18, W-T24).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Hook {
     AfterPathWalk,
+    /// Directories judged and held, custody not yet taken (W-T16b).
+    AfterDirJudged,
     BeforeRecordOpen,
     /// A replace attempt failed and another is about to run (W-T20).
     ReplaceRetry,

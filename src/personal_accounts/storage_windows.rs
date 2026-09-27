@@ -14,7 +14,9 @@ use crate::private_fs;
 pub(super) use crate::private_fs::prefix_allowed;
 
 /// R1: a store directory is judged on an open handle to it.
-pub(super) fn private_directory(path: &Path) -> Result<(), AccountError> {
+/// Returns the judged handle; `open`/`initialize` hold it for the custody
+/// lifetime (design §2.2).
+pub(super) fn private_directory(path: &Path) -> Result<crate::fs_lock::DirPin, AccountError> {
     private_fs::after_path_walk(path);
     let dir = private_fs::open_dir(path).map_err(|_| AccountError::StorageUnavailable)?;
     let metadata = dir
@@ -26,7 +28,8 @@ pub(super) fn private_directory(path: &Path) -> Result<(), AccountError> {
     private_fs::judge_dir(&dir, path).map_err(|reason| {
         tracing::warn!(?reason, path = %path.display(), "account store directory is not private");
         AccountError::InvalidConfiguration
-    })
+    })?;
+    Ok(crate::fs_lock::DirPin(dir))
 }
 
 /// R2: create each missing component private from its first instant, as the
@@ -45,7 +48,7 @@ pub(super) fn create_directory(path: &Path) -> Result<(), AccountError> {
     {
         return Err(AccountError::StorageUnavailable);
     }
-    private_directory(path)?;
+    drop(private_directory(path)?);
     sync_directory(parent)
 }
 

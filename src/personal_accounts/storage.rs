@@ -294,7 +294,7 @@ fn validate_path(path: &Path) -> Result<(), AccountError> {
 }
 
 #[cfg(unix)]
-fn private_directory(path: &Path) -> Result<(), AccountError> {
+fn private_directory(path: &Path) -> Result<crate::fs_lock::DirPin, AccountError> {
     use std::os::unix::fs::PermissionsExt as _;
     let metadata = fs::symlink_metadata(path).map_err(|_| AccountError::StorageUnavailable)?;
     if !metadata.is_dir()
@@ -303,7 +303,7 @@ fn private_directory(path: &Path) -> Result<(), AccountError> {
     {
         return Err(AccountError::InvalidConfiguration);
     }
-    Ok(())
+    Ok(crate::fs_lock::DirPin())
 }
 
 #[cfg(unix)]
@@ -371,6 +371,7 @@ use platform::{
 
 fn claim_store(
     config: &StoreConfig,
+    pins: (crate::fs_lock::DirPin, crate::fs_lock::DirPin),
 ) -> Result<
     (
         crate::fs_lock::ExclusiveFileLock,
@@ -378,13 +379,15 @@ fn claim_store(
     ),
     AccountError,
 > {
+    #[cfg(windows)]
+    crate::private_fs::after_dir_judged(&config.store_dir);
     let record_lock =
         crate::fs_lock::ExclusiveFileLock::try_acquire(&config.store_dir.join(LOCK_FILE))
             .map_err(|_| AccountError::StorageUnavailable)?;
     let authority_lock =
         crate::fs_lock::ExclusiveFileLock::try_acquire(&config.authority_dir.join(LOCK_FILE))
             .map_err(|_| AccountError::StorageUnavailable)?;
-    Ok((record_lock, authority_lock))
+    Ok((record_lock.pinning(pins.0), authority_lock.pinning(pins.1)))
 }
 
 /// 16 random bytes, hex-encoded: 32 lowercase hex characters.
@@ -437,9 +440,11 @@ pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, Ac
     validate_config(&config)?;
     create_directory(&config.store_dir)?;
     create_directory(&config.authority_dir)?;
-    private_directory(&config.store_dir)?;
-    private_directory(&config.authority_dir)?;
-    let (record_lock, authority_lock) = claim_store(&config)?;
+    let pins = (
+        private_directory(&config.store_dir)?,
+        private_directory(&config.authority_dir)?,
+    );
+    let (record_lock, authority_lock) = claim_store(&config, pins)?;
     require_empty(&config.store_dir)?;
     require_empty(&config.authority_dir)?;
     let authority = empty_authority(&config)?;
@@ -475,11 +480,13 @@ pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, Ac
 
 pub(super) fn open(config: StoreConfig) -> Result<PersonalAccountStore, AccountError> {
     validate_config(&config)?;
-    private_directory(&config.store_dir)?;
-    private_directory(&config.authority_dir)?;
+    let pins = (
+        private_directory(&config.store_dir)?,
+        private_directory(&config.authority_dir)?,
+    );
     // Acquire both lifetime locks before inspecting authority. Open never creates
     // an epoch or substitutes empty authority for missing or invalid state.
-    let (record_lock, authority_lock) = claim_store(&config)?;
+    let (record_lock, authority_lock) = claim_store(&config, pins)?;
     let file = open_nofollow(&config.authority_dir.join(AUTHORITY_FILE))
         .map_err(|_| AccountError::StorageUnavailable)?;
     let metadata = file

@@ -20,13 +20,15 @@ pub(super) fn has_mode(_meta: &fs::Metadata, _expected: u32) -> bool {
 
 /// T1: judge the store directory on an open handle (DACL, reparse, locality,
 /// final path), the Windows side of the unix `0700` check.
-pub(super) fn judge_store_dir(dir: &Path) -> Result<(), StoreError> {
+/// Returns the judged handle, which the caller holds for the custody lifetime.
+pub(super) fn judge_store_dir(dir: &Path) -> Result<crate::fs_lock::DirPin, StoreError> {
     private_fs::after_path_walk(dir);
     let handle = private_fs::open_dir(dir).map_err(|_| StoreError::UnsafeStore)?;
     private_fs::judge_dir(&handle, dir).map_err(|reason| {
         tracing::warn!(?reason, path = %dir.display(), "task store directory is not private");
         StoreError::UnsafeStore
-    })
+    })?;
+    Ok(crate::fs_lock::DirPin(handle))
 }
 
 /// T5: create the store directory private from its first instant. Missing

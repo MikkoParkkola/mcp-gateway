@@ -24,7 +24,7 @@ use super::record::{
     CommittedTask, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask,
     RECORD_VERSION, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
 };
-use crate::fs_lock::ExclusiveFileLock;
+use crate::fs_lock::{DirPin, ExclusiveFileLock};
 #[cfg(unix)]
 use std::fs::rename;
 #[cfg(windows)]
@@ -33,7 +33,8 @@ mod platform;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 #[cfg(windows)]
 use platform::{
-    create_private_dir, has_mode, open_new_private, open_record, rename, sync_dir, sync_file,
+    create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
+    sync_file,
 };
 
 /// The one sidecar a fresh store creates. Deliberately not a `task-*.json` name,
@@ -676,23 +677,24 @@ fn open_blocking(
     dir: &Path,
     limits: StoreLimits,
 ) -> Result<(ExclusiveFileLock, BTreeMap<String, Entry>), StoreError> {
-    prepare_dir(dir)?;
-    let lease = acquire_lease(&dir.join(LEASE))?;
+    let pin = prepare_dir(dir)?;
+    let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
     Ok((lease, load(dir, limits)?))
 }
 
-fn prepare_dir(dir: &Path) -> Result<(), StoreError> {
+fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
     match fs::symlink_metadata(dir) {
         Ok(meta) => {
             if !meta.is_dir() || !has_mode(&meta, STORE_MODE) {
                 tracing::warn!(path = %dir.display(), "task store directory is not a private directory");
                 return Err(StoreError::UnsafeStore);
             }
-            #[cfg(windows)]
-            platform::judge_store_dir(dir)?;
-            Ok(())
+            judge_store_dir(dir)
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => create_private_dir(dir),
+        // A fresh directory is judged exactly like an existing one.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_private_dir(dir).and_then(|()| judge_store_dir(dir))
+        }
         Err(error) => {
             tracing::warn!(%error, path = %dir.display(), "task store directory unreadable");
             Err(StoreError::Unavailable)
@@ -896,6 +898,15 @@ fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io
 
 fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
     hook.map_or(Ok(()), |hook| hook(stage))
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "unix judges by mode; nothing to hold"
+)]
+fn judge_store_dir(_dir: &Path) -> Result<DirPin, StoreError> {
+    Ok(DirPin())
 }
 
 #[cfg(unix)]

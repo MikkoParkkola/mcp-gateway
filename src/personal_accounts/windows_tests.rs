@@ -557,3 +557,61 @@ foreach ($pair in @({list})) {{
         }
     }
 }
+
+// W-T26: residue at the next scratch name the store draws is skipped, not
+// written or removed, and the commit succeeds on a fresh name.
+#[test]
+fn wt26_scratch_residue_does_not_block_commit() {
+    use crate::personal_accounts::storage::commit::next_scratch;
+    let (_root, settings, store) = empty_store(8);
+    let residue = settings.authority_dir.join(".authority.json.r26.tmp");
+    std::fs::write(&residue, b"someone else's").unwrap();
+    // The record and the manifest each draw once; both draws get the suffix.
+    next_scratch::push("r26");
+    next_scratch::push("r26");
+    assert_eq!(
+        store.commit_grant(&alice(), &grant()),
+        Ok(()),
+        "WT-ASSERT W-T26: residue at the drawn scratch name blocked the commit"
+    );
+    assert_eq!(
+        std::fs::read(&residue).ok().as_deref(),
+        Some(&b"someone else's"[..]),
+        "WT-ASSERT W-T26: the residue was written or removed"
+    );
+    drop(store);
+    assert!(matches!(
+        reopen(&settings).lookup(&alice()),
+        Ok(AccountLookup::Connected(_))
+    ));
+}
+
+// W-T16b: between judging the store directories and taking custody, only the
+// held directory handles keep the judged directory in place; a rename attempted
+// in that window is refused and the store opens over what it judged.
+#[test]
+fn wt16b_judged_directory_is_held_until_custody() {
+    let (_root, settings) = committed();
+    let moved = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (seen, dir) = (std::sync::Arc::clone(&moved), settings.store_dir.clone());
+    instrument::set_hook(Some(Box::new(move |which, _path| {
+        if which == Hook::AfterDirJudged {
+            let result = std::fs::rename(&dir, dir.with_extension("moved"));
+            *seen.lock().unwrap() = Some(result.is_ok());
+        }
+    })));
+    let opened = PersonalAccountStore::open(settings);
+    instrument::set_hook(None);
+    assert_eq!(
+        *moved.lock().unwrap(),
+        Some(false),
+        "WT-ASSERT W-T16b: the judged store directory was renamed before custody"
+    );
+    assert!(
+        matches!(
+            opened.map(|s| s.lookup(&alice())),
+            Ok(Ok(AccountLookup::Connected(_)))
+        ),
+        "WT-ASSERT W-T16b: the store did not open over what it judged"
+    );
+}

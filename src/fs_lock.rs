@@ -31,9 +31,42 @@ pub(crate) struct ExclusiveFileLock {
         expect(dead_code, reason = "only the unix and Windows paths read the handle")
     )]
     file: File,
+    #[cfg(windows)]
+    pins: Vec<DirPin>,
 }
 
+/// A judged store directory. On Windows its handle, held without delete
+/// sharing for exactly the custody lifetime, so neither the directory nor any
+/// ancestor can be renamed or swapped for a junction while the store is open
+/// (design §2.2, R2-1). Empty elsewhere: a mode check holds nothing.
+pub(crate) struct DirPin(
+    #[cfg(windows)]
+    #[expect(dead_code, reason = "held open, never read")]
+    pub(crate) File,
+);
+
 impl ExclusiveFileLock {
+    fn held(file: File) -> Self {
+        Self {
+            file,
+            #[cfg(windows)]
+            pins: Vec::new(),
+        }
+    }
+
+    /// Keep a judged directory open for as long as this custody lasts.
+    #[cfg_attr(not(windows), expect(clippy::needless_pass_by_value))]
+    pub(crate) fn pinning(
+        #[cfg_attr(not(windows), allow(unused_mut))] mut self,
+        pin: DirPin,
+    ) -> Self {
+        #[cfg(windows)]
+        self.pins.push(pin);
+        #[cfg(not(windows))]
+        let DirPin() = pin;
+        self
+    }
+
     /// Acquire a lifetime custody lock without waiting for another process.
     ///
     /// Unlike the legacy blocking helper, unsupported platforms refuse custody.
@@ -51,7 +84,7 @@ impl ExclusiveFileLock {
         }
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(|error| io::Error::from_raw_os_error(error.raw_os_error()))?;
-        Ok(Self { file })
+        Ok(Self::held(file))
     }
 
     /// Windows: an owner-only sidecar shared for read and write (never
@@ -96,7 +129,7 @@ impl ExclusiveFileLock {
             std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
             std::fs::TryLockError::Error(error) => error,
         })?;
-        Ok(Self { file })
+        Ok(Self::held(file))
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -115,7 +148,7 @@ impl ExclusiveFileLock {
         set_owner_only(&mut opts);
         let file = opts.open(lock_path)?;
         lock_exclusive(&file)?;
-        Ok(Self { file })
+        Ok(Self::held(file))
     }
 }
 

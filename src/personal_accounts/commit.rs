@@ -50,18 +50,55 @@ macro_rules! boundary {
 
 /// A private scratch name inside the same directory, so the rename is atomic.
 fn scratch_name(name: &str) -> Result<String, AccountError> {
+    #[cfg(test)]
+    if let Some(suffix) = next_scratch::take() {
+        return Ok(format!(".{name}.{suffix}.tmp"));
+    }
     Ok(format!(".{name}.{}.tmp", super::random_hex()?))
 }
 
+/// Test-only scratch-name source (test plan W-T26): queued suffixes are drawn
+/// before random ones, so a test can leave residue at the next name.
+#[cfg(test)]
+pub(in crate::personal_accounts) mod next_scratch {
+    use std::cell::RefCell;
+    thread_local!(static QUEUE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) });
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows W-T26 row queues names")
+    )]
+    pub(in crate::personal_accounts) fn push(suffix: &str) {
+        QUEUE.with(|q| q.borrow_mut().push(suffix.to_owned()));
+    }
+    pub(super) fn take() -> Option<String> {
+        QUEUE.with(|q| (!q.borrow().is_empty()).then(|| q.borrow_mut().remove(0)))
+    }
+}
+
+/// Draws a fresh scratch name until one can be created. Residue at a drawn
+/// name (a crash, another writer) is someone else's file: skipped, never
+/// written or removed.
+fn create_scratch(dir: &Path, name: &str) -> Result<(fs::File, std::path::PathBuf), AccountError> {
+    const ATTEMPTS: usize = 4;
+    for _ in 0..ATTEMPTS {
+        let tmp = dir.join(scratch_name(name)?);
+        match open_private(&tmp) {
+            Ok(file) => return Ok((file, tmp)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(AccountError::StorageUnavailable),
+        }
+    }
+    Err(AccountError::StorageUnavailable)
+}
+
 #[cfg(unix)]
-fn open_private(path: &Path) -> Result<fs::File, AccountError> {
+fn open_private(path: &Path) -> std::io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
     fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .mode(0o600)
         .open(path)
-        .map_err(|_| AccountError::StorageUnavailable)
 }
 
 #[cfg(unix)]
@@ -74,9 +111,8 @@ fn sync_file(file: &fs::File) -> std::io::Result<()> {
 
 /// Windows: private from creation, no sharing (design §2.3 R4).
 #[cfg(windows)]
-fn open_private(path: &Path) -> Result<fs::File, AccountError> {
+fn open_private(path: &Path) -> std::io::Result<fs::File> {
     crate::private_fs::create_file_private(path, crate::private_fs::Share::Exclusive)
-        .map_err(|_| AccountError::StorageUnavailable)
 }
 
 #[cfg(windows)]
@@ -108,9 +144,8 @@ pub(super) fn replace_file(
     bytes: &[u8],
     step: impl Fn(ReplaceStep) -> Result<(), AccountError>,
 ) -> Result<(), Replace> {
-    let tmp = dir.join(scratch_name(name).map_err(Replace::Staged)?);
+    let (mut file, tmp) = create_scratch(dir, name).map_err(Replace::Staged)?;
     let staged = (|| -> Result<(), AccountError> {
-        let mut file = open_private(&tmp)?;
         step(ReplaceStep::Write)?;
         file.write_all(bytes)
             .map_err(|_| AccountError::StorageUnavailable)?;
@@ -131,9 +166,8 @@ pub(super) fn replace_file(
 /// Write one immutable candidate record: create, write, sync, rename, sync the
 /// parent. No debris is left behind on any failure.
 fn persist_record(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), AccountError> {
-    let tmp = dir.join(scratch_name(name)?);
+    let (mut file, tmp) = create_scratch(dir, name)?;
     let staged = (|| -> Result<(), AccountError> {
-        let mut file = open_private(&tmp)?;
         boundary!(RecordWrite);
         file.write_all(bytes)
             .map_err(|_| AccountError::StorageUnavailable)?;

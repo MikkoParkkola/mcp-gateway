@@ -100,3 +100,26 @@ async fn wt9_custody_is_exclusive_and_released() {
         "WT-ASSERT W-T9: not reacquired after release"
     );
 }
+
+// W-T5 (task store): a directory the store creates is judged like an existing
+// one, so creating it through a junction refuses.
+#[tokio::test]
+async fn wt5_task_fresh_dir_under_junction_refuses() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = root.path().join("j");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&real)
+        .status();
+    if !made.is_ok_and(|s| s.success()) {
+        crate::private_fs::test_support::fixture_fail("W-T5/task", "mklink /J failed");
+    }
+    assert_eq!(
+        open_err(&link.join("tasks")).await,
+        Some(StoreError::UnsafeStore),
+        "WT-ASSERT W-T5/task"
+    );
+}
