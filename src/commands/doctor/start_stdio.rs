@@ -175,9 +175,17 @@ mod tests {
     async fn t7f_a_hung_start_ends_at_the_cap() {
         let mut backend = stdio("sh -c 'exec sleep 7200'", &[]);
         backend.timeout = Duration::from_secs(3600);
+        // The clock is paused, so this is virtual time: the message names the
+        // cap whichever bound fired, and only the elapsed time tells them apart.
+        let began = tokio::time::Instant::now();
         let result = start_stdio_backend("b", &backend)
             .await
             .expect("a stdio row");
+        let elapsed = began.elapsed();
+        assert!(
+            (START_CAP..START_CAP * 4).contains(&elapsed),
+            "the cap, not the backend timeout, ended the start: {elapsed:?}"
+        );
         assert_eq!(result.status, CheckStatus::Fail, "{}", result.detail);
         assert!(
             result.detail.contains("did not finish within 15s"),
