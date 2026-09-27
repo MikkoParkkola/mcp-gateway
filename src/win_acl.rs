@@ -313,6 +313,11 @@ pub(crate) fn create_dir_private(path: &Path, user: &Sid) -> io::Result<()> {
 /// Create a file that never exists with any other DACL. `CREATE_NEW` refuses
 /// any existing name, reparse point included.
 pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::Result<File> {
+    let early = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(path)?;
+    after_create(path, Some(&early));
+    drop(early);
+    let _ = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status();
+    std::fs::remove_file(path)?;
     let mut sd = private_descriptor(ObjectKind::File, user)?;
     let w = wide(path)?;
     let attrs = SECURITY_ATTRIBUTES {
