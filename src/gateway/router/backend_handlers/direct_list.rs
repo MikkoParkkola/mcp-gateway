@@ -47,8 +47,8 @@ pub(super) async fn drain(
     let mut cursor: Option<Value> = None;
     // An unreadable list (see `readable_page`) is answered as before but never
     // cached: as a complete empty list it would refuse every `tools/call` as
-    // absent. It must also carry a `tools` array on some page.
-    let (mut every_page, mut any_array) = (true, false);
+    // absent.
+    let mut every_page = true;
     for _ in 0..DIRECT_LIST_MAX_PAGES {
         let mut page_params = params
             .filter(|p| p.is_object())
@@ -75,7 +75,6 @@ pub(super) async fn drain(
         every_page &= readable_page(page.result.as_ref());
         let result = page.result.unwrap_or(Value::Null);
         if let Some(items) = result.get("tools").and_then(Value::as_array) {
-            any_array = true;
             tools.extend(items.iter().cloned());
         }
         match result.get("nextCursor") {
@@ -83,7 +82,7 @@ pub(super) async fn drain(
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
                 let credential = !propagated_headers.is_empty();
-                if every_page && any_array {
+                if every_page {
                     backend
                         .remember_listed_tools(identity_key, credential, &tools)
                         .await;
@@ -108,10 +107,13 @@ pub(super) async fn drain(
     ))
 }
 
-/// A page the metadata fill could read: a result object whose `tools`, when
-/// present, is an array. A cursor-only page (no `tools`) is readable.
+/// A page the metadata fill could read: a result whose `tools` is an array,
+/// or which carries only a `nextCursor`. So the last page carries the array.
 fn readable_page(result: Option<&Value>) -> bool {
-    result.is_some_and(|r| r.is_object() && r.get("tools").is_none_or(Value::is_array))
+    result.is_some_and(|r| match r.get("tools") {
+        Some(tools) => tools.is_array(),
+        None => r.is_object() && r.get("nextCursor").is_some_and(|c| !c.is_null()),
+    })
 }
 
 /// Keep only the tools the direct `tools/call` predicate would admit for this
@@ -153,14 +155,18 @@ mod tests {
     use super::readable_page;
     use serde_json::json;
 
-    /// Review fold: each page shape the direct list may cache from. Mutant
-    /// M38 (accept a non-array `tools`) reddens it.
+    /// Review fold: each page shape the direct list may cache from. Mutants
+    /// M38 (accept a non-array `tools`) and M39 (accept a page with neither
+    /// list nor cursor) redden it.
     #[test]
     fn only_a_result_object_with_an_array_or_no_tools_is_readable() {
         let rows = [
             (Some(json!({"tools": []})), true),
             (Some(json!({"tools": [{"name": "edit"}]})), true),
             (Some(json!({"nextCursor": "2"})), true),
+            (Some(json!({})), false),
+            (Some(json!({"nextCursor": null})), false),
+            (Some(json!({"tools": null, "nextCursor": "2"})), false),
             (Some(json!({"tools": null})), false),
             (Some(json!({"tools": "edit"})), false),
             (Some(json!("tools")), false),

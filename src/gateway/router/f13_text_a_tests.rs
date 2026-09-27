@@ -101,9 +101,9 @@ async fn post(router: &axum::Router, uri: &str, body: Value) -> Value {
 /// Review fold: a direct `tools/list` whose result carries no `tools` array
 /// (`tools: null`, or no `tools` key and no cursor) is answered but not
 /// cached, so the slot stays cold and the next call lists and is judged.
-/// Mutants M37 (cache it anyway) and M39 (cache a readable page with no
-/// array) redden it: the slot holds a complete empty list, and a declared
-/// call is refused with text A.
+/// Mutants M37 (cache it anyway) and M39 (accept a page with neither list
+/// nor cursor) redden it: the slot holds a complete empty list, and a
+/// declared call is refused with text A.
 #[tokio::test]
 async fn f13_a_malformed_direct_list_leaves_the_slot_cold() {
     for malformed in [Value::Null, json!({})] {

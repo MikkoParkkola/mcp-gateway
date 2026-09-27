@@ -183,15 +183,19 @@ pub(super) fn admit_fill(
     };
     if let Some((_, replay)) = cooling {
         count("input_schema_fill_cooldown");
-        // A check-site call answers as the transport failure it stands in
-        // for; any other caller keeps the generic fast-fail.
-        if let Some(replay) = replay.filter(|_| gated) {
-            return Err(replay.error());
-        }
-        return Err(Error::BackendUnavailable(format!(
+        let fast_fail = format!(
             "{backend}: tools/list failed within the last {}s",
             LIST_FILL_COOLDOWN.as_secs()
-        )));
+        );
+        // A check-site call answers as the failure it stands in for, carried
+        // in the error so no later read of the stamp can reclass it: the
+        // transport failure, or an unreadable list (not transport-class, so
+        // text U). Any other caller keeps the generic fast-fail.
+        return Err(match replay {
+            Some(replay) if gated => replay.error(),
+            None if gated => Error::json_rpc(-32603, fast_fail),
+            _ => Error::BackendUnavailable(fast_fail),
+        });
     }
     if gated {
         entry

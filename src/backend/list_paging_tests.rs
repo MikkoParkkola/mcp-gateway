@@ -349,6 +349,24 @@ async fn keyless_first_page_keeps_later_pages() {
     assert_eq!(names(&backend), ["t1"]);
 }
 
+/// Review fold: a later page with no `tools` key and no cursor is malformed,
+/// not an empty last page: the fill fails and keeps no partial list, so the
+/// check never judges a present tool absent. Mutant M40 (accept any result
+/// object) reddens it.
+#[tokio::test]
+async fn keyless_last_page_is_unreadable() {
+    let pager = Pager::tools(vec![(vec!["t0"], Some("c1")), (vec![], None)]);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    assert!(
+        backend.get_tools_shared().await.is_err(),
+        "page 2 is malformed"
+    );
+    assert_eq!(pager.request_count(), 2);
+    assert!(names(&backend).is_empty(), "a partial list was cached");
+}
+
 /// #8
 #[tokio::test]
 async fn single_page_backend_request_is_unchanged() {

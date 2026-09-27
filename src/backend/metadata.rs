@@ -48,16 +48,6 @@ impl Backend {
             .is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
     }
 
-    /// Whether `binding`'s slot is in a fill cooldown whose failure was NOT a
-    /// transport one (A3): its fast-fail stands in for an unreadable list.
-    pub(super) fn cooling_after_unreadable_list(&self, binding: Option<&str>) -> bool {
-        self.tools_slot(binding)
-            .tools_fill_failed_at
-            .lock()
-            .as_ref()
-            .is_some_and(|(at, replay)| replay.is_none() && at.elapsed() < LIST_FILL_COOLDOWN)
-    }
-
     /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
     #[must_use]
     pub fn has_cached_tools_for(&self, binding: Option<&str>) -> bool {
@@ -728,15 +718,20 @@ async fn drain_list_pages(
         if let Some(error) = response.error {
             return Err(Error::json_rpc(error.code, error.message));
         }
-        let Some(mut result) = response.result else {
-            // Neither `result` nor `error` says nothing about the list's
-            // shape, on the first page too (F13: an empty first page would
-            // read as a complete list and refuse every tool as absent): a
+        // Readable: the list is an array, or the page carries only a cursor.
+        let readable = |r: &Value| match r.get(family.list_key) {
+            Some(list) => list.is_array(),
+            None => r.is_object() && r.get("nextCursor").is_some_and(Value::is_string),
+        };
+        let Some(mut result) = response.result.filter(readable) else {
+            // No `result`, or a malformed one, says nothing about the list's
+            // shape, on any page (F13: it would read as zero items, so a
+            // complete list would refuse a present tool as absent): a
             // transient page failure, so keep the last complete catalogue
             // (design E).
             return Err(Error::json_rpc(
                 -32603,
-                format!("{} page {} returned no result", family.method, page + 1),
+                format!("{} page {} is not a readable list", family.method, page + 1),
             ));
         };
         let next = result

@@ -119,11 +119,7 @@ impl Backend {
             // as a failed dispatch would (and is accounted as one). A cooldown
             // fast-fail answers as the failure it stands in for. `standard`
             // forwards, and the dispatch then fails on its own.
-            Err(e)
-                if mode == InputSchemaEnforcement::Closed
-                    && is_transport_failure(&e)
-                    && !self.cooling_after_unreadable_list(identity_key) =>
-            {
+            Err(e) if mode == InputSchemaEnforcement::Closed && is_transport_failure(&e) => {
                 return Err(e);
             }
             Err(_) => return Ok(unavailable(mode)),
