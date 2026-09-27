@@ -7,8 +7,7 @@
 use serde_json::{Value, json};
 
 use super::super::super::meta_mcp_helpers::did_you_mean;
-use super::super::super::recovery::{RecoveryContext, attach_recovery, recovery_for};
-use super::{BudgetOutcome, MetaMcp, audit, classify_dispatch_error};
+use super::{BudgetOutcome, MetaMcp, dispatch_error_result};
 use crate::{Error, Result};
 
 /// A miss on `tool`, with a "did you mean?" hint drawn from `candidates`
@@ -25,36 +24,6 @@ pub(super) fn miss_with_hint(
         Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
         None => format!("Tool '{tool}' not found on server '{server}'. {fallback}"),
     }
-}
-
-/// The tool result a failed dispatch answers with, and its audit note.
-///
-/// The caller gets a tool result, but the audit record says `error` with this
-/// code (D1-d.2: a backend failure). The error is classified into a
-/// structured tool-level error, keeping `isError + content + recovery` in the
-/// result body rather than promoting it to a JSON-RPC protocol error, which
-/// gives the LLM actionable recovery guidance without breaking the MCP
-/// framing. The error budget failure is recorded by `record_error_budget`.
-/// Shared with R2's check, whose fill refusal (F13) answers the same way.
-pub(super) fn dispatch_failure_value(e: &Error, server: &str, tool: &str) -> Value {
-    audit::note_dispatch_failure(e);
-    let (category, detail) = classify_dispatch_error(e);
-    let hint = recovery_for(
-        category,
-        RecoveryContext {
-            tool: Some(tool),
-            backend: Some(server),
-            detail: Some(&detail),
-            ..Default::default()
-        },
-    );
-    attach_recovery(
-        json!({
-            "isError": true,
-            "content": [{"type": "text", "text": e.to_string()}],
-        }),
-        hint,
-    )
 }
 
 impl MetaMcp {
@@ -148,7 +117,7 @@ impl MetaMcp {
             "server" => server.to_owned()
         )
         .record(started.elapsed().as_secs_f64());
-        let value = dispatch_failure_value(&error, server, tool);
+        let value = dispatch_error_result(&error, tool, server);
         self.record_error_budget(server, tool, BudgetOutcome::of(&Err(error)));
         value
     }

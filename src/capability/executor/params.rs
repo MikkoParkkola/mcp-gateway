@@ -65,6 +65,10 @@ pub(super) async fn status_error(response: Response, endpoint: &str) -> Error {
             );
             Error::Http(e)
         }
+        // A11-b: a 401 is the one status a managed account can act on, so it is
+        // typed by status, never by body text. The REST path does not retry,
+        // so 400/403/404 keep today's text.
+        Some(e) if status == reqwest::StatusCode::UNAUTHORIZED => Error::Http(e),
         _ => Error::Protocol(format!("{endpoint} returned {status}: {body}")),
     }
 }

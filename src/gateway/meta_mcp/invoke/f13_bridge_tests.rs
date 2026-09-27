@@ -144,6 +144,8 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         protocol_revision: None,
         routing_profile: "default",
         scope: InvokeScope::allow_all(CallerStanding::Standard),
+        managed: None,
+        account_refusal: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     match outcome {
@@ -210,6 +212,8 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         protocol_revision: None,
         routing_profile: "default",
         scope: InvokeScope::allow_all(CallerStanding::Standard),
+        managed: None,
+        account_refusal: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(
