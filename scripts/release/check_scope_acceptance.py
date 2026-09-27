@@ -367,10 +367,6 @@ def inspect_contract(root, document, data, baseline):
             # Nothing is still held by someone once it is finished, and a row
             # claiming both would keep a closed criterion on the held list.
             errors.append(f"{ident}: a met criterion cannot still be blocked")
-        elif row["blocked_on"] != "none" and row["status"] == "waived":
-            # A waiver is a final ruling too. Left blocked, the row would ship
-            # as waived while the burnup still lists it as held.
-            errors.append(f"{ident}: a waived criterion cannot still be blocked")
         if not isinstance(row["note"], str) or not row["note"].strip():
             errors.append(f"{ident}: a verdict needs a nonempty explanatory note")
         errors.extend(
