@@ -34,57 +34,77 @@ hold for a caller that names the backend in the URL; failures there never trip t
 
 ## 2. Design
 
-### 2.1 One implementation per control, in `MetaMcp`
+### 2.1 One implementation per control, in `MetaMcp`, at the stage each already runs
 
-Each control keeps its single implementation where its state lives (`MetaMcp`). Two façade methods,
-in a new child module `src/gateway/meta_mcp/invoke/dispatch_guards.rs` (a child of `invoke`, so it
-reaches the private items it wraps without widening them; `invoke.rs` is on the size ratchet):
+Each control keeps its single implementation where its state lives (`MetaMcp`), and runs at the same
+lifecycle stage on both routes as it does on meta today (review finding: moving response gates into
+dispatch accounting would change their stage and route their refusals through backend-error recovery).
+Four `pub(crate)` stage methods, in a new child module `src/gateway/meta_mcp/invoke/dispatch_guards.rs`
+(a child of `invoke`, so it reaches the private items it wraps without widening them; `invoke.rs` is on
+the size ratchet):
 
-```rust
-/// Pre-dispatch admission for one backend call. The ONE place G1-G4 are decided.
-pub(crate) fn admit_backend_call(&self, call: BackendCall<'_>) -> Result<Admission>;
-/// Post-dispatch accounting and payload gates. The ONE place G5-G6 run.
-pub(crate) fn settle_backend_call(&self, call: BackendCall<'_>, result: Result<Value>) -> Result<Value>;
-```
+| Stage | Method | Runs | Controls |
+|---|---|---|---|
+| S1 policy | `admit_target(&BackendCall) -> Result<()>` | before idempotency, cache and nonce | G1 kill switch, G2 capability disable, G4 session profile |
+| S2 spend | `admit_spend_for(&BackendCall) -> Result<Vec<String>>` | once, immediately before an actual backend dispatch (after cache/idempotency short-circuits, which spend nothing) | G3 budget check |
+| S3 accounting | `account_dispatch(&BackendCall, Outcome)` | at dispatch completion, before idempotency settlement | G5 error budget, and the existing spend recording (`invoke.rs:3298-3322`: `cost_tracker.record` and `enforcer.record_spend`) |
+| S4 payload | `gate_payload(&BackendCall, Value) -> Result<Value>` | on the successful result payload, where meta runs it today (`invoke.rs:2441`) | G6 = the existing `apply_response_gates` (contract, inspection, context integrity) |
 
-`BackendCall { server, tool, session_id, api_key_name, trace_id, route: Route }`, `Route` an enum
-(`Meta`, `Direct`). `Admission` carries the budget warnings meta already appends to results.
+`BackendCall { server, tool, session_id, api_key_name, trace_id }`. `Outcome` is the existing
+`BudgetOutcome` classification plus success/failure for spend recording, built from the dispatch
+result by the one classifier `BudgetOutcome::of`.
 
-- `admit_backend_call`, in order: kill switch (G1), capability disable (G2), active profile (G4),
-  cost budget (G3). Each refusal keeps today's meta error: `-32000` for G1/G2, the profile's
-  `Protocol` refusal for G4, `-32003` for G3.
-- `settle_backend_call`: `record_error_budget(BudgetOutcome::of(&result))` (G5), then on success
-  `apply_response_gates` (G6).
+Meta keeps its order and replaces inline code with calls: `check_invocation_policy`'s profile check
+(`invoke.rs:1089`) and the kill-switch/capability block (`:1637-1659`) are one `admit_target` call
+(single profile implementation, policy before nonce as today); `admit_spend` (:1999) becomes
+`admit_spend_for`; `:3296-3322` becomes `account_dispatch`; `:2441` becomes `gate_payload`. Net lines
+in `invoke.rs` go down.
 
-Meta calls these in place of its inline code: `invoke.rs:1637-1659` becomes one call, the
-`admit_spend` call at :1999 stays where it is (after the cache lookup, so a cache hit spends nothing)
-but goes through the same function with a `budget_only` step, and `:3296` becomes
-`settle_backend_call`. Net lines in `invoke.rs` go down.
+**Spend recording (review finding, critical):** admission alone is not a budget. S3 moves the existing
+spend recording into the shared accounting step, so a direct call records spend exactly as a meta call
+does and successive direct calls cross the limit.
+
+### 2.1a Direct-route adapter
+
+`dispatch_in_scope` returns `Result<JsonRpcResponse>`. One adapter, `DirectOutcome::from_response`,
+maps it for S3/S4: a transport error or JSON-RPC `error` is a failure (classified by `BudgetOutcome::of`
+semantics, so a backend rate-limit refusal is `IgnoredRateLimit`); a `result` is success, and its value
+is what S4 gates. A tool-level `isError: true` result is success for accounting, as on meta.
 
 ### 2.2 Router chain (one chain, reconciled with LIFECYCLE.1)
 
 There is one chain per route boundary and one implementation per control:
 
-- `MetaMcp::admit_backend_call` / `settle_backend_call` own G1-G6. Meta dispatch calls them
-  directly; nothing else implements those controls.
+- The four `MetaMcp` stage methods (S1-S4, §2.1) own G1-G6. Meta dispatch calls them directly;
+  nothing else implements those controls.
 - `DirectRouteGuards::run` and `DirectRouteGuards::after_dispatch` (router, agreed with LIFECYCLE.1)
-  are the direct route's single pre- and post-dispatch chain. They are thin compositions:
-  `run`'s FIRST step is `state.meta_mcp.admit_backend_call(..)`, followed by LIFECYCLE.1's
-  router-only checks (isolation, tool policy and sanitisation, propagation) that produce
-  `GuardedCall`. `after_dispatch`'s first step is `settle_backend_call`, then the response scan.
-  Neither re-implements a G1-G6 control.
-- The request thread and the LIFECYCLE.1 task worker both call `run` / `after_dispatch`; no
-  direct-route code path calls `admit_backend_call` except through `run`.
+  are the direct route's single pre- and post-dispatch chain. They are thin compositions: `run`'s
+  FIRST step is `state.meta_mcp.admit_target(..)` (S1), followed by LIFECYCLE.1's router-only checks
+  (isolation, tool policy and sanitisation, propagation) that produce `GuardedCall`.
+  `after_dispatch` calls `account_dispatch` (S3) then `gate_payload` (S4), then the response scan.
+  S2 `admit_spend_for` is the one stage outside `run`, because it must follow the idempotency
+  short-circuit (a cached result spends nothing); the request thread and the worker both call it
+  through `DirectRouteGuards::before_dispatch`, a one-line wrapper in the same module.
+  None of these re-implements a G1-G6 control.
+- The request thread and the LIFECYCLE.1 task worker both call `run` / `before_dispatch` /
+  `after_dispatch`; no direct-route code path calls a stage method except through them.
 
-`DirectRouteGuards::run(&self, ctx: &DirectCall<'_>) -> Result<GuardedCall, Refusal>` calls
-`state.meta_mcp.admit_backend_call(..)` FIRST, before the idempotency reservation
-(`backend_handlers.rs:~955`) and before any LIFECYCLE.1 check, so a refused call reserves nothing and
-reaches no backend. `DirectRouteGuards::after_dispatch` calls `settle_backend_call` on the backend
-result before the response scan. A refusal maps to HTTP 200 with the JSON-RPC error meta returns
-(the caller sees one classification whichever route it used).
+Direct-route order (request thread and LIFECYCLE.1 worker alike):
+1. `DirectRouteGuards::run`: S1 `admit_target` first, then LIFECYCLE.1's router-only checks. All of
+   `run` executes before the idempotency reservation, so a refused call attempts no reservation.
+2. Idempotency reservation / cached-result short-circuit (unchanged, `backend_handlers.rs:~955`).
+3. `DirectRouteGuards::before_dispatch`: S2 `admit_spend_for`, immediately before `dispatch_in_scope`.
+4. Dispatch.
+5. `DirectRouteGuards::after_dispatch`: S3 `account_dispatch` (before idempotency settlement), then
+   S4 `gate_payload` on a successful result, then the response scan.
 
-Direct session id: the `mcp-session-id` header when present (`backend_handlers.rs:647`), else none
-(no session profile, same as a sessionless meta call).
+A refusal from S1/S2 maps to HTTP 200 with the JSON-RPC error meta returns. An S4 refusal is a
+post-dispatch refusal, as on meta: the backend ran, accounting recorded it, the caller gets the gate's
+error, and the idempotency entry settles with that error.
+
+Direct session id: the `mcp-session-id` header when present (`backend_handlers.rs:647`), else none;
+with none (or an empty header) `active_profile` returns the default routing profile, as for a
+sessionless meta call (`meta_mcp/mod.rs:1550`).
 
 ### 2.3 G7 signing and nonce
 
@@ -92,14 +112,15 @@ ADR-001 defines message signing for the `gateway_invoke` envelope only; the dire
 signed envelope to carry a nonce or return a MAC. Proposal: when `message_signing.enabled` and
 `require_nonce` are both on, the direct route refuses `tools/call` with `-32001`
 ("message signing is enforced; use gateway_invoke"), so an operator who mandates signed exchanges
-has no unsigned side door. With signing off or nonce optional, behaviour is unchanged. Extending
+has no unsigned side door. This is a direct-route restriction, not a claim that signing is
+gateway-wide. With signing off or nonce optional, behaviour is unchanged. Extending
 ADR-001 to the direct route is out of scope. Reviewers: challenge this.
 
 ## 3. Visibility (maintainer decision 2026-09-27)
 
-New `pub(crate)`: `MetaMcp::admit_backend_call`, `MetaMcp::settle_backend_call`, and the
-`BackendCall`, `Route`, `Admission` types, approved as a maintainer decision following the
-`pub(crate)` precedent for `DirectRouteGuards`. Nothing existing is widened.
+New `pub(crate)`: `MetaMcp::admit_target`, `admit_spend_for`, `account_dispatch`, `gate_payload`, and the
+`BackendCall` and `DirectOutcome` types, approved as a maintainer decision following the `pub(crate)`
+precedent for `DirectRouteGuards`. Nothing existing is widened.
 
 ## 4. Behaviour change (UPGRADING item 69)
 
@@ -112,34 +133,45 @@ context-integrity settings now apply to direct-route results. With message signi
 
 ## 5. Tests (red first)
 
-| id | AC | Level | Cell | Red today |
-|---|---|---|---|---|
-| T1 | DIRECT.1 | router | backend killed via `KillSwitch::kill`; POST `/mcp/{name}` `tools/call`; JSON-RPC -32000; backend call counter == 0 | backend called, result returned |
-| T2 | DIRECT.1 | router | capability disabled by error budget; same shape | backend called |
-| T3 | DIRECT.2 | router | budget enforcer with a key already over its daily limit; -32003; counter == 0 | backend called |
-| T4 | DIRECT.3 | router | session profile excluding the tool, `mcp-session-id` set; refused; counter == 0 | backend called |
-| T5 | DIRECT.4 | router | `require_nonce` on; direct `tools/call` refused -32001; counter == 0 | backend called |
-| T6 | DIRECT.5 | router | backend answering errors; N direct failures reach the auto-kill threshold; `is_killed` true | never killed |
-| T7 | DIRECT.6 | router | response contract `fail_closed` with no contract for the tool; direct result refused | result delivered |
-| T8 | DIRECT.8 | unit | both-routes parity table (§6) | table rows red for G1-G6 on Direct |
+All router cells use one counting backend and assert its call count. An allowed-call baseline row
+(no control armed) must dispatch exactly once, so a harness that never reaches the backend cannot pass.
 
-Mutants (throwaway CI): M1 drop the kill-switch step (T1, T8 red); M2 drop the budget step (T3, T8);
-M3 drop the profile step (T4); M4 drop `settle_backend_call` from `after_dispatch` (T6, T7, T8);
-M5 run `admit_backend_call` after the idempotency reservation (T9 below red); M6 drop the nonce
-refusal (T5).
-T9: a refused direct call leaves no idempotency entry (a retry with the same key after un-killing
-succeeds).
+| id | AC | Cell | Red today |
+|---|---|---|---|
+| T1 | DIRECT.1 | backend killed via `KillSwitch::kill`; POST `/mcp/{name}` `tools/call`; -32000; count 0 | backend called |
+| T1b | DIRECT.1 | as T1 but the idempotency key already holds a cached result; still -32000 (kill precedes the cache) | cached result returned |
+| T2 | DIRECT.1 | capability disabled by error budget; -32000; count 0 | backend called |
+| T3 | DIRECT.2 | limit of N calls, empty accumulator: N direct calls succeed, call N+1 -32003; count N | all N+1 dispatched |
+| T4 | DIRECT.3 | session profile excluding the tool, `mcp-session-id` set: refused, count 0; absent and empty header: default profile, dispatched | backend called |
+| T5 | DIRECT.4 | matrix: signing off (dispatched); signing on, nonce optional (dispatched); signing on + `require_nonce` (-32001, count 0); signed `gateway_invoke` with nonce under the same config succeeds | third row dispatched |
+| T6 | DIRECT.5 | backend returning JSON-RPC errors (not rate-limit); server threshold reached before any per-capability limit (capability budget disabled in the fixture); after N failures `is_killed` is true and the next call is refused | never killed |
+| T6b | DIRECT.5 | backend rate-limit refusals do not count toward the budget | n/a (guard) |
+| T7 | DIRECT.6 | response contract `fail_closed` + `action_mode`, no contract for the tool: refused post-dispatch, count 1; observe mode (`action_mode` off): delivered, warning logged | delivered in both |
+| T7b | DIRECT.6 | response inspection `action_mode` with a HIGH finding: refused; context integrity `team_shared` withholding: withheld | delivered |
+| T8 | DIRECT.8 | both-routes parity table (§6) | G1-G6 rows red on Direct |
+| T9 | ordering | a request refused by S1 never calls the idempotency reservation (reservation counter 0, observed through a test hook on `direct_route_idempotency`) | n/a until S1 exists; guards M5 |
+
+Mutants (throwaway CI): M1 drop kill switch from `admit_target` (T1, T1b, T8); M2 drop `admit_spend_for`
+on direct (T3, T8); M3 drop spend recording from `account_dispatch` (T3); M4 drop the profile step (T4);
+M5 call `admit_target` after the reservation (T9, T1b); M6 drop the nonce refusal (T5); M7 skip
+`account_dispatch` on direct (T6, T3); M8 skip `gate_payload` on direct (T7, T7b, T8); M9 add a control
+inline in `invoke_tool_traced` only (T8 structural check, §6).
 
 ## 6. Both-routes parity test (DIRECT.8)
 
 One table in `src/gateway/router/dispatch_parity_tests.rs`: a row per control in §1 plus the
-already-shared ones (rate limit, request firewall, authorizer, tool name, attestation, undeclared
-keys, audit, response firewall). Each row arms its control with a fixture function and states the
-expected outcome. The test runs every row through both routes (`gateway_invoke` and
-`/mcp/{name}`) against one counting backend and asserts the same refusal code and the same backend
-call count. Completeness: the row names must equal `DISPATCH_CONTROLS`, a `const &[&str]` in
-`dispatch_guards.rs` that `admit_backend_call` and `settle_backend_call` iterate in order; adding a
-step there without a row, or a row without a step, fails the test.
+already-shared ones and the allowed baseline. Each row arms its control with a fixture function and
+states the expected refusal code or payload effect, backend call count, and any state assertion
+(budget spent, error-budget sample recorded, `_security_findings` annotation). The test runs every row
+through both routes and asserts identical expectations.
+
+Completeness has two parts:
+- Registry: the stage methods iterate `DISPATCH_CONTROLS` (a `const` list in `dispatch_guards.rs`);
+  row names must equal it, so a step without a row or a row without a step fails.
+- Structure: a source check in the same test reads `invoke_tool_traced`, `backend_handler_inner` and
+  `DirectRouteGuards` and fails if any of the control entry points (`kill_switch.is_killed`,
+  `admit_spend`, `record_error_budget`, `record_spend`, `apply_response_gates`, `active_profile(`)
+  appears outside `dispatch_guards.rs`. A control added inline on one route therefore fails (M9).
 
 ## 7. Out of scope
 
