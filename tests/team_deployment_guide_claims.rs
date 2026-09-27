@@ -114,14 +114,13 @@ fn gateway_reads(dotted: &str) -> bool {
         yaml.push_str(value);
         yaml.push('\n');
     }
-    let leaf = parts.last().unwrap();
     match load(&yaml, "TEAM_GUIDE_UNUSED=1\n") {
         Ok(_) => true,
         Err(e) => {
             let msg = e.to_string();
-            let unrecognised = msg.contains("Unrecognised config key") && msg.contains(dotted);
-            let unknown = msg.contains("unknown field") && msg.contains(&format!("`{leaf}`"));
-            if unrecognised || unknown {
+            // Any key-check refusal fails the probe, including one naming an
+            // ancestor of the probed key rather than its leaf.
+            if msg.contains("Unrecognised config key") || msg.contains("unknown field") {
                 return false;
             }
             // A type error is raised while extracting, before the key check:
@@ -224,6 +223,10 @@ fn prose_config_keys_are_read_by_the_gateway() {
     assert!(
         !gateway_reads("auth.bearer_token.typo"),
         "probe must refuse a key under a scalar"
+    );
+    assert!(
+        !gateway_reads("security.caller_identity.modee.typo"),
+        "probe must refuse a key under a misspelt ancestor"
     );
     assert!(
         !gateway_reads("security.caller_identity.modee"),

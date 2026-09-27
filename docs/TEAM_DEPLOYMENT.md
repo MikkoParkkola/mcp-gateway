@@ -219,8 +219,8 @@ while per-process state is on
 **What the chart cannot do yet.** The chart has no values of its own for API
 keys or the key server. Because it replaces `config.auth`, API keys cannot be
 set through it at all: `credential` mode is one shared bearer token, with one
-reach for every caller. Other sections under `config` are rendered as written,
-so a `config.key_server` block reaches the gateway, but the chart has no Secret
+reach for every caller. A `config.key_server` block is rendered as written and
+reaches the gateway, but the chart has no Secret
 wiring for its `admin_token`, and its tests do not cover that setup. First-class
 API-key and OIDC support in the chart is still to come before 4.0.0 (see
 [Known gaps](release/4.0.0-beta.2-notes.md#known-gaps)). Until then, for
