@@ -57,8 +57,7 @@ pub fn is_loopback_bind(host: &str) -> bool {
     well_known::is_loopback_host(host)
 }
 mod well_known;
-// S1-S4 direct-route guard chain (design doc 2026-09-27-direct-route-guards.md
-// §2.1a). Red-commit pass-through stub; no call site wires it in yet.
+// Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
 mod direct_guards;
 
 #[cfg(test)]

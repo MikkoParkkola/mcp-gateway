@@ -141,8 +141,8 @@ route does:
   that excludes the call from client accounting.
 - The idempotency entry settles with the marked refusal body meta writes today
   (`FIREWALL_REFUSAL_MARKER`, written at `invoke.rs:2376-2385`, restored at `invoke.rs:1851-1867`).
-  That write/restore pair moves into `idempotency.rs` (`firewall_refusal_body()`,
-  `is_firewall_refusal(&Value)`); meta and the direct settle and `CachedError` arms all call it, so a
+  That write/restore pair moves into `dispatch_guards.rs` (`firewall_refusal_body()`,
+  `is_firewall_refusal(&Value)`; `idempotency.rs` is on the size ratchet); meta and the direct settle and `CachedError` arms all call it, so a
   direct replay is served as the same delivery refusal and never as a plain error.
 - Warn and Allow deliver the (redacted) result, unchanged from today.
 The scan stays one implementation; only the verdict is newly acted on.

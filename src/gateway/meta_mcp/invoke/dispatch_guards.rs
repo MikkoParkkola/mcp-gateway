@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! S1-S4 stage methods (design doc `2026-09-27-direct-route-guards.md` §2.1):
 //! one control implementation per stage, in `MetaMcp`, at the lifecycle stage
-//! each already runs today. Red-commit stubs only (MIK-7597); no call site
-//! wires them in yet, so every method is unused until the fix commit.
-#![allow(dead_code)]
+//! each already runs today. Meta dispatch and the per-backend route both call
+//! these; nothing else implements the controls (MIK-7597).
 
-use crate::Result;
+use serde_json::Value;
+
+use super::BudgetOutcome;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::JsonRpcResponse;
+use crate::{Error, Result};
 
 /// The direct-route shape of a dispatch, carrying what each stage needs to
 /// identify the call without reaching back into the HTTP request (design doc
@@ -26,31 +28,75 @@ pub(crate) struct BackendCall<'a> {
 /// whether the call is eligible for spend recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DirectOutcome {
-    Success {
-        spend: bool,
-    },
-    Failure {
-        spend: bool,
-    },
-    IgnoredRateLimit {
-        spend: bool,
-    },
-    /// Sentinel: matches no row of the adapter table, so every
-    /// classification assertion in the red commit fails on this stub
-    /// (test plan "Red commit": "the sentinel stub matches no row").
-    Unclassified,
+    Success { spend: bool },
+    Failure { spend: bool },
+    IgnoredRateLimit { spend: bool },
 }
 
 impl DirectOutcome {
-    /// Stub classifier (design doc §2.1a). Always returns the sentinel until
-    /// the fix commit implements the adapter table.
-    pub(crate) fn from_response(r: &Result<JsonRpcResponse>) -> Self {
-        let _ = r;
-        Self::Unclassified
+    /// Classify a meta dispatch result: spend on any answered call, error
+    /// budget class by [`BudgetOutcome`].
+    pub(crate) fn of(result: &Result<Value>) -> Self {
+        Self::from_class(BudgetOutcome::of(result), result.is_ok())
+    }
+
+    /// The per-backend adapter (design doc §2.1a): a JSON-RPC `error` is a
+    /// failed dispatch, a `result` an answered one, classified as meta does.
+    pub(crate) fn from_response(response: &Result<JsonRpcResponse>) -> Self {
+        match response {
+            Ok(r) => match &r.error {
+                Some(e) => Self::from_class(
+                    BudgetOutcome::of_error(&Error::json_rpc(e.code, e.message.clone())),
+                    false,
+                ),
+                None => Self::from_class(
+                    BudgetOutcome::of_value(r.result.as_ref().unwrap_or(&Value::Null)),
+                    true,
+                ),
+            },
+            Err(e) => Self::from_class(BudgetOutcome::of_error(e), false),
+        }
+    }
+
+    fn from_class(class: BudgetOutcome, spend: bool) -> Self {
+        match class {
+            BudgetOutcome::Success => Self::Success { spend },
+            BudgetOutcome::Failure => Self::Failure { spend },
+            BudgetOutcome::IgnoredRateLimit => Self::IgnoredRateLimit { spend },
+        }
+    }
+
+    fn class_and_spend(self) -> (BudgetOutcome, bool) {
+        match self {
+            Self::Success { spend } => (BudgetOutcome::Success, spend),
+            Self::Failure { spend } => (BudgetOutcome::Failure, spend),
+            Self::IgnoredRateLimit { spend } => (BudgetOutcome::IgnoredRateLimit, spend),
+        }
     }
 }
 
+/// The stored body of a firewall refusal, marked with
+/// [`crate::idempotency::FIREWALL_REFUSAL_MARKER`]. Built from the variant so
+/// the replay cannot drift from the live refusal; both routes settle with it.
+pub(crate) fn firewall_refusal_body() -> Value {
+    let refused = Error::ResponseFirewallRefused;
+    serde_json::json!({
+        "code": refused.to_rpc_code(),
+        "message": refused.to_string(),
+        crate::idempotency::FIREWALL_REFUSAL_MARKER: true,
+    })
+}
+
+/// True when a stored error is a marked firewall refusal.
+pub(crate) fn is_firewall_refusal(error: &Value) -> bool {
+    error
+        .get(crate::idempotency::FIREWALL_REFUSAL_MARKER)
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 /// The six controls one implementation each replaces (design doc §2.1 table).
+#[cfg(test)]
 pub(crate) const DISPATCH_CONTROLS: &[&str] = &[
     "kill_switch",
     "capability_disable",
@@ -60,37 +106,86 @@ pub(crate) const DISPATCH_CONTROLS: &[&str] = &[
     "response_gates",
 ];
 
-// Red-commit stubs: every stage ignores `self` and always succeeds until the
-// fix commit wires in the real control. `unnecessary_wraps` is not applicable
-// to `account_dispatch`, whose signature has no `Result`; the attribute is
-// harmless where it doesn't fire.
-#[allow(clippy::unused_self, clippy::unnecessary_wraps)]
 impl MetaMcp {
-    /// S1 policy: kill switch, capability disable, session profile.
+    /// S1 policy: session profile, kill switch, capability disable. Runs
+    /// before idempotency, cache and nonce on both routes.
     pub(crate) fn admit_target(&self, call: &BackendCall<'_>) -> Result<()> {
-        let _ = call;
+        let (server, tool) = (call.server, call.tool);
+        self.active_profile(call.session_id)
+            .check(server, tool)
+            .map_err(Error::Protocol)?;
+        if self.kill_switch.is_killed(server) {
+            return Err(Error::json_rpc(
+                -32000,
+                format!("Server '{server}' is currently disabled by operator kill switch"),
+            ));
+        }
+        let cooldown = self.capability_budget_config.read().cooldown;
+        if self
+            .kill_switch
+            .is_capability_disabled_with_cooldown(server, tool, cooldown)
+        {
+            return Err(Error::json_rpc(
+                -32000,
+                format!(
+                    "Capability '{tool}' on server '{server}' is temporarily disabled due to \
+                     a high error rate. It will auto-recover after the cooldown period. \
+                     Use gateway_list_disabled_capabilities to see all disabled capabilities."
+                ),
+            ));
+        }
         Ok(())
     }
 
-    /// S2 spend: budget admission immediately before dispatch.
+    /// S2 spend: budget admission immediately before an actual dispatch.
+    /// Returns the warnings to attach to the result.
+    #[cfg_attr(not(feature = "cost-governance"), allow(clippy::unused_self))]
     pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Vec<String>> {
-        let _ = call;
-        Ok(Vec::new())
+        #[cfg(feature = "cost-governance")]
+        return self.admit_spend(call.tool, call.api_key_name);
+        #[cfg(not(feature = "cost-governance"))]
+        {
+            let _ = call;
+            Ok(Vec::new())
+        }
     }
 
-    /// S3 accounting: error budget and spend recording, at completion.
+    /// S3 accounting at dispatch completion: error budget, then spend on an
+    /// answered call.
     pub(crate) fn account_dispatch(&self, call: &BackendCall<'_>, outcome: DirectOutcome) {
-        let _ = (call, outcome);
+        let (class, spend) = outcome.class_and_spend();
+        self.record_error_budget(call.server, call.tool, class);
+        if !spend {
+            return;
+        }
+        if let Some(sid) = call.session_id {
+            // token_count 0: a backend tool call runs no model inference.
+            self.cost_tracker.record(
+                sid,
+                call.api_key_name,
+                call.server,
+                call.tool,
+                0,
+                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
+            );
+        }
+        #[cfg(feature = "cost-governance")]
+        if let Some(ref enforcer) = self.budget_enforcer {
+            let cost = enforcer.registry.cost_for(call.tool);
+            enforcer.record_spend(call.tool, call.api_key_name, cost);
+        }
     }
 
-    /// S4 payload: response gates on a successful result.
-    pub(crate) fn gate_payload(
-        &self,
-        call: &BackendCall<'_>,
-        value: serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let _ = call;
-        Ok(value)
+    /// S4 payload: response gates (contract, inspection, context integrity)
+    /// on a successful result.
+    pub(crate) fn gate_payload(&self, call: &BackendCall<'_>, value: Value) -> Result<Value> {
+        self.apply_response_gates(
+            call.server,
+            call.tool,
+            call.api_key_name,
+            call.trace_id,
+            value,
+        )
     }
 }
 
