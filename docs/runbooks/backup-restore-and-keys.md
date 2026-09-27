@@ -28,8 +28,8 @@ chart sets `HOME=/var/lib/mcp-gateway`, so there it is `/var/lib/mcp-gateway/.mc
 | Identity grants | Local identity-grant rows | `security.identity_grants.path` (`~/.mcp-gateway/identity-grants.yaml`) | Every local grant is lost |
 | Task store | Tasks of the 2026-07-28 tasks extension, kept for `tasks.default_ttl_ms` (24 hours) | `tasks.store_dir` (`~/.mcp-gateway/tasks`) | Open task handles stop resolving |
 | Cost spend | Today's cost-governance spend, saved every 5 minutes | `<data dir>/costs.json` | Budgets restart at zero for the day |
-| Search ranking usage | Tool usage counts that rank search results | `<data dir>/usage.json` | Search ranking starts from no usage history |
-| Tool transitions | Which tool tends to follow which, used to predict the next call | `<data dir>/transitions.json` | Predictions start from no history |
+| Search ranking usage | Tool usage counts that rank search results, written only at a graceful shutdown | `<data dir>/usage.json` | Search ranking starts from no usage history. A copy taken while the gateway runs holds the counts from the last shutdown, not the current ones |
+| Tool transitions | Which tool tends to follow which, used to predict the next call, written only at a graceful shutdown | `<data dir>/transitions.json` | Predictions start from no history. A live copy holds the data from the last shutdown |
 | Protocol-revision telemetry | The restart-safe window counting which MCP revisions clients speak | `<data dir>/protocol-revision-telemetry/window.json` | The measurement window starts again empty |
 | Firewall audit | Firewall decisions as NDJSON, when configured | `security.firewall.audit_log` (off by default) | That history is gone |
 | mTLS material | Server certificate and key, CA, CRL | `mtls.server_cert`, `server_key`, `ca_cert`, `crl_path` | Clients cannot connect until certificates are reissued |
@@ -136,9 +136,10 @@ example because it leaked, can be removed safely only when every account has bee
 the new key became current, and 4.0.0 has no command that lists which records still name an old
 key id. The hosted connection journeys in `accounts.authority_dir/journeys.json` need the same
 care: that file is re-sealed only when the journey table changes, and while it names a removed
-key every journey operation is refused. A journey lives at most 15 minutes and a missing file
-reads as no journeys, so when removing the old key, stop the gateway and delete that one file;
-only connections started in the last 15 minutes have to be started again. If the accounts
+key every journey operation is refused. A missing file reads as no journeys, so when removing
+the old key, stop the gateway and delete that one file. Connections started in the last 15
+minutes have to be started again, and the ended journeys the file keeps for 24 hours are
+gone too, so a late callback for one of them is no longer recognised as a replay. If the accounts
 themselves cannot be shown to be re-sealed: stop the gateway, empty `accounts.store_dir` and
 `accounts.authority_dir`, remove the old key id, run `mcp-gateway accounts init-store --config
 <path>`, start the gateway, and have users reconnect their accounts.
