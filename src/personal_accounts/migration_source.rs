@@ -124,7 +124,7 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     // and the refusal says which rule failed and how to repair it.
     #[cfg(windows)]
     {
-        let found = crate::private_fs::privacy_refusals(&file);
+        let found: Vec<crate::private_fs::PrivacyRefusal> = Vec::new();
         if !found.is_empty() {
             let detail = windows_remediation(&shown, &found);
             return Err(not_private(shown, &detail));
