@@ -50,6 +50,8 @@ impl MetaMcp {
         authentication: super::Authentication,
         params: Option<&Value>,
     ) -> Result<Option<crate::idempotency::GuardOutcome>> {
+        #[cfg(test)]
+        RESERVATION_ATTEMPTS.with(|count| count.set(count.get() + 1));
         let Some(cache) = self.idempotency_cache.as_ref() else {
             return Ok(None);
         };
@@ -84,5 +86,26 @@ impl MetaMcp {
         let discriminator =
             crate::protocol::mrtr::RetryFields::from_params(params).key_discriminator();
         crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
+    }
+}
+
+// T9 (test plan "Shared fixture"): counts every reservation attempt into
+// `direct_route_idempotency`, whatever the outcome, so a fixture can assert
+// on it without `backend_handlers.rs` growing past its size baseline.
+#[cfg(test)]
+thread_local! {
+    static RESERVATION_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+impl MetaMcp {
+    /// Reservation attempts on this thread since the last reset (T9).
+    pub(crate) fn reservation_attempts() -> usize {
+        RESERVATION_ATTEMPTS.with(std::cell::Cell::get)
+    }
+
+    /// Reset the T9 counter for this thread.
+    pub(crate) fn reset_reservation_attempts() {
+        RESERVATION_ATTEMPTS.with(|count| count.set(0));
     }
 }

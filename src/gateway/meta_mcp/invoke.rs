@@ -145,7 +145,7 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
-
+pub(crate) mod dispatch_guards; // S1-S4 stage stubs (design doc 2026-09-27 #2.1)
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
     idempotency_key_for, response_cache_key_for, strip_backend_provenance,
