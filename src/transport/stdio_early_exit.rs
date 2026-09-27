@@ -113,7 +113,7 @@ pub(super) fn excerpt(
         .map(|s| s.trim().to_string())
         .filter(|s| s.len() >= 4)
         .collect();
-    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    secrets.sort_by_key(|s| s.len());
     secrets.dedup();
     let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
     let lines: Vec<String> = tail.iter().map(|raw| redact_line(raw, &secrets)).collect();
