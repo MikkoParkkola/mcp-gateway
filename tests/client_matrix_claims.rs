@@ -271,14 +271,9 @@ fn parse_verified(status: &str) -> Option<Verified> {
     })
 }
 
+/// A real calendar date in ISO-8601 form, four-digit year first.
 fn is_iso_date(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && s.chars()
-            .enumerate()
-            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+    s.len() == 10 && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
 }
 
 /// (client, status) for every row of both tables.
@@ -310,7 +305,7 @@ fn run_field<'a>(run: &'a str, field: &str) -> &'a str {
 /// Whether `cell` holds `token` as a whole token: not a prefix of a longer
 /// version, word or hash.
 fn has_token(cell: &str, token: &str) -> bool {
-    let part = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    let part = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+');
     !token.is_empty()
         && cell.match_indices(token).any(|(i, _)| {
             let before = cell[..i].chars().next_back();
@@ -318,7 +313,7 @@ fn has_token(cell: &str, token: &str) -> bool {
             // A `.` ends a sentence only when no version component follows it.
             let continues = rest.starts_with('.')
                 && rest[1..].starts_with(|c: char| c.is_ascii_alphanumeric())
-                || rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-');
+                || rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '+');
             !before.is_some_and(part) && !continues
         })
 }
@@ -346,6 +341,11 @@ fn run_field_matching_is_exact() {
         assert!(!has_token(client, wrong), "{wrong} must not match 2.1.280");
     }
     assert!(!has_token("`2.1.280.1`", "2.1.280"));
+    assert!(!has_token("`2.1.280+build.1`", "2.1.280"));
+    assert!(is_iso_date("2026-09-23"));
+    assert!(!is_iso_date("2026-13-40"));
+    let cell = "Verified: 2.1.280, 2026-09-23, owner A, gateway `e3c8645f`, see [notes](other.md) ([run](release/verify/x.md))";
+    assert_eq!(parse_verified(cell).unwrap().file, "release/verify/x.md");
     assert!(has_token("ran 2.1.280.", "2.1.280"));
     assert!(leads_with(client, "Claude Code"));
     assert!(!leads_with(client, "Claude"));
@@ -429,6 +429,10 @@ fn verified_rows_agree_with_the_supported_matrix() {
             Some([label_of(&client), v.version, v.date, v.owner, v.file])
         })
         .collect();
+    let here_commits: Vec<(String, String)> = all_statuses()
+        .into_iter()
+        .filter_map(|(client, status)| Some((label_of(&client), parse_verified(&status)?.commit)))
+        .collect();
     let recorded = MATRIX
         .split("Rows recorded so far:")
         .nth(1)
@@ -436,6 +440,16 @@ fn verified_rows_agree_with_the_supported_matrix() {
     let there: BTreeSet<[String; 5]> = table(recorded, "Client")
         .into_iter()
         .map(|c| {
+            let commit = here_commits
+                .iter()
+                .find(|(k, _)| *k == label_of(&c[0]))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            assert!(
+                has_token(&c[4], &commit),
+                "supported matrix row {} does not name gateway commit `{commit}`",
+                c[0]
+            );
             let file = code_spans(&c[4])
                 .into_iter()
                 .find(|s| s.starts_with("docs/release/verify/"))

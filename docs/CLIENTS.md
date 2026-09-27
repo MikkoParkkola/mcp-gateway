@@ -13,15 +13,16 @@ The reasoning is in the
 
 A **verified** row names a client version that was run against a 4.0.0 gateway,
 with the date, the owner of the run, the gateway commit and a link to the
-recorded run. Every other row is **Unverified**: the export target is tested
-against fixture config files, and no launched client has been recorded.
+recorded run. Every other row is **Unverified**: no recorded run meets the rule
+in [Adding a verified row](#adding-a-verified-row). For the export targets,
+that leaves tests against fixture config files only.
 
 ## Clients with an export target
 
 `mcp-gateway setup export --target <target>` writes the gateway entry into the
 file below. An existing file is backed up first and the rollback command is
 printed. A client whose directory does not exist is skipped: a workspace client
-(Cursor, VS Code Copilot, Cline) needs the workspace folder, and Claude
+needs its folder (`.cursor`, `.vscode` or `.cline`) in the current directory, and Claude
 Desktop, Windsurf and Zed count as not installed.
 
 | Client | Target | Config key | Location | Status |
