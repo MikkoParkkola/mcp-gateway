@@ -248,7 +248,7 @@ impl MetaMcp {
     fn classify_surfaced(&self, tool_name: &str) -> Option<Classification> {
         let server = self.surfaced_tool_server(tool_name)?;
         let backend = self.backends.get(server)?;
-        if backend.identity_propagation_config().is_some() {
+        if false && backend.identity_propagation_config().is_some() {
             debug!(
                 server,
                 tool = tool_name,
