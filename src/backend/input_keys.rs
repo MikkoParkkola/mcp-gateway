@@ -117,7 +117,7 @@ impl Backend {
         Ok(match completeness {
             Completeness::Complete => miss(
                 mode,
-                ["input_schema_refused_absent", "input_schema_absent_forward"],
+                ["input_schema_refused_absent", "input_schema_unknown"],
                 || text_absent(tool),
             ),
             Completeness::Truncated => miss(
