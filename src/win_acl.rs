@@ -433,7 +433,7 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
 /// bytes.
 unsafe fn read_aces(acl: *const ACL, avail: usize) -> io::Result<Vec<Ace>> {
     let bad = || io::Error::new(io::ErrorKind::InvalidData, "malformed ACL");
-    if avail < std::mem::size_of::<ACL>() {
+    if acl.is_null() || avail < std::mem::size_of::<ACL>() {
         return Err(bad());
     }
     // SAFETY: caller contract — the header lies inside the readable range.
@@ -450,7 +450,10 @@ unsafe fn read_aces(acl: *const ACL, avail: usize) -> io::Result<Vec<Ace>> {
             return Err(last());
         }
         let start = ace as usize;
-        if start < acl as usize || start + std::mem::size_of::<ACE_HEADER>() > acl_end {
+        if ace.is_null()
+            || start < acl as usize
+            || start + std::mem::size_of::<ACE_HEADER>() > acl_end
+        {
             return Err(bad());
         }
         // SAFETY: contract 3 — the header lies inside the ACL.
