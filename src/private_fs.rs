@@ -233,7 +233,7 @@ pub(crate) fn judge_file(file: &File) -> Result<(), PrivacyRefusal> {
     if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
         return Err(PrivacyRefusal::NotRegular);
     }
-    first(privacy_refusals(file))
+    first(privacy_refusals(file).into_iter().filter(|r| *r != PrivacyRefusal::NotProtected).collect())
 }
 
 /// Create a store directory that is private from its first instant.
