@@ -102,16 +102,20 @@ pub(super) fn excerpt(
     env: &HashMap<String, String>,
 ) -> String {
     // Matched line by line, so a multi-line value (a PEM key) is matched by
-    // each of its own lines; longest first, so a value that is a prefix of
-    // another cannot break the longer one's match.
-    let mut secrets: Vec<&str> = argv
+    // each of its own lines, and normalised as the lines are, so a value with
+    // its own control characters still matches; longest first, so a value
+    // that is a prefix of another cannot break the longer one's match.
+    let mut secrets: Vec<String> = argv
         .iter()
         .chain(env.values())
         .flat_map(|s| s.lines())
-        .map(str::trim)
+        .map(|s| s.chars().filter(|c| !c.is_control()).collect::<String>())
+        .map(|s| s.trim().to_string())
         .filter(|s| s.len() >= 4)
         .collect();
     secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    secrets.dedup();
+    let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
     let lines: Vec<String> = tail.iter().map(|raw| redact_line(raw, &secrets)).collect();
     let mut text = lines.join("\n");
     if text.len() > EXCERPT_BYTES {
@@ -130,9 +134,10 @@ pub(super) fn excerpt(
 /// feature there is no credential recogniser, so the line is withheld.
 fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
     let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
-    let whole = match std::str::from_utf8(raw) {
-        Err(e) if cut_on_read && e.error_len().is_none() => &raw[..e.valid_up_to()],
-        _ => raw,
+    let whole = if cut_on_read {
+        without_split_char(raw)
+    } else {
+        raw
     };
     let mut line: String = String::from_utf8_lossy(whole)
         .chars()
@@ -144,17 +149,72 @@ fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
             mask_secret_head(&mut line, secret);
         }
     }
-    #[cfg(feature = "firewall")]
-    {
-        let mut value = serde_json::Value::String(line);
-        crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut value);
-        line = value.as_str().unwrap_or_default().to_string();
+    recognise(line, RECOGNISER)
+        .chars()
+        .take(LINE_CHARS)
+        .collect()
+}
+
+/// Whether this build can recognise credential-shaped text in stderr.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Recogniser {
+    /// The firewall redactor masks what it recognises.
+    Firewall,
+    /// No recogniser is built in, so the text is withheld outright.
+    Absent,
+}
+
+/// This build's recogniser: a value, so both arms are testable in any build.
+pub(super) const RECOGNISER: Recogniser = if cfg!(feature = "firewall") {
+    Recogniser::Firewall
+} else {
+    Recogniser::Absent
+};
+
+/// Placeholder for a line no recogniser could vet.
+pub(super) const WITHHELD: &str = "[stderr withheld: built without the firewall redactor]";
+
+/// Mask credential-shaped text, or withhold the line when nothing can.
+pub(super) fn recognise(line: String, recogniser: Recogniser) -> String {
+    match recogniser {
+        Recogniser::Firewall => firewall_redact(line),
+        Recogniser::Absent => WITHHELD.to_string(),
     }
-    #[cfg(not(feature = "firewall"))]
-    {
-        line = "[stderr withheld: built without the firewall redactor]".to_string();
+}
+
+#[cfg(feature = "firewall")]
+fn firewall_redact(line: String) -> String {
+    let mut value = serde_json::Value::String(line);
+    crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut value);
+    value.as_str().unwrap_or_default().to_string()
+}
+
+/// Never selected without the feature (see [`RECOGNISER`]); withholds if it were.
+#[cfg(not(feature = "firewall"))]
+fn firewall_redact(_line: String) -> String {
+    WITHHELD.to_string()
+}
+
+/// `raw` without a trailing incomplete UTF-8 sequence, whatever precedes it:
+/// a character the read limit split would otherwise decode to U+FFFD and hide
+/// the secret head before it from [`mask_secret_head`].
+fn without_split_char(raw: &[u8]) -> &[u8] {
+    for back in 1..=3.min(raw.len()) {
+        let byte = raw[raw.len() - back];
+        let width = match byte {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            0x80..=0xBF => continue,
+            _ => return raw,
+        };
+        return if width > back {
+            &raw[..raw.len() - back]
+        } else {
+            raw
+        };
     }
-    line.chars().take(LINE_CHARS).collect()
+    raw
 }
 
 /// Replace the end of a line cut at the read limit when it is the first bytes

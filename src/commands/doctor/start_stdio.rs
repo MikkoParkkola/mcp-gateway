@@ -70,12 +70,11 @@ pub(super) async fn start_stdio_backend(
             .with_category("backend_stdio"),
         );
     }
-    let timeout = backend.timeout.min(START_CAP);
     let transport = StdioTransport::new(
         command,
         isolated_package_manager_env(name, command, backend.env.clone()),
         cwd.clone(),
-        timeout,
+        backend.timeout,
         protocol_version.clone(),
     );
     // The transport logs an early exit's redacted stderr tail as the `stderr`
@@ -167,6 +166,23 @@ mod tests {
         assert!(
             located.is_none_or(|r| !r.detail.contains("exit status")),
             "the locate probe ran the command"
+        );
+    }
+
+    /// T7f: a start that never finishes is cut at the cap, whatever the
+    /// backend's own (per-request) timeout.
+    #[tokio::test(start_paused = true)]
+    async fn t7f_a_hung_start_ends_at_the_cap() {
+        let mut backend = stdio("sh -c 'exec sleep 7200'", &[]);
+        backend.timeout = Duration::from_secs(3600);
+        let result = start_stdio_backend("b", &backend)
+            .await
+            .expect("a stdio row");
+        assert_eq!(result.status, CheckStatus::Fail, "{}", result.detail);
+        assert!(
+            result.detail.contains("did not finish within 15s"),
+            "{}",
+            result.detail
         );
     }
 
