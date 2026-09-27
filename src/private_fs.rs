@@ -142,7 +142,7 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
     }
     match inspection.owner.as_ref() {
         Some(owner) if owner == user => {}
-        Some(owner) => found.push(PrivacyRefusal::ForeignOwner(owner.to_sddl())),
+        Some(_) => {}
         None => found.push(PrivacyRefusal::Unreadable),
     }
     if !inspection.protected || inherited {
