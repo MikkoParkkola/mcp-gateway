@@ -128,7 +128,17 @@ impl Backend {
             }
             Err(_) => return Ok(unavailable(mode)),
         };
-        if let Some(found) = tools.iter().find(|t| t.name == tool) {
+        // A store voided by a newer list (a direct-route list replaced the
+        // slot mid-fill) is judged from that newer list; a store voided by an
+        // invalidation leaves the slot empty and is judged from this one.
+        let voided = matches!(completeness, Completeness::Unknown);
+        let newer = voided
+            .then(|| self.get_cached_tool_for(identity_key, tool))
+            .flatten();
+        if let Some(found) = newer
+            .as_ref()
+            .or_else(|| tools.iter().find(|t| t.name == tool))
+        {
             return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
         }
         Ok(match completeness {

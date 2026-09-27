@@ -317,3 +317,28 @@ async fn a3_t13_a_direct_list_ends_the_stale_refresh_cooldown() {
         "the stale-refresh stamp survived"
     );
 }
+
+/// Review fold: a fill voided by a newer direct-route list is judged from
+/// that newer list, not the superseded one. Here the newer schema declares
+/// the key the fill's list lacks, so the call is forwarded. Mutant M36 (judge
+/// from the superseded list) refuses it.
+#[test]
+fn a3_t14_a_fill_voided_by_a_newer_list_is_judged_from_it() {
+    let (out, _) = metered(true, async {
+        let lister = Lister::new(Mode::Barrier);
+        let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+        let newer = json!({"name": "edit", "inputSchema": {"type": "object",
+            "properties": {"edits": {"type": "array"}, "zzinvented": {}}}});
+        let arguments = undeclared();
+        let (out, ()) = tokio::join!(check(&backend, "edit", &arguments), async {
+            lister.started.notified().await;
+            backend.remember_listed_tools(None, false, &[newer]).await;
+            lister.release.notify_one();
+        });
+        out
+    });
+    assert!(
+        matches!(out, Ok(None)),
+        "judged from the superseded list: {out:?}"
+    );
+}
