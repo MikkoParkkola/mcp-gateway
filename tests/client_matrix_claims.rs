@@ -285,6 +285,12 @@ fn is_concrete_version(v: &str) -> bool {
         && !(v.contains('-') && pre.is_empty())
 }
 
+/// Whether a run's Gateway field names release 4.0.0 exactly, not
+/// `14.0.0`, `4.0.01` or a `4.0.0-rc.1` pre-release.
+fn is_gateway_4_0_0(cell: &str) -> bool {
+    has_token(cell, "4.0.0")
+}
+
 /// A real calendar date in ISO-8601 form, four-digit year first.
 fn is_iso_date(s: &str) -> bool {
     s.len() == 10 && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
@@ -357,6 +363,17 @@ fn run_field_matching_is_exact() {
     assert!(!has_token("`2.1.280.1`", "2.1.280"));
     assert!(!has_token("`2.1.280+build.1`", "2.1.280"));
     assert!(is_iso_date("2026-09-23"));
+    assert!(is_gateway_4_0_0(
+        "`mcp-gateway --version` → `mcp-gateway 4.0.0`, built at `e3c8645f`"
+    ));
+    for other in [
+        "mcp-gateway 14.0.0",
+        "mcp-gateway 4.0.01",
+        "mcp-gateway 4.0.0-rc.1",
+        "mcp-gateway 3.5.0",
+    ] {
+        assert!(!is_gateway_4_0_0(other), "{other} is not 4.0.0");
+    }
     assert!(is_concrete_version("2.1.280") && is_concrete_version("0.11.4-rc.1"));
     for placeholder in ["2.x", "2.1.*", "latest", "current", "2", "2.1-"] {
         assert!(
@@ -441,7 +458,7 @@ fn every_row_is_backed_by_a_recorded_run_or_unverified() {
             "{client}: run gateway commit"
         );
         assert!(
-            run_field(&run, "Gateway").contains("4.0.0"),
+            is_gateway_4_0_0(run_field(&run, "Gateway")),
             "{client}: the recorded run is not against a 4.0.0 gateway"
         );
         verified += 1;
