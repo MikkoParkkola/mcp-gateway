@@ -718,6 +718,13 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
         if error.kind() == io::ErrorKind::WouldBlock {
             return StoreError::AlreadyOwned;
         }
+        // Windows judges the lease's DACL inside `try_acquire`, the check unix
+        // makes above with `has_mode`; a lease that is not private is unsafe.
+        #[cfg(windows)]
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            tracing::warn!(%error, path = %lease.display(), "task store lease is not private");
+            return StoreError::UnsafeStore;
+        }
         // Includes the platforms with no tested exclusion primitive: they refuse
         // custody outright rather than pretend to hold it.
         tracing::warn!(%error, path = %lease.display(), "task store lease not acquired");

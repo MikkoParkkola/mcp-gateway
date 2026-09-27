@@ -72,7 +72,16 @@ impl ExclusiveFileLock {
                     .access_mode(GENERIC_READ | GENERIC_WRITE | READ_CONTROL)
                     .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                     .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-                    .open(lock_path)?;
+                    .open(lock_path)
+                    .map_err(|error| {
+                        // A holder that shares less than read/write is still a
+                        // holder (design R8): the store is owned, not broken.
+                        if error.raw_os_error() == Some(32) {
+                            io::Error::from(io::ErrorKind::WouldBlock)
+                        } else {
+                            error
+                        }
+                    })?;
                 judge_file(&file).map_err(|reason| {
                     io::Error::new(
                         io::ErrorKind::PermissionDenied,
