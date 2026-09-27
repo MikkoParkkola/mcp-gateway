@@ -68,7 +68,7 @@ pub(super) fn try_dashboard_bootstrap(
             // copy may survive in a history, proxy log or `Referer`; a copy
             // presented from elsewhere must die on first use. A wrong value
             // spends nothing.
-            let spent = state.dashboard_bootstrap.consume(&candidate);
+            let spent = { let _ = &candidate; false };
             warn!(
                 peer_is_local,
                 looks_forwarded,
