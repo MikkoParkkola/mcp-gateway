@@ -97,17 +97,23 @@ it also closes F1 (the gateway answers `tasks/*` on this route; nothing forwards
    `DirectRouteGuards::after_dispatch`, called by both the request thread and the worker: the
    response scan, plus the security lane's error-budget recording and auto-kill, response
    contract gate, response inspection, context integrity and response signing.
-   Composition (security lane design `docs/design/2026-09-27-direct-route-guards.md` §2.2, branch
-   `fix/direct-route-guards`): meta-only controls have exactly one implementation each,
-   `MetaMcp::admit_backend_call` (kill switch, capability disable, session profile, cost budget)
-   and `MetaMcp::settle_backend_call` (error budget, response contract, inspection, context
-   integrity), both pub(crate) by maintainer decision. `run` is thin: step 1 calls
-   `admit_backend_call`, then the router checks above produce `GuardedCall`. `after_dispatch`
-   step 1 calls `settle_backend_call`, then the response scan. Neither re-implements a meta
-   control, and no direct-route path calls `admit_backend_call` except through `run`. In the
-   request thread the whole `run` executes BEFORE the idempotency reservation of §3 A.2a (so a
-   replayed key is still refused by a now-denying policy); the worker calls `run` on every
-   dispatch and resume, and `after_dispatch` after each.
+   Composition (security lane design `docs/design/2026-09-27-direct-route-guards.md`, branch
+   `fix/direct-route-guards` at be2a2a9f2): each meta-only control has exactly one
+   implementation on `MetaMcp`, pub(crate) by maintainer decision, and the direct route reaches
+   them only through three steps of this module:
+   - `run`: step 1 `admit_target` (kill switch, capability disable, session profile), then the
+     router checks above, producing `GuardedCall`. In the request thread the whole `run`
+     executes BEFORE the idempotency reservation of §3 A.2a (a replayed key is still refused
+     by a now-denying policy).
+   - `before_dispatch`: a one-line wrapper over `admit_spend_for` (cost budget), called AFTER
+     the idempotency short-circuit and immediately before `dispatch_in_scope`, so a cached
+     result spends nothing.
+   - `after_dispatch`: `account_dispatch` (error budget and spend recording, before
+     idempotency settlement), then `gate_payload` (response gates) on a successful result,
+     then the response scan.
+   The task worker calls `run`, then `before_dispatch`, before every real dispatch and resume,
+   and `after_dispatch` after each. Nothing here re-implements a meta control, and no
+   direct-route path calls those `MetaMcp` functions except through these three steps.
    ONE chain only: the direct route also lacks the kill switch and cost budget that meta
    dispatch checks (security lane finding, 2026-09-26). Those checks join this same function;
    whichever change lands first creates `DirectRouteGuards::run`, the other adds to it.
