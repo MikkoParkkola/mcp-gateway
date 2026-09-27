@@ -5,8 +5,8 @@
 **Headline:** a P50 regression is reproduced against **v3.5.0**, the baseline
 `NFR.PERF.1` actually names, at **1.1237 [1.1010, 1.1521]** (k=4, 96.5% coverage,
 n=15) — excluding both 1.0 and the 5% budget. The largest rise sits in a
-**42-commit window** (idx27→69); paired segment ratios show a second, smaller
-measurable rise at idx69→92. **All numbers are provisional**: the
+**42-commit window** (idx27→69); the only other segment whose paired ratio excludes 1.0
+(idx69→92) is within the modelled position artefact and is not a finding. **All numbers are provisional**: the
 pre-registered settledness rule returned DRIFTING. Resolving ~1.7% per-segment
 differences costs n≈195 against n≈7 for the endpoint.
 
@@ -614,9 +614,11 @@ observed exclusion rate.
   `A`, it would have measured drift across ~60 seconds while `REL` pairs across
   ~6 minutes of CI-burst drift, and G1 would have certified the tightest pair
   in the run while saying nothing about the pair that carries the verdict. At
-  the far end, `Aprime` suffers the same separation as `REL`, so **G1 is an
-  upper bound on the pairing penalty every arm pays.** Pass there, pass
-  everywhere.
+  the far end, `Aprime` sits at the largest *constant* separation, 3 slots. *(Superseded: this
+  paragraph originally called G1 an upper bound on every arm's pairing penalty. It is not.
+  `B` and `REL` are 5 slots from `A` in one rotation phase in six, farther than `Aprime` ever
+  is, and each arm's mean separation is `2d(6−d)/6` (§1.3), so a transient can hit a test ratio
+  harder than it hits G1. `Aprime`'s 3 slots is at least every test arm's mean separation (at most 2.67), but not its worst phase.)*
 
   Every other number in this report is meaningless if the noise floor exceeds
   the decision band; that is precisely how the bisect produced a confident
@@ -835,8 +837,7 @@ This is **not** the load correlation of §6.3, and the two must not be confused 
 §6.3 records that near-miss.
 
 **Read as differences of pooled medians, one segment is resolvable: idx27→69, at
-+8.42pp, carrying 68% of the total +12.37pp rise.** Paired per-cycle segment ratios
-also resolve idx69→92 (`P4/P3` = 1.0382 [1.0174, 1.0514]; Finding 2). On the
++8.42pp, carrying 68% of the total +12.37pp rise.** Paired per-cycle segment ratios do not add a second finding: `P4/P3` = 1.0382 [1.0174, 1.0514] excludes 1.0, but the modelled median-pooling position artefact alone puts a +3.33pp `P3`→`P4` step there (§1.3.3), nearly the whole ratio; the interval covers sampling error, not that bias, so idx69→92 is not evidence of a code rise (Finding 2). On the
 pooled-median reading everything else is inside the floor, including the
 negative idx92→115 segment — so the non-monotonicity (`P4` above `REL`) is
 **not** a resolvable finding and needs no explanation beyond noise.
@@ -1167,7 +1168,7 @@ resolvable effect: **idx27→69, at +8.42pp, carrying 68% of the total +12.37pp*
 Read as paired per-cycle segment ratios (k = 4, coverage 96.5%), two segments exclude
 1.0: `P3/B` = 1.1096 [1.0700, 1.1224] and `P4/P3` = 1.0382 [1.0174, 1.0514]. `B/A` =
 1.0166 [0.9602, 1.0330] and `REL/P4` = 0.9927 [0.9603, 1.0281] include 1.0. The
-largest rise is idx27→69, but idx69→92 is a measurable rise too.
+largest rise is idx27→69, and it is the only one this run supports: `P4/P3` = 1.0382 [1.0174, 1.0514] excludes 1.0, but the modelled median-pooling position artefact alone puts a +3.33pp `P3`→`P4` step there (§1.3.3), nearly the whole ratio; the interval covers sampling error, not that bias, so idx69→92 is not evidence of a code rise.
 
 That window is 42 commits, is the heaviest in the run (107,746 `src` lines
 added, §1.2), and **straddles the 4.0.0 version boundary at index 39**. It is
@@ -1264,7 +1265,7 @@ smaller is INCONCLUSIVE on that reading, never absent. A wide interval excludes 
 | self-versus-self control | — | yes, it *is* G1 |
 | is `REL` slower than v3.5.0 at all | ~12% | **yes** |
 | does `REL` breach the 5% budget | ~5% | **yes**, budget excluded by 5.1pp |
-| which segment carries the rise | ~6% | pooled medians: **one** (idx27→69); paired ratios: idx27→69 and idx69→92 |
+| which segment carries the rise | ~6% | **one** (idx27→69); `P4/P3` excludes 1.0 but sits within the modelled +3.33pp position artefact (§1.3.3) |
 | does the regression predate 4.0.0 | ~1.6% | **no** — INCONCLUSIVE |
 | which commit | ~1.7% | **no** for small per-segment differences (needs n≈195); a single persistent step in idx27→69 could be bisected at n≈8 per comparison |
 
