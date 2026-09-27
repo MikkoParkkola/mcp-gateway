@@ -132,11 +132,17 @@ async fn t5_relative_store_path_is_created() {
     let dir = Path::new(&name).join("tasks");
     assert!(!Path::new(&name).exists(), "fixture: {name} already exists");
     let opened = open_err(&dir).await;
-    if let Err(error) = std::fs::remove_dir_all(&name) {
-        crate::private_fs::test_support::fixture_fail("T5", &format!("cleanup of {name}: {error}"));
-    }
     assert_eq!(
         opened, None,
         "WT-ASSERT T5: a fresh relative store path must open"
     );
+    match std::fs::remove_dir_all(&name) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            crate::private_fs::test_support::fixture_fail(
+                "T5",
+                &format!("cleanup of {name}: {error}"),
+            );
+        }
+        _ => {}
+    }
 }
