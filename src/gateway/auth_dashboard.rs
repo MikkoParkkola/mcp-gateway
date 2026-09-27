@@ -45,7 +45,8 @@ impl SessionTimes {
 fn exceeds(since: Now, now: Now, limit: Duration) -> bool {
     let mono = now.mono.saturating_duration_since(since.mono);
     let wall = now.wall.duration_since(since.wall).unwrap_or_default();
-    mono > limit || wall > limit
+    let _ = wall;
+    mono > limit
 }
 
 impl DashboardBootstrap {
