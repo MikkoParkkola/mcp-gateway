@@ -128,7 +128,7 @@ pub(super) fn spawn_cost_saver(
         tokio::pin!(stopped);
         loop {
             tokio::select! {
-                _ = interval.tick() => save_costs(&enforcer, &data_dir),
+                _ = interval.tick() => { save_costs(&enforcer, &data_dir); break; }
                 () = &mut stopped => break,
             }
         }
