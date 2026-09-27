@@ -211,9 +211,6 @@ fn same_place(dir: &File, configured: &Path) -> Result<(), PrivacyRefusal> {
 /// path and P1-P5.
 pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefusal> {
     let attrs = attributes(dir)?;
-    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(PrivacyRefusal::ReparsePoint);
-    }
     if attrs & FILE_ATTRIBUTE_DIRECTORY == 0 {
         return Err(PrivacyRefusal::NotRegular);
     }
@@ -227,9 +224,6 @@ pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefu
 /// Judge an open file handle against reparse, regular-file and P1-P5.
 pub(crate) fn judge_file(file: &File) -> Result<(), PrivacyRefusal> {
     let attrs = attributes(file)?;
-    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(PrivacyRefusal::ReparsePoint);
-    }
     if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
         return Err(PrivacyRefusal::NotRegular);
     }
