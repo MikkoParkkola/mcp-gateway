@@ -6,6 +6,7 @@
 //! validates the config again, so a line logged per load would repeat every
 //! 2 seconds for as long as the config stays broken.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::Evaluated;
@@ -19,6 +20,21 @@ pub(super) fn warn_port_zero(port: u16, warned: &AtomicBool) {
     if port == 0 && !warned.swap(true, Ordering::Relaxed) {
         tracing::warn!("Server port is 0; OS will assign an ephemeral port");
     }
+}
+
+/// Whether `key` is logged for the first time in this process. For advisory
+/// warnings about config content: the same config re-read on every retried
+/// reload stays quiet, and a changed config (a new key) warns again.
+// ponytail: one process-wide set, grows only with distinct advisories in the
+// configs this process loaded; bound it if configs are generated per request.
+pub(crate) fn first_time(key: &str) -> bool {
+    static LOGGED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut logged = LOGGED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    logged
+        .get_or_insert_with(HashSet::new)
+        .insert(key.to_owned())
 }
 
 impl Evaluated {

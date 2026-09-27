@@ -195,12 +195,16 @@ impl ControlPlaneRoleMappingConfig {
                 } else {
                     "email"
                 };
-                tracing::warn!(
-                    "control_plane.role_mapping rule {i} (issuer {}, {discriminator}) now grants \
-                     gateway admin on all surfaces (meta-tools, /ui/api/*), not only the \
-                     control plane",
-                    rule.issuer
-                );
+                // Once per rule per process: every reload validates.
+                let key = format!("role_mapping:{i}:{}:{discriminator}", rule.issuer);
+                if crate::config::log_once::first_time(&key) {
+                    tracing::warn!(
+                        "control_plane.role_mapping rule {i} (issuer {}, {discriminator}) now \
+                         grants gateway admin on all surfaces (meta-tools, /ui/api/*), not only \
+                         the control plane",
+                        rule.issuer
+                    );
+                }
             }
         }
         Ok(())
