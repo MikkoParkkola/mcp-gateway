@@ -15,7 +15,7 @@ use std::path::{Component, Path};
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
 };
 
 pub(crate) use crate::win_acl::Share;
@@ -59,7 +59,7 @@ pub(crate) fn prefix_allowed(component: &Component<'_>) -> bool {
 pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
 }
@@ -144,6 +144,12 @@ pub(crate) fn after_path_walk(path: &Path) {
 pub(crate) enum Hook {
     AfterPathWalk,
     BeforeRecordOpen,
+    /// A replace attempt failed and another is about to run (W-T20).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "red stage: the stub never retries")
+    )]
+    ReplaceRetry,
 }
 
 /// Durability calls, in order (test plan W-T22).
@@ -164,36 +170,56 @@ fn trace(_event: Trace) {}
 #[cfg(not(test))]
 fn attempt() {}
 
+/// Thread-local, so parallel tests never see each other's hooks or traces.
+/// Store operations run the IO on the calling thread, where the hook is set.
 #[cfg(test)]
 pub(crate) mod instrument {
     use super::{Hook, Trace};
+    use std::cell::{Cell, RefCell};
     use std::path::Path;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU32, Ordering};
 
-    type HookFn = Box<dyn Fn(Hook, &Path) + Send + Sync>;
-    pub(crate) static HOOK: Mutex<Option<HookFn>> = Mutex::new(None);
-    pub(crate) static TRACE: Mutex<Vec<Trace>> = Mutex::new(Vec::new());
-    pub(crate) static REPLACE_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+    type HookFn = Box<dyn Fn(Hook, &Path)>;
+    thread_local! {
+        static HOOK: RefCell<Option<HookFn>> = const { RefCell::new(None) };
+        static TRACE: RefCell<Vec<Trace>> = const { RefCell::new(Vec::new()) };
+        static REPLACE_ATTEMPTS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn set_hook(hook: Option<HookFn>) {
+        HOOK.with(|h| *h.borrow_mut() = hook);
+    }
+
+    /// Take (and clear) this thread's durability trace.
+    pub(crate) fn take_trace() -> Vec<Trace> {
+        TRACE.with(|t| std::mem::take(&mut *t.borrow_mut()))
+    }
+
+    /// Take (and reset) this thread's replace-attempt count.
+    pub(crate) fn take_attempts() -> u32 {
+        REPLACE_ATTEMPTS.with(|c| c.replace(0))
+    }
 
     pub(super) fn hook(which: Hook, path: &Path) {
-        if let Some(f) = HOOK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-        {
-            f(which, path);
-        }
+        HOOK.with(|h| {
+            if let Some(f) = h.borrow().as_ref() {
+                f(which, path);
+            }
+        });
     }
 
     pub(super) fn trace(event: Trace) {
-        TRACE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(event);
+        TRACE.with(|t| t.borrow_mut().push(event));
     }
 
     pub(super) fn attempt() {
-        REPLACE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+        REPLACE_ATTEMPTS.with(|c| c.set(c.get() + 1));
     }
 }
+
+#[cfg(test)]
+#[path = "private_fs_test_support.rs"]
+pub(crate) mod test_support;
+
+#[cfg(test)]
+#[path = "private_fs_tests.rs"]
+mod tests;

@@ -382,10 +382,58 @@ jobs:
       - run: >-
           cargo clippy --all-targets --all-features --
           -D warnings -A clippy::unnecessary_wraps
+      # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
+      # non-elevated token create symlinks, so the row runs rather than skips.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
       # Library and binary unit tests, the store suites included: both stores
       # run on Windows with owner-only DACLs (ADR-016). The integration targets
       # under tests/ are compiled above and not run here yet (W1, #1142).
       - run: cargo test --all-features --lib --bins --no-fail-fast -- --show-output
+      # Owner-only rows that need real Windows state: a second, non-admin
+      # account (the runner is an administrator, whose rights bypass DACLs), a
+      # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
+      # even when it failed, so no evidence hides behind an earlier failure.
+      - name: Privileged owner-only rows
+        id: privileged
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
+          $free = 68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "${_}:\") }
+          # Second user: Users only, never Administrators.
+          $pass = [guid]::NewGuid().ToString() + 'Aa1!'
+          net user mgw-probe $pass /add | Out-Null
+          if ((net localgroup Administrators) -match 'mgw-probe') { throw 'mgw-probe is an administrator' }
+          $sid = (New-Object System.Security.Principal.NTAccount('mgw-probe')).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          secedit /export /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
+          (Get-Content "$env:RUNNER_TEMP\sec.inf") -replace '^(SeInteractiveLogonRight = .*)$', "`$1,*$sid" | Set-Content "$env:RUNNER_TEMP\sec.inf"
+          secedit /configure /db "$env:RUNNER_TEMP\sec.sdb" /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
+          Set-Service seclogon -StartupType Manual; Start-Service seclogon
+          # Mapped network drive.
+          $net = $free[0]
+          net use "${net}:" \\localhost\C$ | Out-Null
+          New-Item -ItemType Directory -Force "${net}:\mgw-net-root" | Out-Null
+          # FAT32 and exFAT volumes.
+          $vols = @(@{ fs = 'FAT32'; letter = $free[1] }, @{ fs = 'exFAT'; letter = $free[2] })
+          foreach ($v in $vols) {
+            $vhd = "$env:RUNNER_TEMP\mgw-$($v.fs).vhdx"
+            @("create vdisk file=`"$vhd`" maximum=64 type=expandable", "select vdisk file=`"$vhd`"",
+              'attach vdisk', 'create partition primary', "format fs=$($v.fs) quick",
+              "assign letter=$($v.letter)") | Set-Content "$env:RUNNER_TEMP\dp.txt"
+            diskpart /s "$env:RUNNER_TEMP\dp.txt" | Out-Null
+          }
+          $env:MGW_PROBE_USER = 'mgw-probe'
+          $env:MGW_PROBE_PASS = $pass
+          $env:MGW_NET_ROOT = "${net}:\mgw-net-root"
+          $env:MGW_FAT32_ROOT = "$($free[1]):\"
+          $env:MGW_EXFAT_ROOT = "$($free[2]):\"
+          cargo test --all-features --lib -- --ignored --show-output win_privileged::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   test:
     name: Tests

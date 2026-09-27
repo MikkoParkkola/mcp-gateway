@@ -554,6 +554,11 @@ mod crash;
 #[path = "migration_provenance_tests.rs"]
 mod migration_provenance;
 
+// Store-level rows of the Windows owner-only test plan.
+#[cfg(windows)]
+#[path = "windows_tests.rs"]
+mod windows;
+
 /// Owner-only fixture writes for the suites that run on every platform: `0600`
 /// / `0700` on unix, the Windows store primitives on Windows.
 pub(super) mod private_io {
