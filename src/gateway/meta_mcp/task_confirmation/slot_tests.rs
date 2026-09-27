@@ -211,7 +211,15 @@ fn fresh() -> RetryFields {
 }
 
 async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfirmation {
-    let who = identity();
+    ask_as(fx, retry, declared, Some(&identity())).await
+}
+
+async fn ask_as(
+    fx: &Fixture,
+    retry: &RetryFields,
+    declared: Declared,
+    who: Option<&VerifiedIdentity>,
+) -> TaskConfirmation {
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
     let outcome = fx
@@ -222,7 +230,7 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
             arguments: &arguments,
             task: Some(&task),
             retry,
-            verified_identity: Some(&who),
+            verified_identity: who,
             input_capabilities: declared,
             is_modern: true,
             admission: &fx.admission,
@@ -428,5 +436,28 @@ async fn a_foreign_request_state_does_not_exempt_an_unclassified_call() {
             response.error.is_some(),
             "refused, not challenged: {response:?}"
         );
+    }
+}
+
+/// T12: with no verified identity the call runs on the shared slot, so a
+/// harmless shared entry is believed even on a propagating backend.
+#[tokio::test]
+async fn an_anonymous_caller_is_classified_from_the_shared_slot() {
+    let fx = fixture(propagating(), Some(Hint::Harmless)).await;
+    let outcome = ask_as(&fx, &fresh(), elicitation(), None).await;
+    assert!(
+        matches!(outcome, TaskConfirmation::NotRequired),
+        "expected NotRequired, got {outcome:?}"
+    );
+
+    // Destructive or missing: still never waved through for an anonymous
+    // caller, who cannot be bound to a grant and is refused instead.
+    for shared in [Some(Hint::Destructive), None] {
+        let fx = fixture(propagating(), shared).await;
+        let outcome = ask_as(&fx, &fresh(), elicitation(), None).await;
+        let TaskConfirmation::Answer(response) = &outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(response.error.is_some(), "refused: {response:?}");
     }
 }

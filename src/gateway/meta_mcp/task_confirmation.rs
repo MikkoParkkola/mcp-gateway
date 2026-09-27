@@ -156,7 +156,7 @@ impl MetaMcp {
         if !request.is_modern {
             return TaskConfirmation::NotRequired;
         }
-        let (backend_id, unclassified) = match self.classify_surfaced(request.tool_name) {
+        let (backend_id, unclassified) = match self.classify_surfaced(request) {
             None => return TaskConfirmation::NotRequired,
             Some(Classification::Destructive(server)) => (server, false),
             Some(Classification::Unclassified(server)) => (server, true),
@@ -245,10 +245,15 @@ impl MetaMcp {
     /// is not the dispatch slot there, so it proves nothing either way. A tool
     /// whose entry cannot be read is confirmed as if it were destructive:
     /// "unknown" is never "harmless".
-    fn classify_surfaced(&self, tool_name: &str) -> Option<Classification> {
+    ///
+    /// A caller with no verified identity resolves no binding, and
+    /// `Backend::pool_key_for` maps no binding to the shared slot, so the
+    /// shared entry is the one its call runs on.
+    fn classify_surfaced(&self, request: &TaskConfirmationRequest<'_>) -> Option<Classification> {
+        let tool_name = request.tool_name;
         let server = self.surfaced_tool_server(tool_name)?;
         let backend = self.backends.get(server)?;
-        if backend.identity_propagation_config().is_some() {
+        if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
             debug!(
                 server,
                 tool = tool_name,
