@@ -310,14 +310,9 @@ pub enum Command {
         url: Option<String>,
     },
 
-    /// Ask a running gateway for a fresh single-use dashboard link. Reads the
-    /// admin credential from `MCP_GATEWAY_TOKEN`, never from an argument.
-    #[command(
-        name = "dashboard-link",
-        about = "Print a fresh dashboard link from a running gateway"
-    )]
+    /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
     DashboardLink {
-        /// Base URL of the running gateway. Defaults as for `stats`.
+        /// Gateway base URL (default as for `stats`).
         #[arg(short, long)]
         url: Option<String>,
     },

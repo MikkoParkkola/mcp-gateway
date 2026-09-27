@@ -216,7 +216,9 @@ fn with_audit(
             key_id: "e5".to_string(),
             ..TransparencyLogConfig::default()
         }))
-        .expect("open log"),
+        .expect("open log")
+        // Fail-closed, as with auth on: a failed append degrades the log.
+        .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed),
     );
     Arc::get_mut(state)
         .expect("state is unique")
