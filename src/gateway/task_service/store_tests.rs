@@ -337,7 +337,8 @@ async fn store_04_live_owner_excludes_second_open_and_close_releases_lease() {
 }
 
 #[tokio::test]
-
+// Unix-only by the test plan: Windows paths are covered by the W-T rows.
+#[cfg(unix)]
 async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");

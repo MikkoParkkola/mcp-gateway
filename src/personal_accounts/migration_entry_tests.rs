@@ -115,6 +115,8 @@ impl Fixture {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
                     .expect("chmod");
             }
+            #[cfg(windows)]
+            crate::private_fs::test_support::plant_owner_only("seed", &path);
         }
         let settings = store_config(root.path());
         let store =

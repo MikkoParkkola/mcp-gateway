@@ -30,6 +30,10 @@ fn seed(dir: &Path, name: &str, body: &str, mode: u32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
     }
+    #[cfg(windows)]
+    if mode == 0o600 {
+        crate::private_fs::test_support::plant_owner_only("seed", &path);
+    }
     #[cfg(not(unix))]
     let _ = mode;
     path

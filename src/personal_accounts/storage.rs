@@ -456,12 +456,15 @@ pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, Ac
     if encoded.len() > config.max_authority_bytes {
         return Err(AccountError::StorageUnavailable);
     }
-    crate::config_persistence::write_config_text(
-        &config.authority_dir.join(AUTHORITY_FILE),
-        &encoded,
+    // The store's own writer (R9): private from creation on every platform,
+    // then sync, rename and parent sync.
+    commit::replace_file(
+        &config.authority_dir,
+        AUTHORITY_FILE,
+        encoded.as_bytes(),
+        |_| Ok(()),
     )
     .map_err(|_| AccountError::StorageUnavailable)?;
-    sync_directory(&config.authority_dir)?;
     Ok(PersonalAccountStore {
         config,
         authority: parking_lot::Mutex::new(super::AuthoritySlot::new(authority)),

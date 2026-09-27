@@ -688,6 +688,8 @@ fn prepare_dir(dir: &Path) -> Result<(), StoreError> {
                 tracing::warn!(path = %dir.display(), "task store directory is not a private directory");
                 return Err(StoreError::UnsafeStore);
             }
+            #[cfg(windows)]
+            platform::judge_store_dir(dir)?;
             Ok(())
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => create_private_dir(dir),
@@ -715,6 +717,13 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
     ExclusiveFileLock::try_acquire(lease).map_err(|error| {
         if error.kind() == io::ErrorKind::WouldBlock {
             return StoreError::AlreadyOwned;
+        }
+        // Windows judges the lease's DACL inside `try_acquire`, the check unix
+        // makes above with `has_mode`; a lease that is not private is unsafe.
+        #[cfg(windows)]
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            tracing::warn!(%error, path = %lease.display(), "task store lease is not private");
+            return StoreError::UnsafeStore;
         }
         // Includes the platforms with no tested exclusion primitive: they refuse
         // custody outright rather than pretend to hold it.

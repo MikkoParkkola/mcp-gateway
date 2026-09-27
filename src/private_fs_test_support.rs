@@ -139,6 +139,14 @@ pub(crate) fn plant_sddl(row: &str, path: &Path, sddl: &str, expect_back: &str) 
     }
 }
 
+/// Make `path` owner-only for the current user, the Windows counterpart of a
+/// fixture's `chmod 0600`: owner = user, protected DACL granting only the user.
+pub(crate) fn plant_owner_only(row: &str, path: &Path) {
+    let user = user_sid();
+    let sddl = format!("O:{user}D:P(A;;FA;;;{user})");
+    plant_sddl(row, path, &sddl, &sddl);
+}
+
 /// Set a descriptor whose read-back Windows may normalise; returns it.
 pub(crate) fn plant_any(row: &str, path: &Path, sddl: &str) -> String {
     native_set(row, path, sddl);

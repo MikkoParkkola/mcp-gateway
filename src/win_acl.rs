@@ -6,11 +6,6 @@
 //! function; callers never see a raw handle, pointer or Win32 type. Each
 //! `unsafe` block names the ADR-016 safety-contract points it relies on.
 #![allow(unsafe_code)]
-// Red stage: the stores reach this module only through permissive stubs.
-#![expect(
-    dead_code,
-    reason = "red stage: private_fs stubs do not call win_acl yet"
-)]
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;

@@ -10,12 +10,16 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt as _;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf, Prefix};
+use std::sync::OnceLock;
+
+use crate::win_acl::{Ace, Inspection, Sid};
 
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
 };
 
 pub(crate) use crate::win_acl::Share;
@@ -23,7 +27,6 @@ pub(crate) use crate::win_acl::Share;
 /// Why an object is not private (design §2.2). Tests assert the reason, so one
 /// check cannot mask another.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "red stage: the stub judges construct no refusal")]
 pub(crate) enum PrivacyRefusal {
     /// P1: a NULL DACL grants everyone.
     NullDacl,
@@ -50,8 +53,13 @@ pub(crate) enum PrivacyRefusal {
 }
 
 /// Lexical acceptance of a leading path component on Windows (design §2.3 R3).
+/// Only a plain drive (`C:`) or its verbatim form (`\\?\C:`); a UNC share,
+/// a device path or `\\?\GLOBALROOT` is not a local, ACL-bearing location.
 pub(crate) fn prefix_allowed(component: &Component<'_>) -> bool {
-    matches!(component, Component::Prefix(_))
+    matches!(
+        component,
+        Component::Prefix(p) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    )
 }
 
 /// Open a directory for judging and pinning: no reparse following, data access
@@ -59,7 +67,7 @@ pub(crate) fn prefix_allowed(component: &Component<'_>) -> bool {
 pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
 }
@@ -74,33 +82,153 @@ pub(crate) fn open_file_read(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-/// Judge an open directory handle against P1-P5, reparse, locality and the
-/// configured path.
-pub(crate) fn judge_dir(_dir: &File, _configured: &Path) -> Result<(), PrivacyRefusal> {
+/// The user this process runs as, read once.
+fn user() -> io::Result<&'static Sid> {
+    static USER: OnceLock<Sid> = OnceLock::new();
+    if let Some(user) = USER.get() {
+        return Ok(user);
+    }
+    let sid = crate::win_acl::current_user_sid()?;
+    Ok(USER.get_or_init(|| sid))
+}
+
+/// `FILE_READ_DATA | FILE_WRITE_DATA`, or `GENERIC_ALL`: what P3 requires.
+const READ_WRITE: u32 = 0x1 | 0x2;
+const GENERIC_ALL: u32 = 0x1000_0000;
+/// `INHERITED_ACE`.
+const INHERITED: u8 = 0x10;
+
+/// Every rule P1-P5 the descriptor breaks, in the design's reporting order.
+pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusal> {
+    let mut found = Vec::new();
+    let Some(aces) = inspection.dacl.as_ref() else {
+        found.push(PrivacyRefusal::NullDacl);
+        return found;
+    };
+    let mut read_write = false;
+    let mut inherited = false;
+    for ace in aces {
+        match ace {
+            Ace::Allowed { flags, mask, sid } => {
+                inherited |= flags & INHERITED != 0;
+                if sid == user {
+                    read_write |= mask & GENERIC_ALL != 0 || mask & READ_WRITE == READ_WRITE;
+                } else {
+                    found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
+                }
+            }
+            // A deny only narrows access; it may name anyone.
+            Ace::Denied { flags, .. } => inherited |= flags & INHERITED != 0,
+            Ace::Other { ace_type } => found.push(PrivacyRefusal::OtherAceType(*ace_type)),
+        }
+    }
+    if !read_write {
+        found.push(PrivacyRefusal::NoReadWrite);
+    }
+    match inspection.owner.as_ref() {
+        Some(owner) if owner == user => {}
+        Some(owner) => found.push(PrivacyRefusal::ForeignOwner(owner.to_sddl())),
+        None => found.push(PrivacyRefusal::Unreadable),
+    }
+    if !inspection.protected || inherited {
+        found.push(PrivacyRefusal::NotProtected);
+    }
+    found
+}
+
+/// Every rule the open object breaks; empty when it is private.
+pub(crate) fn privacy_refusals(file: &File) -> Vec<PrivacyRefusal> {
+    match (user(), crate::win_acl::inspect(file)) {
+        (Ok(user), Ok(inspection)) => refusals(&inspection, user),
+        _ => vec![PrivacyRefusal::Unreadable],
+    }
+}
+
+fn first(found: Vec<PrivacyRefusal>) -> Result<(), PrivacyRefusal> {
+    found.into_iter().next().map_or(Ok(()), Err)
+}
+
+fn attributes(file: &File) -> Result<u32, PrivacyRefusal> {
+    use std::os::windows::fs::MetadataExt as _;
+    file.metadata()
+        .map(|meta| meta.file_attributes())
+        .map_err(|_| PrivacyRefusal::Unreadable)
+}
+
+/// Re-walk `configured` after the store directory is open: every existing
+/// component must still be a plain directory (no reparse point), and the path
+/// must still resolve to the very directory the handle holds. This is what
+/// catches an ancestor swapped for a junction between the first walk and the
+/// open (design R2-1). Comparing identities, not path strings, keeps 8.3 short
+/// names (`RUNNER~1`) from reading as a different place.
+fn same_place(dir: &File, configured: &Path) -> Result<(), PrivacyRefusal> {
+    // `absolute` resolves `.`/`..` and a relative path the same way the
+    // original open did.
+    let wanted = std::path::absolute(configured).map_err(|_| PrivacyRefusal::PathMismatch)?;
+    let mut prefix = PathBuf::new();
+    let mut last = None;
+    for part in wanted.components() {
+        prefix.push(part);
+        if matches!(part, Component::Prefix(_) | Component::RootDir) {
+            continue;
+        }
+        let handle = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&prefix)
+            .map_err(|_| PrivacyRefusal::PathMismatch)?;
+        if attributes(&handle)? & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(PrivacyRefusal::PathMismatch);
+        }
+        last = Some(handle);
+    }
+    let last = last.ok_or(PrivacyRefusal::PathMismatch)?;
+    let held = crate::win_acl::file_identity(dir).map_err(|_| PrivacyRefusal::Unreadable)?;
+    let now = crate::win_acl::file_identity(&last).map_err(|_| PrivacyRefusal::Unreadable)?;
+    if held != now {
+        return Err(PrivacyRefusal::PathMismatch);
+    }
     Ok(())
 }
 
-/// Judge an open file handle against P1-P5, reparse and regular-file.
-pub(crate) fn judge_file(_file: &File) -> Result<(), PrivacyRefusal> {
-    Ok(())
+/// Judge an open directory handle against reparse, locality, the configured
+/// path and P1-P5.
+pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefusal> {
+    let attrs = attributes(dir)?;
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(PrivacyRefusal::ReparsePoint);
+    }
+    if attrs & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(PrivacyRefusal::NotRegular);
+    }
+    if !crate::win_acl::volume_is_local(dir).map_err(|_| PrivacyRefusal::Unreadable)? {
+        return Err(PrivacyRefusal::NotLocal);
+    }
+    same_place(dir, configured)?;
+    first(privacy_refusals(dir))
+}
+
+/// Judge an open file handle against reparse, regular-file and P1-P5.
+pub(crate) fn judge_file(file: &File) -> Result<(), PrivacyRefusal> {
+    let attrs = attributes(file)?;
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(PrivacyRefusal::ReparsePoint);
+    }
+    if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return Err(PrivacyRefusal::NotRegular);
+    }
+    first(privacy_refusals(file))
 }
 
 /// Create a store directory that is private from its first instant.
 pub(crate) fn create_dir_private(path: &Path) -> io::Result<()> {
-    std::fs::create_dir(path)?;
-    crate::win_acl::after_create(path, None);
-    Ok(())
+    crate::win_acl::create_dir_private(path, user()?)
 }
 
 /// Create a store file that is private from its first instant.
-pub(crate) fn create_file_private(path: &Path, _share: Share) -> io::Result<File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    crate::win_acl::after_create(path, Some(&file));
-    Ok(file)
+pub(crate) fn create_file_private(path: &Path, share: Share) -> io::Result<File> {
+    crate::win_acl::create_file_private(path, user()?, share)
 }
 
 /// Flush a file's data and metadata.
@@ -122,14 +250,31 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
     result
 }
 
-/// Replace `dest` with `tmp`, durably.
+/// Replace `dest` with `tmp`, durably (`MOVEFILE_WRITE_THROUGH`). An outside
+/// holder of `dest` (an antivirus scan, a backup agent) makes the move fail
+/// with access-denied or a sharing violation (probe E2b); that is retried, at
+/// most three attempts in all, 10 then 20 ms apart, and then reported.
 /// Takes `AsRef<Path>` like `std::fs::rename`, so call sites are shared.
 pub(crate) fn replace(tmp: impl AsRef<Path>, dest: impl AsRef<Path>) -> io::Result<()> {
-    attempt();
-    trace(Trace::Replace {
-        write_through: false,
-    });
-    std::fs::rename(tmp, dest)
+    const ATTEMPTS: u32 = 3;
+    let (tmp, dest) = (tmp.as_ref(), dest.as_ref());
+    let mut wait = std::time::Duration::from_millis(10);
+    let mut attempt_no = 1;
+    loop {
+        attempt();
+        trace(Trace::Replace {
+            write_through: true,
+        });
+        match crate::win_acl::replace(tmp, dest) {
+            Err(error) if attempt_no < ATTEMPTS && matches!(error.raw_os_error(), Some(5 | 32)) => {
+                hook(Hook::ReplaceRetry, dest);
+                std::thread::sleep(wait);
+                wait *= 2;
+                attempt_no += 1;
+            }
+            done => return done,
+        }
+    }
 }
 
 /// Fired by the store open between the path walk and the directory open.
@@ -145,10 +290,6 @@ pub(crate) enum Hook {
     AfterPathWalk,
     BeforeRecordOpen,
     /// A replace attempt failed and another is about to run (W-T20).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "red stage: the stub never retries")
-    )]
     ReplaceRetry,
 }
 

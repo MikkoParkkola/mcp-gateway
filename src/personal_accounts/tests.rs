@@ -348,7 +348,7 @@ fn s03_explicit_initialization_creates_encrypted_authority_and_reopens() {
 }
 
 #[test]
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn s11_unsupported_platform_refuses_custody_without_creating_state() {
     let root = tempfile::tempdir().unwrap();
     let settings = config(root.path());

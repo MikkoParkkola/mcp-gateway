@@ -149,6 +149,8 @@ impl Harness {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         }
+        #[cfg(windows)]
+        crate::private_fs::test_support::plant_owner_only("seed", &path);
     }
 
     fn migrate(

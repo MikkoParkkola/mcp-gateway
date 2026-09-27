@@ -158,9 +158,11 @@ ordinary users create folders. The fix binds the store to its validated director
 - While a directory handle without delete-sharing is open, Windows refuses to rename
   or delete that directory or any ancestor of it (probe E6 must confirm; W-T16 and
   M15 pin it). So the path cannot be re-pointed while the store is open.
-- Before holding it, `GetFinalPathNameByHandleW` on the handle must equal the
-  configured path (case-insensitive, after `\\?\` normalisation), which catches a
-  swap between the R3 walk and the open. `volume_is_local` runs on the same handle.
+- Before holding it, the configured path is walked again component by component
+  without following reparse points: every component must be a plain directory, and
+  the last one must have the same `file_identity` as the held handle (§12 A1). This
+  catches a swap between the R3 walk and the open. `volume_is_local` runs on the
+  same handle.
 - If E6 shows ancestors CAN be renamed under a held handle, the fallback is to keep
   every ancestor handle open the same way (bounded by path depth); that is an
   amendment for re-review.
@@ -174,7 +176,7 @@ unchanged byte for byte: the unix bodies move, they are not rewritten.
 
 | Rule | Windows mechanism |
 |---|---|
-| R1/T1 private dir | open dir with `custom_flags(FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT)` and `access_mode(READ_CONTROL \| FILE_READ_ATTRIBUTES \| FILE_LIST_DIRECTORY)` (a handle with no data access records no sharing, so `FILE_LIST_DIRECTORY` is what makes the missing delete-share bind; R3-1); handle `file_attributes()` must be DIRECTORY and not REPARSE_POINT; `inspect` passes P1-P5; `volume_is_local` true; `final_path` equals the configured path; the handle is HELD for the store lifetime without `FILE_SHARE_DELETE` (§2.2 Parent directories) |
+| R1/T1 private dir | open dir with `custom_flags(FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT)` and `access_mode(READ_CONTROL \| FILE_READ_ATTRIBUTES \| FILE_LIST_DIRECTORY)` (a handle with no data access records no sharing, so `FILE_LIST_DIRECTORY` is what makes the missing delete-share bind; R3-1); handle `file_attributes()` must be DIRECTORY and not REPARSE_POINT; `inspect` passes P1-P5; `volume_is_local` true; a no-follow re-walk of the configured path reaches the same `file_identity` (§12 A1); the handle is HELD for the store lifetime without `FILE_SHARE_DELETE` (§2.2 Parent directories) |
 | R2/T5 create private dir | `create_dir_private` (atomic DACL), then open and judge exactly as R1. Missing ancestors are created with plain `create_dir` (they are outside the model, as on unix) |
 | R3 path | lexical: accept `Prefix(Disk)` and `Prefix(VerbatimDisk)` followed by `RootDir` + `Normal`; refuse UNC, `Verbatim`/`VerbatimUNC`, `DeviceNS`. A drive letter can still map a network share, so locality is decided on the OPEN store directory handle by `volume_is_local` (G3), not by the prefix. Walk: every existing component must be a directory with no REPARSE_POINT attribute (covers symlinks AND junctions, which `is_symlink` misses) |
 | R4/T4 create private file | `create_file_private` (atomic DACL, `CREATE_NEW`, share 0, reparse no-follow); the handle carries `GENERIC_READ\|GENERIC_WRITE` only, since nothing re-protects it |
@@ -388,3 +390,29 @@ elevation note for the P4 remediation (§2.4); W-T17 made barrier-controlled and
 independent of antivirus timing; W-T8b pins P3 alone; W-T18 and M18 pin the final-path
 check; the `unsafe` fence covers `src/`, `build.rs`, `benches/` and `examples/`
 (ADR-016); scratch-name uniqueness stated (§2.3).
+
+## 12. Implementation amendments
+
+Found by the first full Windows run of the implementation (CI run 36337890807).
+
+- A1, final-path check. The configured path and `GetFinalPathNameByHandleW` disagree
+  whenever the path holds an 8.3 short name: the runner's temp directory is
+  `C:\Users\RUNNER~1\...`, its final path is the long name, so every reopen refused
+  with `PathMismatch`. Expanding short names needs a path lookup that follows
+  reparse points, which is the thing being checked. The check is now a no-follow
+  re-walk of the configured path after the open: any reparse point on the way
+  refuses, and the last component's `file_identity` (volume serial, 128-bit file id)
+  must equal the held handle's. W-T18 and M18 are unchanged: a junction swapped in
+  for an ancestor refuses with `PathMismatch`.
+- A2, lock release. Windows releases the byte-range lock of a closed handle "when
+  system resources allow", not at close, so a reopen straight after a drop met the
+  old lock (`StorageUnavailable` / `AlreadyOwned` across the account and task store
+  suites). The custody lock guard now unlocks explicitly in `Drop`, as the unix guard
+  already does with `flock`.
+- A3, fixtures. The whole-file lock refuses even a zero-length read of the empty task
+  store lease while the store is open, so the store test oracles take an empty
+  file's bytes from its length, and `store_01` checks name, count and layout but
+  not bytes at Flush and FileSync, where the scratch record is still held with no
+  sharing. The 3.x source fixtures plant an owner-only
+  descriptor on Windows where they `chmod 0600` on unix. The W-T10b row runs each
+  printed `icacls` line verbatim through `cmd`, as a user pastes it.

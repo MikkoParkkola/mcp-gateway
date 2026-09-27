@@ -56,8 +56,24 @@ pub(in crate::personal_accounts) enum SourceRefusal {
     /// ownership or mode check. A party who can write into the source directory
     /// could otherwise plant that exact path and have migration seal THEIR
     /// token into the declared principal's account.
-    #[error("the 3.x credential path at {path} is not a regular file owned privately by this user")]
-    NotPrivate { path: String },
+    #[cfg_attr(
+        not(windows),
+        error(
+            "the 3.x credential path at {path} is not a regular file owned privately by this user"
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        error(
+            "the 3.x credential path at {path} is not a regular file owned privately by this user{detail}"
+        )
+    )]
+    NotPrivate {
+        path: String,
+        /// Windows: which rule failed and the commands that repair it.
+        #[cfg(windows)]
+        detail: String,
+    },
     /// The file parsed as neither a 3.x nor a 4.0.0 `TokenInfo`.
     ///
     /// Reports the position and nothing else. `serde_json`'s own `Display`
@@ -88,7 +104,7 @@ pub(in crate::personal_accounts) fn read_legacy_source(
         return Err(SourceRefusal::Missing { path: shown });
     };
     if !meta.is_file() || !privately_owned(&meta) {
-        return Err(SourceRefusal::NotPrivate { path: shown });
+        return Err(not_private(shown, ""));
     }
     // OPEN ONCE, THEN VALIDATE AND READ THE SAME HANDLE. Checking a path and
     // then reopening it leaves a window in which the two are different files:
@@ -97,21 +113,26 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     // the private-directory precondition is already violated, which is exactly
     // when a defence has to hold. The re-check below is against the OPEN
     // handle's own metadata, which no rename can change.
-    let mut file = std::fs::File::open(path).map_err(|_| SourceRefusal::NotPrivate {
-        path: shown.clone(),
-    })?;
-    let opened = file.metadata().map_err(|_| SourceRefusal::NotPrivate {
-        path: shown.clone(),
-    })?;
+    let mut file = std::fs::File::open(path).map_err(|_| not_private(shown.clone(), ""))?;
+    let opened = file
+        .metadata()
+        .map_err(|_| not_private(shown.clone(), ""))?;
     if !opened.is_file() || !privately_owned(&opened) {
-        return Err(SourceRefusal::NotPrivate { path: shown });
+        return Err(not_private(shown, ""));
+    }
+    // Windows has no mode to read: the open handle's DACL is judged instead,
+    // and the refusal says which rule failed and how to repair it.
+    #[cfg(windows)]
+    {
+        let found = crate::private_fs::privacy_refusals(&file);
+        if !found.is_empty() {
+            let detail = windows_remediation(&shown, &found);
+            return Err(not_private(shown, &detail));
+        }
     }
     let mut bytes = String::new();
-    std::io::Read::read_to_string(&mut file, &mut bytes).map_err(|_| {
-        SourceRefusal::NotPrivate {
-            path: shown.clone(),
-        }
-    })?;
+    std::io::Read::read_to_string(&mut file, &mut bytes)
+        .map_err(|_| not_private(shown.clone(), ""))?;
     serde_json::from_str(&bytes).map_err(|error| SourceRefusal::Unparseable {
         path: shown,
         // Position only. The error's `Display` is never rendered.
@@ -139,12 +160,50 @@ fn privately_owned(meta: &std::fs::Metadata) -> bool {
     meta.permissions().mode() & 0o777 == 0o600
 }
 
-/// No mode model to check against, so existence and file-ness are the whole
-/// test. The durable writers are unix-only anyway (`commit.rs:592-601` refuses
-/// outright), so a migration cannot complete here regardless.
+/// No mode on Windows: the DACL of the opened handle is judged in
+/// `read_legacy_source` instead, so the metadata alone decides nothing here.
 #[cfg(not(unix))]
 fn privately_owned(_meta: &std::fs::Metadata) -> bool {
     true
+}
+
+fn not_private(path: String, detail: &str) -> SourceRefusal {
+    #[cfg(windows)]
+    {
+        SourceRefusal::NotPrivate {
+            path,
+            detail: detail.to_owned(),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = detail;
+        SourceRefusal::NotPrivate { path }
+    }
+}
+
+/// Which rules failed, and the `icacls` sequence that repairs them, one
+/// command per line. Taking ownership needs an elevated prompt.
+#[cfg(windows)]
+fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) -> String {
+    use crate::private_fs::PrivacyRefusal as P;
+    use std::fmt::Write as _;
+    let me = r"%USERDOMAIN%\%USERNAME%";
+    let mut out = format!(" ({found:?}). To repair it, run from a command prompt");
+    if found.iter().any(|r| matches!(r, P::ForeignOwner(_))) {
+        out.push_str(", elevated because the file has another owner");
+    }
+    out.push_str(":\n");
+    if found.iter().any(|r| matches!(r, P::ForeignOwner(_))) {
+        let _ = writeln!(out, "icacls \"{path}\" /setowner \"{me}\"");
+    }
+    let _ = writeln!(out, "icacls \"{path}\" /inheritance:r /grant:r \"{me}:F\"");
+    for refusal in found {
+        if let P::ForeignSid(sid) = refusal {
+            let _ = writeln!(out, "icacls \"{path}\" /remove:g \"*{sid}\"");
+        }
+    }
+    out
 }
 
 #[cfg(test)]
