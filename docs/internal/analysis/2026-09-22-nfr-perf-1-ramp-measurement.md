@@ -307,7 +307,7 @@ evidence is a direct measurement with a clear scale:
   `n`, where the gaps reach 1.67pp, §4.6) for every test arm
   (largest: `REL`, −0.0024), against the **±1.7%** the noiseless model predicts
   for the measured profile. The two estimators differ by a factor of ~7 less
-  than the effect would require. This is the number to cite.
+  than the effect would require. At n = 6 this was the number to cite; it is withdrawn at final `n`.
 
 Supporting, and weaker than it first appears:
 
@@ -961,7 +961,8 @@ order.
 4. **An arm at first-parent index 38 (`37ddab1e`, the last 3.5.1 commit) — this
    answers question 3 at achievable `n`.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈141 and is out of
    reach. But **locating a step does not require resolving small differences**:
-   the idx27→69 step is ~10.5pp, which already clears the noise floor. `4.0.0`
+   the idx27→69 rise is 8.42pp on pooled medians (`P3/B` = 1.1096 paired), which already
+   clears the noise floor. `4.0.0`
    opens at **index 39 (`0f04a179`), inside that window**, and that commit changes
    code itself, so the arm goes at index 38: it splits the window exactly at the
    version boundary — a step in idx27→38 predates 4.0.0, a step in idx38→69
@@ -1174,7 +1175,7 @@ From realised scatter (CV 4.83%), using the prior analysis's own formula
 
 | effect to resolve | required n |
 |---|---|
-| 8.7% (endpoint) | **7** |
+| 8.7% (pre-registered endpoint estimate) | **7** |
 | 1.7% (per segment) | **195** |
 | 1.0% (prior analysis's target) | **564** |
 
