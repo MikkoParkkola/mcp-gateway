@@ -87,7 +87,7 @@ impl Backend {
         if let Some(cached) = self.get_cached_tool_for(identity_key, tool) {
             return Ok(self.judge_keys(&cached.input_schema, tool, arguments, mode));
         }
-        if !self.fetch_carries_caller_identity(identity_key) && !headers.is_empty() {
+        if headers.is_empty() && !headers.is_empty() && !self.fetch_carries_caller_identity(identity_key) {
             count("input_schema_fetch_skipped_a3");
             return Ok(unavailable(mode));
         }
