@@ -35,7 +35,7 @@ separate questions, and the options below answer different ones:
 | `auth.bearer_token` | yes | none: one shared credential, always admin | everything | [DEPLOYMENT.md](DEPLOYMENT.md#authentication-for-production) |
 | `auth.api_keys` | yes | `api_key:<name>`, one per key | the key's `backends`, `allowed_tools`, `denied_tools` | [API keys](DEPLOYMENT.md#api-keys) |
 | `key_server` (OIDC) | yes, with an exchanged or delegated token | `(issuer, sub)` from your identity provider | `key_server.policies`, first match wins | [MULTI_USER.md](MULTI_USER.md#1-who-is-calling) |
-| `security.caller_identity` headers | no: only names the user behind an already admitted request | the header subject, or a Cloudflare Access `sub` | through identity grants | [Caller identity headers](identity_grants.md#caller-identity-headers) |
+| `security.caller_identity` headers | no: only names the user behind an already admitted request | the header subject, or a Cloudflare Access `sub` | identity grants for personal capabilities; backend reach stays the admitting credential's | [Caller identity headers](identity_grants.md#caller-identity-headers) |
 | `mtls` client certificates | yes, with `mtls.require_client_cert` | first SAN URI, else CN | mTLS policy | [TLS / mTLS](DEPLOYMENT.md#tls--mtls) |
 
 Which to pick:
@@ -48,8 +48,10 @@ Which to pick:
   step 0, which undoes two `mcp-gateway init` defaults that defeat it.
 - **A proxy you control already authenticates users**: `security.caller_identity`
   with `mode: trusted_proxy` (exact `trusted_proxies` IPs, one `authority`) or
-  `mode: cloudflare_access`. Headers name a user; they do not admit a request
-  on their own, so the admission rules above still apply. In `trusted_proxy` mode each
+  `mode: cloudflare_access`. Headers name a user for identity grants and the
+  audit log; they do not admit a request on their own, and they do not narrow
+  which backends it reaches: that stays the reach of the credential that
+  admitted it. In `trusted_proxy` mode each
   proxy must strip or overwrite every `X-Gateway-Identity-*` header a client
   sends: the allowlist proves the request came through the proxy, not that the
   proxy wrote the header.
@@ -214,14 +216,16 @@ pod, and the audit log with it. Keep `replicaCount: 1`; the chart refuses more
 while per-process state is on
 ([Replica Count and per-process state](DEPLOYMENT.md#replica-count-and-per-process-state)).
 
-**What the chart cannot do yet.** Its values have no API keys and no key
-server: `credential` mode is one shared bearer token, so every caller has the
-same identity and the same reach. Per-person API keys and OIDC in the chart are
-still to come before 4.0.0 (see
-[Known gaps](release/4.0.0-beta.2-notes.md#known-gaps)). Until it lands, give a
-team per-person identity with a gateway config you deploy yourself, as in
-[the example above](#a-team-config-that-loads), or with a proxy in front that
-sets [caller identity headers](identity_grants.md#caller-identity-headers).
+**What the chart cannot do yet.** The chart has no values of its own for API
+keys or the key server. Because it replaces `config.auth`, API keys cannot be
+set through it at all: `credential` mode is one shared bearer token, with one
+reach for every caller. Other sections under `config` are rendered as written,
+so a `config.key_server` block reaches the gateway, but the chart has no Secret
+wiring for its `admin_token`, and its tests do not cover that setup. First-class
+API-key and OIDC support in the chart is still to come before 4.0.0 (see
+[Known gaps](release/4.0.0-beta.2-notes.md#known-gaps)). Until then, for
+per-person reach use a gateway config you deploy yourself, as in
+[the example above](#a-team-config-that-loads).
 
 ## Before you hand out credentials
 
