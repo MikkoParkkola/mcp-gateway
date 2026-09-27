@@ -109,7 +109,7 @@ impl Backend {
             {
                 return Err(e);
             }
-            Err(_) => return Ok(unavailable(mode)),
+            Err(_) => return Ok(None),
         };
         if let Some(found) = tools.iter().find(|t| t.name == tool) {
             return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
