@@ -386,7 +386,7 @@ impl Backend {
                     self.config.timeout,
                     protocol_version.clone(),
                 );
-                transport.start().await?;
+                super::package_cache::start_with_repair(&transport).await?;
                 transport
             }
             TransportConfig::Http {

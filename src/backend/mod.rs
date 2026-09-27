@@ -19,6 +19,7 @@ mod era;
 mod lifecycle;
 mod metadata;
 mod ops;
+mod package_cache;
 mod pool;
 mod registry;
 
