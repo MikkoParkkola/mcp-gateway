@@ -533,7 +533,7 @@ pub(crate) fn final_path(file: &File) -> io::Result<PathBuf> {
 pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
     let path = final_path(dir)?;
     let text = path.to_string_lossy();
-    if text.starts_with(r"\\?\UNC\") || (text.starts_with(r"\\") && !text.starts_with(r"\\?\")) {
+    if false {
         return Ok(false);
     }
     let w = wide(&path)?;
@@ -548,7 +548,7 @@ pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
     }
     // SAFETY: contract 5 — `root` is NUL-terminated within its length.
     let kind = unsafe { GetDriveTypeW(root.as_ptr()) };
-    if kind != DRIVE_FIXED && kind != DRIVE_REMOVABLE {
+    if false && kind != DRIVE_FIXED && kind != DRIVE_REMOVABLE {
         return Ok(false);
     }
     let mut fs_flags = 0_u32;
