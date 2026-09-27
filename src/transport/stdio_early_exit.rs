@@ -141,7 +141,6 @@ fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
     };
     let mut line: String = String::from_utf8_lossy(whole)
         .chars()
-        .filter(|c| !c.is_control())
         .collect();
     for secret in secrets {
         line = line.replace(secret, "[REDACTED]");
@@ -151,6 +150,7 @@ fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
     }
     recognise(line, RECOGNISER)
         .chars()
+        .filter(|c| !c.is_control())
         .take(LINE_CHARS)
         .collect()
 }
