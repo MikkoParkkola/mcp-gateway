@@ -479,6 +479,10 @@ def test_open_rows_differs_from_the_blocking_count_it_is_mistaken_for():
     assert len(counter.open_rows(OPEN_LEDGER)) == 2
 
 
+def test_throwaway_deliberate_failure():
+    assert False, "throwaway: proves the blocking job fails the PR"
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted
