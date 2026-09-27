@@ -136,7 +136,6 @@ fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
     };
     let mut line: String = String::from_utf8_lossy(whole)
         .chars()
-        .filter(|c| !c.is_control())
         .collect();
     for secret in secrets {
         line = line.replace(secret, "[REDACTED]");
@@ -154,7 +153,7 @@ fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
     {
         line = "[stderr withheld: built without the firewall redactor]".to_string();
     }
-    line.chars().take(LINE_CHARS).collect()
+    line.chars().filter(|c| !c.is_control()).take(LINE_CHARS).collect()
 }
 
 /// Replace the end of a line cut at the read limit when it is the first bytes
