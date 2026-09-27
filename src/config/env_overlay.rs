@@ -422,7 +422,7 @@ impl EnvOverlay {
     pub(crate) fn differs_on_disk(&self, path: &Path) -> bool {
         // The same absence test `apply_file` makes, so the two agree.
         match path.try_exists() {
-            Ok(false) => return !self.absent.iter().any(|p| p == path),
+            Ok(false) => return true,
             Err(_) => return true,
             Ok(true) => {}
         }
