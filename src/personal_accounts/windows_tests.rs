@@ -284,7 +284,8 @@ fn wt17_reader_closes_before_replace() {
     assert!(
         store
             .refresh_tokens(&alice(), &version(&first), &refreshed(&first))
-            .is_ok()
+            .is_ok(),
+        "WT-ASSERT W-T17: the refresh's replace was blocked with no outside holder"
     );
     let replaces = instrument::take_trace()
         .iter()
