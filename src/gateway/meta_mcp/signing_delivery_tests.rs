@@ -246,7 +246,7 @@ async fn signing_delivery_required_nonce_defensive_failure_is_marked() {
 // Independent Python JSON encoding and SHA-256; these fixed fixtures use ASCII
 // property names and exact integers, shared by sorted-json-v1 and this oracle.
 fn independent_attempt_hash(value: &Value) -> String {
-    let script = "import hashlib,json,sys\nv=json.load(sys.stdin)\nb=json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')\nprint('sha256:'+hashlib.sha256(b).hexdigest())";
+    let script = "import hashlib,json,sys\nv=json.loads(sys.stdin.buffer.read().decode('utf-8'))\nb=json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')\nprint('sha256:'+hashlib.sha256(b).hexdigest())";
     let mut child = Command::new("python3")
         .args(["-I", "-S", "-c", script])
         .stdin(Stdio::piped())
