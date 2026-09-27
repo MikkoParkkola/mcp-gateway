@@ -81,10 +81,12 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     // one reuses) is skipped, never reused or removed: it is not ours.
     let (tmp, mut file) = loop {
         let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+        let _ = n;
+        let tmp = path.with_extension("json.tmp");
         match std::fs::OpenOptions::new()
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(true)
             .open(&tmp)
         {
             Ok(file) => break (tmp, file),
