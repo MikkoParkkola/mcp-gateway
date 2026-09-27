@@ -264,44 +264,73 @@ async fn envfile_19_the_poll_reads_the_recorded_paths_and_no_other() {
     assert_eq!(value(&g.env, "MCP_GW_T1286_E19_OTHER"), None);
 }
 
-/// A poll read that never finishes, like a stalled NFS mount.
+/// A poll read that never finishes in time, like a stalled NFS mount.
 fn stalled_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
-    std::thread::sleep(Duration::from_secs(30));
+    std::thread::sleep(Duration::from_secs(5));
     None
 }
 
-/// T20: shutdown ends the rewatch task within one poll wait while an env
-/// read is stalled, though the poll interval is ready again every tick.
+/// Runs of T20. Without the post-poll shutdown check, a run passes only if
+/// `select!` picks shutdown over the equally ready poll branch after the
+/// in-flight tick, probability 1/2 (tokio picks ready branches uniformly at
+/// random). All 20 runs pass with probability 2^-20 ~= 9.5e-7, below 1e-6.
+const T20_RUNS: usize = 20;
+
+/// T20: shutdown sent while a stalled env read is in flight ends the rewatch
+/// task when that tick returns, with no further tick started, though the
+/// poll interval is ready again every tick.
 #[tokio::test]
-async fn t20_shutdown_during_a_stalled_env_read_ends_the_rewatch_task() {
+async fn t20_shutdown_during_a_stalled_env_read_starts_no_further_tick() {
     use super::watch_chain::{CHAIN_RETRY, named_config_path, spawn_rewatch_task};
-    let root = tempfile::tempdir().unwrap();
-    let named = named_config_path(root.path().join("gateway.yaml"));
-    write_owner_only(&named, "a: 1\n").unwrap();
-    let (tx, _events) = tokio::sync::mpsc::channel(32);
-    let (wake_tx, wake_rx) = tokio::sync::watch::channel(());
-    let (shutdown, _) = tokio::sync::broadcast::channel(1);
-    let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named)
-        .expect("the watcher starts");
-    let poller = super::env_poll::EnvPoller::new(Arc::default(), Arc::default(), PathBuf::new())
-        .with_read(stalled_read);
-    let wait = Duration::from_millis(200);
-    let task = spawn_rewatch_task(
-        named,
-        chain,
-        wake_rx,
-        tx,
-        shutdown.subscribe(),
-        CHAIN_RETRY,
-        poller,
-        wait,
-    );
-    // Several stalled ticks in, so the interval is ready again each time.
-    tokio::time::sleep(wait * 5).await;
-    shutdown.send(()).expect("the task listens");
-    let ended = tokio::time::timeout(wait * 4, task).await;
-    assert!(
-        ended.is_ok(),
-        "shutdown must end the task within one poll wait despite a stalled read"
-    );
+    let wait = Duration::from_millis(50);
+    for run in 0..T20_RUNS {
+        let root = tempfile::tempdir().unwrap();
+        let named = named_config_path(root.path().join("gateway.yaml"));
+        write_owner_only(&named, "a: 1\n").unwrap();
+        let (tx, _events) = tokio::sync::mpsc::channel(32);
+        let (wake_tx, wake_rx) = tokio::sync::watch::channel(());
+        let (shutdown, _) = tokio::sync::broadcast::channel(1);
+        let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named)
+            .expect("the watcher starts");
+        let poller =
+            super::env_poll::EnvPoller::new(Arc::default(), Arc::default(), PathBuf::new())
+                .with_read(stalled_read);
+        let ticks = poller.ticks();
+        let task = spawn_rewatch_task(
+            named,
+            chain,
+            wake_rx,
+            tx,
+            shutdown.subscribe(),
+            CHAIN_RETRY,
+            poller,
+            wait,
+        );
+        // Let a few stalled ticks pass, then send the moment the next tick
+        // has started: the test and the task share one thread, so the task
+        // is parked inside that tick's wait when this loop sees the count.
+        let count = || ticks.load(Ordering::SeqCst);
+        let seen = tokio::time::timeout(Duration::from_secs(5), async {
+            while count() < 2 {
+                tokio::task::yield_now().await;
+            }
+            let before = count();
+            while count() == before {
+                tokio::task::yield_now().await;
+            }
+            count()
+        })
+        .await
+        .expect("the poll ticks");
+        shutdown.send(()).expect("the task listens");
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("shutdown ends the task")
+            .expect("the task does not panic");
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            seen,
+            "run {run}: a tick started after shutdown was sent during a stalled read"
+        );
+    }
 }

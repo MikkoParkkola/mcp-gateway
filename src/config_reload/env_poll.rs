@@ -92,6 +92,9 @@ pub(super) struct EnvPoller {
     /// Whether the pending read has already been warned about.
     stalled: bool,
     read: PollRead,
+    /// Ticks started, for tests that count loop iterations.
+    #[cfg(test)]
+    ticks: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl EnvPoller {
@@ -103,7 +106,15 @@ impl EnvPoller {
             pending: None,
             stalled: false,
             read: env_poll,
+            #[cfg(test)]
+            ticks: Arc::default(),
         }
+    }
+
+    /// A handle on the count of ticks started.
+    #[cfg(test)]
+    pub(super) fn ticks(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        Arc::clone(&self.ticks)
     }
 
     /// Replace the read, so a test can make it stall.
@@ -116,6 +127,8 @@ impl EnvPoller {
     /// The reload to trigger this tick, if any. Waits at most `wait` for the
     /// read, so the caller always gets back to its shutdown check.
     pub(super) async fn tick(&mut self, wait: std::time::Duration) -> Option<ReloadTrigger> {
+        #[cfg(test)]
+        self.ticks.fetch_add(1, Ordering::SeqCst);
         let mut read = if let Some(read) = self.pending.take() {
             read
         } else {
