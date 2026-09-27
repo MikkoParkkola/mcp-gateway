@@ -83,7 +83,9 @@ pub(super) async fn start_stdio_backend(
     // second API (#526).
     let capture = ExcerptCapture::default();
     let log = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
-    let started = tokio::time::timeout(timeout, transport.start().with_subscriber(log)).await;
+    // The backend's own timeout bounds each request inside `start`; the cap
+    // bounds the whole start, spawn and handshake included.
+    let started = tokio::time::timeout(START_CAP, transport.start().with_subscriber(log)).await;
     let _ = transport.close().await;
     Some(match started {
         Ok(Ok(())) => {
@@ -98,10 +100,7 @@ pub(super) async fn start_stdio_backend(
         }
         Err(_) => CheckResult::fail(
             &label,
-            format!(
-                "no answer to initialize within {}s (capped at 15s)",
-                timeout.as_secs()
-            ),
+            format!("start did not finish within {}s", START_CAP.as_secs()),
         )
         .with_category("backend_stdio"),
     })

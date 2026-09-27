@@ -102,37 +102,17 @@ pub(super) fn excerpt(
     env: &HashMap<String, String>,
 ) -> String {
     // Matched line by line, so a multi-line value (a PEM key) is matched by
-    // each of its own lines.
-    let secrets: Vec<&str> = argv
+    // each of its own lines; longest first, so a value that is a prefix of
+    // another cannot break the longer one's match.
+    let mut secrets: Vec<&str> = argv
         .iter()
         .chain(env.values())
         .flat_map(|s| s.lines())
         .map(str::trim)
         .filter(|s| s.len() >= 4)
         .collect();
-    let lines: Vec<String> = tail
-        .iter()
-        .map(|raw| {
-            let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
-            let mut line = String::from_utf8_lossy(raw).into_owned();
-            for secret in &secrets {
-                line = line.replace(secret, "[REDACTED]");
-                if cut_on_read {
-                    mask_secret_head(&mut line, secret);
-                }
-            }
-            #[cfg(feature = "firewall")]
-            {
-                let mut value = serde_json::Value::String(line);
-                crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut value);
-                line = value.as_str().unwrap_or_default().to_string();
-            }
-            line.chars()
-                .filter(|c| !c.is_control())
-                .take(LINE_CHARS)
-                .collect()
-        })
-        .collect();
+    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    let lines: Vec<String> = tail.iter().map(|raw| redact_line(raw, &secrets)).collect();
     let mut text = lines.join("\n");
     if text.len() > EXCERPT_BYTES {
         let mut cut = text.len() - EXCERPT_BYTES;
@@ -142,6 +122,39 @@ pub(super) fn excerpt(
         text = text[cut..].to_string();
     }
     text
+}
+
+/// One stderr line, normalised first (lossy UTF-8, control characters out, a
+/// character split by the read limit dropped) so redaction sees what the log
+/// will show, then redacted, then cut to [`LINE_CHARS`]. Without the `firewall`
+/// feature there is no credential recogniser, so the line is withheld.
+fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
+    let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
+    let whole = match std::str::from_utf8(raw) {
+        Err(e) if cut_on_read && e.error_len().is_none() => &raw[..e.valid_up_to()],
+        _ => raw,
+    };
+    let mut line: String = String::from_utf8_lossy(whole)
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    for secret in secrets {
+        line = line.replace(secret, "[REDACTED]");
+        if cut_on_read {
+            mask_secret_head(&mut line, secret);
+        }
+    }
+    #[cfg(feature = "firewall")]
+    {
+        let mut value = serde_json::Value::String(line);
+        crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut value);
+        line = value.as_str().unwrap_or_default().to_string();
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        line = "[stderr withheld: built without the firewall redactor]".to_string();
+    }
+    line.chars().take(LINE_CHARS).collect()
 }
 
 /// Replace the end of a line cut at the read limit when it is the first bytes
