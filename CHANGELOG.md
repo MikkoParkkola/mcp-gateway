@@ -176,9 +176,10 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 - **The OWASP self-assessment matches the shipped controls.** It had claimed a
   tool-descriptor validator and a grant-collision check that never run on a request, a removed
-  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
-  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
-  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites
+  request-path and config-load controls (plus release-time supply-chain controls for ASI04),
+  states which are on by default, adds the 4.0 multi-user controls, uses the 2026 OWASP ASI
+  risk names, and reads 2/10 COVERED, 8/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
   Withholding poisoned tool descriptors is tracked in #1441.
 
 - **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
