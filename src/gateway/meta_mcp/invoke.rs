@@ -22,6 +22,7 @@ use crate::context_integrity::{
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::gateway::authz::{Authorize as _, Emit};
+use crate::gateway::input_bridge::BridgeError;
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::GrantSubject;
 use crate::identity_propagation::{CallerProof, CallerProvenance};
@@ -2438,11 +2439,15 @@ impl MetaMcp {
                 }
                 // A11-c: a round's 401 on a managed account answers with the
                 // reconnect refusal or the rejection, not the generic refusal.
-                // Settled like any round that reached the backend.
-                Err(_) if parked.is_some() => {
+                // Settled like any round that reached the backend; one refused
+                // at its cold-slot list (NotAdmitted, F13) is released.
+                Err(round) if parked.is_some() => {
                     let refused = parked.take().expect("the arm's guard checked it");
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&uncertain_side_effect());
+                    let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
+                    match idem_reservation.as_mut() {
+                        Some(reservation) if not_admitted => reservation.release(),
+                        Some(reservation) => reservation.commit(&uncertain_side_effect()),
+                        None => {}
                     }
                     if crate::personal_accounts::refusal::marked(&refused).is_some() {
                         return self
