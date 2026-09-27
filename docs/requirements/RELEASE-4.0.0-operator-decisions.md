@@ -57,3 +57,4 @@ operator rulings until the owner ratifies them.
 | # | Date | Decision | By |
 |---|---|---|---|
 | 20 | 2026-09-25 | MIK-7217.DISCOVER.3 is amended to "byte-identical to 3.5.0 except the capability corrections in UPGRADING-4.0 item 52" (F24). The 3.5.0 goldens stay as captured, and the test applies the three-flag delta. `nfr_compat_2` pins no capability flags, so it needs no delta. | Coordinator decision, flagged to owner |
+| 21 | 2026-09-27 | MIK-7570.AUDIT.4 (governance audit record for grant approve and revoke via the grant file and the `identity grants` CLI) is added as a pending 4.0.0 criterion. | Maintainer decision under the standing owner rule that every 4.0 follow-up ships in 4.0 (no deferral to 4.0.x); explicit owner confirmation pending. If the owner declines, the row moves out of scope in a follow-up change. |
