@@ -71,7 +71,7 @@ Expected red (stated reason) versus guards (green at red, pinned for later):
 | T3 | call N+1 dispatches; no `_cost_warnings` |
 | T3c | limit 2.5: an opening call and one bridged round both dispatch and spend 2.0, then a direct call dispatches (should be -32003); the source assertion finds `admit_spend(` in `BridgeDispatcher::invoke` |
 | T4 | refused-profile call dispatches |
-| T5 | the signing-on rows (nonce optional and `require_nonce`) dispatch; the cached-result row returns the cached value |
+| T5 | the signing-on rows (nonce optional and `require_nonce`) dispatch; the cached-result rows (run under both signing-on configs) return the cached value. At green each refusal is -32001 naming `gateway_invoke`, with zero backend calls and zero reservation attempts (T9 hook) |
 | T6 | `is_killed` stays false after N direct failures |
 | T7 | fail-closed contract result delivered (HTTP 200 with result, not error) |
 | T7b-i | response inspection `action_mode`, a result carrying a HIGH finding: delivered (should be refused) |
