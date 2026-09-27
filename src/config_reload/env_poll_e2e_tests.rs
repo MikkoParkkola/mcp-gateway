@@ -266,14 +266,17 @@ async fn envfile_19_the_poll_reads_the_recorded_paths_and_no_other() {
 
 /// A poll read that never finishes in time, like a stalled NFS mount.
 fn stalled_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
-    std::thread::sleep(Duration::from_secs(5));
+    std::thread::sleep(Duration::from_secs(1));
     None
 }
 
 /// Runs of T20. Without the post-poll shutdown check, a run passes only if
-/// `select!` picks shutdown over the equally ready poll branch after the
-/// in-flight tick, probability 1/2 (tokio picks ready branches uniformly at
-/// random). All 20 runs pass with probability 2^-20 ~= 9.5e-7, below 1e-6.
+/// `select!` reaches shutdown before the poll branch, which is ready again at
+/// once after the in-flight tick. `select!` starts at a random branch and
+/// polls in order: of its four branches (shutdown, wake, retry, poll), only a
+/// start at shutdown picks it, so a run passes with probability 1/4, and at
+/// most 1/2 even when a directory wake is also ready. All 20 runs pass with
+/// probability at most 2^-20 ~= 9.5e-7, below 1e-6.
 const T20_RUNS: usize = 20;
 
 /// T20: shutdown sent while a stalled env read is in flight ends the rewatch
