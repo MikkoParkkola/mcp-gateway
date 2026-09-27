@@ -416,12 +416,15 @@ impl EnvOverlay {
     ///
     /// Read through the loader's own read, whole: content is compared, never
     /// size or mtime. Missing matches only a path this overlay found missing;
-    /// an unreadable or refused file, or a path this overlay neither loaded
-    /// nor found missing (a failed load), always differs.
+    /// a lookup error (a link loop, a denied directory), an unreadable or
+    /// refused file, or a path this overlay neither loaded nor found missing
+    /// (a failed load) always differs.
     pub(crate) fn differs_on_disk(&self, path: &Path) -> bool {
-        // `exists` follows links, as `apply_file`'s absence check does.
-        if !path.exists() {
-            return !self.absent.iter().any(|p| p == path);
+        // The same absence test `apply_file` makes, so the two agree.
+        match path.try_exists() {
+            Ok(false) => return !self.absent.iter().any(|p| p == path),
+            Err(_) => return true,
+            Ok(true) => {}
         }
         match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
             Ok(text) => !self.sources.iter().any(|(p, t)| p == path && *t == text),
@@ -475,10 +478,22 @@ impl EnvOverlay {
     /// Applies one env file. A missing file is not an error — the old loader
     /// skipped it silently and configs rely on that for optional files.
     pub(crate) fn apply_file(&mut self, path: &Path) -> Result<()> {
-        if !path.exists() {
-            tracing::debug!("Env file not found (skipped): {}", path.display());
-            self.absent.push(path.to_path_buf());
-            return Ok(());
+        // `try_exists`, not `exists`: a lookup that fails (a link loop, a
+        // denied directory) is not absence. Treating it as absence would let a
+        // reload succeed and drop every value the file supplied (#1286).
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!("Env file not found (skipped): {}", path.display());
+                self.absent.push(path.to_path_buf());
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(Error::Config(format!(
+                    "Cannot read env file {}: {e}",
+                    path.display()
+                )));
+            }
         }
         // The mode check and the read share one handle (CONFIG.2). A refusal
         // is fatal on the serving loaders and a WARN on the tolerant ones,

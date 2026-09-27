@@ -36,6 +36,10 @@ pub(super) const POLL_EVERY: Duration = ENV_POLL;
 #[cfg(test)]
 pub(super) const POLL_EVERY: Duration = TEST_ENV_POLL;
 
+// Every poll interval must outlast the debounce, which restarts on each
+// trigger: a faster poll would postpone the reload forever.
+const _: () = assert!(ENV_POLL.as_millis() > DEBOUNCE.as_millis() + RELOAD_TICK.as_millis());
+
 /// How long a path's repeated, unchanged reload error stays at debug.
 const WARN_EVERY: Duration = Duration::from_secs(60);
 
@@ -44,6 +48,33 @@ const WARN_EVERY: Duration = Duration::from_secs(60);
 /// A failing file keeps differing, so it is retried every tick.
 pub(super) fn env_poll(applied: &EnvOverlay, paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|p| applied.differs_on_disk(p)).cloned()
+}
+
+/// Log what triggered the pending reload. A failing env file re-triggers
+/// every poll, so its trigger is logged at debug; the outcome is logged once
+/// by [`report_reloaded`] or through the [`WarnLimiter`].
+pub(super) fn log_trigger(trigger: &ReloadTrigger) {
+    match trigger {
+        ReloadTrigger::ConfigFile => {
+            tracing::info!("Config watcher: config file changed, triggering reload");
+        }
+        ReloadTrigger::EnvFile(path) => {
+            tracing::debug!(
+                path = %path.display(),
+                "Config watcher: env file differs from the loaded one, triggering reload"
+            );
+        }
+    }
+}
+
+/// Log a reload an env-file change started and that succeeded.
+pub(super) fn report_reloaded(path: &Path, outcome: &super::ReloadOutcome) {
+    tracing::info!(
+        path = %path.display(),
+        changes = %outcome.changes,
+        restart_required = outcome.restart_required,
+        "Config reload: env file changed, reloaded"
+    );
 }
 
 /// Rate-limits the warning for an env-file reload that keeps failing: per

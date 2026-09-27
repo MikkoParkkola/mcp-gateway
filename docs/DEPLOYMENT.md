@@ -354,8 +354,10 @@ watched, so this also works on NFS and FUSE mounts and through a retargeted link
 a symlink). A listed file that was missing is picked up when it appears, including
 when its directory appears later. A file that fails to load (malformed, refused mode)
 leaves the running values in place and is retried every 2 seconds; its warning is
-logged at most once a minute per file unless the error changes. Each tick reads every
-listed file in full.
+logged at most once a minute per file unless the error changes. Each tick reads the
+listed files in order, each in full, until one differs. A lookup error (a link loop, a
+directory the gateway cannot search) is not treated as a missing file: it fails the load
+and keeps the running values.
 
 Env files supply values to configuration references, and also the attestation signing
 key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same

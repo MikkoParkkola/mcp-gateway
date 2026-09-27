@@ -1218,9 +1218,12 @@ impl ConfigWatcher {
                         {
                             let trigger = pending_trigger.take().unwrap();
                             last_event = None;
-                            log_reload_trigger(&trigger);
+                            env_poll::log_trigger(&trigger);
                             env_reloads.count_attempt(&trigger);
                             match (ctx.reload_outcome().await, &trigger) {
+                                (Ok(outcome), ReloadTrigger::EnvFile(path)) => {
+                                    env_poll::report_reloaded(path, &outcome);
+                                }
                                 (Ok(outcome), _) if outcome.changes == NO_CHANGES_SUMMARY => {
                                     tracing::debug!("Config reload: no changes detected");
                                 }
@@ -1232,7 +1235,8 @@ impl ConfigWatcher {
                                     );
                                 }
                                 (Err(e), ReloadTrigger::EnvFile(path))
-                                    if !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
+                                    if !e.starts_with(SHUTDOWN_ABORTED_ERROR)
+                                        && !is_posture_refusal(&e) =>
                                 {
                                     env_reloads.report_failure(&mut env_warns, path, &e);
                                 }
@@ -1275,21 +1279,6 @@ impl ConfigWatcher {
                 }
             }
         });
-    }
-}
-
-/// Emit an INFO log describing what triggered the pending reload.
-fn log_reload_trigger(trigger: &ReloadTrigger) {
-    match trigger {
-        ReloadTrigger::ConfigFile => {
-            info!("Config watcher: config file changed, triggering reload");
-        }
-        ReloadTrigger::EnvFile(path) => {
-            info!(
-                path = %path.display(),
-                "Config watcher: env file changed, triggering reload"
-            );
-        }
     }
 }
 

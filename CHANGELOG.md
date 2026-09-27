@@ -98,7 +98,9 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   target, because its directory watch was fixed at startup. Env files are now re-read every
   2 seconds and reloaded when their content differs from what is loaded, which also works on
   NFS and FUSE mounts. A file that fails to load keeps the running values and is retried, with
-  at most one warning a minute per file unless the error changes. See `docs/DEPLOYMENT.md`. (#1286)
+  at most one warning a minute per file unless the error changes. A lookup error on an env
+  file (a link loop, a directory the gateway cannot search) now fails the load instead of
+  reading as a missing file. See `docs/DEPLOYMENT.md`. (#1286)
 
 - **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
   about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
