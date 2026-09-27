@@ -20,7 +20,9 @@ the [backup, restore and key runbook](runbooks/backup-restore-and-keys.md).
 ## 1. How callers authenticate
 
 The gateway refuses to start when it can be reached from off the machine and
-its tools can be called without a credential
+its tools can be called without a credential, unless
+`server.allow_unauthenticated_network_bind` declares that authentication
+happens in front of it
 ([Authentication for Production](DEPLOYMENT.md#authentication-for-production)).
 So a team gateway always has an answer to "who is calling". There are three
 separate questions, and the options below answer different ones:
@@ -118,8 +120,8 @@ gateway using either runs one replica
 
 With `auth.enabled`, the tool-call audit log is required: a config without
 `security.transparency_log.enabled` and a non-blank `path` refuses to load
-(UPGRADING-4.0 item 43). Each record names the caller, and refused and failed
-calls are recorded too. If the log stops appending, calls are refused with 503
+(UPGRADING-4.0 item 43). Each record names the caller, and tool calls that are
+refused or fail are recorded too. If the log stops appending, calls are refused with 503
 until it recovers (items 43 and 50). A 503 of this kind can arrive after the
 backend already ran the call, so do not retry it blindly. The log rotates on
 its own; do not rotate it with an external tool (item 49).
