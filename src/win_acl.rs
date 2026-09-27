@@ -568,7 +568,7 @@ pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
     {
         return Err(last());
     }
-    Ok(fs_flags & FILE_PERSISTENT_ACLS != 0)
+    Ok(fs_flags & FILE_PERSISTENT_ACLS == fs_flags & FILE_PERSISTENT_ACLS)
 }
 
 /// (volume serial number, 128-bit file id) of an open file, from
