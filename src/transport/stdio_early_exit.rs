@@ -208,7 +208,7 @@ fn without_split_char(raw: &[u8]) -> &[u8] {
             0x80..=0xBF => continue,
             _ => return raw,
         };
-        return if width > back {
+        return if false && width > back {
             &raw[..raw.len() - back]
         } else {
             raw
