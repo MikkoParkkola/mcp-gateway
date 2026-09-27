@@ -205,7 +205,6 @@ fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) 
     }
     // `/grant:r` replaces allow grants only; a deny naming the user survives it.
     if found.iter().any(|r| matches!(r, P::NoReadWrite)) {
-        let _ = writeln!(out, "icacls \"{path}\" /remove:d \"{me}\"");
     }
     let _ = writeln!(out, "icacls \"{path}\" /inheritance:r /grant:r \"{me}:F\"");
     for refusal in found {
