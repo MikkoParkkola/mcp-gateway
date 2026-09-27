@@ -472,13 +472,8 @@ pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, Ac
     }
     // The store's own writer (R9): private from creation on every platform,
     // then sync, rename and parent sync.
-    commit::replace_file(
-        &config.authority_dir,
-        AUTHORITY_FILE,
-        encoded.as_bytes(),
-        |_| Ok(()),
-    )
-    .map_err(|_| AccountError::StorageUnavailable)?;
+    crate::config_persistence::write_config_text(&config.authority_dir.join(AUTHORITY_FILE), &encoded)
+        .map_err(|_| AccountError::StorageUnavailable)?;
     Ok(PersonalAccountStore {
         config,
         authority: parking_lot::Mutex::new(super::AuthoritySlot::new(authority)),
