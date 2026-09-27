@@ -1061,7 +1061,7 @@ read at startup; a reload that changes `webhooks` needs a restart.
 
 ## 43. With auth on, the audit log is required and fails closed
 
-> Superseded in part by item 49: the log rotates, and a full volume expires old segments by default instead of stopping calls.
+> Replaced in part by item 49: the log rotates, and a full volume expires old segments by default instead of stopping calls.
 
 An authenticated gateway used to run with no tool-call audit, and when the log did run it
 named an API-key label rather than a person and skipped every refused or failed call.
