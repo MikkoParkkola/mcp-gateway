@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # One-time setup of the project's self-hosted runner on an arm64 Linux host.
-# Run as root:  sudo RUNNER_TOKEN=<registration token> scripts/ci/trusted-runner/setup.sh
-# The token is read from the environment so it never appears in a process
-# listing; mint it with
-#   gh api -X POST repos/MikkoParkkola/mcp-gateway/actions/runners/registration-token --jq .token
+# Run as root, with the token in the environment (never on a command line,
+# where any local user could read it from the process list):
+#   export RUNNER_TOKEN=$(gh api -X POST repos/MikkoParkkola/mcp-gateway/actions/runners/registration-token --jq .token)
+#   sudo --preserve-env=RUNNER_TOKEN scripts/ci/trusted-runner/setup.sh
 #
 # What it creates:
 #   - user ghr-mcpgw: no sudo, no docker group, no other groups
@@ -69,7 +69,7 @@ if [[ ! -x $RUNNER_DIR/config.sh ]]; then
   "$RUNNER_DIR/bin/installdependencies.sh"
   # The runner reads ACTIONS_RUNNER_INPUT_<OPTION> for any option left off the
   # command line, so the token never appears in a process listing.
-  export ACTIONS_RUNNER_INPUT_TOKEN=$RUNNER_TOKEN
+  export ACTIONS_RUNNER_INPUT_TOKEN="$RUNNER_TOKEN"
   sudo -u "$USER_NAME" --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN bash -c "cd '$RUNNER_DIR' && ./config.sh --unattended \
     --url '$REPO_URL' --name '$RUNNER_NAME' --labels '$LABEL' \
     --no-default-labels --work '$HOME_DIR/_work' --disableupdate --replace"

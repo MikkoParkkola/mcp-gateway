@@ -31,6 +31,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,14 +128,15 @@ def evidence(output: str) -> list[str]:
 
 
 FAILED_TEST_RE = re.compile(r"^test (.+) \.\.\. FAILED$")
-DOCTEST_NAME_RE = re.compile(r" - .* \(line \d+\)$")
+DOCTEST_NAME_RE = re.compile(r" - (.* )?\(line \d+\)$")
 
 
 def doctest_compile_failure(output: str) -> bool:
-    """True when every failing test is a doctest and rustdoc reported a compile error:
-    `--no-run` does not build doctests, so this is a compile failure, not a kill."""
+    """True when every failing test is a doctest and rustdoc said it could not compile
+    one: `--no-run` does not build doctests, so this is a compile failure, not a kill."""
     failing = [m.group(1) for m in map(FAILED_TEST_RE.match, output.splitlines()) if m]
-    return bool(failing) and all(DOCTEST_NAME_RE.search(n) for n in failing) and "error[E" in output
+    return (bool(failing) and all(DOCTEST_NAME_RE.search(n) for n in failing)
+            and "Couldn't compile the test." in output)
 
 
 def classify_test(run: Outcome) -> Verdict:
@@ -191,6 +193,10 @@ def run_cmd(cmd: list[str], limit: int, log: Path) -> Outcome:
             # server, say) die with the group before the tree is reverted.
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
+                for _ in range(100):  # the group is gone before the tree is reverted
+                    os.killpg(proc.pid, 0)
+                    time.sleep(0.1)
+                raise Abort("a test process group survived SIGKILL for 10 s")
             except ProcessLookupError:
                 pass
         buf.seek(0)
@@ -315,8 +321,9 @@ def self_test() -> int:
     red = ("running 1 test\ntest t ... FAILED\n\nfailures:\n\n---- t stdout ----\n"
            "thread 't' panicked at src/x.rs:9:5:\nassertion `left == right` failed\n  left: 1\n right: 2\n\n"
            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out\n")
-    doc_compile = ("running 1 test\ntest src/lib.rs - add (line 3) ... FAILED\n\nfailures:\n\n"
-                   "---- src/lib.rs - add (line 3) stdout ----\nerror[E0308]: mismatched types\n\n"
+    doc_compile = ("running 1 test\ntest src/lib.rs - (line 3) ... FAILED\n\nfailures:\n\n"
+                   "---- src/lib.rs - (line 3) stdout ----\nerror: expected one of `.`, `;`\n"
+                   "Couldn't compile the test.\n\n"
                    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
     doc_red = ("running 1 test\ntest src/lib.rs - add (line 3) ... FAILED\n\nfailures:\n\n"
                "---- src/lib.rs - add (line 3) stdout ----\nassertion `left == right` failed\n\n"
@@ -334,6 +341,10 @@ def self_test() -> int:
         ("FAILED summary but exit 0", classify_test(Outcome(0, red, False)), "SURVIVED"),
         ("doctest does not compile", classify_test(Outcome(101, doc_compile, False)), "VOID"),
         ("doctest assertion fails", classify_test(Outcome(101, doc_red, False)), "RED"),
+        ("doctest compile error with an error code", classify_test(Outcome(101, doc_compile.replace(
+            "error: expected one of `.`, `;`", "error[E0308]: mismatched types").replace(
+            "src/lib.rs - (line 3)", "src/lib.rs - add (line 3)"), False)), "VOID"),
+        ("doctest compile failure beside a real failure", classify_test(Outcome(101, doc_compile + red, False)), "RED"),
         ("red baseline", classify_baseline(Outcome(101, red, False)), "VOID"),
         ("baseline runs nothing", classify_baseline(Outcome(0, ignored, False)), "VOID"),
         ("baseline timeout", classify_baseline(Outcome(137, "", True)), "VOID"),
