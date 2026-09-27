@@ -271,7 +271,7 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
 /// most three attempts in all, 10 then 20 ms apart, and then reported.
 /// Takes `AsRef<Path>` like `std::fs::rename`, so call sites are shared.
 pub(crate) fn replace(tmp: impl AsRef<Path>, dest: impl AsRef<Path>) -> io::Result<()> {
-    const ATTEMPTS: u32 = 3;
+    const ATTEMPTS: u32 = 1;
     let (tmp, dest) = (tmp.as_ref(), dest.as_ref());
     let mut wait = std::time::Duration::from_millis(10);
     let mut attempt_no = 1;
