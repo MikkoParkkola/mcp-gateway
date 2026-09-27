@@ -165,6 +165,76 @@ mod tests {
         assert!((loaded.key_totals["dev_key"] - 2.50).abs() < 1e-9);
     }
 
+    /// Two writers saving one path at once each finish with one whole
+    /// snapshot on disk: no save fails and nothing is left half-written.
+    /// A shared scratch name lets one writer rename the other's file away
+    /// (a failed save) or interleave into it (a torn file).
+    #[test]
+    fn concurrent_saves_use_distinct_scratch_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::sync::Arc::new(dir.path().join("costs.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writers: Vec<_> = [1_u64, 2]
+            .into_iter()
+            .map(|writer| {
+                let (path, barrier) = (path.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let mut costs = PersistedCosts {
+                        saved_at: writer,
+                        ..PersistedCosts::default()
+                    };
+                    // Enough entries that a write is not one syscall.
+                    for i in 0..200 {
+                        costs.key_totals.insert(format!("key-{writer}-{i}"), 0.5);
+                    }
+                    barrier.wait();
+                    (0..200)
+                        .map(|_| save(&path, &costs).map_err(|e| e.to_string()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for writer in writers {
+            for result in writer.join().expect("writer thread") {
+                result.expect("a concurrent save failed");
+            }
+        }
+        let loaded = load(&path).expect("the file on disk is one whole snapshot");
+        assert!(
+            loaded.saved_at == 1 || loaded.saved_at == 2,
+            "the file is neither writer's snapshot: saved_at {}",
+            loaded.saved_at
+        );
+        assert_eq!(loaded.key_totals.len(), 200, "a torn or merged snapshot");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "costs.json")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "scratch files left behind: {leftovers:?}"
+        );
+    }
+
+    /// A save that cannot replace the destination reports the error and
+    /// leaves no scratch file behind in the user's data directory.
+    #[test]
+    fn a_failed_rename_removes_its_scratch_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("costs.json");
+        // A non-empty directory where the file should go: the rename fails.
+        std::fs::create_dir_all(path.join("occupied")).unwrap();
+        assert!(save(&path, &PersistedCosts::default()).is_err());
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["costs.json".to_string()], "scratch left behind");
+    }
+
     #[test]
     fn persist_load_missing_file_returns_default() {
         let dir = tempfile::tempdir().unwrap();
