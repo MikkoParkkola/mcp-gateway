@@ -634,7 +634,9 @@ async fn key_server_still_enforces_iat_cap() {
 #[tokio::test]
 async fn documented_caller_identity_examples_load_and_resolve() {
     const DOC: &str = include_str!("../../../docs/identity_grants.md");
+    // A Windows checkout converts the doc to CRLF; the fences are matched on LF.
     let blocks: Vec<crate::config::SecurityConfig> = DOC
+        .replace("\r\n", "\n")
         .split("```yaml\n")
         .skip(1)
         .map(|block| textwrap_dedent(block.split("```").next().unwrap()))
