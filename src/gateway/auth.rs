@@ -1696,6 +1696,8 @@ mod tests {
             .status()
     }
 
+    #[path = "bootstrap_spend_tests.rs"]
+    mod bootstrap_spend_tests;
     #[test]
     fn an_admin_api_key_is_an_admin_credential_for_the_bootstrap_link() {
         let (state, printed) = bootstrap_state(None, vec![admin_key(true)]);

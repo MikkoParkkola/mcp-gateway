@@ -88,6 +88,8 @@ mod sso_admin_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod trace_span_tests;
+#[cfg(test)]
 mod webhook_scope_tests;
 
 /// Shared application state
