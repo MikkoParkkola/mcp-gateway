@@ -92,8 +92,12 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
             Err(e) => return Err(crate::Error::Config(format!("Failed to save costs: {e}"))),
         }
     };
-    let saved = std::io::Write::write_all(&mut file, json.as_bytes())
-        .and_then(|()| std::fs::rename(&tmp, path));
+    // Synced and closed before the rename: the renamed file holds the whole
+    // snapshot after a power loss, and Windows renames only a closed file.
+    let written =
+        std::io::Write::write_all(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
+    drop(file);
+    let saved = written.and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = saved {
         // This save created the scratch file, so it is ours to remove.
         let _ = std::fs::remove_file(&tmp);

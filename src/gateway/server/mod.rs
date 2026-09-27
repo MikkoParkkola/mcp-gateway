@@ -2078,16 +2078,19 @@ impl Gateway {
         // this feature exists to correct.
         spawn_idle_reaper(Arc::clone(&self.backends), Some(shutdown_tx.subscribe()));
 
-        // Detached: it ends on the shutdown broadcast.
+        // Ends on the shutdown broadcast; awaited before the shutdown save.
         #[cfg(feature = "cost-governance")]
-        if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
-            drop(persistence::spawn_cost_saver(
-                Arc::clone(enforcer),
-                data_dir.clone(),
-                persistence::COST_SAVE_INTERVAL,
-                Some(shutdown_tx.subscribe()),
-            ));
-        }
+        let cost_saver = meta_mcp_for_shutdown
+            .budget_enforcer
+            .as_ref()
+            .map(|enforcer| {
+                persistence::spawn_cost_saver(
+                    Arc::clone(enforcer),
+                    data_dir.clone(),
+                    persistence::COST_SAVE_INTERVAL,
+                    Some(shutdown_tx.subscribe()),
+                )
+            });
 
         // Run server — plain HTTP or mTLS depending on config
         if self.config.mtls.enabled {
@@ -2131,6 +2134,10 @@ impl Gateway {
 
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
+            // A periodic save still running must not land after this one.
+            if let Some(saver) = cost_saver {
+                drop(saver.await);
+            }
             persistence::save_costs(enforcer, &data_dir);
         }
 
