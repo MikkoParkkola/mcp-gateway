@@ -60,6 +60,7 @@ this documentation change does not initiate either.
 | MIK-7332.DISCOVERY.1 | Admin/nonadmin and configured/unconfigured features: served list, routing guide, tiered schema detail and invoke permissions agree; surfaced tools actually appear and execute; invalid schema tool is withheld while healthy backend tools remain. |
 | MIK-7235.PIN.1 | Check catalogue classification completeness; verify selected pins with the shipped command; tamper a pinned file and require rejection; intentionally unpinned development file remains supported. |
 | MIK-6710.AUDIT.1 | Large log plus rare/no-match filters and pagination: measure records/bytes examined or index work, compare ordered results to a small full-scan oracle, and prove bounded behavior never silently truncates filtered results. |
+| MIK-7570.AUDIT.4 | Approve then revoke a grant through the `identity grants` CLI and through a grant-file edit plus reload on an auth-enabled gateway; read the governance log and require one record per change naming the verb and timestamp, the CLI records carrying the operator and the file-driven ones marking the actor absent. Positive controls: an auth-disabled gateway writes only the tracing event and no governance store exists; a failed write leaves the prior grant set unchanged. |
 
 ## Release-level validation
 
