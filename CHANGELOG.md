@@ -124,6 +124,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   one succeeds, so a config edit that failed alongside a broken env file still applies once the
   env file is fixed. See `docs/DEPLOYMENT.md` and `docs/UPGRADING-4.0.md` item 72. (#1286)
 
+- **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
+  binaries and image digests handed between jobs expired after a day, so a later re-run
+  published a release with no binaries or failed to find the digests. They now last the
+  repository's 14-day artifact retention, and a CI check keeps every such handoff there.
+
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
