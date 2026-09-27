@@ -46,7 +46,7 @@ fn config(env: &std::path::Path, hosted: bool) -> crate::config::Config {
     };
     serde_yaml::from_str(&format!(
         r#"
-env_files: ["{env}"]
+env_files: ['{env}']
 backends:
   {BOUND_BACKEND}:
     http_url: https://ledger.fixture.test/mcp
