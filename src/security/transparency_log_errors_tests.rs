@@ -105,3 +105,46 @@ fn a_removed_directory_is_named_and_keeps_its_kind() {
     assert!(e.to_string().contains("audit log:"), "{e}");
     assert!(e.to_string().contains(&dir.display().to_string()), "{e}");
 }
+
+/// Writing a line (a plain fault through the write seam, not ENOSPC).
+#[test]
+fn write_names_the_active_file() {
+    use super::rotation::WriteFault;
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
+    l.arm_write_fault(Some(WriteFault::WriteError));
+    let e = l
+        .log_invocation("s", "c", "srv", "t", "a", "b")
+        .expect_err("the write fault fires");
+    assert_eq!(l.write_faults_fired(), 1, "the write hook never fired");
+    assert_eq!(e.kind(), io::ErrorKind::Other, "{e}");
+    assert_names(&e, "write", &path);
+}
+
+/// Syncing a synced append.
+#[test]
+fn sync_names_the_active_file() {
+    use super::rotation::WriteFault;
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
+    l.arm_write_fault(Some(WriteFault::SyncError));
+    let e = l
+        .append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
+        .expect_err("the sync fault fires");
+    assert_eq!(l.write_faults_fired(), 1, "the sync hook never fired");
+    assert_eq!(e.kind(), io::ErrorKind::Other, "{e}");
+    assert_names(&e, "sync", &path);
+}
+
+/// Listing the segments: the log's parent is a regular file.
+#[test]
+fn listing_names_the_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain-file");
+    std::fs::write(&plain, b"x").unwrap();
+    let path = plain.join("transparency.jsonl");
+    let e = verify_log(&path).expect_err("a file is not a directory");
+    assert_names(&e, "list", &plain);
+}

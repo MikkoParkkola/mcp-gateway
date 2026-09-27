@@ -207,6 +207,13 @@ impl TransparencyLogger {
             gate.hold(); // held under `Inner`, like a write stuck in the kernel
         }
         let fault = *self.hooks.fault.lock().unwrap();
+        if fault == Some(WriteFault::WriteError) {
+            *self.hooks.fault.lock().unwrap() = None;
+            self.hooks
+                .fault_fired
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            return Some(Err(io::Error::other("injected write failure")));
+        }
         let full = match fault {
             Some(WriteFault::FullForever) => true,
             Some(WriteFault::FullUntilReserveFreed) => !self
@@ -228,6 +235,16 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn injected_sync(&self, inner: &mut Inner) -> io::Result<()> {
         use super::rotation::WriteFault;
+        {
+            let mut fault = self.hooks.fault.lock().unwrap();
+            if *fault == Some(WriteFault::SyncError) {
+                *fault = None;
+                self.hooks
+                    .fault_fired
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                return Err(io::Error::other("injected sync failure"));
+            }
+        }
         if *self.hooks.fault.lock().unwrap() == Some(WriteFault::ExpirySyncFails)
             && self
                 .hooks

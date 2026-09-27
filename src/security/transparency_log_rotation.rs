@@ -512,6 +512,10 @@ pub(crate) enum WriteFault {
     ExpirySyncFails,
     /// ENOSPC on the open-record write right after a rename, once.
     FullAfterRename,
+    /// A plain I/O error (not ENOSPC) on the next line write, once.
+    WriteError,
+    /// A plain I/O error on the next synced append's `sync_all`, once.
+    SyncError,
 }
 
 /// F20: holds one write "in the kernel" until the test opens it, or for at
