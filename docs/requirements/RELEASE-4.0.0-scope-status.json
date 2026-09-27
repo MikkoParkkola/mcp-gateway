@@ -969,6 +969,19 @@
       "blocked_on": "none",
       "evidence": [],
       "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+    },
+    {
+      "id": "MIK-7596.OWNER.1",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/router/backend_handlers.rs",
+        "src/gateway/router/direct_tasks_owner_tests.rs",
+        "docs/UPGRADING-4.0.md",
+        "docs/design/2026-09-26-f1-direct-route-tasks-refusal.md"
+      ],
+      "note": "Graded 2026-09-27 (F1, #1442, merged in #1453 as 46161901e). Red-first CI Tests run 36270945741 (throwaway #1450, tests only): the four refusal cells failed on 'reached the backend' (tasks/get, tasks/cancel, tasks/update, subscriptions/listen with taskIds); the forwarding control and the 403-order cell passed. Green CI run 36275265621 at 92dac2fb3: 40 jobs passed, 3 skipped. Mutants: tasks/get forward restored (#1454, run 36271263350) reddened caller_b_tasks_get_for_a_task_never_reaches_backend; tasks/cancel forward restored (#1455, run 36271265917) reddened caller_b_tasks_cancel_for_a_task_never_reaches_backend. Two independent reviews on design and final code. UPGRADING-4.0 item 67."
     }
   ],
   "decisions": [
