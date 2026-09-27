@@ -20,7 +20,7 @@ pub(super) const LEASE_RETRY: Duration = Duration::from_millis(100);
 
 /// Another writer holds the log at `path`.
 #[derive(Debug)]
-pub struct LeaseHeld {
+pub(crate) struct LeaseHeld {
     path: PathBuf,
 }
 
@@ -40,7 +40,7 @@ impl std::error::Error for LeaseHeld {}
 
 /// Whether `error` is the writer-lease refusal, not an ordinary open failure.
 #[must_use]
-pub fn is_lease_held(error: &io::Error) -> bool {
+pub(crate) fn is_lease_held(error: &io::Error) -> bool {
     error
         .get_ref()
         .is_some_and(|inner| inner.downcast_ref::<LeaseHeld>().is_some())

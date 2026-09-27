@@ -77,7 +77,7 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 mod degraded;
 #[path = "transparency_log_lease.rs"]
 mod lease;
-pub use lease::{LeaseHeld, is_lease_held};
+pub(crate) use lease::is_lease_held;
 // D6 segment files, rotation and recovery, multi-segment verify.
 #[path = "transparency_log_append.rs"]
 mod append;
@@ -131,7 +131,7 @@ pub struct TransparencyLogConfig {
 
 /// Default `lease_wait_secs`: long enough for a supervisor restart to let the
 /// old process exit; a Kubernetes grace period can need more.
-pub const DEFAULT_LEASE_WAIT_SECS: u64 = 10;
+pub(crate) const DEFAULT_LEASE_WAIT_SECS: u64 = 10;
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
 // #323). A derived `Debug` would print the resolved signing secret verbatim
