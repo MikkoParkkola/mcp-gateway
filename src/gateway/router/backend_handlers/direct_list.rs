@@ -107,12 +107,17 @@ pub(super) async fn drain(
     ))
 }
 
-/// A page the metadata fill could read: a result whose `tools` is an array,
-/// or which carries only a `nextCursor`. So the last page carries the array.
+/// A page the metadata fill could read: a string `nextCursor` or none, and
+/// `tools` an array, or absent on a page with a cursor. So the last page
+/// carries the array.
 fn readable_page(result: Option<&Value>) -> bool {
-    result.is_some_and(|r| match r.get("tools") {
-        Some(tools) => tools.is_array(),
-        None => r.is_object() && r.get("nextCursor").is_some_and(|c| !c.is_null()),
+    result.is_some_and(|r| {
+        let cursor = r.get("nextCursor").filter(|c| !c.is_null());
+        cursor.is_none_or(Value::is_string)
+            && match r.get("tools") {
+                Some(tools) => tools.is_array(),
+                None => r.is_object() && cursor.is_some(),
+            }
     })
 }
 
@@ -156,8 +161,8 @@ mod tests {
     use serde_json::json;
 
     /// Review fold: each page shape the direct list may cache from. Mutants
-    /// M38 (accept a non-array `tools`) and M39 (accept a page with neither
-    /// list nor cursor) redden it.
+    /// M38 (accept a non-array `tools`), M39 (accept a page with neither list
+    /// nor cursor) and M44 (accept a mistyped cursor) redden it.
     #[test]
     fn only_a_result_object_with_an_array_or_no_tools_is_readable() {
         let rows = [
@@ -166,6 +171,9 @@ mod tests {
             (Some(json!({"nextCursor": "2"})), true),
             (Some(json!({})), false),
             (Some(json!({"nextCursor": null})), false),
+            (Some(json!({"nextCursor": 2})), false),
+            (Some(json!({"tools": [], "nextCursor": 2})), false),
+            (Some(json!({"tools": [], "nextCursor": null})), true),
             (Some(json!({"tools": null, "nextCursor": "2"})), false),
             (Some(json!({"tools": null})), false),
             (Some(json!({"tools": "edit"})), false),

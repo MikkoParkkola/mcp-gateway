@@ -149,7 +149,9 @@ impl Drop for FillGuard {
                 count("input_schema_fetched");
             }
             FillEnd::Stored => {
+                // A newer list ends both hold-offs, as a direct list does.
                 *stamp.lock() = None;
+                *self.entry.tools_refresh_failed_at.lock() = None;
                 count("input_schema_fetched");
             }
         }

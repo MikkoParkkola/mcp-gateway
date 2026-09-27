@@ -241,6 +241,27 @@ async fn a4_t2_a_failed_refresh_falls_back_to_the_held_schema() {
     );
 }
 
+/// Review fold: a failed stale refresh that starts no fill cooldown (`Io`),
+/// then a discovery fill that succeeds: once that list is stale, the next
+/// stale hit refreshes again. Mutant M43 (a stored fill keeps the refresh
+/// stamp) holds it off the wire.
+#[tokio::test]
+async fn a4_t4_a_stored_fill_ends_the_refresh_hold_off() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = short_ttl(&lister);
+    let _ = check(&backend, "edit", &json!({"edits": []})).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    lister.set(Mode::Io);
+    let _ = check(&backend, "edit", &undeclared()).await;
+    lister.set(Mode::Serve);
+    let fill = backend.get_tools_for_binding(None, &[]).await;
+    fill.expect("the discovery fill succeeds");
+    let before = lister.lists();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let _ = check(&backend, "edit", &undeclared()).await;
+    assert_eq!(lister.lists(), before + 1, "the stale hit did not refresh");
+}
+
 /// A4-T3 (review fold): concurrent stale hits whose refresh fails with an
 /// error that starts no fill cooldown (`Io`) still list once: waiters inside
 /// the fill honour the stale-refresh stamp at admission. Mutant M30 (drop that

@@ -718,10 +718,16 @@ async fn drain_list_pages(
         if let Some(error) = response.error {
             return Err(Error::json_rpc(error.code, error.message));
         }
-        // Readable: the list is an array, or the page carries only a cursor.
-        let readable = |r: &Value| match r.get(family.list_key) {
-            Some(list) => list.is_array(),
-            None => r.is_object() && r.get("nextCursor").is_some_and(Value::is_string),
+        // Readable: a string cursor or none, and the list is an array, or
+        // absent on a page that carries a cursor. A mistyped cursor would
+        // otherwise read as the last page.
+        let readable = |r: &Value| {
+            let cursor = r.get("nextCursor").filter(|c| !c.is_null());
+            cursor.is_none_or(Value::is_string)
+                && match r.get(family.list_key) {
+                    Some(list) => list.is_array(),
+                    None => r.is_object() && cursor.is_some(),
+                }
         };
         let Some(mut result) = response.result.filter(readable) else {
             // No `result`, or a malformed one, says nothing about the list's

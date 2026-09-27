@@ -40,6 +40,8 @@ struct Script {
     bare_from: Option<usize>,
     /// Page index whose answer omits the list key (keeps `nextCursor`).
     keyless_page: Option<usize>,
+    /// Page index whose `nextCursor` is a number, not a string.
+    numeric_cursor_page: Option<usize>,
     sleep_per_page: Duration,
 }
 
@@ -90,6 +92,7 @@ fn finite(pages: Vec<(Vec<&'static str>, Option<&'static str>)>) -> Script {
         error_from: None,
         bare_from: None,
         keyless_page: None,
+        numeric_cursor_page: None,
         sleep_per_page: Duration::ZERO,
     }
 }
@@ -101,6 +104,7 @@ fn endless(error_from: Option<usize>, sleep_per_page: Duration) -> Script {
         error_from,
         bare_from: None,
         keyless_page: None,
+        numeric_cursor_page: None,
         sleep_per_page,
     }
 }
@@ -148,6 +152,9 @@ impl crate::transport::Transport for Pager {
         }
         if let Some(next) = next {
             result["nextCursor"] = json!(next);
+        }
+        if script.numeric_cursor_page == Some(page) {
+            result["nextCursor"] = json!(1);
         }
         Ok(JsonRpcResponse::success(id, result))
     }
@@ -364,6 +371,22 @@ async fn keyless_last_page_is_unreadable() {
         "page 2 is malformed"
     );
     assert_eq!(pager.request_count(), 2);
+    assert!(names(&backend).is_empty(), "a partial list was cached");
+}
+
+/// Review fold: a page whose `nextCursor` is not a string is malformed, not
+/// the last page: the fill fails and keeps no list that a later page would
+/// have extended. Mutant M45 (accept any cursor type) reddens it.
+#[tokio::test]
+async fn a_numeric_cursor_is_unreadable() {
+    let pager = Pager::tools(vec![(vec!["t0"], None)]);
+    pager.script.lock().numeric_cursor_page = Some(0);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    assert!(
+        backend.get_tools_shared().await.is_err(),
+        "the cursor is malformed"
+    );
     assert!(names(&backend).is_empty(), "a partial list was cached");
 }
 
