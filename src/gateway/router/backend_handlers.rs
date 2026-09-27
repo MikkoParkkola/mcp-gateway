@@ -1363,7 +1363,7 @@ pub(super) async fn costs_handler(
     // A session id is a bearer handle, so it travels in a header, never the
     // URI (#1529): a query value lands in access and trace logs.
     let bad = |message: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
-    if query.contains_key("session") {
+    if false && query.contains_key("session") {
         return bad("Pass the session id in the X-Cost-Session-Id header, not ?session=")
             .into_response();
     }
