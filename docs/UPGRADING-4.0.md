@@ -11,12 +11,13 @@ items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 55 and 58 below, the
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
 7 and 8 are decided per backend, so there is no single moment at startup at which
-the binary could know whether a given deployment is affected. Item 10 changes the shipped
+the binary could know whether a given deployment is affected; item 8 refuses the start with an
+error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
 load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66 and 67 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67 and 70 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
@@ -94,6 +95,9 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
+| 68 | Reserved: lands with #1473 | None yet |
+| 69 | Reserved: lands with a pending change | None yet |
+| 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -476,14 +480,14 @@ shipped defaults now run one pod, and more than one is refused while the task su
 
 The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so a chart install reports the store unavailable (one WARN at
-startup). Since item 25, grant and policy edits are refused on every install, and the store
-holds only the governance audit log.
+startup). Since item 25, grant and policy edits are refused on every install; the store keeps
+the governance audit log and any 3.x grant and policy rows (item 25).
 
 Both still serve the bearer token over plain HTTP inside the cluster. Item 38 makes that a
 declared choice, `cleartext_http: cluster_internal`, rather than a silent one.
 ## 22. The governance store location is configurable
 
-> Superseded in part by item 25: the store no longer holds grant or policy edits.
+> Superseded in part by item 25: the store no longer takes grant or policy edits.
 
 New `control_plane.store_dir`. When it is unset, the store stays at
 `<config dir>/<config stem>-control-plane`, so existing installs do not move. When it is set, it
@@ -496,8 +500,8 @@ path.
 
 Helm: the chart's config directory is a read-only ConfigMap, so the default location cannot be
 created there, and a chart install reports `store_unavailable`. Since item 25 the store
-holds only the governance audit log, so a persistent `store_dir` on Helm keeps that log; it holds
-no grant or revocation.
+takes no new grant or policy edit, but it still holds the governance audit log and the 3.x rows
+that 4.1 will import as drafts, so keep `store_dir` persistent on Helm.
 
 ## 23. `logging/setLevel` needs an admin key
 
@@ -559,8 +563,8 @@ unavailable, and adds `authority`, which names where each kind is enforced.
 What is enforced has not changed. Grants come from the file at `security.identity_grants.path`,
 edited with `mcp-gateway identity grants grant|revoke|list`. Policies come from
 `security.sanitize_input` and `security.ssrf_protection`. The store still holds the governance
-audit log, which the page and SIEM export read, so the note in item 22 about a persistent
-`store_dir` now applies to the audit log only.
+audit log, which the page and SIEM export read, and the rows below, so keep the persistent
+`store_dir` of item 22.
 
 Existing rows in `store/grants.json` and `store/policies.json` are no longer shown. Leave them on
 disk: 4.1 will bring them back as unenforced drafts that need re-approval. **Do not delete or
@@ -1082,8 +1086,9 @@ named an API-key label rather than a person and skipped every refused or failed 
   `/readyz` itself tries that probe, so a drained pod recovers without traffic; `/livez`
   stays 200, so the pod is not restarted. Watch `mcp_audit_append_failures_total` and
   `mcp_audit_degraded`. Probe records carry `type: "audit_probe"`.
-- **A full volume.** Item 49 added rotation: by default the oldest segments expire to make
-  room. With `rotation.on_disk_full: refuse`, a full volume makes every append fail
+- **A full volume.** Item 49 added rotation: by default the oldest sealed segments expire to
+  make room. Before the first rotation there is no sealed segment to expire, so a volume that
+  fills that early still fails appends as below. With `rotation.on_disk_full: refuse`, a full volume makes every append fail
   with `storage_full`: tool calls get 503 and `/readyz` returns 503 (its body names the
   cause), and the counter reads `mcp_audit_append_failures_total{cause="storage_full"}`.
   Size the volume with item 49's rule, and archive or export segments you must keep; the
@@ -1555,11 +1560,12 @@ the caller has no credential, so the gateway now treats it as a secret.
   stay raw, but they name no live session: sessions do not survive the restart.
   The dashboard's cost view (`/ui/api/costs`, `by_session[].session_id`) shows the
   fingerprint too; the admin API `/api/costs` keeps raw ids, since inspecting a
-  session by id needs one.
-- **Header-logging middleware brings the leak back.** A layer you add that logs
-  request headers (for example a tower-http trace layer configured to log
-  headers) prints the raw `Mcp-Session-Id` whatever the gateway's own log fields
-  do.
+  session by id needs one. It takes that id in the `X-Cost-Session-Id` header
+  (item 70).
+- **The gateway's own HTTP trace span recorded the full URI** at DEBUG, query
+  string included, until item 70. It now records the method and route template
+  only. A layer you add that logs request headers or URIs still prints whatever
+  it sees, including the raw `Mcp-Session-Id`.
 - A legacy destructive call with no usable session, an empty id included, is
   unchanged: it runs with a warning that nobody could be asked.
 - Library users: `NotificationMultiplexer::first_session_id` and
@@ -1725,6 +1731,28 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
 
+## 70. Secrets stay out of the request URI and its trace
+
+The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
+secrets travelled there: a raw session id in `GET /api/costs?session=<id>`, and the one-time
+dashboard link value in `/dashboard?bootstrap=<value>`. With `tower_http=debug` logging on, both
+reached the log.
+
+- The span now records the method and the matched route template only (for example
+  `/mcp/{name}`), for every route the gateway traces. It never records the query string, a path
+  value or a header.
+- `/api/costs` selects a session by the `X-Cost-Session-Id` request header. `?session=` is refused
+  with HTTP 400 and a message naming the header. `?key=` (an API key's name) is unchanged. Sending
+  both `?key=` and the header is refused.
+- A dashboard link presented from anywhere but the gateway's own machine is refused, as before, and
+  is now also used up. The refusal says so. A copy left in a browser history, a proxy log or a
+  `Referer` header therefore dies on its first use elsewhere. On the gateway's own machine, a
+  refusal because no admin credential is configured still leaves the link usable.
+
+**Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
+Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
+first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
@@ -1744,8 +1772,10 @@ precautions it does not exercise.
    mcp-gateway upgrade --data-dir ~/.mcp-gateway
    ```
 
-3. Replace every plaintext `auth.api_keys[].key` with its digest (item 41). The same key keeps
-   working [PHASE2.API_KEY_MIGRATED_TO_DIGEST]:
+3. Give every API key an explicit `backends` list, or `["*"]` for all: a 3.x key without one
+   reached every backend and now reaches none (item 32). Then replace every plaintext
+   `auth.api_keys[].key` with its digest (item 41). The same key keeps working
+   [PHASE2.API_KEY_MIGRATED_TO_DIGEST]:
 
    ```bash
    printf %s "$KEY" | mcp-gateway hash-key                   # put the output in key_sha256

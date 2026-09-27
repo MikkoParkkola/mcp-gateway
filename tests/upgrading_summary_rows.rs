@@ -57,7 +57,7 @@ fn sections(doc: &str) -> BTreeSet<u32> {
 /// The highest item number published so far. Item numbers are public
 /// identifiers and never renumbered, so deleting the last item (row and
 /// section together) must fail too, not just shrink the range.
-const PUBLISHED_MAX: u32 = 67;
+const PUBLISHED_MAX: u32 = 70;
 
 /// The Change cell of every summary row, by item number.
 fn summary_cells(doc: &str) -> BTreeMap<u32, String> {
@@ -218,7 +218,7 @@ fn numbers_in(text: &str) -> BTreeSet<u32> {
 }
 
 /// The text between `after` and the next `until` in the intro.
-fn intro_span<'a>(after: &str, until: &str) -> &'a str {
+fn intro_span(after: &str, until: &str) -> &'static str {
     let intro = DOC.split("## What changed").next().unwrap();
     let start = intro
         .find(after)
