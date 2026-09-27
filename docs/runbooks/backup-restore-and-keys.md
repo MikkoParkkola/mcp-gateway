@@ -28,12 +28,12 @@ chart sets `HOME=/var/lib/mcp-gateway`, so there it is `/var/lib/mcp-gateway/.mc
 | Identity grants | Local identity-grant rows | `security.identity_grants.path` (`~/.mcp-gateway/identity-grants.yaml`) | Every local grant is lost |
 | Task store | Tasks of the 2026-07-28 tasks extension, kept for `tasks.default_ttl_ms` (24 hours) | `tasks.store_dir` (`~/.mcp-gateway/tasks`) | Open task handles stop resolving |
 | Cost spend | Today's cost-governance spend, saved every 5 minutes | `<data dir>/costs.json` | Budgets restart at zero for the day |
-| Search ranking usage | Tool usage counts that rank search results, written only at a graceful shutdown | `<data dir>/usage.json` | Search ranking starts from no usage history. A copy taken while the gateway runs holds the counts from the last shutdown, not the current ones |
-| Tool transitions | Which tool tends to follow which, used to predict the next call, written only at a graceful shutdown | `<data dir>/transitions.json` | Predictions start from no history. A live copy holds the data from the last shutdown |
+| Search ranking usage | Tool usage counts that rank search results, written only at a graceful shutdown of an HTTP gateway (`serve --stdio` loads the file but never saves it) | `<data dir>/usage.json` | Search ranking starts from no usage history. A copy taken while the gateway runs holds the counts from the last shutdown, not the current ones |
+| Tool transitions | Which tool tends to follow which, used to predict the next call, written only at a graceful shutdown of an HTTP gateway (stdio never saves it) | `<data dir>/transitions.json` | Predictions start from no history. A live copy holds the data from the last shutdown |
 | Protocol-revision telemetry | The restart-safe window counting which MCP revisions clients speak | `<data dir>/protocol-revision-telemetry/window.json` | The measurement window starts again empty |
 | Firewall audit | Firewall decisions as NDJSON, when configured | `security.firewall.audit_log` (off by default) | That history is gone |
 | mTLS material | Server certificate and key, CA, CRL | `mtls.server_cert`, `server_key`, `ca_cert`, `crl_path` | Clients cannot connect until certificates are reissued |
-| Configuration | `gateway.yaml`, env files, capability files with their `sha256:` pins, and every file a `file:` secret reference names (for example `auth.bearer_token`, `auth.api_keys[].key_sha256`, `agent_auth.agents[].hs256_secret`, `key_server.admin_token`, `accounts.keys`, `server.metrics_token`) | where you keep them, each `file:` target at its original path and mode | The gateway does not start as it was: an unresolved secret reference fails the load (UPGRADING-4.0 item 40), with three exceptions. `server.metrics_token` logs a warning and leaves `/metrics` answering 401. A personal-account descriptor's `client_secret_ref` is read only when a token is requested, so a missing target lets the gateway start and then fails that account's token refresh. And a reference inside a disabled block (for example `key_server.admin_token` with the key server off, or `accounts.keys` with `accounts.enabled: false` and no `accounts.adapters` configured) is not read at all, so a missing target shows up only when the block is enabled. A clean start is therefore not proof that every `file:` target was restored |
+| Configuration | `gateway.yaml`, env files, capability files with their `sha256:` pins, and every file a `file:` secret reference names (for example `auth.bearer_token`, `auth.api_keys[].key_sha256`, `agent_auth.agents[].hs256_secret`, `key_server.admin_token`, `accounts.keys`, `server.metrics_token`) | where you keep them, each `file:` target at its original path and mode | The gateway does not start as it was: an unresolved secret reference fails the load (UPGRADING-4.0 item 40), with three exceptions. `server.metrics_token` logs a warning and leaves `/metrics` answering 401. A personal-account descriptor's `client_secret_ref` is read only when a token is requested, so a missing target lets the gateway start and then fails that account's token refresh, new connections at their callback, and revocation on disconnect. And a reference inside a disabled block (for example `key_server.admin_token` with the key server off, or `accounts.keys` with `accounts.enabled: false` and no `accounts.adapters` configured) is not read at all, so a missing target shows up only when the block is enabled. A clean start is therefore not proof that every `file:` target was restored |
 
 Also in the data directory: `version.stamp` (the last version that ran). Losing it only means
 the one-time upgrade notice prints again. Package caches under `pkg-cache/` are downloaded again
@@ -64,7 +64,7 @@ persistent storage, so point those settings at a volume you mount yourself.
 ## Taking a backup
 
 1. **Stop the gateway, or take one atomic snapshot that covers every location in the first
-   table.** If they are on different volumes that cannot be snapshotted together at one
+   table that the gateway writes** (the configuration row is copied separately). If they are on different volumes that cannot be snapshotted together at one
    instant, stop the gateway. Two sets break when copied piece by piece from a running
    gateway. Each audit log, its sealed segments and its `.hwm` must come from one instant: a
    segment sealed between two copies breaks the chain, and a `.hwm` that runs ahead of the
@@ -75,7 +75,7 @@ persistent storage, so point those settings at a volume you mount yourself.
    authentication failed". Copying the files of a running gateway one by one can produce
    exactly that pair.
 2. Copy every location in the first table, keeping each one's permissions. With SIEM export on,
-   copy the export file and both cursors in the same stop or snapshot. The gateway refuses
+   copy the export file and every cursor in the same stop or snapshot. The gateway refuses
    key, token and credential files that other users can read (UPGRADING-4.0 items 35 and 54), so
    a restore that widens modes does not start.
 3. **Back up the accounts keys separately from the store**, the same way you back up other
