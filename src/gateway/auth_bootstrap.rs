@@ -122,7 +122,7 @@ pub(super) fn try_dashboard_bootstrap(
             .issue_session_at(Now::read(), &limits);
         // The cookie lives exactly as long as the server will honour it, so a
         // browser never keeps presenting a handle the server already dropped.
-        let max_age = limits.absolute.as_secs();
+        let max_age = 86_400;
         Some(axum::response::IntoResponse::into_response((
             axum::http::StatusCode::SEE_OTHER,
             [
