@@ -119,10 +119,15 @@ a binary swap plus a symlink flip.
 > moving; re-staging on every commit never lets a cutover finish. Re-stage only when
 >
 > ```
+> set -e
+> git fetch origin docs/ranking-1-release-line
 > git diff --name-only <staged-sha>..origin/docs/ranking-1-release-line -- src/ Cargo.toml Cargo.lock
 > ```
 >
-> is non-empty. Six of the seven commits above were documentation and changed nothing the
+> is non-empty. Read the exit status, not only the output: with `set -e` a failed fetch or
+> diff stops the block. If either fails, stop: do not rebuild and do not cut over until both
+> succeed. A stale local ref prints nothing, and rebuilding from
+> it would reproduce the same stale build. Six of the seven commits above were documentation and changed nothing the
 > binary carries; one was #707 and changed everything. If that command prints nothing, the
 > staged artifact is current for this criterion and the cutover proceeds.
 
@@ -187,7 +192,8 @@ upgrade was rehearsed from (17/17 PASS, `docs/release/nfr-upgrade-1-rehearsal-re
 among them `782e5ac8` (refuse an unserved protocol-version header) and `992b87c3`
 (request-scoped notification and outbound refusal gaps). Those are refusal behaviours the
 manifest does not probe. Option A therefore satisfies the instrument, not the criterion's
-wording — "every merged security control" is only true of a build from `main`. Treat A as
+wording — "every merged security control" is only true of a build from the release line
+(`origin/docs/ranking-1-release-line` until 4.0.0 is tagged; `main` lags it). Treat A as
 a stopgap that shrinks the gap from "predates the guard entirely" to "behind on the
 security path", and B as the close. Which to deploy is the operator's call; the procedure
 below is identical either way.
@@ -228,7 +234,18 @@ shasum -a 256 /tmp/gw/mcp-gateway-darwin-arm64
 # expect 78fc2fdb5a56539a35b9204e704374303f140ed91f933492f92f49acdece77b1
 GW=/tmp/gw/mcp-gateway-darwin-arm64
 
-# 1b. Option C — build from origin/main instead, in a checkout at that commit.
+# 1b. Option C — build from the release line instead, in a checkout at its fetched tip.
+#     Not origin/main: main lags the release line and can lack its security fixes,
+#     which the drift checker cannot see.
+# Build in a fresh worktree so no local edit or untracked file enters the binary.
+# Run these lines under `set -e`, so a failed fetch, worktree add or clean check
+# stops before the build:
+# set -e
+# git fetch origin docs/ranking-1-release-line
+# git worktree add --detach ../gw-cutover-build origin/docs/ranking-1-release-line
+# cd ../gw-cutover-build
+# tree_status=$(git status --porcelain)
+# test -z "$tree_status"
 #     Same recipe release.yml uses for the darwin-arm64 asset. Needs headroom:
 #     cold, 431 crates, and a hook refuses to build under 5 GB free.
 # cargo build --release --target aarch64-apple-darwin
@@ -312,7 +329,12 @@ Grade on these four conditions, not on the transcript:
 
 1. exit status 0,
 2. the tally ends `0 failing`,
-3. `origin-guard` and `host-guard` each read `refused 403; legitimate request 200`,
+3. `origin-guard` and `host-guard` each read `refused 403; legitimate request 200`. The
+   checker passes any 4xx for these two (neither sets `refusal_status` in
+   `security-controls.toml`), so this condition is stricter than its exit code: the guard
+   itself answers 403 (`src/gateway/router/origin_guard.rs`), and any other 4xx means
+   a different layer refused (a proxy, the router, or another gateway check) and the
+   guard itself was not exercised,
 4. no control that was covered in the recorded baseline has become `uncovered`.
 
 The shape, measured against the 4.0.0 build on 2026-09-21:
@@ -339,7 +361,10 @@ against it.
 - `<provenance>` is `provenance: 5d25f104 is in v3.5.1` for option A, and
   `provenance unavailable: v4.0.0 is not a tag in this repository` for a pre-tag 4.0.0
   build. It is corroboration; it does not change the exit code.
-- Any 4xx satisfies the negative half; a `2xx`/`3xx` or a `5xx` fails it. No `--header`
+- For the origin and host probes the checker accepts any 4xx as the negative half, since
+  neither sets `refusal_status`; a `2xx`/`3xx` or a `5xx` fails it. A control that sets
+  `refusal_status` must refuse with exactly that status. Condition 3 still requires 403
+  from the two guards. No `--header`
   is needed — `tools/list` answers unauthenticated on this install.
 - `/health` is the check the drift checker cannot make: its positive half answers 200
   even if only a handful of the 32 backends came up.
