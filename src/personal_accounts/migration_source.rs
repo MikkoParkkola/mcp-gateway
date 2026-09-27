@@ -116,8 +116,7 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     // Windows opens without following a reparse point, so a link swapped in
     // after the check above is refused by the handle's own type below.
     #[cfg(windows)]
-    let mut file =
-        crate::private_fs::open_file_read(path).map_err(|_| not_private(shown.clone(), ""))?;
+    let mut file = std::fs::File::open(path).map_err(|_| not_private(shown.clone(), ""))?;
     #[cfg(not(windows))]
     let mut file = std::fs::File::open(path).map_err(|_| not_private(shown.clone(), ""))?;
     let opened = file
