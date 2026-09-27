@@ -443,4 +443,5 @@ only raise it.
 - [ADR-008 — multi-user OAuth isolation](adr/ADR-008-multi-user-oauth-isolation.md),
   the rungs and why passthrough is the primary path.
 - [OAUTH_CONFIG.md](OAUTH_CONFIG.md) for the provider-side setup.
+- [TEAM_DEPLOYMENT.md](TEAM_DEPLOYMENT.md), the order to set up a team gateway in.
 - [DEPLOYMENT.md](DEPLOYMENT.md) for everything that is not identity.

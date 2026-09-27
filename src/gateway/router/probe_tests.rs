@@ -214,9 +214,10 @@ fn metrics_gauge_reads_zero_while_breaker_open() {
 /// A backend whose own limiter holds one token (1 rps, burst 1). `admit` runs
 /// once per request, outside `with_retry`, so retry cannot spend a token; it is
 /// off so its backoff cannot open a refill window between back-to-back calls.
-/// Nothing listens on port 9, so an admitted request fails fast after the
-/// limiter has already decided. A stall of over a second between calls would
-/// refill the bucket; T5 carries the same exposure.
+/// An admitted request connects to port 0 and fails at once, after the limiter
+/// has already decided. A stall of over a second between calls would refill
+/// the bucket, which is why this backend does not use the port-9 address the
+/// others do (see the comment on `http_url`); T5 carries the same exposure.
 #[cfg(feature = "metrics")]
 fn limited_backend() -> crate::backend::Backend {
     let mut failsafe = crate::config::FailsafeConfig::default();
@@ -226,7 +227,11 @@ fn limited_backend() -> crate::backend::Backend {
     failsafe.retry.enabled = false;
     let config = crate::config::BackendConfig {
         transport: crate::config::TransportConfig::Http {
-            http_url: "http://127.0.0.1:9/mcp".to_string(),
+            // Port 0 fails at connect on every platform at once. A closed port
+            // does not on Windows: there the connect took about two seconds in
+            // CI (run 36307786398), and with one token per second the bucket
+            // refills during that wait and the next call is admitted.
+            http_url: "http://127.0.0.1:0/mcp".to_string(),
             streamable_http: false,
             protocol_version: None,
         },
