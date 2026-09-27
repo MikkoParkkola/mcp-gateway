@@ -24,6 +24,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Added
 
+- **The task store and the personal-account store run on Windows.** Directories and files are
+  created owner-only and checked on every open (owner, grants, inheritance, junctions, network
+  and non-ACL volumes), the directories are held open while the store runs, and custody uses a
+  Windows file lock. A 3.x token file other accounts can read is refused with the `icacls` lines
+  that fix it. One Windows-only module uses `unsafe` for the Win32 security calls (ADR-016).
+  (#1473)
 - `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
   launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
   and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a

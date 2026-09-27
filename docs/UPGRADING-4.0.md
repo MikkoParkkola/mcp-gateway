@@ -85,6 +85,7 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
+| 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints on a flagged 3.x token file |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 
 Numbers 18-20 are intentionally unused.
@@ -1697,6 +1698,30 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
+
+## 68. Windows runs the task and personal-account stores, owner-only
+
+Before 4.0 both stores refused to start on Windows: their custody lock and their privacy
+checks existed only for unix. In 4.0 they run on Windows with protection equivalent to the unix
+`0700` directories and `0600` files:
+
+- Every directory and file the stores create is owner-only from its first instant: owner is the
+  gateway's account, one grant to that account, and nothing inherited from the parent.
+- On every open, each store directory and file is checked on the open handle and refused when
+  another account is granted access, the owner is someone else, the DACL inherits or is NULL,
+  or the object is a symlink or junction. A store directory reached through a junction, on a
+  network drive, or on a volume with no ACLs (FAT32, exFAT) is refused.
+- The directories stay open for as long as the store runs, so they cannot be renamed or
+  swapped for a junction underneath it.
+- A 3.x OAuth token file offered for migration is refused when other accounts can read it
+  (the 3.x gateway wrote it with the directory's inherited ACL). The refusal names the rule it
+  broke and prints the `icacls` commands that make the file owner-only.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** keep the store directories on a local NTFS or ReFS path, not a
+mapped drive or a junction. If a 3.x token migration is refused, run the printed `icacls` lines
+from a command prompt (an elevated one when it says the file has another owner) and retry.
 
 ## 70. Secrets stay out of the request URI and its trace
 
