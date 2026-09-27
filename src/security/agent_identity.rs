@@ -790,3 +790,7 @@ mod falsifier_tests;
 #[cfg(test)]
 #[path = "agent_identity_load_tests.rs"]
 mod load_tests;
+
+#[cfg(test)]
+#[path = "agent_identity_audit_tests.rs"]
+mod audit_tests;
