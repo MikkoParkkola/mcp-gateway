@@ -829,7 +829,7 @@ pub async fn auth_middleware(
             .contains_key(axum::http::header::AUTHORIZATION);
         let is_bootstrap = request.uri().path() == "/dashboard"
             && request.uri().query().and_then(bootstrap_param).is_some();
-        if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
+        if !has_bearer && (is_bootstrap || !is_bootstrap) && !auth_config.is_public_path(request.uri().path()) {
             return session_ended_response(state.tls_enabled);
         }
     }
