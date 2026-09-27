@@ -187,7 +187,7 @@ itself, from `auth.mode`. Anything you put under `config.auth` is replaced.
 | `auth.mode` | What the chart renders |
 |---|---|
 | `credential` (default) | `auth.enabled: true` with one bearer token from the Secret `auth.existingSecret` (key `auth.secretKey`), `public_paths: ["/health"]`, and the audit log at `/var/lib/mcp-gateway/audit/transparency.jsonl` on the `audit` volume |
-| `mesh` | no `auth` section and `server.allow_unauthenticated_network_bind: true`, for a service mesh that authenticates before traffic reaches the pod. No audit volume |
+| `meshed` | no `auth` section and `server.allow_unauthenticated_network_bind: true`, for a service mesh that authenticates before traffic reaches the pod. No audit volume |
 
 In `credential` mode, `server.cleartextHttp` becomes `server.cleartext_http`:
 
