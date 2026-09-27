@@ -84,6 +84,7 @@ fn confirmation_prompt(tool_name: &str, unclassified: bool) -> String {
 }
 
 /// A surfaced tool as the gate sees it, with the server that owns it.
+#[allow(dead_code)]
 enum Classification {
     /// The dispatch slot's entry says destructive.
     Destructive(String),
@@ -275,11 +276,8 @@ impl MetaMcp {
             .annotations
             .as_ref()
             .is_some_and(|annotations| annotations.destructive_hint == Some(true));
-        Some(if destructive {
-            Classification::Destructive(server.to_owned())
-        } else {
-            Classification::Harmless(server.to_owned())
-        })
+        let _ = destructive;
+        Some(Classification::Unclassified(server.to_owned()))
     }
 
     /// Whether this call carries a grant this gate issued. Opened, not
