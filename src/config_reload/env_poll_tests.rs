@@ -302,6 +302,16 @@ fn u18_a_path_recorded_absent_and_loaded_differs() {
     assert_eq!(env_poll(&overlay, &paths), Some(p));
 }
 
+/// An env with one recorded file, so a tick runs its read: with none, the
+/// poller skips the read entirely (U21). The read under test is injected, so
+/// the path is never opened.
+fn one_env_file() -> std::sync::Arc<crate::config::LiveEnv> {
+    std::sync::Arc::new(crate::config::LiveEnv::new(
+        std::sync::Arc::new(EnvOverlay::none()),
+        crate::config::ResolvedEnvFiles::new(vec![PathBuf::from("/unread.env")], false),
+    ))
+}
+
 /// How many times `stalled_read` has started. Only U19 uses it.
 static STALLED_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -317,7 +327,7 @@ fn stalled_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
 #[tokio::test]
 async fn u19_a_stalled_read_returns_within_the_wait() {
     let mut poller = super::EnvPoller::new(
-        std::sync::Arc::default(),
+        one_env_file(),
         std::sync::Arc::default(),
         PathBuf::from("/cfg.yaml"),
     )
@@ -369,7 +379,7 @@ fn stalled_read_for_l7(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
 fn l7_a_stalled_read_is_warned_about_once() {
     use crate::test_log_capture::{count, records};
     let mut poller = super::EnvPoller::new(
-        std::sync::Arc::default(),
+        one_env_file(),
         std::sync::Arc::default(),
         PathBuf::from("/cfg.yaml"),
     )
@@ -399,7 +409,7 @@ fn dying_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
 fn l8_a_read_that_dies_is_warned_about() {
     use crate::test_log_capture::{count, records};
     let mut poller = super::EnvPoller::new(
-        std::sync::Arc::default(),
+        one_env_file(),
         std::sync::Arc::default(),
         PathBuf::from("/cfg.yaml"),
     )
@@ -428,7 +438,7 @@ fn slow_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
 fn l9_a_new_stall_after_recovery_is_warned_about_again() {
     use crate::test_log_capture::{count, records};
     let mut poller = super::EnvPoller::new(
-        std::sync::Arc::default(),
+        one_env_file(),
         std::sync::Arc::default(),
         PathBuf::from("/cfg.yaml"),
     )

@@ -297,9 +297,16 @@ async fn t20_shutdown_during_a_stalled_env_read_starts_no_further_tick() {
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
         let chain = ConfigWatcher::create_notify_watcher(tx.clone(), wake_tx, &named)
             .expect("the watcher starts");
-        let poller =
-            super::env_poll::EnvPoller::new(Arc::default(), Arc::default(), PathBuf::new())
-                .with_read(stalled_read);
+        let poller = super::env_poll::EnvPoller::new(
+            // One recorded file, so each tick runs the stalled read.
+            Arc::new(LiveEnv::new(
+                Arc::new(EnvOverlay::none()),
+                ResolvedEnvFiles::new(vec![PathBuf::from("/unread.env")], false),
+            )),
+            Arc::default(),
+            PathBuf::new(),
+        )
+        .with_read(stalled_read);
         let ticks = poller.ticks();
         let task = spawn_rewatch_task(
             named,
