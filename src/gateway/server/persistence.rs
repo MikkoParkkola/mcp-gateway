@@ -95,33 +95,51 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 
 /// Save today's spend to `<data_dir>/costs.json`.
 #[cfg(feature = "cost-governance")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "red-first stub, wired by the fix")
-)]
-pub(super) fn save_costs(_enforcer: &BudgetEnforcer, _data_dir: &Path) {}
+pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
+    let persisted = super::support::build_persisted_costs(&enforcer.snapshot());
+    save_with_logging(
+        &data_dir.join("costs.json"),
+        |path| crate::cost_accounting::persistence::save(path, &persisted),
+        "Failed to save cost governance data",
+        "Saved cost governance data",
+    );
+}
 
 /// Save today's spend every `every` until `shutdown` fires, or until the
 /// returned task is aborted when `shutdown` is `None`.
 #[cfg(feature = "cost-governance")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "red-first stub, wired by the fix")
-)]
 pub(super) fn spawn_cost_saver(
-    _enforcer: Arc<BudgetEnforcer>,
-    _data_dir: PathBuf,
-    _every: std::time::Duration,
-    _shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+    enforcer: Arc<BudgetEnforcer>,
+    data_dir: PathBuf,
+    every: std::time::Duration,
+    shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async {})
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(every);
+        // The first tick is immediate: nothing has been spent yet.
+        interval.tick().await;
+        let stopped = async move {
+            match shutdown {
+                Some(mut rx) => drop(rx.recv().await),
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(stopped);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => save_costs(&enforcer, &data_dir),
+                () = &mut stopped => break,
+            }
+        }
+    })
 }
 
 impl super::Gateway {
     /// Point this gateway's data directory at `dir` (the in-process tests'
     /// tempdir), so a test never reads or writes the developer's own.
     #[cfg(test)]
-    pub(super) fn with_data_dir(self, _dir: PathBuf) -> Self {
+    pub(super) fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data_dir = Some(dir);
         self
     }
 }
@@ -130,10 +148,14 @@ impl super::AbortOnDrop {
     /// Abort the task and wait until it has ended, so nothing it was doing
     /// can land after this returns.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "red-first stub, wired by the fix")
+        not(any(feature = "cost-governance", test)),
+        expect(dead_code, reason = "only the stdio cost saver is stopped this way")
     )]
-    pub(crate) async fn stop(self) {}
+    pub(crate) async fn stop(mut self) {
+        self.0.abort();
+        // Cancelled is the expected outcome; a panic is reported by the runtime.
+        drop((&mut self.0).await);
+    }
 }
 
 #[cfg(test)]
@@ -259,8 +281,8 @@ mod tests {
         let held = Arc::new(());
         let inside = Arc::clone(&held);
         let guard = super::super::AbortOnDrop::new(tokio::spawn(async move {
-            let _inside = inside;
             std::future::pending::<()>().await;
+            drop(inside);
         }));
         // Let the task start and take its clone.
         tokio::task::yield_now().await;

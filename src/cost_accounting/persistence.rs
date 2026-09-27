@@ -65,6 +65,8 @@ impl ToolTotal {
 /// be written.
 #[cfg(feature = "cost-governance")]
 pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
+    // Numbers each save's scratch file within this process (see below).
+    static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| crate::Error::Config(format!("Failed to create cost dir: {e}")))?;
@@ -72,12 +74,22 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     let json = serde_json::to_string_pretty(costs)
         .map_err(|e| crate::Error::Config(format!("Failed to serialize costs: {e}")))?;
     // Write then rename, so a crash mid-write leaves the previous file, not a
-    // truncated one that fails to parse and restarts the budgets at zero.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)
-        .map_err(|e| crate::Error::Config(format!("Failed to write costs: {e}")))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| crate::Error::Config(format!("Failed to replace costs: {e}")))?;
+    // truncated one that fails to parse and restarts the budgets at zero. The
+    // scratch name is unique per save: gateways sharing a data directory (and
+    // one gateway's periodic and final saves) must never write one file.
+    let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+    let saved = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, json.as_bytes()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = saved {
+        // Best effort: the scratch may not exist if the open itself failed.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(crate::Error::Config(format!("Failed to save costs: {e}")));
+    }
     tracing::info!(path = %path.display(), "Saved cost data");
     Ok(())
 }
