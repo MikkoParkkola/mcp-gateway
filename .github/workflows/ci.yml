@@ -382,7 +382,10 @@ jobs:
       # no more than that.
       - run: >-
           cargo test --all-features --lib --no-fail-fast --
-          probe_tls_error_chain rate_limited_counter personal_accounts::offline_migration --nocapture
+          identity_grant_doc_tests documented_caller_identity_examples
+          gateway::meta_mcp::response_security gateway::meta_mcp::signing
+          personal_accounts::provider::wire_tests gateway::server::gateway_bootstrap_tests
+          rate_limited_counter personal_accounts::offline_migration
 
   test:
     name: Tests

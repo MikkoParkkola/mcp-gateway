@@ -492,32 +492,3 @@ pub(super) fn expect_terminal(
         other => panic!("{what}: expected a terminal refusal, got {other:?}"),
     }
 }
-
-
-/// Throwaway probe: print the raw TLS error chain for the trusting client,
-/// with reqwest's default verifier and with an explicit webpki root store.
-#[tokio::test]
-async fn probe_tls_error_chain() {
-    let fixture = Fixture::start(responder(|_| json_200("{}"))).await;
-    let ca = || reqwest::Certificate::from_pem(fixture.ca_pem.as_bytes()).unwrap();
-    for (label, builder) in [
-        ("platform+extra-root", reqwest::Client::builder().add_root_certificate(ca())),
-        ("certs-only", reqwest::Client::builder().tls_certs_only([ca()])),
-    ] {
-        let client = builder.resolve(HOST, fixture.addr).build().unwrap();
-        match client.get(fixture.url("/x")).send().await {
-            Ok(r) => println!("PROBE-TLS {label} ok {}", r.status()),
-            Err(e) => {
-                let mut chain = format!("{e:?}");
-                let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
-                while let Some(s) = src {
-                    chain.push_str(&format!(" <- {s}"));
-                    src = s.source();
-                }
-                println!("PROBE-TLS {label} err {chain}");
-            }
-        }
-    }
-    let der = &certificates().0;
-    println!("PROBE-TLS leaf-der-len {} ca-der-len {}", der[0].len(), der[1].len());
-}
