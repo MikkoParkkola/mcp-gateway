@@ -204,6 +204,16 @@ async fn t4_a_child_that_closes_stdout_and_stays_is_reported_and_killed() {
     );
 }
 
+/// T6b: with the reply and EOF both ready before the first poll, the reply
+/// wins every time. An unbiased select picks EOF about half the time.
+#[tokio::test]
+async fn t6b_a_ready_reply_beats_a_ready_eof() {
+    for _ in 0..1000 {
+        let won = super::reply_or_eof(std::future::ready(7), std::future::ready(())).await;
+        assert_eq!(won, Some(7));
+    }
+}
+
 /// T6: a child that answers `initialize` and then exits is past the boundary:
 /// whatever the start returns, it is not the early-exit report.
 #[tokio::test]

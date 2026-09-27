@@ -156,6 +156,20 @@ fn mask_secret_head(line: &mut String, secret: &str) {
     }
 }
 
+/// The reply, or `None` if stdout closed first. A reply read before EOF has
+/// resolved its request already, so the reply wins a tie: a child that
+/// answered and then exited has still answered.
+pub(super) async fn reply_or_eof<T>(
+    reply: impl std::future::Future<Output = T>,
+    eof: impl std::future::Future<Output = ()>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        reply = reply => Some(reply),
+        () = eof => None,
+    }
+}
+
 /// Per-start state: the stdout-closed latch (fresh each start, so a previous
 /// generation's exit cannot answer this one) and whether the race saw it. Tests
 /// also keep the excerpt of the last early exit.
@@ -204,16 +218,17 @@ impl StdioTransport {
         // `wait_for` reads the current value first, so the clone sees an EOF
         // the select arm already saw.
         let mut after_error = eof.clone();
-        let response = tokio::select! {
-            // A reply read before EOF has resolved its request already, so the
-            // request wins a tie: a child that answered and then exited has
-            // still answered.
-            biased;
-            response = self.request("initialize", Some(params)) => response,
-            _ = eof.wait_for(|closed| *closed) => {
-                self.start.exited.store(true, std::sync::atomic::Ordering::SeqCst);
-                return Err(Error::Transport("stdout closed before initialize".to_string()));
-            }
+        let closed = async move {
+            let _ = eof.wait_for(|closed| *closed).await;
+        };
+        let Some(response) = reply_or_eof(self.request("initialize", Some(params)), closed).await
+        else {
+            self.start
+                .exited
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(Error::Transport(
+                "stdout closed before initialize".to_string(),
+            ));
         };
         // A child that died before reading fails the write (EPIPE) before its
         // stdout closes; stdout closing within the drain window makes that the
