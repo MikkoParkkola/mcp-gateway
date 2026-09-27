@@ -226,7 +226,11 @@ fn limited_backend() -> crate::backend::Backend {
     failsafe.retry.enabled = false;
     let config = crate::config::BackendConfig {
         transport: crate::config::TransportConfig::Http {
-            http_url: "http://127.0.0.1:9/mcp".to_string(),
+            // Port 0 fails at connect on every platform at once. A closed port
+            // does not on Windows, where a refused loopback connect is retried
+            // for about two seconds; with one token per second the bucket
+            // refills during that wait and the next call is admitted.
+            http_url: "http://127.0.0.1:0/mcp".to_string(),
             streamable_http: false,
             protocol_version: None,
         },
