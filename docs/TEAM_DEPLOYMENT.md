@@ -24,8 +24,11 @@ its tools can be called without a credential, unless
 `server.allow_unauthenticated_network_bind` declares that authentication
 happens in front of it
 ([Authentication for Production](DEPLOYMENT.md#authentication-for-production)).
-So a team gateway always has an answer to "who is calling". There are three
-separate questions, and the options below answer different ones:
+That exception only settles admission: with gateway auth off, every request
+reaches the gateway as the same anonymous caller, so grants, the audit log and
+per-caller caching cannot tell people apart. A team gateway needs one of the
+credentials below. There are three separate questions, and the options below
+answer different ones:
 
 - **Admission**: may this request reach the gateway at all?
 - **Identity**: which person or client is it, for grants, the audit log and
@@ -133,7 +136,10 @@ the [runbook](runbooks/backup-restore-and-keys.md).
 
 Two people with their own API keys, one of them temporary, behind a reverse
 proxy that terminates TLS. The digests come from environment variables, which
-must hold `sha256:<hex>` values, not keys.
+must hold `sha256:<hex>` values, not keys. `tls_terminated_upstream` only
+stops the startup refusal; it does not restrict who connects. Make the proxy
+the only thing that can reach port 39400: bind `127.0.0.1` when the proxy runs
+on the same host, or firewall the port to the proxy's address.
 
 ```yaml
 server:
