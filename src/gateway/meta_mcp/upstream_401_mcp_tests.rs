@@ -46,13 +46,13 @@ async fn mcp_route_401_uses_propagated_lease() {
         "the refusal must pass through with_connect_offer: {error}"
     );
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
-    assert_eq!(dispatches.count(), 1, "the 401 is not retried");
+    assert_eq!(dispatches.calls().len(), 1, "the 401 is not retried");
 
     Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect_err("the fenced account refuses before dispatch");
     assert_eq!(
-        dispatches.count(),
+        dispatches.calls().len(),
         1,
         "a fenced account never reaches the backend"
     );
@@ -87,7 +87,7 @@ async fn non_vault_401_forces_no_refresh() {
     assert_eq!(custody.refreshes(), 0);
     // Retry is pinned by T8 (the HTTP transport) and T16 (the policy): this
     // fixture's pooled transport does not go through `with_retry`.
-    assert_eq!(dispatches.count(), 1);
+    assert_eq!(dispatches.calls().len(), 1);
 }
 
 /// T7-meta-b: on the meta Err arm, a rotation becomes a tool result
@@ -122,7 +122,11 @@ async fn mcp_route_401_with_live_grant_says_retry() {
     );
     assert_eq!(result["recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
-    assert_eq!(dispatches.count(), 1, "the call itself is not retried");
+    assert_eq!(
+        dispatches.calls().len(),
+        1,
+        "the call itself is not retried"
+    );
 }
 
 /// T17: a 401 on an elicitation continuation. The first dispatch asks a
@@ -172,7 +176,7 @@ async fn bridged_continuation_401_forces_the_refresh() {
     );
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
     assert_eq!(
-        dispatches.count(),
+        dispatches.calls().len(),
         2,
         "the first call and the one continuation"
     );
@@ -222,5 +226,41 @@ async fn bridged_continuation_401_with_live_grant_says_retry() {
     );
     assert_eq!(result["recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
-    assert_eq!(dispatches.count(), 2);
+    assert_eq!(dispatches.calls().len(), 2);
+}
+
+/// F13 x A11-c: under the default `closed`, a cold slot's first request is the
+/// R2 `tools/list`, sent as the caller. A 401 there forces the one refresh and
+/// comes back as the reconnect refusal, exactly as a dispatched call's does;
+/// no `tools/call` is sent. Mutant M26 (skip the refresh at the fill site)
+/// reddens it: the custody sees no refresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_slot_list_401_forces_the_refresh() {
+    let custody = custody_with_steps(
+        &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
+        ROTATED_TOKEN,
+        &[ProviderStep::InvalidGrant],
+    );
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+    dispatches.script_lists();
+    dispatches.answer_with(&[401]);
+    let error = Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
+        .await
+        .expect_err("a 401 on the cold-slot list must refuse");
+    assert!(
+        marked(&error).is_none(),
+        "not through with_connect_offer: {error}"
+    );
+    assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
+    assert_eq!(
+        dispatches.calls().len(),
+        0,
+        "no tools/call after a refused list"
+    );
 }

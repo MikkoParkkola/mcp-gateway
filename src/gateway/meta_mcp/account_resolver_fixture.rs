@@ -499,6 +499,8 @@ pub(super) struct Dispatches {
     /// A11: what the backend answers the next dispatches with, in order.
     /// Empty means today's success, which is what every pre-A11 case relies on.
     answers: Mutex<std::collections::VecDeque<Answer>>,
+    /// The script answers the cold-slot `tools/list` too (F13 A11-c cells).
+    lists_scripted: std::sync::atomic::AtomicBool,
 }
 
 /// One scripted backend answer (A11 cells).
@@ -525,6 +527,12 @@ fn http_status_error(status: u16) -> crate::Error {
 
 impl Dispatches {
     /// Answer the next dispatches with these HTTP statuses (A11 cells).
+    /// Let the script answer `tools/list` as well as `tools/call`.
+    pub(super) fn script_lists(&self) {
+        self.lists_scripted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub(super) fn answer_with(&self, statuses: &[u16]) {
         let answers = statuses.iter().copied().map(Answer::Status);
         self.answers.lock().extend(answers);
@@ -607,7 +615,12 @@ impl crate::transport::Transport for CapturingTransport {
         });
         // The scripted answers are for `tools/call`; the cold-slot
         // `tools/list` R2 sends first (F13) keeps the fixture's catalogue.
-        if method != "tools/list" {
+        if method != "tools/list"
+            || self
+                .dispatches
+                .lists_scripted
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
             match self.dispatches.answers.lock().pop_front() {
                 Some(Answer::Status(status)) => return Err(http_status_error(status)),
                 Some(Answer::Result(result)) => {

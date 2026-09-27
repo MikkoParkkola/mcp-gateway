@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::super::super::meta_mcp_helpers::did_you_mean;
 use super::{BudgetOutcome, MetaMcp, dispatch_error_result};
+use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
 
 /// A miss on `tool`, with a "did you mean?" hint drawn from `candidates`
@@ -23,6 +24,19 @@ pub(super) fn miss_with_hint(
     match did_you_mean(tool, candidates, 3, 3) {
         Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
         None => format!("Tool '{tool}' not found on server '{server}'. {fallback}"),
+    }
+}
+
+impl BudgetOutcome {
+    /// [`Self::of`]'s `Err` arm, for a caller that keeps the error.
+    fn of_error(error: &Error) -> Self {
+        if matches!(error, Error::RateLimited(_))
+            || crate::gateway::recovery::is_rate_limited(&error.to_string())
+        {
+            Self::IgnoredRateLimit
+        } else {
+            Self::Failure
+        }
     }
 }
 
@@ -93,6 +107,56 @@ impl MetaMcp {
             .collect()
     }
 
+    /// A cold-slot fill that failed, answered as a failed dispatch is. The
+    /// list is this caller's first request, so a 401 on a managed credential
+    /// forces its one refresh here (A11-c); otherwise a cold slot would never
+    /// reach the dispatch that refreshes it. `Ok` is the accounted tool
+    /// result and the error text; `Err` is a marked account refusal, for the
+    /// caller's connect offer.
+    pub(super) async fn answer_refused_fill(
+        &self,
+        (server, tool): (&str, &str),
+        error: Error,
+        managed: Option<&crate::personal_accounts::ManagedLease>,
+        checked_at: std::time::Instant,
+    ) -> std::result::Result<(Value, String), Error> {
+        let error = match managed {
+            Some(managed) if is_upstream_unauthorized(&error) => {
+                managed.after_upstream_401(error).await
+            }
+            _ => error,
+        };
+        let value = self.account_refused_fill(server, tool, &error, checked_at);
+        if crate::personal_accounts::refusal::marked(&error).is_some() {
+            return Err(error);
+        }
+        Ok((value, error.to_string()))
+    }
+
+    /// [`Self::answer_refused_fill`] for a bridged round: the error text it
+    /// is refused with, a marked account refusal parked in `parked` as a
+    /// dispatched round's is (A11-c).
+    pub(super) async fn bridged_refused_fill(
+        &self,
+        at: (&str, &str),
+        error: Error,
+        managed: Option<&crate::personal_accounts::ManagedLease>,
+        checked_at: std::time::Instant,
+        parked: &parking_lot::Mutex<Option<Error>>,
+    ) -> String {
+        match self
+            .answer_refused_fill(at, error, managed, checked_at)
+            .await
+        {
+            Ok((_, message)) => message,
+            Err(error) => {
+                let message = error.to_string();
+                *parked.lock() = Some(error);
+                message
+            }
+        }
+    }
+
     /// Account a check-site fill the slot's failsafe refused, or that failed
     /// on transport under `closed` (F13, A3), exactly as `accounted_dispatch`
     /// accounts a dispatch refused or failed the same way: the
@@ -103,7 +167,7 @@ impl MetaMcp {
         &self,
         server: &str,
         tool: &str,
-        error: Error,
+        error: &Error,
         started: std::time::Instant,
     ) -> Value {
         telemetry_metrics::counter!(
@@ -117,8 +181,7 @@ impl MetaMcp {
             "server" => server.to_owned()
         )
         .record(started.elapsed().as_secs_f64());
-        let value = dispatch_error_result(&error, tool, server);
-        self.record_error_budget(server, tool, BudgetOutcome::of(&Err(error)));
-        value
+        self.record_error_budget(server, tool, BudgetOutcome::of_error(error));
+        dispatch_error_result(error, tool, server)
     }
 }

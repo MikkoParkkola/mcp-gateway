@@ -66,7 +66,7 @@ async fn apply_backend_tool_call_security(
     params: Option<&Value>,
     id: &RequestId,
     backend: &crate::backend::Backend,
-    slot: key_check::CallerSlot<'_>,
+    (slot, failed): (key_check::CallerSlot<'_>, &DirectFailure<'_>),
 ) -> BackendSecurityResult {
     let unnamed = || {
         let message = "tools/call requires params.name";
@@ -143,7 +143,7 @@ async fn apply_backend_tool_call_security(
 
     // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
     // passthrough backend is checked too.
-    if let Some(rejection) = key_check::key_refusal(state, auth, backend, slot, params, id).await {
+    if let Some(rejection) = key_check::key_refusal(backend, (slot, failed), params, id).await {
         return Err(rejection);
     }
 
@@ -1008,7 +1008,7 @@ async fn backend_handler_inner(
             params.as_ref(),
             &id,
             &backend,
-            (identity_key.as_deref(), &propagated_headers),
+            ((identity_key.as_deref(), &propagated_headers), &failed),
         )
         .await
         {

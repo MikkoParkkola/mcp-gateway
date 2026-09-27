@@ -978,15 +978,13 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         let refusal = match refusal.await {
             Ok(refusal) => refusal,
             Err(e) => {
-                // Accounted as `accounted_dispatch` accounts a refused round,
-                // but always NotAdmitted: no `tools/call` left the gateway, so
-                // the idempotency key must stay retryable.
-                let bridged = crate::gateway::input_bridge::BridgeError::NotAdmitted {
-                    message: e.to_string(),
-                };
-                self.meta
-                    .account_refused_fill(self.server, self.tool, e, checked_at);
-                return Err(bridged);
+                // NotAdmitted: no `tools/call` left, so the key stays retryable.
+                let (at, parked) = ((self.server, self.tool), self.account_refusal);
+                let fill = self
+                    .meta
+                    .bridged_refused_fill(at, e, self.managed, checked_at, parked);
+                let message = fill.await;
+                return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
             }
         };
         if let Some(refusal) = refusal {
@@ -1955,7 +1953,21 @@ impl MetaMcp {
         );
         let refusal = match refusal.await {
             Ok(refusal) => refusal,
-            Err(e) => Some(self.account_refused_fill(server, tool, e, checked_at)),
+            Err(e) => {
+                let managed = caller_credential.managed.as_ref();
+                match self
+                    .answer_refused_fill((server, tool), e, managed, checked_at)
+                    .await
+                {
+                    Ok((value, _)) => Some(value),
+                    Err(e) => {
+                        if let Some(reservation) = idem_reservation.as_mut() {
+                            reservation.release();
+                        }
+                        return self.with_connect_offer(Err(e), verified_identity).await;
+                    }
+                }
+            }
         };
         if let Some(refusal) = refusal {
             if let Some(reservation) = idem_reservation.as_mut() {
