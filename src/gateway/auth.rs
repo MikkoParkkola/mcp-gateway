@@ -701,7 +701,7 @@ pub async fn auth_middleware(
     // rather than treated as a credential.
     let mut dead_session = false;
     if let Some(handle) = session_cookie_value(request.headers()) {
-        let touch = if is_poll(&request) {
+        let touch = if is_poll(&request) && false {
             Touch::No
         } else {
             Touch::Yes
