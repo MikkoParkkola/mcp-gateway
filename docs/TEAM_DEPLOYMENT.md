@@ -150,7 +150,7 @@ auth:
     - name: contractor-bob
       key_sha256: "env:BOB_KEY_SHA256"
       backends: ["jira"]
-      expires_at: "2026-12-31T23:59:59Z"
+      expires_at: "2026-12-31T23:59:59Z"     # set your own end date
 security:
   transparency_log:
     enabled: true
@@ -242,8 +242,10 @@ like success:
    or revoke their key-server token with `DELETE /auth/token/{jti}`, and confirm
    their next call is refused. A key past its `expires_at` is refused without a
    restart.
-4. Confirm the audit log has a record for each of those tool calls, naming the
-   caller.
+4. Call one backend tool as each person and confirm the audit log has a
+   record for each call, naming the caller. The requests refused in steps 2
+   and 3 are turned away by authentication, before a tool call exists, so
+   they are not in the tool-call audit log.
 
 ## Related
 
