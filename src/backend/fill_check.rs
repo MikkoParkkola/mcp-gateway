@@ -131,7 +131,7 @@ impl Drop for FillGuard {
         match std::mem::replace(&mut self.end, FillEnd::Pending) {
             FillEnd::Pending => count("input_schema_fill_cancelled"),
             FillEnd::Failed { transport } => {
-                *stamp.lock() = Some((tokio::time::Instant::now(), transport));
+                let _ = transport;
                 count("input_schema_fetch_failed");
             }
             FillEnd::Unreplayable => count("input_schema_fetch_failed"),
