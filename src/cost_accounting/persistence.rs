@@ -77,16 +77,25 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     // truncated one that fails to parse and restarts the budgets at zero. The
     // scratch name is unique per save: gateways sharing a data directory (and
     // one gateway's periodic and final saves) must never write one file.
-    let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
-    let saved = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, json.as_bytes()))
+    // A name already taken (a file left by a killed process whose id this
+    // one reuses) is skipped, never reused or removed: it is not ours.
+    let (tmp, mut file) = loop {
+        let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(crate::Error::Config(format!("Failed to save costs: {e}"))),
+        }
+    };
+    let saved = std::io::Write::write_all(&mut file, json.as_bytes())
         .and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = saved {
-        // Best effort: the scratch may not exist if the open itself failed.
+        // This save created the scratch file, so it is ours to remove.
         let _ = std::fs::remove_file(&tmp);
         return Err(crate::Error::Config(format!("Failed to save costs: {e}")));
     }
@@ -217,7 +226,12 @@ mod tests {
             "the file is neither writer's snapshot: saved_at {}",
             loaded.saved_at
         );
-        assert_eq!(loaded.key_totals.len(), 200, "a torn or merged snapshot");
+        let owner = format!("key-{}-", loaded.saved_at);
+        assert!(
+            loaded.key_totals.len() == 200
+                && loaded.key_totals.keys().all(|k| k.starts_with(&owner)),
+            "the file mixes the two writers' snapshots"
+        );
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
@@ -245,6 +259,30 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["costs.json".to_string()], "scratch left behind");
+    }
+
+    /// A scratch name already on disk (left by a killed process whose id this
+    /// one reuses) is skipped: the save still succeeds and the leftover is
+    /// neither overwritten nor removed.
+    #[test]
+    fn a_leftover_scratch_file_is_neither_reused_nor_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("costs.json");
+        // Every name this process can reach before the test's save, with
+        // room for the saves other tests make in parallel.
+        let leftovers: Vec<_> = (0..5_000)
+            .map(|n| path.with_extension(format!("json.{}.{n}.tmp", std::process::id())))
+            .collect();
+        for leftover in &leftovers {
+            std::fs::write(leftover, b"left by an earlier process").unwrap();
+        }
+        save(&path, &PersistedCosts::default()).expect("a free scratch name is used instead");
+        assert!(
+            leftovers
+                .iter()
+                .all(|l| std::fs::read(l).is_ok_and(|b| b == b"left by an earlier process")),
+            "a leftover scratch file was overwritten or removed"
+        );
     }
 
     #[test]

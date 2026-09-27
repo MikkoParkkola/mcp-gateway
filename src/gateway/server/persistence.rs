@@ -253,21 +253,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let costs = dir.path().join("costs.json");
         let (tx, rx) = tokio::sync::broadcast::channel(1);
+        let enforcer = enforcer_with_spend(0.2);
         let task = spawn_cost_saver(
-            enforcer_with_spend(0.2),
+            Arc::clone(&enforcer),
             dir.path().to_path_buf(),
             std::time::Duration::from_millis(50),
             Some(rx),
         );
-        let saved = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while !costs.exists() {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        assert!(saved.is_ok(), "the saver never wrote costs.json");
-        let global = restored_global(dir.path());
-        assert!((global - 0.2).abs() < 1e-9, "the next boot reads {global}");
+        // Each tick saves the spend as it is then, not a snapshot taken once.
+        for (spent, expected) in [(0.0, 0.2), (0.3, 0.5)] {
+            enforcer.record_spend("tool", Some("key"), spent);
+            let saved = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while !costs.exists() || (restored_global(dir.path()) - expected).abs() > 1e-9 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            assert!(
+                saved.is_ok(),
+                "the saver never wrote {expected}; the next boot reads {}",
+                restored_global(dir.path())
+            );
+        }
         tx.send(()).expect("the saver is listening");
         tokio::time::timeout(std::time::Duration::from_secs(5), task)
             .await

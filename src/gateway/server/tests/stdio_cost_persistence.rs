@@ -29,22 +29,23 @@ const TOOL: &str = "echo";
 const KEY: &str = "seeded-key";
 /// Bound on every wait for a frame that must arrive.
 const ARRIVAL: Duration = Duration::from_secs(10);
-
-/// How long the backend holds a `tools/call` answer, so EOF lands while the
-/// call is still in flight and only the drain can finish it.
-const HELD: Duration = Duration::from_millis(500);
+/// How long after EOF the held backend answer is released: far longer than
+/// the loop needs to read EOF from an in-memory pipe.
+const EOF_HOLD: Duration = Duration::from_millis(300);
 
 /// An HTTP MCP backend with one tool. `called` flips when a `tools/call`
-/// arrives; the answer follows [`HELD`] later.
-async fn spawn_backend(called: Arc<AtomicBool>) -> String {
+/// arrives; its answer is held until `release` is notified, so the test can
+/// close stdin while the call is still in flight.
+async fn spawn_backend(called: Arc<AtomicBool>, release: Arc<tokio::sync::Notify>) -> String {
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
-            let called = Arc::clone(&called);
+            let (called, release) = (Arc::clone(&called), Arc::clone(&release));
             async move {
                 if request.get("method").and_then(Value::as_str) == Some("tools/call") {
+                    let released = release.notified();
                     called.store(true, Ordering::SeqCst);
-                    tokio::time::sleep(HELD).await;
+                    released.await;
                 }
                 let result = match request.get("method").and_then(Value::as_str) {
                     Some("initialize") => json!({
@@ -158,7 +159,13 @@ impl Served {
 
     /// Close stdin (EOF, the MCP stdio shutdown) and wait for the loop to end.
     async fn close(self) {
+        self.close_then(async {}).await;
+    }
+
+    /// Close stdin, run `after_eof`, then wait for the loop to end.
+    async fn close_then(self, after_eof: impl std::future::Future<Output = ()>) {
         drop(self.client);
+        after_eof.await;
         timeout(ARRIVAL, self.task)
             .await
             .expect("the stdio loop did not end after EOF")
@@ -185,7 +192,8 @@ fn restored_daily(served_config: &Config, data_dir: &Path) -> (f64, Option<f64>,
 async fn stdio_exit_saves_todays_spend() {
     let dir = tempfile::tempdir().expect("tempdir");
     let called = Arc::new(AtomicBool::new(false));
-    let backend = spawn_backend(Arc::clone(&called)).await;
+    let release = Arc::new(tokio::sync::Notify::new());
+    let backend = spawn_backend(Arc::clone(&called), Arc::clone(&release)).await;
     let yaml = format!(
         "backends:\n  {BACKEND}:\n    http_url: \"{backend}\"\n    streamable_http: true\n{GOVERNANCE}"
     );
@@ -207,8 +215,16 @@ async fn stdio_exit_saves_todays_spend() {
     .await
     .expect("control: the call never reached the backend");
     let config = served.config.clone();
-    // EOF with the backend still holding its answer.
-    served.close().await;
+    // EOF first, with the backend still holding its answer. The answer is
+    // released a hold after EOF (nothing outside the loop can observe the
+    // loop reading EOF), so the spend is recorded during the drain and a
+    // save made before the drain misses it.
+    served
+        .close_then(async {
+            tokio::time::sleep(EOF_HOLD).await;
+            release.notify_one();
+        })
+        .await;
 
     assert!(
         dir.path().join("costs.json").exists(),
