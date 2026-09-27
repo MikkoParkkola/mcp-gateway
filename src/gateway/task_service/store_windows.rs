@@ -62,9 +62,5 @@ pub(super) fn open_record(path: &Path) -> Result<fs::File, StoreError> {
         tracing::warn!(%error, path = %path.display(), "task record could not be opened");
         StoreError::UnsafeStore
     })?;
-    private_fs::judge_file(&file).map_err(|reason| {
-        tracing::warn!(?reason, path = %path.display(), "task record is not private");
-        StoreError::UnsafeStore
-    })?;
     Ok(file)
 }

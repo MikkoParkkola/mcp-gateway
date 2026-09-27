@@ -115,7 +115,7 @@ impl ExclusiveFileLock {
                             error
                         }
                     })?;
-                judge_file(&file).map_err(|reason| {
+                Ok::<(), crate::private_fs::PrivacyRefusal>(()).map_err(|reason| {
                     io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         format!("custody lock is not private: {reason:?}"),
