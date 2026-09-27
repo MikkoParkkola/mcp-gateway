@@ -31,6 +31,8 @@ enum Mode {
     Down,
     /// A transport failure whose source cannot be cloned (`Io`).
     Io,
+    /// A handshake failure (`Protocol`).
+    Handshake,
     Hang,
     /// Signals `started`, waits for `release`, then serves.
     Barrier,
@@ -130,6 +132,10 @@ impl crate::transport::Transport for Lister {
             Mode::Fail => {
                 tokio::task::yield_now().await;
                 return Ok(JsonRpcResponse::error(Some(id), -32603, "list fails"));
+            }
+            Mode::Handshake => {
+                tokio::task::yield_now().await;
+                return Err(crate::Error::Protocol("initialize refused".into()));
             }
             Mode::Io => {
                 tokio::task::yield_now().await;

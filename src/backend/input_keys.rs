@@ -207,8 +207,13 @@ impl Backend {
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            // A readable list is proof the slot recovered: end its cooldown.
+            // A readable list is proof the slot recovered: end both
+            // cooldowns, and void any in-flight fill's claim to restart one.
             *entry.tools_fill_failed_at.lock() = None;
+            *entry.tools_refresh_failed_at.lock() = None;
+            entry
+                .tools_direct_epoch
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
     }
 }

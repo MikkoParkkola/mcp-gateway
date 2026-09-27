@@ -10,6 +10,7 @@
 //! the fill ends without storing, and never on a caller cancellation.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::LIST_MAX_PAGES;
@@ -71,6 +72,7 @@ impl Replay {
             Error::Transport(m) => (Error::Transport, m.clone()),
             Error::TransportPermanent(m) => (Error::TransportPermanent, m.clone()),
             Error::TransportConnect(m) => (Error::TransportConnect, m.clone()),
+            Error::Protocol(m) => (Error::Protocol, m.clone()),
             Error::Config(m) => (Error::Config, m.clone()),
             Error::ConfigValidation(m) => (Error::ConfigValidation, m.clone()),
             Error::OAuth(m) => (Error::OAuth, m.clone()),
@@ -107,13 +109,17 @@ pub(crate) enum FillEnd {
 pub(crate) struct FillGuard {
     entry: Arc<PooledEntry>,
     end: FillEnd,
+    /// The slot's direct-list epoch when the fill was armed.
+    epoch: u64,
 }
 
 impl FillGuard {
     pub(super) fn arm(entry: Arc<PooledEntry>) -> Self {
+        let epoch = entry.tools_direct_epoch.load(Ordering::SeqCst);
         Self {
             entry,
             end: FillEnd::Pending,
+            epoch,
         }
     }
 
@@ -135,7 +141,10 @@ impl Drop for FillGuard {
             }
             FillEnd::Unreplayable => count("input_schema_fetch_failed"),
             FillEnd::Drained => {
-                *stamp.lock() = Some((tokio::time::Instant::now(), None));
+                // Voided by a newer direct list: that list ended the cooldown.
+                if self.entry.tools_direct_epoch.load(Ordering::SeqCst) == self.epoch {
+                    *stamp.lock() = Some((tokio::time::Instant::now(), None));
+                }
                 count("input_schema_fetched");
             }
             FillEnd::Stored => {
@@ -238,6 +247,10 @@ pub(crate) fn is_transport_failure(error: &Error) -> bool {
             | Error::Http(_)
             | Error::Io(_)
             | Error::Tls(_)
+            // The handshake failed (initialize refused, a framing fault): a
+            // dispatch would get the same error.
+            | Error::Protocol(_)
+            | Error::ProtocolVersionRejected { .. }
             // The backend could not be started as this caller: the dispatch
             // would fail with the same error, so the call gets it too.
             | Error::Config(_)

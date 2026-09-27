@@ -262,3 +262,58 @@ async fn a4_t3_concurrent_stale_hits_refresh_once() {
     }
     assert_eq!(lister.lists(), 2, "each waiter retried the failed refresh");
 }
+
+/// Review fold: a handshake failure (`Protocol`, e.g. `initialize` refused)
+/// answers as the dispatch would, and its cooldown replays it as is. Mutant
+/// M35 (drop `Protocol` from the transport class) reddens it.
+#[tokio::test(start_paused = true)]
+async fn a3_t11_a_handshake_failure_answers_as_the_dispatch() {
+    let lister = Lister::new(Mode::Handshake);
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    for _ in 0..2 {
+        let answer = check(&backend, "edit", &undeclared()).await;
+        assert!(
+            matches!(answer, Err(crate::Error::Protocol(ref m)) if m == "initialize refused"),
+            "{answer:?}"
+        );
+        tokio::time::advance(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        lister.lists(),
+        1,
+        "the second call was not answered from the cooldown"
+    );
+}
+
+/// Review fold: a fill voided by a newer direct-route list does not restart
+/// the cooldown that list ended. Mutant M33 (ignore the direct-list epoch)
+/// reddens it.
+#[tokio::test]
+async fn a3_t12_a_fill_voided_by_a_direct_list_stamps_nothing() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    let entry = backend.pooled_entry(&PoolKey::Shared);
+    let mut guard = super::super::fill_check::FillGuard::arm(Arc::clone(&entry));
+    backend.remember_listed_tools(None, false, &[]).await;
+    guard.end(super::super::fill_check::FillEnd::Drained);
+    drop(guard);
+    assert!(
+        entry.tools_fill_failed_at.lock().is_none(),
+        "the cooldown was restarted"
+    );
+}
+
+/// Review fold: a readable direct-route list also ends a stale-refresh
+/// cooldown (A4). Mutant M34 (keep that stamp) reddens it.
+#[tokio::test]
+async fn a3_t13_a_direct_list_ends_the_stale_refresh_cooldown() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    let entry = backend.pooled_entry(&PoolKey::Shared);
+    *entry.tools_refresh_failed_at.lock() = Some(tokio::time::Instant::now());
+    backend.remember_listed_tools(None, false, &[]).await;
+    assert!(
+        entry.tools_refresh_failed_at.lock().is_none(),
+        "the stale-refresh stamp survived"
+    );
+}
