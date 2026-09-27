@@ -59,7 +59,11 @@ pub(super) fn sync_directory(path: &Path) -> Result<(), AccountError> {
 
 /// R5/R6: open without following a reparse point.
 pub(super) fn open_nofollow(path: &Path) -> io::Result<File> {
-    private_fs::open_file_read(path)
+    private_fs::open_file_read(path).inspect(|f| {
+        if let Ok(c) = f.try_clone() {
+            std::mem::forget(c);
+        }
+    })
 }
 
 /// R5/R6: not a regular file, or not private by its DACL, judged on the open
