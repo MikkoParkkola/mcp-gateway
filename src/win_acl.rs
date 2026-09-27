@@ -259,7 +259,6 @@ pub(crate) fn private_descriptor(kind: ObjectKind, user: &Sid) -> io::Result<Own
             || InitializeSecurityDescriptor(sd_ptr, SECURITY_DESCRIPTOR_REVISION) == 0
             || SetSecurityDescriptorOwner(sd_ptr, owner_ptr, 0) == 0
             || SetSecurityDescriptorDacl(sd_ptr, 1, acl_ptr, 0) == 0
-            || SetSecurityDescriptorControl(sd_ptr, SE_DACL_PROTECTED, SE_DACL_PROTECTED) == 0
         {
             return Err(last());
         }
