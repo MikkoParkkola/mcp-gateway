@@ -33,9 +33,23 @@ fn config_yaml(root: &Path, extra_backends: &str) -> String {
     // Canonical, because the store refuses a path with non-normal components
     // and a macOS temp directory reaches it through a symlink.
     let root = root.canonicalize().expect("fixture root exists");
-    let root = root.display();
+    // Joined with the platform separator: a canonical Windows path is
+    // verbatim (`\\?\C:\...`), and a verbatim path takes no `/`.
+    // Single-quoted YAML scalars (apostrophes doubled), so no character a
+    // temp path can hold changes how the value parses.
+    let quoted = |name: &str| {
+        format!(
+            "'{}'",
+            root.join(name).display().to_string().replace('\'', "''")
+        )
+    };
+    let (env, records, authority) = (
+        quoted("accounts.env"),
+        quoted("records"),
+        quoted("authority"),
+    );
     format!(
-        "env_files:\n  - {root}/accounts.env\n\
+        "env_files:\n  - {env}\n\
 backends:\n\
 \x20 gdrive:\n\
 \x20   http_url: https://mcp.example.test/v1/mcp\n\
@@ -46,8 +60,8 @@ accounts:\n\
 \x20 enabled: true\n\
 \x20 deployment: single_process\n\
 \x20 instance_id: test-instance\n\
-\x20 store_dir: {root}/records\n\
-\x20 authority_dir: {root}/authority\n\
+\x20 store_dir: {records}\n\
+\x20 authority_dir: {authority}\n\
 \x20 current_key_id: current\n\
 \x20 keys:\n\
 \x20   current: env:ACCOUNTS_KEY\n\
