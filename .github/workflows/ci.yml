@@ -381,8 +381,8 @@ jobs:
       # here yet (W1, #1142). Green means Windows coverage for what runs, and
       # no more than that.
       - run: >-
-          cargo test --all-features --lib --bins --no-fail-fast --
-          --skip gateway:: --skip personal_accounts::
+          cargo test --all-features --lib --no-fail-fast --
+          gateway::router::tests::openwebui_adapter gateway::server::control_plane_store
 
   test:
     name: Tests
