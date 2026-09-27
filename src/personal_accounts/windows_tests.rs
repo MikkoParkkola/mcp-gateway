@@ -512,6 +512,7 @@ mod win_privileged {
             s = script.replace('"', "`\"")
         );
         let exit = std::process::Command::new("powershell")
+            .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", &launcher])
             .status();
         if !exit.is_ok_and(|s| s.success()) {

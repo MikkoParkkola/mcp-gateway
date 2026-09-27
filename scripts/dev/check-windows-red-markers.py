@@ -29,7 +29,6 @@ RED = {
     "wt4_task_dir": "W-T4",
     "wt4_task_lease": "W-T4",
     "wt4_task_record": "W-T4",
-    "wt5_junction_in_store_path_refuses": "W-T5",
     "wt7_unc": "W-T7",
     "wt7_verbatim_unc": "W-T7",
     "wt7_device": "W-T7",
@@ -46,7 +45,6 @@ RED = {
     "wt15_fat32_volume_refuses": "W-T15",
     "wt15_exfat_volume_refuses": "W-T15",
     "wt16a_held_directory_blocks_its_own_rename": "W-T16a",
-    "wt16_open_store_blocks_ancestor_swap": "W-T16",
     "wt18_path_swap_between_walk_and_open_refuses": "W-T18",
     "wt19_other_ace_type_refuses": "W-T19",
     "wt20_external_holder_released_after_one_attempt": "W-T20",
@@ -58,7 +56,10 @@ RED = {
 # Regression guards: already true of the permissive stage, must pass.
 GUARDS = {
     "wt7_drive_relative", "wt7_root_relative", "wt7_relative", "wt7_parent_component",
-    "wt7_plain_drive", "wt7_verbatim_drive", "wt17_reader_closes_before_replace",
+    # The existing symlink walk already refuses junctions, and an open store's
+    # own sidecar handles already pin its ancestors (probe E6).
+    "wt5_junction_in_store_path_refuses", "wt16_open_store_blocks_ancestor_swap",
+    "wt17_reader_closes_before_replace",
     "wt21_foreign_deny_ace_is_accepted", "wt22b_sync_file_really_flushes",
     "wt25_create_refuses_an_existing_name",
 }

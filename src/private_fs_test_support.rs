@@ -30,7 +30,10 @@ pub(crate) fn fixture_fail(row: &str, detail: &str) -> ! {
 }
 
 fn powershell(script: &str) -> Result<String, String> {
+    // Windows PowerShell must not inherit a PowerShell 7 module path (the CI
+    // shell is pwsh), or it cannot load its own security module.
     let out = Command::new("powershell")
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .map_err(|e| e.to_string())?;
