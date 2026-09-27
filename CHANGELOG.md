@@ -122,11 +122,17 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   binaries and image digests handed between jobs expired after a day, so a later re-run
   published a release with no binaries or failed to find the digests. They now last the
   repository's 14-day artifact retention, and a CI check keeps every such handoff there.
+- **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
+  row let a release pass while the burnup still listed it as held. A test also pins the
+  approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
+  cannot leave its approval behind.
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
   carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
-  text redacted. The stderr never goes to MCP clients. (#526)
+  text redacted. The stderr never goes to MCP clients. A build without the `firewall` feature has
+  no credential recogniser, so it logs a withheld marker instead of the text. `doctor
+  --start-stdio` caps a whole start at 15 s. (#526, #1568)
 - **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
   about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
   thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
@@ -190,9 +196,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 - **The OWASP self-assessment matches the shipped controls.** It had claimed a
   tool-descriptor validator and a grant-collision check that never run on a request, a removed
-  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
-  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
-  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites
+  request-path and config-load controls (plus release-time supply-chain controls for ASI04),
+  states which are on by default, adds the 4.0 multi-user controls, uses the 2026 OWASP ASI
+  risk names, and reads 2/10 COVERED, 8/10 PARTIAL.
+  CI fails when it cites a path or test that no longer exists.
   Withholding poisoned tool descriptors is tracked in #1441.
 
 - **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
