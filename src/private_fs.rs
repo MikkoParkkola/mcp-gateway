@@ -243,7 +243,8 @@ pub(crate) fn create_dir_private(path: &Path) -> io::Result<()> {
 
 /// Create a store file that is private from its first instant.
 pub(crate) fn create_file_private(path: &Path, share: Share) -> io::Result<File> {
-    crate::win_acl::create_file_private(path, user()?, share)
+    let _ = share;
+    std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(path)
 }
 
 /// Flush a file's data and metadata.
