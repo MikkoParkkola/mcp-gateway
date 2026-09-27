@@ -35,9 +35,19 @@ fn config_yaml(root: &Path, extra_backends: &str) -> String {
     let root = root.canonicalize().expect("fixture root exists");
     // Joined with the platform separator: a canonical Windows path is
     // verbatim (`\\?\C:\...`), and a verbatim path takes no `/`.
-    let env = root.join("accounts.env").display().to_string();
-    let records = root.join("records").display().to_string();
-    let authority = root.join("authority").display().to_string();
+    // Single-quoted YAML scalars (apostrophes doubled), so no character a
+    // temp path can hold changes how the value parses.
+    let quoted = |name: &str| {
+        format!(
+            "'{}'",
+            root.join(name).display().to_string().replace('\'', "''")
+        )
+    };
+    let (env, records, authority) = (
+        quoted("accounts.env"),
+        quoted("records"),
+        quoted("authority"),
+    );
     format!(
         "env_files:\n  - {env}\n\
 backends:\n\
