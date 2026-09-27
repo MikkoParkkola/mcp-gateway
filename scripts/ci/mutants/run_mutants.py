@@ -77,6 +77,10 @@ class Abort(Exception):
     """The batch cannot be trusted; fail the run before (or instead of) classifying."""
 
 
+class ProcessLeak(Abort):
+    """A test process survived its row; the tree must not be touched while it runs."""
+
+
 def git(*args: str, check: bool = True) -> str:
     done = subprocess.run(["git", *args], capture_output=True, text=True, errors="replace")
     if check and done.returncode != 0:
@@ -128,15 +132,28 @@ def evidence(output: str) -> list[str]:
 
 
 FAILED_TEST_RE = re.compile(r"^test (.+) \.\.\. FAILED$")
+SECTION_RE = re.compile(r"^---- (.+) stdout ----$")
 DOCTEST_NAME_RE = re.compile(r" - (.* )?\(line \d+\)$")
 
 
 def doctest_compile_failure(output: str) -> bool:
-    """True when every failing test is a doctest and rustdoc said it could not compile
-    one: `--no-run` does not build doctests, so this is a compile failure, not a kill."""
+    """True when every failing test is a doctest whose own failure section carries
+    rustdoc's compile marker: `--no-run` does not build doctests, so that is a
+    compile failure, not a kill. One doctest assertion failure beside it is a kill."""
     failing = [m.group(1) for m in map(FAILED_TEST_RE.match, output.splitlines()) if m]
-    return (bool(failing) and all(DOCTEST_NAME_RE.search(n) for n in failing)
-            and "Couldn't compile the test." in output)
+    if not failing or not all(DOCTEST_NAME_RE.search(n) for n in failing):
+        return False
+    sections: dict[str, list[str]] = {}
+    current = None
+    for line in output.splitlines():
+        m = SECTION_RE.match(line)
+        if m:
+            current = sections.setdefault(m.group(1), [])
+        elif line.startswith("failures:") or line.startswith("test result:"):
+            current = None
+        elif current is not None:
+            current.append(line)
+    return all("Couldn't compile the test." in "\n".join(sections.get(n, [])) for n in failing)
 
 
 def classify_test(run: Outcome) -> Verdict:
@@ -188,22 +205,41 @@ def run_cmd(cmd: list[str], limit: int, log: Path) -> Outcome:
             else:
                 os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
-        if os.name != "nt":
-            # Descendants that outlived a normal exit (a test that spawned a
-            # server, say) die with the group before the tree is reverted.
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-                for _ in range(100):  # the group is gone before the tree is reverted
-                    os.killpg(proc.pid, 0)
-                    time.sleep(0.1)
-                raise Abort("a test process group survived SIGKILL for 10 s")
-            except ProcessLookupError:
-                pass
+        leaked = os.name != "nt" and not group_gone(proc.pid)
         buf.seek(0)
         output = buf.read()
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(f"$ {' '.join(cmd)}\n{output}", encoding="utf-8")
+    if leaked:
+        raise ProcessLeak(f"a process of `{' '.join(cmd)}` survived SIGKILL for 10 s; see {log}")
     return Outcome(proc.returncode, output, timed_out)
+
+
+def group_gone(pgid: int) -> bool:
+    """Kills what is left of the group (a test that spawned a server, say) and
+    waits up to 10 s for it to be empty."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+        for _ in range(100):
+            os.killpg(pgid, 0)
+            time.sleep(0.1)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def reverting(action):
+    """Runs action, then reverts the tree -- unless a test process is still alive,
+    in which case the tree is left alone and the batch aborts."""
+    try:
+        result = action()
+    except ProcessLeak:
+        raise
+    except BaseException:
+        revert()
+        raise
+    revert()
+    return result
 
 
 def sha256(path: Path) -> str:
@@ -256,6 +292,18 @@ def revert() -> None:
     git("clean", "-fdxq", "-e", "target", "-e", "mutants-out")
 
 
+def judge(row: Row, cargo: list[str], logs: Path) -> Verdict:
+    applied = subprocess.run(["git", "apply", str(Path(MUTANTS_DIR, row.patch))], capture_output=True, text=True)
+    if applied.returncode != 0:
+        return Verdict("VOID", "apply")
+    build = run_cmd([*cargo, "--no-run"], COMPILE_LIMIT, logs / f"{row.id}-compile.log")
+    if build.timed_out:
+        return Verdict("VOID", "compile-timeout")
+    if build.exit != 0:
+        return Verdict("VOID", "compile")
+    return classify_test(run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"{row.id}.log"))
+
+
 def run(platform: str, out: Path) -> int:
     rows = [r for r in plan() if r.platform == platform]
     meta = header(rows)
@@ -270,26 +318,11 @@ def run(platform: str, out: Path) -> int:
         key = tuple(row.args)
         if key not in baselines:
             n = len(baselines)
-            try:
-                baselines[key] = classify_baseline(run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"baseline-{n}.log"))
-            finally:
-                revert()
+            baselines[key] = reverting(lambda: classify_baseline(
+                run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"baseline-{n}.log")))
         verdict = baselines[key]
         if verdict is None:
-            try:
-                applied = subprocess.run(["git", "apply", str(Path(MUTANTS_DIR, row.patch))], capture_output=True, text=True)
-                if applied.returncode != 0:
-                    verdict = Verdict("VOID", "apply")
-                else:
-                    build = run_cmd([*cargo, "--no-run"], COMPILE_LIMIT, logs / f"{row.id}-compile.log")
-                    if build.timed_out:
-                        verdict = Verdict("VOID", "compile-timeout")
-                    elif build.exit != 0:
-                        verdict = Verdict("VOID", "compile")
-                    else:
-                        verdict = classify_test(run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"{row.id}.log"))
-            finally:
-                revert()
+            verdict = reverting(lambda: judge(row, cargo, logs))
         results.append({"id": row.id, "platform": platform, "args": " ".join(row.args), **verdict.__dict__})
         print(f"{row.id}: {verdict.result} ({verdict.detail})", flush=True)
     write_outputs(out, platform, meta, results)
@@ -345,6 +378,9 @@ def self_test() -> int:
             "error: expected one of `.`, `;`", "error[E0308]: mismatched types").replace(
             "src/lib.rs - (line 3)", "src/lib.rs - add (line 3)"), False)), "VOID"),
         ("doctest compile failure beside a real failure", classify_test(Outcome(101, doc_compile + red, False)), "RED"),
+        ("doctest compile failure beside a doctest assertion", classify_test(Outcome(101, doc_compile.replace(
+            "test result: FAILED", "test src/lib.rs - sub (line 9) ... FAILED\n\n"
+            "---- src/lib.rs - sub (line 9) stdout ----\nassertion `left == right` failed\n\ntest result: FAILED"), False)), "RED"),
         ("red baseline", classify_baseline(Outcome(101, red, False)), "VOID"),
         ("baseline runs nothing", classify_baseline(Outcome(0, ignored, False)), "VOID"),
         ("baseline timeout", classify_baseline(Outcome(137, "", True)), "VOID"),

@@ -6,6 +6,7 @@
 # where any local user could read it from the process list):
 #   export RUNNER_TOKEN=$(gh api -X POST repos/MikkoParkkola/mcp-gateway/actions/runners/registration-token --jq .token)
 #   sudo --preserve-env=RUNNER_TOKEN scripts/ci/trusted-runner/setup.sh
+#   unset RUNNER_TOKEN
 #
 # What it creates:
 #   - user ghr-mcpgw: no sudo, no docker group, no other groups
