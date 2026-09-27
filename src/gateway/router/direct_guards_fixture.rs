@@ -100,8 +100,9 @@ impl Transport for CountingBackend {
     }
 }
 
-/// A router wired for the direct-route guard cells: two non-admin keys
-/// (`k-std`, `k-budget`, both `backends: ["*"]`), and `alpha` / `alpha-pt`
+/// A router wired for the direct-route guard cells: non-admin keys
+/// (`k-std`, `k-budget`, `k-rl` with a rate limit of 1, `k-deny` denied `read`;
+/// all `backends: ["*"]`), and `alpha` / `alpha-pt`
 /// (`passthrough: true`) sharing one call counter and one `Answer`.
 pub(crate) struct Fx {
     pub state: Arc<super::AppState>,
@@ -139,7 +140,18 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
     let auth = AuthConfig {
         enabled: true,
-        api_keys: vec![key("k-std"), key("k-budget")],
+        api_keys: vec![
+            key("k-std"),
+            key("k-budget"),
+            ApiKeyConfig {
+                rate_limit: 1,
+                ..key("k-rl")
+            },
+            ApiKeyConfig {
+                denied_tools: Some(vec!["read".to_string()]),
+                ..key("k-deny")
+            },
+        ],
         ..Default::default()
     };
     let (mut state, store) = test_router_app_state_with_auth(&auth).await;

@@ -109,3 +109,34 @@ accounting site is caught as well as a new inline one (M9, M13).
 fmt, `clippy --all-targets` (compile-only, on Spark, own target dir), file-size ratchet (`invoke.rs`
 and `backend_handlers.rs` must not grow; new modules under 800 lines), orphan-module check, commit
 hygiene.
+
+## Amendment 1 (red commit)
+
+Five differences between the red commit and revision 3, each with its reason:
+
+1. T3c runs on the input-bridge harness, as a child module of `src/gateway/meta_mcp/tests.rs`
+   (`bridge_budget_tests.rs`), reusing its scripted backend and accepting channel. The opening call
+   and one bridged round are driven through `MetaMcp::invoke_tool` with the `k-budget` caller
+   (limit 2.5, cost 1.0), then the next admission for that key goes through the shared spend
+   stage `admit_spend_for` and must be refused -32003. It stops at the stage rather than an HTTP
+   call because the harness has no router: `MetaMcp::invoke_tool` is `pub(super)`
+   (`meta_mcp/invoke.rs`) and the HTTP fixture cannot drive a bridged round without a live client
+   channel (the router's `/mcp` path supplies none in a one-shot request). The per-backend route's
+   use of `admit_spend_for` is pinned separately by T3 (the route draws on the budget) and by the
+   T8 structural check (no route calls spend admission any other way). No test-only seam needed.
+2. Already-shared table populated with live rows on both routes: tool-name validation, authorizer
+   (a key denied `read`), request firewall (shell-injection argument), per-key rate limit (limit 1,
+   second call), and response-firewall redaction (a GitHub-token-shaped result, redacted on both).
+   Attestation, the invocation audit record and undeclared-key refusal are already pinned on both
+   routes by `router/tests/attestation_routes.rs`, `router/direct_audit_tests.rs` and
+   `router/r2_identity_keys_tests.rs`; the table cites them rather than duplicate them.
+3. T4 stages the session profile with `session_profiles().set_profile` instead of calling
+   `gateway_set_profile`. Equivalent: the tool writes that same store, and the control under test
+   is the read through `active_profile`, which both paths share.
+4. T5's "cached before signing" row became "same key twice under signing, both refused, nothing
+   dispatched or cached". Equivalent for the ordering claim: signing cannot be switched on after
+   `MetaMcp` is shared, and the property tested (refusal precedes reservation and cache) is pinned
+   by zero backend calls plus the T9 reservation counter in the T5 main cell.
+5. The signed-`gateway_invoke` guard covers nonce-optional only. Equivalent: `require_nonce` on
+   the meta route is already pinned by `meta_mcp/signing_delivery_tests.rs`; the guard's purpose
+   here is only that the direct-route refusal leaves `gateway_invoke` working.
