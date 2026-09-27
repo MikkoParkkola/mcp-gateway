@@ -544,8 +544,9 @@ fn f13_t7c_a_voided_store_is_judged_from_the_returned_list_and_stamps() {
 
 /// F13-T7d: an invented tool name, with the store voided mid-drain by an
 /// invalidation or by a direct-route `replace`: `closed` refuses with text U,
-/// never text A, because absence from a list the slot does not hold proves
-/// nothing (`Completeness::Unknown`). The no-voider control gets text A.
+/// never text A after an invalidation, because absence from a list the slot
+/// does not hold proves nothing (`Completeness::Unknown`). A replacement is a
+/// newer complete list, so absence from it is text A, as in the control.
 /// New-API row: `Completeness` has no base counterpart. Proven by mutants
 /// M6c (completeness without `ptr_eq`) and M6d (judge a void from the side
 /// bit), which turn the voided arms into text A.
@@ -557,13 +558,14 @@ fn f13_t7d_absence_from_a_voided_list_is_unavailable_not_absent() {
             let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
             voided_check(&backend, &lister, "nosuch", voider).await
         });
+        // A replacement is a newer complete list: absence from it is text A.
         let (text, refused, other) = match voider {
-            Voider::Nothing => (
+            Voider::Nothing | Voider::Replace => (
                 super::fill_check::text_absent("nosuch"),
                 "input_schema_refused_absent",
                 "input_schema_refused_unavailable",
             ),
-            _ => (
+            Voider::Invalidate => (
                 TEXT_UNAVAILABLE.to_owned(),
                 "input_schema_refused_unavailable",
                 "input_schema_refused_absent",

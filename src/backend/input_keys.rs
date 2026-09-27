@@ -128,17 +128,14 @@ impl Backend {
             }
             Err(_) => return Ok(unavailable(mode)),
         };
-        // A store voided by a newer list (a direct-route list replaced the
-        // slot mid-fill; stored complete) is judged wholly from that list,
-        // presence and absence alike; a store voided by an invalidation
-        // leaves the slot empty and is judged from this one.
+        // A store voided by a newer list (a list replaced the slot mid-fill)
+        // is judged wholly from that list and its completeness, presence and
+        // absence alike; a store voided by an invalidation leaves the slot
+        // empty and is judged from this one.
         let newer = matches!(completeness, Completeness::Unknown)
             .then(|| self.held_tools_for(identity_key))
             .flatten();
-        let (tools, completeness) = match newer {
-            Some(newer) => (newer, Completeness::Complete),
-            None => (tools, completeness),
-        };
+        let (tools, completeness) = newer.unwrap_or((tools, completeness));
         if let Some(found) = tools.iter().find(|t| t.name == tool) {
             return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
         }

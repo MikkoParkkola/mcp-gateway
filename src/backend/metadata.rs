@@ -175,9 +175,22 @@ impl Backend {
         self.get_cached_tool_for(None, name)
     }
 
-    /// The list `binding`'s slot holds now, fresh or not; `None` when empty.
-    pub(super) fn held_tools_for(&self, binding: Option<&str>) -> Option<Arc<Vec<Tool>>> {
-        self.tools_slot(binding).tools_cache.snapshot_shared()
+    /// The list `binding`'s slot holds now, fresh or not, with its
+    /// completeness, read under one cache guard; `None` when empty.
+    pub(super) fn held_tools_for(
+        &self,
+        binding: Option<&str>,
+    ) -> Option<(Arc<Vec<Tool>>, Completeness)> {
+        let slot = self.tools_slot(binding);
+        slot.tools_cache.with_cached(|held| {
+            let truncated = slot.tools_truncated.load(Ordering::SeqCst);
+            let completeness = if truncated {
+                Completeness::Truncated
+            } else {
+                Completeness::Complete
+            };
+            held.map(|list| (Arc::clone(list), completeness))
+        })
     }
 
     /// Snapshot of the tools cached on `binding`'s slot (non-blocking).
