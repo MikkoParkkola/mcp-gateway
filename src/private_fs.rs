@@ -58,7 +58,7 @@ pub(crate) enum PrivacyRefusal {
 pub(crate) fn prefix_allowed(component: &Component<'_>) -> bool {
     matches!(
         component,
-        Component::Prefix(p) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        Component::Prefix(p) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_) | Prefix::UNC(..) | Prefix::VerbatimUNC(..))
     )
 }
 
