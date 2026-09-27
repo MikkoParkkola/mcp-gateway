@@ -1696,6 +1696,24 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
 
+## 74. A stdio gateway writes `costs.json`
+
+With `cost_governance` enabled, a stdio gateway (`mcp-gateway --stdio`) loaded today's spend
+from `costs.json` at startup but never saved it, so each restart reset the daily budgets.
+
+In 4.0 the stdio gateway saves the file as the HTTP gateway does:
+
+- when the client closes stdin, after the calls still in flight have finished;
+- every 5 minutes while it runs.
+
+A gateway stopped any other way (killed, or its task cancelled when embedded) loses at most the
+last 5 minutes of spend. The file is per process: two gateways sharing one data directory
+(`MCP_GATEWAY_CONFIG_DIR`, default `~/.mcp-gateway`) each enforce their own budget, and the file
+holds whichever saved last.
+
+**Action:** none for most setups. If several stdio gateways share a data directory and you need
+each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
@@ -1709,6 +1727,7 @@ These need no action and have no startup notice.
 - **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
   `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
   has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
+  Item 74 covers stdio.
 - **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
   a private capability checkout under `$HOME/github` if it existed. If you relied on that,
   add the directory to `capabilities.directories`.

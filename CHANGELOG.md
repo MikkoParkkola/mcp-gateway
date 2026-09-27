@@ -113,6 +113,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
