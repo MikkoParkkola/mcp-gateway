@@ -387,3 +387,66 @@ fn l7_a_stalled_read_is_warned_about_once() {
     });
     assert_eq!(count(&logs, "WARN", "env-file read has not finished"), 1);
 }
+
+/// A poll read that dies, so its result channel closes empty.
+fn dying_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
+    panic!("the poll read died");
+}
+
+/// L8: a read that ends without a result is warned about, not taken for
+/// "no difference".
+#[test]
+fn l8_a_read_that_dies_is_warned_about() {
+    use crate::test_log_capture::{count, records};
+    let mut poller = super::EnvPoller::new(
+        std::sync::Arc::default(),
+        std::sync::Arc::default(),
+        PathBuf::from("/cfg.yaml"),
+    )
+    .with_read(dying_read);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            assert!(poller.tick(Duration::from_secs(5)).await.is_none());
+        });
+    });
+    assert_eq!(count(&logs, "WARN", "ended without a result"), 1);
+}
+
+/// A poll read slow enough to overrun a short wait once, then finish.
+fn slow_read(_: &EnvOverlay, _: &[PathBuf]) -> Option<PathBuf> {
+    std::thread::sleep(Duration::from_millis(300));
+    None
+}
+
+/// L9: a stall that ends clears the warning state, so the next stall is
+/// warned about again.
+#[test]
+fn l9_a_new_stall_after_recovery_is_warned_about_again() {
+    use crate::test_log_capture::{count, records};
+    let mut poller = super::EnvPoller::new(
+        std::sync::Arc::default(),
+        std::sync::Arc::default(),
+        PathBuf::from("/cfg.yaml"),
+    )
+    .with_read(slow_read);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            let short = Duration::from_millis(20);
+            assert!(poller.tick(short).await.is_none(), "first stall");
+            assert!(
+                poller.tick(Duration::from_secs(5)).await.is_none(),
+                "it ends"
+            );
+            assert!(poller.tick(short).await.is_none(), "second stall");
+        });
+    });
+    assert_eq!(count(&logs, "WARN", "env-file read has not finished"), 2);
+}

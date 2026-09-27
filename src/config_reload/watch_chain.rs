@@ -247,10 +247,6 @@ pub(super) fn spawn_rewatch_task(
         env_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                // Shutdown first, deterministically: after a stalled env read
-                // the poll interval is ready again at once, and a random pick
-                // could keep choosing it over a pending shutdown.
-                biased;
                 _ = shutdown.recv() => break,
                 changed = wake.changed() => {
                     if changed.is_err() {
@@ -263,6 +259,16 @@ pub(super) fn spawn_rewatch_task(
                     // until a reload succeeds; the debounce coalesces them.
                     if let Some(trigger) = poller.tick(env_poll_every).await {
                         let _ = reload.try_send(trigger);
+                    }
+                    // After a stalled read the interval is ready again at once
+                    // and select picks at random, so shutdown is checked here:
+                    // it then waits at most one poll wait. Not `biased`, which
+                    // would let constant directory wakes starve the poll.
+                    if !matches!(
+                        shutdown.try_recv(),
+                        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                    ) {
+                        break;
                     }
                     continue;
                 }
