@@ -174,7 +174,7 @@ Defaults that matter here:
 | `auth.enabled` | `false` |
 | `server.host` | `127.0.0.1` |
 | `server.cleartext_http` | `refuse` |
-| `server.replicas` | `1` |
+| `server.replicas` | `2` |
 | `security.caller_identity.mode` | `off` |
 | `security.transparency_log.enabled` | `false` |
 | `key_server.enabled` | `false` |
