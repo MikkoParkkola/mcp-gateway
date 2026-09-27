@@ -2138,7 +2138,7 @@ impl Gateway {
             if let Some(saver) = cost_saver {
                 drop(saver.await);
             }
-            persistence::save_costs(enforcer, &data_dir);
+            let _ = enforcer;
         }
 
         // Graceful drain: wait for in-flight requests to complete.
