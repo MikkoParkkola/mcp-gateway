@@ -72,8 +72,10 @@ does and successive direct calls cross the limit.
 maps it for S3/S4: a transport error or JSON-RPC `error` is a failure (classified by `BudgetOutcome::of`
 semantics, so a backend rate-limit refusal is `IgnoredRateLimit`); a `result` is success, and its value
 is what S4 gates. A tool-level `isError: true` result is success for accounting, as on meta. Spend eligibility and
-error-budget class are separate outputs of the adapter, each unit-tested for: ordinary success,
-`isError: true`, JSON-RPC error, transport error, backend rate-limit refusal.
+error-budget class are separate outputs of the adapter, each unit-tested for: ordinary success
+(spend, Success), `isError: true` (spend, Success), a rate-limit refusal carried as `isError: true`
+(spend, IgnoredRateLimit), a rate-limit refusal as a JSON-RPC error or transport error (no spend,
+IgnoredRateLimit), other JSON-RPC and transport errors (no spend, Failure).
 
 ### 2.2 Router chain (one chain, reconciled with LIFECYCLE.1)
 
@@ -99,7 +101,8 @@ Direct-route order (request thread and LIFECYCLE.1 worker alike):
    attempts no reservation and a cached result is never returned past a refusal.
 2. Idempotency reservation / cached-result short-circuit (unchanged, `backend_handlers.rs:~955`).
 3. `DirectRouteGuards::before_dispatch`: S2 `admit_spend_for`, immediately before `dispatch_in_scope`;
-   its warnings are attached to a successful result as `_cost_warnings`, as meta does (`invoke.rs:2446-2455`).
+   its warnings are kept and attached as `_cost_warnings` after `gate_payload` (step 5), as meta
+   does (`invoke.rs:2446-2455`).
 4. Dispatch.
 5. `DirectRouteGuards::after_dispatch`: S3 `account_dispatch` (before idempotency settlement), then
    S4 `gate_payload` on a successful result, then the response scan.
@@ -154,12 +157,12 @@ All router cells use one counting backend and assert its call count. An allowed-
 | T2 | DIRECT.1 | capability disabled by error budget; -32000; count 0 | backend called |
 | T3 | DIRECT.2 | limit of N calls, empty accumulator: N direct calls succeed, call N+1 -32003; count N; successful results carry `_cost_warnings` near the limit | all N+1 dispatched |
 | T3b | DIRECT.2 | direct JSON-RPC and transport failures do not increment the spend accumulator | n/a (guard) |
-| T3c | DIRECT.2 | a bridged multi-round exchange and a direct call draw on one budget | n/a (guard of the :937 extraction) |
+| T3c | DIRECT.2 | limit 1: one bridged round spends it, then a direct call is refused -32003; plus a source assertion that the bridged round (`invoke.rs:937`) calls `admit_spend_for` | the direct call dispatches |
 | T4 | DIRECT.3 | session profile excluding the tool, `mcp-session-id` set: refused, count 0; absent and empty header: default profile, dispatched | backend called |
 | T5 | DIRECT.4 | matrix: signing off (dispatched); signing on, nonce optional (dispatched); signing on + `require_nonce` (-32001, count 0); signed `gateway_invoke` with nonce under the same config succeeds; with an idempotency key already holding a cached result, still -32001 | third row dispatched |
 | T6 | DIRECT.5 | backend returning JSON-RPC errors (not rate-limit); server threshold reached before any per-capability limit (capability budget disabled in the fixture); after N failures `is_killed` is true and the next call is refused | never killed |
 | T6b | DIRECT.5 | backend rate-limit refusals do not count toward the budget | n/a (guard) |
-| T7 | DIRECT.6 | response contract `fail_closed` + `action_mode`, no contract for the tool: refused post-dispatch, count 1; observe mode (`action_mode` off): delivered, warning logged | delivered in both |
+| T7 | DIRECT.6 | response contract `fail_closed` + `action_mode`, no contract for the tool: refused post-dispatch with HTTP 200 and the gate's JSON-RPC error, count 1; observe mode (`action_mode` off): delivered, warning logged | delivered in both |
 | T7b | DIRECT.6 | response inspection `action_mode` with a HIGH finding: refused; context integrity `team_shared` withholding: withheld | delivered |
 | T8 | DIRECT.8 | both-routes parity table (§6) | G1-G6 rows red on Direct |
 | T9 | ordering | with the T1 kill fixture, the idempotency reservation is never called (counter via a test hook on `direct_route_idempotency`) | counter is 1 today |
@@ -189,10 +192,12 @@ dispatch-`Err` arm (T7 status 500 instead of 200).
 
 Structure: a source check reads `invoke_tool_traced`, `backend_handler_inner` and
 `src/gateway/router/direct_guards.rs` and fails if an inner primitive appears there:
-`kill_switch.is_killed`, `is_capability_disabled`, `record_error_budget`, `enforcer.record_spend`,
-`apply_response_gates`, or `active_profile(..).check`. Calls to the stage methods, and the plain
+`kill_switch.is_killed`, `is_capability_disabled`, `record_error_budget`, `enforcer.check`,
+`enforcer.record_spend`, a call to `admit_spend(` (not `admit_spend_for`), `apply_response_gates`, or
+`active_profile(` followed by `.check` (whitespace- and newline-tolerant, matching `invoke.rs:1089-1091`). Calls to the stage methods, and the plain
 `active_profile(session_id)` lookup meta uses for routing and cache keys (`invoke.rs:1661`), are
-allowed. A control added inline on one route therefore fails (M9); correct wiring passes.
+allowed. A control added inline on one route therefore fails (M9, including a re-added inline
+`admit_spend` call); correct wiring passes.
 
 ## 7. Out of scope
 
