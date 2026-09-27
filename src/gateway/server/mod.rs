@@ -913,7 +913,7 @@ impl Gateway {
         let usage_stats = Some(Arc::new(UsageStats::new()));
 
         #[cfg(test)]
-        let data_dir = (self.data_dir.clone()).unwrap_or_else(persistence::standard_data_dir);
+        let data_dir = (self.data_dir.clone()).map_or_else(persistence::standard_data_dir, |_| persistence::standard_data_dir());
         #[cfg(not(test))]
         let data_dir = persistence::standard_data_dir();
         persistence::ensure_data_dir(&data_dir);
