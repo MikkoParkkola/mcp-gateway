@@ -113,16 +113,17 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
-- **Env files follow a retargeted link.** An env file reached through a link (`current/.env`
-  after a release switch, or an env file that is itself a symlink) kept reloading from the old
-  target, because its directory watch was fixed at startup. Env files are now re-read every
-  2 seconds and reloaded when their content differs from what is loaded, which also works on
-  NFS and FUSE mounts. A file that fails to load keeps the running values and is retried, with
-  at most one warning a minute per file unless the error changes. A lookup error on an env
-  file (a link loop, a directory the gateway cannot search) now fails the load instead of
-  reading as a missing file. After a failed reload the gateway retries every 2 seconds until
-  one succeeds, so a config edit that failed alongside a broken env file still applies once the
-  env file is fixed. See `docs/DEPLOYMENT.md` and `docs/UPGRADING-4.0.md` item 72. (#1286)
+- **Env files follow a retargeted link.** An env file reached through a link (`current/.env` after
+  a release switch, or an env file that is itself a symlink) kept reloading from the old target,
+  because its directory watch was fixed at startup. A gateway serving HTTP now re-reads env files
+  every 2 seconds and reloads when their content differs from what is loaded, which also works on
+  NFS and FUSE mounts; a stdio gateway watches no files, as before. A file that fails to load
+  keeps the running values and is retried, with at most one warning a minute per file unless the
+  error changes. A lookup error on an env file (a link loop, a directory the gateway cannot
+  search) now fails the load instead of reading as a missing file. After a failed reload the
+  gateway retries every 2 seconds until one succeeds, so a config edit that failed alongside a
+  broken env file still applies once the env file is fixed. See `docs/DEPLOYMENT.md` and
+  `docs/UPGRADING-4.0.md` item 72. (#1286)
 
 - **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
   binaries and image digests handed between jobs expired after a day, so a later re-run

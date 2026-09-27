@@ -1764,8 +1764,9 @@ FUSE mounts.
 
 In 4.0:
 
-- Every listed env file is re-read every 2 seconds and the config reloads when its content
-  differs from what is loaded. A file that appears later is picked up.
+- A gateway serving HTTP re-reads every listed env file every 2 seconds and reloads when its
+  content differs from what is loaded. A file that appears later is picked up. A stdio
+  gateway watches no files, as before.
 - A lookup error on an env file (a link loop, a directory the gateway cannot search) fails
   the load instead of reading as a missing file.
 - After any failed reload, whatever caused it, the reload is retried every 2 seconds until
