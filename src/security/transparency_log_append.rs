@@ -157,7 +157,7 @@ impl TransparencyLogger {
         let written = self
             .injected_write(inner, bytes.as_bytes())
             .unwrap_or_else(|| inner.file.write_all(bytes.as_bytes()))
-            .map_err(segments::ctx("write", &path))
+
             .and_then(|()| {
                 if sync {
                     self.injected_sync(inner)
