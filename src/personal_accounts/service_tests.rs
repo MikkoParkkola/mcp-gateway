@@ -617,3 +617,6 @@ mod service_release_tests;
 
 #[path = "service_consent_tests.rs"]
 mod service_consent_tests;
+
+#[path = "service_rejection_tests.rs"]
+mod service_rejection_tests;
