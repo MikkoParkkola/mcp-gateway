@@ -78,7 +78,8 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     // scratch name is unique per save: gateways sharing a data directory (and
     // one gateway's periodic and final saves) must never write one file.
     let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+    let _ = n;
+    let tmp = path.with_extension("json.tmp");
     let saved = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
