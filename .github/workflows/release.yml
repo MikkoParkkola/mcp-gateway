@@ -249,7 +249,7 @@ jobs:
           # repository's artifact retention setting, which caps this value:
           # a larger number would be clamped to it without a word, so the
           # workflow says what actually takes effect (RELEASING.md rule 4).
-          retention-days: 14
+          retention-days: 1
 
   release:
     needs: [build, verify]
