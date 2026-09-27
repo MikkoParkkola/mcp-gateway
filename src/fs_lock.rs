@@ -125,7 +125,7 @@ impl ExclusiveFileLock {
             }
             other => other?,
         };
-        file.try_lock().map_err(|error| match error {
+        Ok::<(), std::fs::TryLockError>(()).map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
             std::fs::TryLockError::Error(error) => error,
         })?;
