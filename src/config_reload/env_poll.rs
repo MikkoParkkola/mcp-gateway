@@ -252,9 +252,9 @@ pub(super) fn report_grants_busy(limiter: &parking_lot::Mutex<WarnLimiter>, path
 #[derive(Debug, Default)]
 pub(super) struct WarnLimiter {
     last: BTreeMap<PathBuf, (String, Instant)>,
-    /// A config-file failure its own arm already warned about. Its first
-    /// retry runs under the config path or, while an env file still differs,
-    /// under that file's path; either way the same error stays quiet.
+    /// The latest config-file failure, which its own arm already warned about.
+    /// Its retries run under the config path or, while an env file still
+    /// differs, under that file's path; either way the same error stays quiet.
     primed: Option<(String, Instant)>,
 }
 
@@ -264,12 +264,16 @@ impl WarnLimiter {
         let fresh = |(last_error, at): &(String, Instant)| {
             last_error == error && now.duration_since(*at) < WARN_EVERY
         };
-        // The prime answers only the next failure: consumed if it matches,
-        // dropped if it does not, so an error that changes and changes back
-        // still warns each time.
-        let primed = self.primed.take().is_some_and(|p| fresh(&p));
-        let warn = !primed && !self.last.get(path).is_some_and(fresh);
-        if warn || primed {
+        // Compared with the latest warning that concerns this path: its own,
+        // or a config-file failure's, whichever came later. So an error that
+        // changes and changes back warns each time, and only real warnings
+        // are recorded, which keeps the 60 s reminder on the actual warning.
+        let latest = [self.last.get(path), self.primed.as_ref()]
+            .into_iter()
+            .flatten()
+            .max_by_key(|(_, at)| *at);
+        let warn = !latest.is_some_and(fresh);
+        if warn {
             self.last
                 .insert(path.to_path_buf(), (error.to_owned(), now));
         }

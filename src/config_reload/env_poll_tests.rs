@@ -350,7 +350,7 @@ async fn u19_a_stalled_read_returns_within_the_wait() {
     );
 }
 
-/// U20: a failed config-file reload is recorded under the config path, so
+/// U20: a failed config-file reload primes the limiter with its error, so
 /// the first retry of the same error does not warn a second time.
 #[test]
 fn u20_a_config_file_failure_primes_the_limiter_for_its_retries() {
@@ -566,4 +566,60 @@ fn u24_an_error_that_changes_back_after_a_prime_warns_again() {
         2,
         "E2 is new, and E1 after E2 is a change"
     );
+}
+
+/// U25: a path that warned E1, then a config-file failure that warned E2:
+/// E1 returning on that path is a change from the latest warning and warns.
+#[test]
+fn u25_an_error_returning_after_a_newer_config_failure_warns() {
+    use super::super::ReloadTrigger;
+    let counts = super::EnvReloadCounts::default();
+    let mut limiter = WarnLimiter::default();
+    let env = ReloadTrigger::EnvFile(PathBuf::from("/a.env"));
+    counts.report_failure(&mut limiter, &env, "E1");
+    std::thread::sleep(Duration::from_millis(5));
+    counts.settled(&mut limiter, Some("E2"), &ReloadTrigger::ConfigFile);
+    counts.report_failure(&mut limiter, &env, "E1");
+    assert_eq!(
+        counts.warns.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "E1, then E2 from the config file, then E1 again: each is a change"
+    );
+}
+
+/// Spawn attempts made by `flaky_spawn`. Only L10b uses it.
+static FLAKY_SPAWNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fails the first and third spawn, starts the second.
+fn flaky_spawn(read: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    match FLAKY_SPAWNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+        1 => std::thread::Builder::new().spawn(read).map(drop),
+        _ => Err(std::io::Error::other("no threads")),
+    }
+}
+
+/// L10b: a read that starts again clears the spawn warning, so the next
+/// spawn failure is warned about again.
+#[test]
+fn l10b_a_new_spawn_failure_after_recovery_warns_again() {
+    use crate::test_log_capture::{count, records};
+    let mut poller = super::EnvPoller::new(
+        one_env_file(),
+        std::sync::Arc::default(),
+        PathBuf::from("/cfg.yaml"),
+    )
+    .with_read(|_, _| None)
+    .with_spawn(flaky_spawn);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let logs = records(|| {
+        runtime.block_on(async {
+            for _ in 0..3 {
+                let _ = poller.tick(Duration::from_secs(5)).await;
+            }
+        });
+    });
+    assert_eq!(count(&logs, "WARN", "cannot start an env-file read"), 2);
 }
