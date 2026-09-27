@@ -53,14 +53,17 @@ pub(crate) enum Completeness {
 /// rate-limit text stays one) as the failure it stands in for (A3).
 #[derive(Clone, Debug)]
 pub(crate) struct Replay {
-    /// The original variant, rebuilt as is. `Http`, `Io` and `Tls` carry
-    /// non-cloneable sources, so they replay as `Transport` with their text.
+    /// The original variant, rebuilt as is.
     variant: fn(String) -> Error,
     message: String,
 }
 
 impl Replay {
-    /// `Some` for a transport failure (see [`is_transport_failure`]).
+    /// `Some` for a transport failure that can be rebuilt exactly. `Http`,
+    /// `Io` and `Tls` carry sources that cannot be cloned, so they get `None`
+    /// and their fill stamps no cooldown ([`FillEnd::Unreplayable`]): the
+    /// next call lists again and gets the backend's own error, bounded by
+    /// the breaker.
     pub(crate) fn of(error: &Error) -> Option<Self> {
         let (variant, message): (fn(String) -> Error, String) = match error {
             Error::BackendTimeout(m) => (Error::BackendTimeout, m.clone()),
@@ -71,7 +74,6 @@ impl Replay {
             Error::Config(m) => (Error::Config, m.clone()),
             Error::ConfigValidation(m) => (Error::ConfigValidation, m.clone()),
             Error::OAuth(m) => (Error::OAuth, m.clone()),
-            other if is_transport_failure(other) => (Error::Transport, other.to_string()),
             _ => return None,
         };
         Some(Self { variant, message })
@@ -90,6 +92,9 @@ pub(crate) enum FillEnd {
     /// The drain, parse, start or inner timeout returned an error;
     /// `transport` is its [`Replay`] when it was a transport failure (A3).
     Failed { transport: Option<Replay> },
+    /// A transport failure no [`Replay`] can rebuild exactly: counted, but
+    /// stamps no cooldown, so no later call answers with a lookalike.
+    Unreplayable,
     /// Drained; reaching drop in this state means the store was voided.
     Drained,
     /// The store was accepted.
@@ -128,6 +133,7 @@ impl Drop for FillGuard {
                 *stamp.lock() = Some((tokio::time::Instant::now(), transport));
                 count("input_schema_fetch_failed");
             }
+            FillEnd::Unreplayable => count("input_schema_fetch_failed"),
             FillEnd::Drained => {
                 *stamp.lock() = Some((tokio::time::Instant::now(), None));
                 count("input_schema_fetched");

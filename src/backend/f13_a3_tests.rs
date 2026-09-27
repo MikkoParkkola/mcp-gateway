@@ -89,7 +89,7 @@ fn a3_t7_start_failures_answer_as_the_dispatch() {
         crate::Error::ConfigValidation("bad url".into()),
         crate::Error::OAuth("token store unavailable".into()),
     ] {
-        assert!(is_transport_failure(&error), "{error:?}");
+        assert!(is_transport_failure(&error), "not transport-class");
         let replay = Replay::of(&error).expect("replayed");
         let message = error.to_string();
         let kept = message.split(": ").nth(1).unwrap_or(&message);
@@ -159,5 +159,28 @@ async fn a3_t9_a_resultless_first_page_is_unreadable() {
     assert_eq!(
         answer.expect("text U is a result"),
         Some(TEXT_UNAVAILABLE.to_owned())
+    );
+}
+
+/// Review fold: an error whose source cannot be cloned (here `Io`) stamps no
+/// cooldown, so the next call lists again and gets the backend's own error,
+/// not a lookalike with another code or text. Mutant M27 (stamp it as
+/// `Transport`) reddens it.
+#[tokio::test(start_paused = true)]
+async fn a3_t10_an_unreplayable_failure_is_not_replayed() {
+    let lister = Lister::new(Mode::Io);
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    for _ in 0..2 {
+        let answer = check(&backend, "edit", &undeclared()).await;
+        assert!(
+            matches!(answer, Err(crate::Error::Io(_))),
+            "not the original error"
+        );
+        tokio::time::advance(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        lister.lists(),
+        2,
+        "the second call was answered from a cooldown"
     );
 }

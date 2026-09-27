@@ -274,8 +274,11 @@ impl Backend {
                     .await;
                     let end = match &drained {
                         Ok(_) => FillEnd::Drained,
-                        Err(e) => FillEnd::Failed {
-                            transport: super::fill_check::Replay::of(e),
+                        Err(e) => match super::fill_check::Replay::of(e) {
+                            None if super::fill_check::is_transport_failure(e) => {
+                                FillEnd::Unreplayable
+                            }
+                            transport => FillEnd::Failed { transport },
                         },
                     };
                     if let Some(guard) = guard.as_mut() {

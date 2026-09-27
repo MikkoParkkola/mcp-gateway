@@ -29,6 +29,8 @@ enum Mode {
     Fail,
     /// As `Fail`, but a transport failure: the backend is unreachable (A3).
     Down,
+    /// A transport failure whose source cannot be cloned (`Io`).
+    Io,
     Hang,
     /// Signals `started`, waits for `release`, then serves.
     Barrier,
@@ -128,6 +130,10 @@ impl crate::transport::Transport for Lister {
             Mode::Fail => {
                 tokio::task::yield_now().await;
                 return Ok(JsonRpcResponse::error(Some(id), -32603, "list fails"));
+            }
+            Mode::Io => {
+                tokio::task::yield_now().await;
+                return Err(crate::Error::Io(std::io::Error::other("list io")));
             }
             Mode::Down => {
                 tokio::task::yield_now().await;

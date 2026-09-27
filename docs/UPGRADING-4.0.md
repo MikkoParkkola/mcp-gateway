@@ -1576,8 +1576,10 @@ call was forwarded unchecked.
 - **Cooldown.** After a failed or timed-out tool list, or one whose result could not be kept
   because the cache was invalidated meanwhile, the gateway does not ask that backend again for
   10 s. Inside that window cold tool calls, discovery and `gateway_search` on that backend fail
-  fast instead of each waiting out a fresh list. A caller that disconnects mid-list does not start
-  this window.
+  fast instead of each waiting out a fresh list, and each gets the error the failed list got. A
+  list that failed with an HTTP error status or an I/O or TLS error starts no window, so the next
+  call lists again and gets the backend's own error; the circuit breaker bounds those retries. A
+  caller that disconnects mid-list does not start this window.
 - **Circuit breaker and rate limit.** The list obeys the caller's slot failsafe. An open breaker
   refuses the call with the same circuit-open error a dispatch gets, and a failed or successful
   list counts toward the breaker as a dispatch does. A cold call spends a token for its metadata
