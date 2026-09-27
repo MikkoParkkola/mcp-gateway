@@ -279,6 +279,10 @@ fn validate_path(path: &Path) -> Result<(), AccountError> {
     let mut current = std::path::PathBuf::new();
     for part in path.components() {
         current.push(part);
+        // A bare drive prefix (`C:`, `\\?\C:`) names a volume, not a directory.
+        if matches!(part, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
             Ok(_) => return Err(AccountError::InvalidConfiguration),
