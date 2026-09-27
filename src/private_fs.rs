@@ -221,7 +221,7 @@ pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefu
         return Err(PrivacyRefusal::NotLocal);
     }
     same_place(dir, configured)?;
-    first(privacy_refusals(dir))
+    first(privacy_refusals(dir).into_iter().filter(|r| *r != PrivacyRefusal::NotProtected).collect())
 }
 
 /// Judge an open file handle against reparse, regular-file and P1-P5.
