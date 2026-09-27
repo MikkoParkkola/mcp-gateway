@@ -54,9 +54,9 @@ quantity.
 | E | 4.0.0, modern era, mixed | 0.8385 | 0.294 | 3.8150 | 4.706 |
 
 The workload contract (`docs/requirements/RELEASE-4.0.0-workload-contract.md`) asks
-cells D and E to report p90 as well. This run did not record p90 for any cell, and the
-per-rep summaries it would come from are not in the repository (see Provenance), so the
-table cannot supply it.
+cells D and E to report p90 as well. The committed files carry no p90 for any cell, and
+the per-rep summaries that would hold it are not in the repository (see Provenance), so
+the table cannot supply it.
 
 Baseline `min(A.p50, B.p50)` = 0.6681, limit at the 5% budget = 0.7015.
 Candidate C = **0.7321, which is 4.4% over the limit** — 8.3% slower than A, 9.6% slower
