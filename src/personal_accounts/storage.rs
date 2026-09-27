@@ -269,13 +269,6 @@ fn validate_config(config: &StoreConfig) -> Result<(), AccountError> {
 }
 
 fn validate_path(path: &Path) -> Result<(), AccountError> {
-    if !path.is_absolute()
-        || path.components().any(|part| {
-            !matches!(part, Component::RootDir | Component::Normal(_)) && !prefix_allowed(&part)
-        })
-    {
-        return Err(AccountError::InvalidConfiguration);
-    }
     let mut current = std::path::PathBuf::new();
     for part in path.components() {
         current.push(part);
