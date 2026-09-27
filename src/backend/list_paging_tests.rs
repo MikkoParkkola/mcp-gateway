@@ -17,6 +17,7 @@ use std::time::Duration;
 fn item(key: &str, name: &str, extra: &Value) -> Value {
     let mut v = match key {
         "resourceTemplates" => json!({ "uriTemplate": format!("x://{name}/{{id}}"), "name": name }),
+        "resources" => json!({ "uri": format!("x://{name}"), "name": name }),
         _ => json!({ "name": name, "inputSchema": { "type": "object" } }),
     };
     if let (Some(m), Some(e)) = (v.as_object_mut(), extra.as_object()) {
@@ -429,6 +430,51 @@ async fn resource_templates_cache_follows_next_cursor() {
 
     let templates = backend.get_resource_templates_shared().await.expect("fill");
     assert_eq!(templates.len(), 2, "{templates:?}");
+}
+
+/// A two-page `method` list whose last page omits `key`, served to a fresh
+/// backend; `fill` reads it. The fill must fail: a keyless last page is
+/// malformed, not an empty end of the list.
+async fn keyless_last_page_fails<T, F>(method: &'static str, key: &'static str, fill: F)
+where
+    F: AsyncFnOnce(&Backend) -> crate::Result<T>,
+{
+    let script = finite(vec![(vec!["a"], Some("c1")), (vec![], None)]);
+    let pager = Pager::with(method, key, script);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+    assert!(
+        fill(&backend).await.is_err(),
+        "{method}: page 2 is malformed"
+    );
+    assert_eq!(pager.request_count(), 2, "{method}");
+}
+
+/// Review fold, per list family: mutants M46-M48 (accept any page for that
+/// family) redden the matching cell.
+#[tokio::test]
+async fn resources_keyless_last_page_is_unreadable() {
+    keyless_last_page_fails("resources/list", "resources", async |b| {
+        b.get_resources_shared().await
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn prompts_keyless_last_page_is_unreadable() {
+    keyless_last_page_fails("prompts/list", "prompts", async |b| {
+        b.get_prompts_shared().await
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn resource_templates_keyless_last_page_is_unreadable() {
+    let method = "resources/templates/list";
+    keyless_last_page_fails(method, "resourceTemplates", async |b| {
+        b.get_resource_templates_shared().await
+    })
+    .await;
 }
 
 /// #11 (F3-T11): a slow backend stops at the 120 s drain budget.
