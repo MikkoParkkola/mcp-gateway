@@ -121,7 +121,17 @@ fn gateway_reads(dotted: &str) -> bool {
             let msg = e.to_string();
             let unrecognised = msg.contains("Unrecognised config key") && msg.contains(dotted);
             let unknown = msg.contains("unknown field") && msg.contains(&format!("`{leaf}`"));
-            !(unrecognised || unknown)
+            if unrecognised || unknown {
+                return false;
+            }
+            // A type error is raised while extracting, before the key check:
+            // it proves the key is read only when it names this exact key,
+            // not an ancestor that could not hold a mapping.
+            if msg.contains("invalid type") || msg.contains("invalid value") {
+                return msg.contains(&format!("{dotted}\""));
+            }
+            // Validation runs after the key check, so the key was read.
+            true
         }
     }
 }
@@ -212,6 +222,10 @@ fn prose_config_keys_are_read_by_the_gateway() {
         "probe must refuse a misspelt key"
     );
     assert!(
+        !gateway_reads("auth.bearer_token.typo"),
+        "probe must refuse a key under a scalar"
+    );
+    assert!(
         !gateway_reads("security.caller_identity.modee"),
         "probe must refuse a misspelt key under a strict struct"
     );
@@ -267,6 +281,14 @@ fn helm_values_block_names_real_chart_values() {
     let block: serde_yaml::Value = serde_yaml::from_str(&blocks[0]).expect("block parses");
     let mut leaves = Vec::new();
     collect_leaves(&block, String::new(), &mut leaves);
+    assert!(leaves.len() >= 5, "the Helm block has only {leaves:?}");
+    // The `config` subtree is gateway config the chart passes through; it
+    // must load as written.
+    let config = block.get("config").expect("the Helm block sets config");
+    let config = serde_yaml::to_string(config).expect("serialize config");
+    if let Err(e) = load(&config, "TEAM_GUIDE_UNUSED=1\n") {
+        panic!("the Helm block's `config` does not load: {e}");
+    }
     for (path, value) in leaves {
         if let Some(gateway_key) = path.strip_prefix("config.") {
             assert!(

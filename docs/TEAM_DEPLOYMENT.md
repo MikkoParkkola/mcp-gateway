@@ -61,9 +61,9 @@ API key's name.
 API keys are stored as digests, never as the key:
 
 ```bash
-openssl rand -base64 32                       # a key to hand out
+KEY="$(openssl rand -base64 32)"              # the key you hand out
 printf %s "$KEY" | mcp-gateway hash-key       # prints sha256:<hex> for key_sha256
-printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>
+printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>   # exit 0 on a match
 ```
 
 Give a key handed to someone temporary an `expires_at`; after that instant the
@@ -118,8 +118,9 @@ With `auth.enabled`, the tool-call audit log is required: a config without
 `security.transparency_log.enabled` and a non-blank `path` refuses to load
 (UPGRADING-4.0 item 43). Each record names the caller, and refused and failed
 calls are recorded too. If the log stops appending, calls are refused with 503
-until it recovers (items 43 and 50). The log rotates on its own; do not rotate
-it with an external tool (item 49).
+until it recovers (items 43 and 50). A 503 of this kind can arrive after the
+backend already ran the call, so do not retry it blindly. The log rotates on
+its own; do not rotate it with an external tool (item 49).
 
 Keep the log on persistent storage. Backup and HMAC key rotation for it are in
 the [runbook](runbooks/backup-restore-and-keys.md).
@@ -216,7 +217,8 @@ while per-process state is on
 **What the chart cannot do yet.** Its values have no API keys and no key
 server: `credential` mode is one shared bearer token, so every caller has the
 same identity and the same reach. Per-person API keys and OIDC in the chart are
-a 4.0.0 release criterion still open (MIK-7570.CHART.2). Until it lands, give a
+still to come before 4.0.0 (see
+[Known gaps](release/4.0.0-beta.2-notes.md#known-gaps)). Until it lands, give a
 team per-person identity with a gateway config you deploy yourself, as in
 [the example above](#a-team-config-that-loads), or with a proxy in front that
 sets [caller identity headers](identity_grants.md#caller-identity-headers).
@@ -230,9 +232,14 @@ like success:
 1. Call `gateway_list_tools` as two different people. Each should see only
    the backends their grant names.
 2. Send a request with no credential to `/mcp`. It must be refused with 401.
-3. Expire or remove one person's key (or revoke their key-server token with
-   `DELETE /auth/token/{jti}`) and confirm their next call is refused.
-4. Confirm the audit log grew by one record per call, naming the caller.
+3. Remove one person's key and restart the gateway (a config reload does not
+   apply `auth` changes; see
+   [What a config reload applies](DEPLOYMENT.md#what-a-config-reload-applies)),
+   or revoke their key-server token with `DELETE /auth/token/{jti}`, and confirm
+   their next call is refused. A key past its `expires_at` is refused without a
+   restart.
+4. Confirm the audit log has a record for each of those tool calls, naming the
+   caller.
 
 ## Related
 
