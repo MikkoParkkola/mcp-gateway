@@ -416,3 +416,23 @@ Found by the first full Windows run of the implementation (CI run 36337890807).
   sharing. The 3.x source fixtures plant an owner-only
   descriptor on Windows where they `chmod 0600` on unix. The W-T10b row runs each
   printed `icacls` line verbatim through `cmd`, as a user pastes it.
+
+Found by the final code review and the first mutation runs:
+
+- A4, held directory handles. The judged directory handles are now kept, without delete
+  sharing, beside the custody lock for the store's life (§2.2 as written). The first
+  implementation dropped them after judging, leaving a swap window before custody; W-T16b
+  pins the window. A task store directory created on open is judged like an existing one
+  (W-T5/task), and its missing ancestors are created owner-only, as unix creates them `0700`.
+- A5, P3. An inherit-only grant does not count toward P3 (W-T8c), a deny naming the user that
+  removes read or write fails it (W-T8d), and a `GENERIC_READ|GENERIC_WRITE` grant satisfies
+  it (W-T8e). A deny for a group is not resolved: it can only fail closed.
+- A6, W-T22. The trace reads the write-through bit from the flags constant passed to
+  `MoveFileExW`, so M24 changes what the row observes.
+- A7, W-T7 and W-T26. W-T7 gains lexical rows that call `validate_path` alone: through a full
+  store open, the locality check refused UNC paths too and hid M4. W-T26 and the scratch-name
+  redraw it needs were missing; the account store now redraws a scratch name on residue
+  (Windows only; unix keeps its single attempt and no longer deletes a file already at a
+  colliding name).
+- A8, bounds. Owner SID and DACL reads in `win_acl::inspect` are bounded by the descriptor's
+  own length (`GetSecurityDescriptorLength`), not by the maximum SID size.
