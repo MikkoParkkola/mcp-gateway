@@ -1136,6 +1136,34 @@ handle means nothing outside the running process and dies with it. It is
 `HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
 cross-site, and it is marked `Secure` when the listener speaks TLS.
 
+#### Session limits, logout and signing in again
+
+A session ends after 30 minutes without activity or 8 hours after sign-in,
+whichever comes first; the cookie's `Max-Age` matches the 8 hours. The
+dashboard's own 5-second refresh is checked but is not activity, so an unattended
+tab signs out at the idle limit. Change the limits under `auth.dashboard_session`
+(`idle_timeout_secs`, `absolute_timeout_secs`); a reload applies them to open
+sessions.
+
+**Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
+on the server as well as in the browser. It answers `303` whether or not the
+session was still live, and it works while the audit log is unavailable.
+
+To sign in again without a restart:
+
+```bash
+MCP_GATEWAY_TOKEN=<bearer token or admin API key> mcp-gateway dashboard-link
+```
+
+It calls `POST /ui/api/dashboard-link`, which replaces any unused link and
+returns a new one. The credential is read from the environment only, so it stays
+out of shell history and process listings. Only the static bearer or an admin API
+key may mint a link: a dashboard session or an SSO login gets `403`. The new link
+keeps every rule above: single use, from this machine only.
+
+Sessions live in each replica's memory. Serve the dashboard from one replica, or
+put it behind sticky sessions.
+
 ### Admin requires a credential
 
 With `auth.enabled = false` every caller **over HTTP** is anonymous and holds

@@ -174,6 +174,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
+- **Dashboard sessions expire, and logout ends them.** A session opened from the dashboard
+  link lasted until the gateway restarted, and a copied cookie kept working. It now ends after
+  30 minutes idle or 8 hours total (`auth.dashboard_session`), and the dashboard's own refresh
+  does not count as activity. `POST /dashboard/logout` and a Log out button end it on the
+  server. `mcp-gateway dashboard-link` prints a fresh single-use link without a restart. See
+  UPGRADING-4.0 item 71.
+
 - **The OWASP self-assessment matches the shipped controls.** It had claimed a
   tool-descriptor validator and a grant-collision check that never run on a request, a removed
   SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only

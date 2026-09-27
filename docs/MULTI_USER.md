@@ -432,6 +432,9 @@ only raise it.
   verified user, `(issuer, sub)`, and records refused and failed calls too. On
   Kubernetes give the log a PersistentVolumeClaim (`audit.existingClaim`) or
   export it, because the chart's default `emptyDir` dies with the pod.
+- The dashboard: sessions end after 30 minutes idle or 8 hours total
+  (`auth.dashboard_session`), and live in each replica's memory. Serve the dashboard
+  from one replica or behind sticky sessions (UPGRADING-4.0 section 71).
 
 ## Related
 

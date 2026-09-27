@@ -85,6 +85,7 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
+| 71 | Dashboard sessions end after 30 minutes idle or 8 hours total; the dashboard's own refresh is not activity; an ended session gets a 401 that clears the cookie | Log in again with `mcp-gateway dashboard-link`; set `auth.dashboard_session` to change the limits |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1695,6 +1696,48 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
+
+## 71. Dashboard sessions expire, and logout ends them
+
+A dashboard session opened from the startup link used to last as long as the gateway
+process. Its cookie said `Max-Age=86400`, but the server never enforced that, so a copied
+cookie kept working. There was no logout.
+
+In 4.0:
+
+- A session ends after 30 minutes without activity, or 8 hours after sign-in, whichever
+  comes first. The cookie's `Max-Age` matches the 8-hour limit.
+- The dashboard's own 5-second refresh does not count as activity, so an unattended tab
+  signs out at the idle limit. Clicks and page changes in `/ui` do count.
+- Both limits are measured on the monotonic and the wall clock, so a machine that sleeps
+  overnight wakes to an ended session.
+- The dashboard has a **Log out** button. `POST /dashboard/logout` ends the session on the
+  server, not only in the browser, and works while the audit log is unavailable.
+- A request with an ended session cookie gets a 401 that says the session ended and clears
+  the cookie, instead of "Missing Authorization header". A bearer token sent with it is
+  still honoured, and on a public path the request proceeds as unauthenticated.
+- `mcp-gateway dashboard-link` asks the running gateway for a fresh single-use link, so
+  signing in again needs no restart. It reads the static bearer token or an admin API key
+  from `MCP_GATEWAY_TOKEN`. The link still opens only from the machine running the gateway.
+  The endpoint behind it, `POST /ui/api/dashboard-link`, refuses a dashboard session and an
+  SSO login with 403.
+
+Sessions are held in memory by each replica. Run the dashboard against one replica, or use
+sticky sessions.
+
+**Action:** none for most installs. To change the limits:
+
+```yaml
+auth:
+  dashboard_session:
+    idle_timeout_secs: 1800      # 30 minutes
+    absolute_timeout_secs: 28800 # 8 hours
+```
+
+Both must be above zero, and the idle limit may not exceed the absolute one; the gateway
+refuses to start or reload otherwise. A reload applies new limits to sessions already open.
+
+Library users: `DashboardBootstrap::issue_session` and `session_is_valid` are removed.
 
 ## After upgrading
 
