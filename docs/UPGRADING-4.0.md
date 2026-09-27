@@ -1712,7 +1712,10 @@ In 4.0:
 - On other backends, a surfaced tool missing from the shared tool list (an upstream that refuses
   an anonymous `tools/list`, or before warm-start finishes) is confirmed the same way, with a
   warning in the log naming the server and tool.
-- A client without the `elicitation` capability gets JSON-RPC -32021 for these calls.
+- A client without the `elicitation` capability gets JSON-RPC -32021 for these calls. The
+  confirmation runs before attestation, so under attestation enforce an unattested call to
+  such a tool gets -32021 (or the confirmation prompt) rather than the attestation refusal
+  -32002.
 - Calls without `task`, legacy-revision calls and non-surfaced tools are unchanged.
 - A confirmation already granted is honoured even if the tool list changes before the answer.
 
