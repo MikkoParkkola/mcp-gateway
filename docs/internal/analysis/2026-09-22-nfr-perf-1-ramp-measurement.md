@@ -927,12 +927,14 @@ cell `A` unpaired relative half-width 0.091 against paired `C/A` 0.1057 — whil
 buying roughly 30× on p99. The difference between the two harnesses is the one
 this report is about: **that harness runs its cells in fixed order** (`for rep:
 for cell in A B C D E`), so `C` sits two slots after `A` in every rep and each
-ratio carries an uncancelled position term. This design rotates, so the term
-averages out and the pairing gain survives.
+ratio carries an uncancelled position term. This design rotates, which spreads the
+per-cycle position term across slots and keeps the pairing gain; it does not remove the
+deterministic median-pooling term, which survives rotation (§1.3.3) and which no part of
+this run covers (§5.1).
 
 So the sharper form of the lesson: pairing buys a great deal on tail statistics
 in any design, and buys something on medians **only if the ordering is
-randomised or rotated**. Under fixed ordering, a paired median can be worse
+randomised or rotated**, and even then a rotated median keeps a deterministic position term. Under fixed ordering, a paired median can be worse
 than an unpaired one — the ratio carries two noise sources and gains nothing
 back.
 
@@ -965,7 +967,7 @@ order.
    throwaway rep costs ~17% at six arms and removes any carry-over from the
    previous cycle's tail; whether that carry-over exists is untested.
 4. **An arm at first-parent index 38 (`37ddab1e`, the last 3.5.1 commit) — this
-   answers question 3 at achievable `n`.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈141 and is out of
+   answers question 3 at achievable `n`.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈220 (Finding 3's formula) and is out of
    reach. But **locating a step does not require resolving small differences**:
    the idx27→69 rise is 8.42pp as a difference of pooled `X/A` medians (`P3/A` − `B/A`),
    or +10.96% as the pooled paired per-cycle ratio `P3/B` = 1.1096; the two are
