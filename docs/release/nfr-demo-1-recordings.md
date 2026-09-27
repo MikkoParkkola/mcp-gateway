@@ -7,6 +7,12 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (41 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
 
+The recordings are text transcripts. They meet the criterion, which asks for versions,
+expected observations and actual outcomes (`docs/requirements/RELEASE-4.0.0-scope-tests.md`).
+The design's second artefact, a `.tape` script and GIF per scenario
+(`docs/design/2026-09-17-nfr-demo-1-scenario-recordings.md`), does not exist yet; it lands
+with the re-recording of the demos on the current release line.
+
 The machine-readable evidence is [`nfr-demo-1-recordings.json`](nfr-demo-1-recordings.json).
 This page is the human-readable half: what each rule in the gate is answering, and
 what the recordings do and do not prove.
