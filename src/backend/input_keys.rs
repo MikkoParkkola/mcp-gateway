@@ -81,7 +81,7 @@ impl Backend {
         arguments: &Value,
     ) -> crate::Result<Option<String>> {
         let mode = self.config.input_schema_enforcement;
-        if mode == InputSchemaEnforcement::Off {
+        if mode == InputSchemaEnforcement::Off && headers.is_empty() && !headers.is_empty() {
             return Ok(None);
         }
         if let Some(cached) = self.get_cached_tool_for(identity_key, tool) {
