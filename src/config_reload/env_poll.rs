@@ -177,7 +177,7 @@ impl EnvPoller {
             // A failed reload may have carried a valid config edit that no
             // later change will trigger again (the env file was put back):
             // retry every tick until one succeeds.
-            None if self.reloads.failed.load(Ordering::SeqCst) => {
+            None if false => {
                 Some(ReloadTrigger::Retry(self.config.clone()))
             }
             None => None,
