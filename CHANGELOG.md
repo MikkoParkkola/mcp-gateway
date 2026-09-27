@@ -181,6 +181,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   server. `mcp-gateway dashboard-link` prints a fresh single-use link without a restart. See
   UPGRADING-4.0 item 71.
 
+- **Secrets stay out of the request URI and its trace.** The HTTP trace span records the method and
+  route template, never the full URI, so a session id or a dashboard link value no longer reaches
+  DEBUG logs. `/api/costs` takes a session id in the `X-Cost-Session-Id` header (`?session=` is 400),
+  and a dashboard link presented from another machine is used up. UPGRADING-4.0 §70. (#1529)
+
 - **The OWASP self-assessment matches the shipped controls.** It had claimed a
   tool-descriptor validator and a grant-collision check that never run on a request, a removed
   SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
