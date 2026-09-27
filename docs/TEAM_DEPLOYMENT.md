@@ -86,7 +86,7 @@ says who protects the traffic instead (UPGRADING-4.0 item 38):
 | `refuse` | no plain HTTP on a network bind | you enable `mtls` on the listener |
 | `tls_terminated_upstream` | a proxy terminates TLS in front of the gateway | nginx, Caddy, an ingress or a tunnel fronts it ([Reverse Proxy](DEPLOYMENT.md#reverse-proxy)) |
 | `cluster_internal` | callers reach the pod only over the cluster network, by its Service name | Kubernetes, in-cluster callers only; `server.public_url` must be that Service name |
-| `host_local_publish` | a container binds `0.0.0.0` and the host publishes the port on loopback only | Docker with `-p 127.0.0.1:...` ([Docker Deployment](DEPLOYMENT.md#docker-deployment)) |
+| `host_local_published` | a container binds `0.0.0.0` and the host publishes the port on loopback only | Docker with `-p 127.0.0.1:...` ([Docker Deployment](DEPLOYMENT.md#docker-deployment)) |
 
 Every value other than `refuse` is logged at WARN on each start.
 `server.allow_unauthenticated_network_bind` does not answer this question: it
