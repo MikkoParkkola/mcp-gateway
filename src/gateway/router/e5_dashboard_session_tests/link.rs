@@ -212,16 +212,16 @@ async fn the_link_names_the_running_listener_not_a_pending_reload() {
     );
 }
 
-/// Removing an HTTPS `public_url` by reload stops marking new cookies
-/// `Secure`, so a link minted afterwards over plain HTTP still signs in.
+/// Adding an HTTPS `public_url` by reload marks new cookies `Secure`, and
+/// removing it stops, so a link minted over plain HTTP still signs in.
 #[tokio::test]
 async fn cookie_security_follows_a_reloaded_public_url() {
     let (state, _dir) = fixture().await;
+    // Built once, before the reloads, as the server builds it at startup.
+    let router = create_router(Arc::clone(&state));
     reload(&state, |c| {
         c.server.public_url = Some("https://gw.example".to_string());
     });
-    // Built once, before the reloads, as the server builds it at startup.
-    let router = create_router(Arc::clone(&state));
     let value = state.dashboard_bootstrap.peek().expect("startup value");
     let out = send_to(router.clone(), redeem(&value, None)).await;
     assert!(out.set_cookie().contains("Secure"), "{}", out.set_cookie());
