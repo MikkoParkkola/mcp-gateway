@@ -277,6 +277,47 @@ pub(in super::super) async fn execute(
         .await
 }
 
+/// A client that accepts every question it is asked (A11 bridged cells).
+struct AcceptingChannel;
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> std::result::Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        Ok(json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"ok": true}}}))
+    }
+}
+
+/// [`execute`] for a legacy client that declared elicitation and answers
+/// every question, through `invoke_tool`, so a backend's `input_required`
+/// result is bridged and the call is re-dispatched with the answers (A11).
+pub(in super::super) async fn execute_bridged(
+    meta: &MetaMcp,
+    server: &str,
+    caller_identity: Option<&VerifiedIdentity>,
+) -> crate::Result<Value> {
+    let mut context = caller(caller_identity);
+    context.channel = &AcceptingChannel;
+    context.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({
+            "_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+            }
+        })),
+        None,
+    )
+    .declared_capabilities();
+    let args = json!({"server": server, "tool": "read", "arguments": {"folder": "inbox"}});
+    meta.invoke_tool(&args, Some("fixture-session"), &context)
+        .await
+}
+
 /// Per-user pool slots for each `(subject, descriptor)` pair, at BOTH the seeded
 /// and the refreshed token revision. The authority-bearing binding changes when
 /// a refresh commits, so seeding only the seeded revision would make the refresh

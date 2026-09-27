@@ -513,41 +513,41 @@ impl CapabilityBackend {
             });
         }
 
-        // THE ACCOUNT IS RESOLVED ONLY ONCE THE CALL IS OTHERWISE WELL FORMED.
-        //
-        // Both checks above reject without side effects, and acquiring a
-        // custody lease for a call that is about to be rejected for a bad path
-        // selector or an unknown argument would consume a real credential for a
-        // request that never happens. So the resolve happens HERE: after the
-        // arguments are known good, before the isolation guard, and through the
-        // SAME `prepare_account_context` the executor uses — a carried
-        // credential is rechecked against the live registry rather than
-        // re-minted, and a `shared` descriptor still resolves to the legacy
-        // credential and therefore still faces the unchanged guard below.
-        //
-        // The returned context is the one that is executed under, so the
-        // credential the guard consented to is the credential the inner cache
-        // key and the egress headers speak about. The executor's own resolve,
-        // inner-cache lookup and egress recheck are untouched.
-        let context = if multi_user && descriptor_bound {
+        // THE ACCOUNT IS RESOLVED ONLY ONCE THE CALL IS WELL FORMED (a lease for a
+        // rejected call would spend a real credential), through the executor's
+        // own `prepare_account_context`, on EVERY descriptor-bound call so this
+        // site still holds the managed lease when a 401 comes back (A11-e′). The
+        // isolation guard stays multi-user only; the context it consented to is
+        // the one the inner cache key and the egress are keyed on.
+        let context = if descriptor_bound {
             let context = self
                 .executor
                 .prepare_account_context(&capability, context)
                 .await?;
-            validate_oauth_isolation(&capability, &context, multi_user)?;
+            if multi_user {
+                validate_oauth_isolation(&capability, &context, multi_user)?;
+            }
             context
         } else {
             context
         };
 
-        // Use the coerced arguments (e.g., "123" → 123 for integer fields).
-        // The executor records transport health (success/failure) at the HTTP
-        // boundary, so cache hits and application-level errors do not skew
-        // backend liveness (MIK-5080).
-        let result = self
+        // Coerced arguments; the executor records transport health (MIK-5080).
+        let held = context.account_credential.clone();
+        let result = match self
             .executor
             .execute_with_context(&capability, validation.coerced, context)
-            .await?;
+            .await
+        {
+            // A11-c: a 401 on a managed credential forces at most one refresh.
+            Err(e) if crate::security::http_diagnostics::is_upstream_unauthorized(&e) => {
+                return Err(match held {
+                    Some(held) => held.after_upstream_401(e).await,
+                    None => e,
+                });
+            }
+            result => result?,
+        };
 
         Ok(build_success_tool_result(&capability, result))
     }
