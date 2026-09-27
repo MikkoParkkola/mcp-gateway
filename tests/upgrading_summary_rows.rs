@@ -256,6 +256,10 @@ fn intro_lists_cover_every_item() {
     let refuses = numbers_in(intro_span("unless one of items ", " refuses it"));
     let bold = numbers_in(intro_span("**Items ", " refuse the gateway's start"));
     assert_eq!(refuses, bold, "the two refuses-start lists differ");
+    assert!(
+        refuses.len() >= 21,
+        "the refuses-start list shrank to {refuses:?}"
+    );
     let notice = numbers_in(intro_span("notice to stderr listing\nitems ", " below"));
     assert_eq!(
         notice.len(),
@@ -422,5 +426,5 @@ fn walkthrough_commands_and_checks_are_real() {
             );
         }
     }
-    assert!(cited >= 8, "found only {cited} rehearsal checks cited");
+    assert!(cited >= 10, "found only {cited} rehearsal checks cited");
 }

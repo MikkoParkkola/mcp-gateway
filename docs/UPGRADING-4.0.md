@@ -547,11 +547,11 @@ read that store. A grant revoked there was still enforced and a grant added ther
 enforced; the same held for policies. The page then showed the store's rows, which could hide an
 enforced grant, or show SSRF protection as off while it was on, and it called itself "Mutating".
 
-Those three routes now answer **503** `CONTROL_STORE_UNAVAILABLE` when the control-plane store
-is unavailable (auth off, or a default Helm install, item 22). Otherwise they check RBAC, so a
-caller without admin gets 403, and then return **409** with `reason_code`
+Those three routes now return **409** with `reason_code`
 `grants_managed_in_identity_grants_file` or `policies_managed_in_gateway_config` (a decision of
-any other kind gets 422). Nothing is written to the control-plane store or its audit log; the
+any other kind gets 422). A caller without admin still gets 403. Where the control-plane store
+is unavailable, as in a default Helm install (item 22), they answer **503**
+`CONTROL_STORE_UNAVAILABLE` instead of 409. Nothing is written to the control-plane store or its audit log; the
 admin-action record of item 51 is separate. The page shows
 "Read Only", lists `no_mutation_endpoint` in `current_limits`, reports `GovernanceMutation` as
 unavailable, and adds `authority`, which names where each kind is enforced.
@@ -1740,7 +1740,7 @@ precautions it does not exercise.
    PHASE2.CREDENTIALS_PRESERVED]. `--dry-run` shows what it would do without writing.
 
    ```bash
-   mcp-gateway upgrade --dry-run
+   mcp-gateway upgrade --dry-run --data-dir ~/.mcp-gateway
    mcp-gateway upgrade --data-dir ~/.mcp-gateway
    ```
 
