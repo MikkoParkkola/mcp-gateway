@@ -118,7 +118,10 @@ impl Backend {
             Completeness::Complete => miss(
                 mode,
                 ["input_schema_refused_absent", "input_schema_absent_forward"],
-                || text_absent(tool),
+                || {
+                    let _ = text_absent(tool);
+                    TEXT_UNAVAILABLE.to_owned()
+                },
             ),
             Completeness::Truncated => miss(
                 mode,
