@@ -85,6 +85,7 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
+| 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1548,11 +1549,12 @@ the caller has no credential, so the gateway now treats it as a secret.
   stay raw, but they name no live session: sessions do not survive the restart.
   The dashboard's cost view (`/ui/api/costs`, `by_session[].session_id`) shows the
   fingerprint too; the admin API `/api/costs` keeps raw ids, since inspecting a
-  session by id needs one.
-- **Header-logging middleware brings the leak back.** A layer you add that logs
-  request headers (for example a tower-http trace layer configured to log
-  headers) prints the raw `Mcp-Session-Id` whatever the gateway's own log fields
-  do.
+  session by id needs one. It takes that id in the `X-Cost-Session-Id` header
+  (item 70).
+- **The gateway's own HTTP trace span recorded the full URI** at DEBUG, query
+  string included, until item 70. It now records the method and route template
+  only. A layer you add that logs request headers or URIs still prints whatever
+  it sees, including the raw `Mcp-Session-Id`.
 - A legacy destructive call with no usable session, an empty id included, is
   unchanged: it runs with a warning that nobody could be asked.
 - Library users: `NotificationMultiplexer::first_session_id` and
@@ -1717,6 +1719,28 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
+
+## 70. Secrets stay out of the request URI and its trace
+
+The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
+secrets travelled there: a raw session id in `GET /api/costs?session=<id>`, and the one-time
+dashboard link value in `/dashboard?bootstrap=<value>`. With `tower_http=debug` logging on, both
+reached the log.
+
+- The span now records the method and the matched route template only (for example
+  `/mcp/{name}`), for every route the gateway traces. It never records the query string, a path
+  value or a header.
+- `/api/costs` selects a session by the `X-Cost-Session-Id` request header. `?session=` is refused
+  with HTTP 400 and a message naming the header. `?key=` (an API key's name) is unchanged. Sending
+  both `?key=` and the header is refused.
+- A dashboard link presented from anywhere but the gateway's own machine is refused, as before, and
+  is now also used up. The refusal says so. A copy left in a browser history, a proxy log or a
+  `Referer` header therefore dies on its first use elsewhere. On the gateway's own machine, a
+  refusal because no admin credential is configured still leaves the link usable.
+
+**Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
+Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
+first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
 
 ## After upgrading
 

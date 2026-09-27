@@ -37,6 +37,9 @@ pub use quota::QuotaPrincipal;
 #[path = "auth_api_key.rs"]
 mod api_key;
 pub use api_key::ResolvedApiKey;
+#[path = "auth_bootstrap.rs"]
+mod bootstrap;
+use bootstrap::try_dashboard_bootstrap;
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
@@ -700,119 +703,6 @@ mod dashboard_session_tests {
 /// address bar, the history, or a `Referer`.
 pub const SESSION_COOKIE: &str = "mcp_gateway_session";
 
-/// Exchange a dashboard bootstrap link for a session, if this is one.
-///
-/// Split out of the middleware so the credential path stays readable; a
-/// browser navigation is the one place a value arrives in the URL, and that is
-/// worth being able to see in one screen.
-fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option<Response> {
-    if request.uri().path() != "/dashboard" {
-        return None;
-    }
-    let candidate = request.uri().query().and_then(bootstrap_param)?;
-    {
-        // Redeemable only from this machine, whatever the origin gate admits.
-        //
-        // The value is printed to the operator's own terminal on the assumption
-        // that seeing it means being at the machine. That assumption breaks the
-        // moment a `public_url` is declared: the origin gate then admits that
-        // hostname by design, so anyone who obtains the printed value — shipped
-        // logs, shared scrollback, a screenshot — can exchange it for an admin
-        // session from anywhere. Printing is already gated on a loopback bind;
-        // the exchange was not, which left the weaker half deciding.
-        //
-        // Read from the CONNECTION, not from the request. `Host` is written by
-        // the caller and rewritten by proxies — nginx's default for a bare
-        // `proxy_pass` is the upstream address — so a forwarded request could
-        // present a loopback `Host` and redeem a leaked link from anywhere
-        // (MIK-7257). The peer address is the socket the kernel accepted and
-        // nobody upstream can dictate it.
-        //
-        // Absent connect info is treated as NOT local. Both serve paths install
-        // it (`server::mod`, `support::serve_tls`); a request without it came
-        // from somewhere unaccounted for, and the safe reading of "unaccounted
-        // for" is "not at this machine".
-        let peer_is_local = request
-            .extensions()
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .is_some_and(|info| info.0.ip().is_loopback());
-
-        // A loopback peer is not conclusive on its own: a reverse proxy running
-        // on THIS machine also connects from loopback. Such a proxy announces
-        // itself — every convention-following one sets a forwarding header, and
-        // this project's own nginx example sets `X-Forwarded-For`. Refusing
-        // when one is present closes the same-host case for any proxy that
-        // follows the convention.
-        //
-        // Stated honestly: a proxy that strips these headers defeats it. That
-        // is a narrower residual than trusting `Host`, not an empty one.
-        let looks_forwarded = ["x-forwarded-for", "forwarded", "x-forwarded-host"]
-            .iter()
-            .any(|h| request.headers().contains_key(*h));
-
-        if !peer_is_local || looks_forwarded {
-            warn!(
-                peer_is_local,
-                looks_forwarded, "Dashboard bootstrap refused: redeemable only from this machine"
-            );
-            return Some(bearer_unauthorized_response(
-                "The dashboard link works only from the machine running the gateway.",
-            ));
-        }
-
-        // Checked BEFORE the value is spent. The bootstrap is one-time, so
-        // consuming it and then discovering there is no credential to exchange
-        // it for leaves the operator holding a dead link with no way to retry
-        // short of restarting the gateway — and nothing tells them that. An
-        // install configured with API keys but no bearer hits exactly this.
-        //
-        // An admin API key counts. The exchange hands back an opaque session
-        // handle and never touches the credential itself, so a bearer is not
-        // mechanically required — demanding one refused every API-key-only
-        // operator over a token the exchange would not have used. A RESTRICTED
-        // key does not count: the session it opens carries admin.
-        let has_admin_credential = state.auth_config.bearer_token.is_some()
-            || state.auth_config.api_keys.iter().any(|k| k.admin);
-        if !has_admin_credential {
-            warn!("Dashboard bootstrap unusable: no admin credential is configured");
-            return Some(bearer_unauthorized_response(
-                "No admin credential is configured. Set auth.bearer_token or an admin \
-                 API key, or run `mcp-gateway init` to generate one, then restart for \
-                 a fresh link.",
-            ));
-        }
-        if !state.dashboard_bootstrap.consume(&candidate) {
-            warn!("Dashboard bootstrap rejected: wrong or already-used value");
-            return Some(bearer_unauthorized_response(
-                "Bootstrap link is invalid or already used. Restart the gateway \
-                 for a fresh link.",
-            ));
-        }
-        // Hand the browser an opaque session in an HttpOnly cookie and redirect.
-        // Done here rather than in the handler so the token never leaves this
-        // module, and so the address bar keeps nothing after the redirect.
-        let handle = state.dashboard_bootstrap.issue_session();
-        // `Secure` whenever this listener speaks TLS. Without it a downgrade
-        // puts the cookie on the wire; with a plain-HTTP loopback listener the
-        // attribute would stop the cookie being sent at all, so it is
-        // conditional rather than unconditional.
-        let secure = if state.tls_enabled { " Secure;" } else { "" };
-        Some(axum::response::IntoResponse::into_response((
-            axum::http::StatusCode::SEE_OTHER,
-            [
-                (axum::http::header::LOCATION, "/dashboard".to_string()),
-                (
-                    axum::http::header::SET_COOKIE,
-                    format!(
-                        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; \
-                         Path=/; Max-Age=86400"
-                    ),
-                ),
-            ],
-        )))
-    }
-}
-
 /// The identity a validated dashboard session carries.
 fn dashboard_client() -> AuthenticatedClient {
     AuthenticatedClient {
@@ -841,15 +731,6 @@ fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
                 .or_else(|| v.strip_prefix("bearer "))
         })
         .map(ToString::to_string)
-}
-
-/// The `bootstrap` query parameter, if present.
-fn bootstrap_param(query: &str) -> Option<String> {
-    query
-        .split('&')
-        .filter_map(|p| p.split_once('='))
-        .find(|(k, _)| *k == "bootstrap")
-        .map(|(_, v)| v.to_string())
 }
 
 /// Read the session cookie from a request's headers, if present.
@@ -1696,6 +1577,8 @@ mod tests {
             .status()
     }
 
+    #[path = "bootstrap_spend_tests.rs"]
+    mod bootstrap_spend_tests;
     #[test]
     fn an_admin_api_key_is_an_admin_credential_for_the_bootstrap_link() {
         let (state, printed) = bootstrap_state(None, vec![admin_key(true)]);
