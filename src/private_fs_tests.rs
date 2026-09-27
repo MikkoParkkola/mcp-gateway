@@ -163,16 +163,25 @@ fn wt8d_user_deny_refuses() {
 #[test]
 fn wt8e_generic_grant_and_inherit_only_deny_accepted() {
     let user = user_sid();
-    for (row, sddl) in [
-        ("W-T8e/generic", format!("O:{user}D:P(A;;GRGW;;;{user})")),
+    for (row, sddl, kept) in [
+        (
+            "W-T8e/generic",
+            format!("O:{user}D:P(A;;GRGW;;;{user})"),
+            "GRGW",
+        ),
         (
             "W-T8e/io-deny",
             format!("O:{user}D:P(D;IO;FA;;;{user})(A;;FA;;;{user})"),
+            "(D;IO;",
         ),
     ] {
         let root = tempfile::tempdir().unwrap();
         let file = private_file_in(root.path(), "record.json");
         let back = super::test_support::plant_any(row, &file, &sddl);
+        // The row only proves something if Windows kept what it tests.
+        if !back.contains(kept) {
+            super::test_support::fixture_fail(row, &format!("planted {sddl}, read back {back}"));
+        }
         assert_eq!(judge_path(&file), Ok(()), "WT-ASSERT {row}: {back}");
     }
 }

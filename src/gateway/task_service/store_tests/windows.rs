@@ -128,9 +128,15 @@ async fn wt5_task_fresh_dir_under_junction_refuses() {
 // ancestor a relative path ends in is not a component.
 #[tokio::test]
 async fn t5_relative_store_path_is_created() {
-    let name = format!("mgw-t5-{}", std::process::id());
+    let name = format!("mgw-t5-{}-{:x}", std::process::id(), rand::random::<u64>());
     let dir = Path::new(&name).join("tasks");
+    assert!(!Path::new(&name).exists(), "fixture: {name} already exists");
     let opened = open_err(&dir).await;
-    let _ = std::fs::remove_dir_all(&name);
-    assert_eq!(opened, None, "a fresh relative store path must open");
+    if let Err(error) = std::fs::remove_dir_all(&name) {
+        crate::private_fs::test_support::fixture_fail("T5", &format!("cleanup of {name}: {error}"));
+    }
+    assert_eq!(
+        opened, None,
+        "WT-ASSERT T5: a fresh relative store path must open"
+    );
 }

@@ -104,6 +104,14 @@ Expected outcomes, one table for every run kind:
 | W-T23 | `directory_at_record_name_refuses` | create a DIRECTORY (private, protected) at a valid record name the manifest points to; same for a task record name. Record reads open with `FILE_FLAG_BACKUP_SEMANTICS \| FILE_FLAG_OPEN_REPARSE_POINT`, so a directory OPENS and is then judged by its `FILE_ATTRIBUTE_DIRECTORY` attribute | lookup / load refuses, reason `NotRegular` | the stub `judge_*` returns `Ok`: the reason assertion fails |
 | W-T25 | `create_refuses_an_existing_name` | an existing file (and a junction) at the target name, each with known content and file id | `create_file_private` and `create_dir_private` return `AlreadyExists`; the existing object's content and file id are unchanged | stub `create_new` also refuses: GREEN-in-red guard; proof is M31 |
 | W-T26 | `scratch_residue_does_not_block_commit` | leave a file at the next scratch name the store will draw (test-only name source) | the commit succeeds using a fresh scratch name; the residue is untouched | stub has no retry of its own: the `AlreadyExists` from `create_new` fails the commit |
+| W-T5/task | `wt5_task_fresh_dir_under_junction_refuses` | task store opened at `<junction>\tasks`, absent | `UnsafeStore`: a directory created on open is judged like an existing one (amendment A4) | pre-A4 code created it unjudged |
+| W-T7/lexical | `wt7_lexical_*` | the W-T7 paths passed to `validate_path` alone | each refuses `InvalidConfiguration`; `C:\x` and `\\?\C:\x` pass (amendment A7) | M4, M28 |
+| W-T8c | `inherit_only_grant_refuses` | `(A;IO;FA;;;<user>)(A;;FR;;;<user>)` | `NoReadWrite` (amendment A5) | inherit-only grant counted |
+| W-T8d | `user_deny_refuses` | `(D;;FW;;;<user>)(A;;FA;;;<user>)` | `NoReadWrite` (A5) | user deny ignored |
+| W-T8e | `generic_grant_and_inherit_only_deny_accepted` | `(A;;GRGW;;;<user>)`; `(D;IO;FA;;;<user>)(A;;FA;;;<user>)`; read-back must keep the tested bits | both accepted (A5) | over-strict P3 |
+| W-T16b | `judged_directory_is_held_until_custody` | hook between judging and custody renames the store directory | rename refused; the store opens (A4) | M15 |
+| W-T26 impl | see W-T26 | queued scratch suffix with residue at that name | commit succeeds on a fresh name; residue untouched (A7) | M33 |
+| T5 | `t5_relative_store_path_is_created` | task store at a fresh relative path | opens (the empty ancestor is not created) | pre-fix code tried to create the empty path |
 | W-T12b | `unc_final_path_is_not_local` (used only if E5 shows the mapped drive reports `DRIVE_FIXED`) | open a directory through `\\?\UNC\localhost\C$\<tmp>` | `volume_is_local` false via the UNC final-path leg | stub `true` |
 | W-T18 | `path_swap_between_walk_and_open_refuses` | `cfg(test)` fault boundary `AfterPathWalk` replaces ancestor with a junction to another private store of the same user | reason `PathMismatch` | stub `final_path` echoes input: accepts |
 
