@@ -158,6 +158,25 @@ fn wt8d_user_deny_refuses() {
     assert_eq!(got, Err(PrivacyRefusal::NoReadWrite), "WT-ASSERT W-T8d");
 }
 
+// W-T8e: a generic read+write grant to the user satisfies P3, and a deny
+// that applies to children only takes nothing away (accept side of P3).
+#[test]
+fn wt8e_generic_grant_and_inherit_only_deny_accepted() {
+    let user = user_sid();
+    for (row, sddl) in [
+        ("W-T8e/generic", format!("O:{user}D:P(A;;GRGW;;;{user})")),
+        (
+            "W-T8e/io-deny",
+            format!("O:{user}D:P(D;IO;FA;;;{user})(A;;FA;;;{user})"),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let file = private_file_in(root.path(), "record.json");
+        let back = super::test_support::plant_any(row, &file, &sddl);
+        assert_eq!(judge_path(&file), Ok(()), "WT-ASSERT {row}: {back}");
+    }
+}
+
 // W-T11: only P4 fails (owner BUILTIN\Administrators).
 #[test]
 fn wt11_foreign_owner_refuses() {

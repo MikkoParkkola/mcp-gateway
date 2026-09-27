@@ -123,3 +123,14 @@ async fn wt5_task_fresh_dir_under_junction_refuses() {
         "WT-ASSERT W-T5/task"
     );
 }
+
+// T5 with a relative path: every missing component is created, and the empty
+// ancestor a relative path ends in is not a component.
+#[tokio::test]
+async fn t5_relative_store_path_is_created() {
+    let name = format!("mgw-t5-{}", std::process::id());
+    let dir = Path::new(&name).join("tasks");
+    let opened = open_err(&dir).await;
+    let _ = std::fs::remove_dir_all(&name);
+    assert_eq!(opened, None, "a fresh relative store path must open");
+}

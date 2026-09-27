@@ -34,7 +34,11 @@ pub(super) fn judge_store_dir(dir: &Path) -> Result<crate::fs_lock::DirPin, Stor
 /// T5: create the store directory, and each missing ancestor, private from its
 /// first instant, as unix creates them all `0700`.
 pub(super) fn create_private_dir(dir: &Path) -> Result<(), StoreError> {
-    let missing: Vec<&Path> = dir.ancestors().take_while(|p| !p.exists()).collect();
+    // A relative path's last ancestor is the empty path: never created.
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|p| !p.as_os_str().is_empty() && !p.exists())
+        .collect();
     for path in missing.into_iter().rev() {
         match private_fs::create_dir_private(path) {
             Err(error) if error.kind() != io::ErrorKind::AlreadyExists => {
