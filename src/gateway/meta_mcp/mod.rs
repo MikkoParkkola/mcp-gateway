@@ -2675,10 +2675,6 @@ mod chain_resume_live_tests;
 mod account_entry_point_authz_tests;
 
 #[cfg(test)]
-#[path = "account_sole_operator_mcp_tests.rs"]
-mod account_sole_operator_mcp_tests;
-
-#[cfg(test)]
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
 

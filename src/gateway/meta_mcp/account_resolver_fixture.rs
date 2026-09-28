@@ -617,3 +617,7 @@ pub(super) use gateway::{
     Bind, Descriptors, execute, execute_as, execute_bridged, external_cfg, gateway, gateway_in,
     slots,
 };
+
+// #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
+#[path = "account_sole_operator_mcp_tests.rs"]
+mod sole_operator_mcp_tests;

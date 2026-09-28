@@ -13,9 +13,7 @@
 //!
 //! No case may reach the backend: there is no grant to dispatch with.
 
-use super::account_resolver_fixture::{
-    Bind, Descriptors, WORK, custody_with, execute_as, gateway_in,
-};
+use super::{Bind, Descriptors, WORK, custody_with, execute_as, gateway_in};
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::STDIO_CREDENTIAL_PRINCIPAL;
 use crate::gateway::server::account_bindings::ServeMode;
