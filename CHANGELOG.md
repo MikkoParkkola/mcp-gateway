@@ -116,6 +116,11 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 - The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
   command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
 - **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
   binaries and image digests handed between jobs expired after a day, so a later re-run
   published a release with no binaries or failed to find the digests. They now last the

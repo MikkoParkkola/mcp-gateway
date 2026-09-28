@@ -89,7 +89,7 @@ That is it. Your AI clients now talk to the gateway, and the gateway routes to e
 
 > Read https://github.com/MikkoParkkola/mcp-gateway and install mcp-gateway to consolidate all my MCP servers behind one gateway
 
-Your agent will install the binary, run the setup wizard, import your existing MCP servers, and wire itself up. This works in Claude Code, Cursor, Windsurf, Codex, and any AI with terminal access.
+Your agent will install the binary, run the setup wizard, import your existing MCP servers, and wire itself up. It is written for any agent with terminal access, such as Claude Code, Cursor, Windsurf or Codex; which clients have a recorded 4.0 run is in [Supported clients](docs/CLIENTS.md).
 
 ### Install
 
@@ -215,15 +215,7 @@ mcp-gateway setup export --rollback <backup-file>     # restore one client confi
 
 Existing client files are backed up before mutation. The command prints the exact rollback command beside each updated client.
 
-| Client | Config path |
-|--------|-------------|
-| `claude-code` | `~/.claude.json` |
-| `claude-desktop` | platform-specific |
-| `cursor` | `.cursor/mcp.json` (workspace) |
-| `vs-code-copilot` | `.vscode/mcp.json` (workspace) |
-| `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
-| `cline` | `.cline/mcp_servers.json` (workspace) |
-| `zed` | `~/.config/zed/settings.json` |
+Targets: `claude-code`, `claude-desktop`, `cursor`, `vs-code-copilot`, `windsurf`, `cline`, `zed`, `generic`, `all`. The file each one writes, and which clients have been verified against 4.0, are in [Supported clients](docs/CLIENTS.md).
 
 Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe the health endpoint, then fall back).
 
