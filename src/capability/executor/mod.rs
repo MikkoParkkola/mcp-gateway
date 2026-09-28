@@ -198,6 +198,9 @@ impl CapabilityExecutor {
     /// A new executor whose calls go through `capabilities.egress_proxy` when
     /// it is set, and direct and pinned otherwise (#1881). A value the load
     /// check would refuse is ignored here, which only ever means direct.
+    // Public for the gateway server and the egress tests under tests/; not
+    // documented API.
+    #[doc(hidden)]
     #[must_use]
     pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
         let mut executor = Self::new();

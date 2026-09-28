@@ -50,7 +50,7 @@ impl CapabilityConfig {
     /// [`Error::ConfigValidation`] unless the value is an absolute `http://`
     /// or `https://` URL with a host. A bad value is refused, never ignored:
     /// ignoring it would silently send the calls direct.
-    pub fn egress_proxy_url(&self) -> Result<Option<url::Url>> {
+    pub(crate) fn egress_proxy_url(&self) -> Result<Option<url::Url>> {
         let Some(raw) = self.egress_proxy.as_deref() else {
             return Ok(None);
         };
@@ -71,7 +71,7 @@ impl CapabilityConfig {
 
     /// `scheme://host:port` of the egress proxy, for logs: never its userinfo.
     #[must_use]
-    pub fn egress_proxy_for_log(url: &url::Url) -> String {
+    pub(crate) fn egress_proxy_for_log(url: &url::Url) -> String {
         let host = url.host_str().unwrap_or_default();
         match url.port_or_known_default() {
             Some(port) => format!("{}://{host}:{port}", url.scheme()),

@@ -1798,16 +1798,17 @@ holds whichever saved last.
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
 
-## 77. Capability calls and spec imports ignore `HTTP_PROXY` and `HTTPS_PROXY`
+## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
 
-Capability calls, OpenAPI import by URL (`mcp-gateway cap import`) and the web UI's import
-followed `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` from the environment. A proxied request
-is resolved by the proxy, not the gateway, so it skipped the gateway's SSRF check on
-resolved addresses: with a proxy set, a capability could reach loopback, private networks
-or a cloud metadata endpoint through it.
+Capability calls, OpenAPI import by URL (`mcp-gateway cap import`), capability discovery
+(`mcp-gateway cap discover`) and the web UI's import followed `HTTP_PROXY`, `HTTPS_PROXY`
+and `ALL_PROXY` from the environment. A proxied request is resolved by the proxy, not the
+gateway, so it skipped the gateway's SSRF check on resolved addresses: with a proxy set, a
+capability could reach loopback, private networks or a cloud metadata endpoint through it.
 
-In 4.0 these clients ignore the proxy environment variables and connect directly, with
-every resolved address checked. To proxy capability calls, name the proxy in config:
+In 4.0 these clients ignore the proxy environment variables and connect directly;
+capability calls and imports check every resolved address. To proxy capability calls, name
+the proxy in config:
 
 ```yaml
 capabilities:
@@ -1821,11 +1822,10 @@ capabilities:
 - The value must be an `http://` or `https://` URL with a host; anything else fails the
   config load. It applies at restart. Startup logs a warning naming the proxy (without
   credentials).
-- OpenAPI and UI imports have no proxy setting and always connect directly. So do one-shot
-  capability calls from the CLI (`mcp-gateway cap test`, `mcp-gateway tool invoke`); the key applies
-  to the gateway's own capability calls.
-- Unchanged: capability discovery (`mcp-gateway cap discover`) and backend connections
-  still follow the environment proxy.
+- Imports and discovery have no proxy setting and always connect directly. So do one-shot
+  capability calls from the CLI (`mcp-gateway cap test`, `mcp-gateway tool invoke`); the key
+  applies to the gateway's own capability calls.
+- Unchanged: backend connections still follow the environment proxy.
 
 **Action:** if capability calls must leave through a proxy, set `capabilities.egress_proxy`.
 Imports that could only reach their spec through a proxy must be fetched another way, for
