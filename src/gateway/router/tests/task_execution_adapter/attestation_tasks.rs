@@ -18,6 +18,25 @@ const KEY_ID: &str = "surfaced-task";
 /// attestation in enforce mode, read from an env file.
 async fn surfaced_enforced(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
     let (state, store) = state_with(mock).await;
+    // Warm the catalogue: a surfaced tool the gateway has never listed is
+    // confirmed as unclassified before attestation is consulted, and these
+    // rows are about attestation. `tools/list` is not counted as a call.
+    let backend = state
+        .backends
+        .get(BACKEND)
+        .expect("fixture backend is registered");
+    backend
+        .get_tools_shared()
+        .await
+        .expect("the mock serves tools/list");
+    let listed = backend
+        .get_cached_tool(TOOL)
+        .expect("premise: the surfaced tool is in the catalogue");
+    assert_ne!(
+        listed.annotations.and_then(|a| a.destructive_hint),
+        Some(true),
+        "premise: the surfaced tool is not destructive, so confirmation stays out of these rows"
+    );
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let meta =
         Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));

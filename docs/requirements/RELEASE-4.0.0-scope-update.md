@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 75
+Approved supplemental criteria: 81
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -110,6 +110,12 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7570.STDIO.1 | A modern-era stdio caller whose backend asks for input it declared on that request receives an `InputRequiredResult` carrying a redeemable `requestState`, and its retry completes, instead of being refused with -32003; the input bridge stays legacy-only, and a modern call declares per request, never by the `initialize` handshake. Pinned in `tests/r5_stdio_modern_continuation.rs`. Or this criterion is waived by a recorded ruling that moves R5 to a later 4.x release (R5; amended 2026-09-25 by the R5 PR from the coordinator's L0 wording, design R5-design.md rev 3). | ENTERPRISE |
 | MIK-7570.DOCS.1 | The team deployment guide, backup/restore and key runbook, reconciled upgrade guide and client matrix ship with 4.0.0 (F docs). | ENTERPRISE |
 | MIK-7596.OWNER.1 | Task methods on the per-backend route `POST /mcp/{name}` never reach the backend: every `tasks/*` method and `subscriptions/listen` naming `taskIds` is refused with -32601, so callers sharing a backend cannot read or cancel each other's tasks (F1, #1442). | ENTERPRISE |
+| GH1941.SIGN.1 | Every release binary ships an SPDX SBOM of the crates linked into it, and each binary, each SBOM and SHA256SUMS.txt (which lists them all) carries a cosign keyless bundle whose identity is release.yml at the tag; the release job refuses to publish when any file is missing or a signature does not verify, and re-checks the published release afterwards (ASI04, #1941). | SECURITY |
+| GH1942.HARDEN.1 | One opt-in hardened posture, raising the context-integrity preset floor to `team_shared`, forces message signing, anomaly blocking with per-identity learning (which also resolves #1756), SSRF checks on backend URLs, and per-caller identity on every HTTP MCP request (403 when no grant subject resolves; only an API key of kind `personal` counts as a per-person credential; stdio exempt), and refuses legacy clients that do not declare elicitation; a multi-user deployment running without it gets a startup WARN and a `doctor` finding (#1942). | SECURITY |
+| GH1943.PROV.1 | With remote HTTP/A2A backends configured and signed provenance not required, startup logs a WARN naming the unverified backends and `doctor` reports a finding; no default changes (#1943). | SECURITY |
+| GH1944.CHAIN.1 | A downstream gateway configured to verify a backend's signature chain checks every link against its trusted keys, the pinned origin and last signer, the link-to-link digests and its own nonce, strips and marks a chain that fails, and appends its own link, so a tampered, reordered or dropped hop or a re-signed chain fails verification (ASI07, #1944). | SECURITY |
+| GH1945.COLLUDE.1 | Opt-in verbatim cross-principal relay detection: sensitive content one principal received that another principal then sends onward is reported, or refused under `block`, on the meta route and on the direct route once #1785 lands; one principal never flags itself and relays outside the window are not flagged. ASI10 stays PARTIAL, since other collusion patterns have no sound definition (#1945). | SECURITY |
+| GH1625.BOTREVIEW.1 | Every automated pull-request reviewer finding on pull requests merged to the release line up to the release tip is resolved with a fix commit or an individual written disposition verified at source (no bulk won't-fix), and the #1625 backlog is closed (#1625). | SECURITY |
 
 ## Boundaries
 

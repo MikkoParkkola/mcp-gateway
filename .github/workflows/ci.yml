@@ -448,6 +448,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The release tooling's Python suites, which `release-script-tests` runs
+      # but which that job skips here. Without this, a throwaway meant to show
+      # a workflow-wiring or release-script test going red passes on cargo
+      # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Release tooling Python suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for suite in scripts/release/test_*.py; do
+            echo "::group::$suite"
+            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
@@ -477,6 +491,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The release tooling's Python suites, which `release-script-tests` runs
+      # but which that job skips here. Without this, a throwaway meant to show
+      # a workflow-wiring or release-script test going red passes on cargo
+      # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Release tooling Python suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for suite in scripts/release/test_*.py; do
+            echo "::group::$suite"
+            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.

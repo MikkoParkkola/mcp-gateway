@@ -91,9 +91,9 @@ impl Issuer {
             .expect("the bound listener reports its address");
         let url = format!("https://{addr}");
 
-        // `CertGenerator::issue_leaf` carries DNS and URI SANs only, and the
-        // issuer must be addressed by IP so no name resolution can send the
-        // child somewhere else. The CA above is still the shipped helper's.
+        // The issuer must be addressed by IP so no name resolution can send
+        // the child somewhere else; the SAN names the bound address itself.
+        // The CA above is still the shipped helper's.
         let leaf_key = KeyPair::generate().expect("a leaf key pair");
         let mut leaf = CertificateParams::default();
         let mut dn = DistinguishedName::new();
