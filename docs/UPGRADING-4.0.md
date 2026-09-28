@@ -70,6 +70,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 83
 - Item 84
 - Item 85
+- Item 86
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -188,6 +189,7 @@ without it.**
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
+| 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2110,6 +2112,16 @@ credential or prompt injection placed in an object key reached the client unchan
 
 **Action:** none for most deployments. If a backend uses credential-shaped strings as
 object keys, expect those keys to be renamed; use other key names.
+
+## 86. `kubernetes controller --watch --format json` prints JSON Lines
+
+A watch runs until it is stopped, so its JSON output is a stream. Each reconcile cycle now
+prints its report as one compact JSON document on its own line (JSON Lines, also called NDJSON).
+Earlier releases printed each report as indented JSON over many lines, so no line parsed on its
+own. Without `--watch`, `--format json` still prints one indented document (#1909).
+
+**Action:** a script reading `--watch --format json` parses each line on its own, for example
+with `jq -c .` or a line-by-line JSON reader.
 
 ## Upgrading from 3.5.x: a walkthrough
 
