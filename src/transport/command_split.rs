@@ -118,7 +118,6 @@ pub fn split_command_windows(command: &str) -> Option<Vec<String>> {
 /// NUL). Discovery uses it so a client's `command` and `args` survive the
 /// string the transport stores (#1876).
 #[must_use]
-#[expect(dead_code, reason = "red-first stub; wired into discovery by the fix")]
 pub fn join_command(argv: &[String]) -> Option<String> {
     #[cfg(windows)]
     {
@@ -140,8 +139,7 @@ pub fn join_command(argv: &[String]) -> Option<String> {
     )
 )]
 pub fn join_command_unix(argv: &[String]) -> Option<String> {
-    let _ = argv;
-    None
+    shlex::try_join(argv.iter().map(String::as_str)).ok()
 }
 
 /// The inverse of [`split_command_windows`].
@@ -154,8 +152,44 @@ pub fn join_command_unix(argv: &[String]) -> Option<String> {
     )
 )]
 pub fn join_command_windows(argv: &[String]) -> Option<String> {
-    let _ = argv;
-    None
+    let mut line = String::new();
+    for arg in argv {
+        if arg.contains('\0') {
+            return None;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        let plain = !arg.is_empty() && !arg.contains([' ', '\t', '"']);
+        if plain {
+            line.push_str(arg);
+            continue;
+        }
+        // Quote per the rules `split_command_windows` reads: backslashes are
+        // literal unless they precede a quote, where they are doubled; a quote
+        // is escaped with one backslash; trailing backslashes before the
+        // closing quote are doubled.
+        line.push('"');
+        let mut backslashes = 0usize;
+        for c in arg.chars() {
+            match c {
+                '\\' => backslashes += 1,
+                '"' => {
+                    line.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                    line.push('"');
+                    backslashes = 0;
+                }
+                other => {
+                    line.extend(std::iter::repeat_n('\\', backslashes));
+                    line.push(other);
+                    backslashes = 0;
+                }
+            }
+        }
+        line.extend(std::iter::repeat_n('\\', backslashes * 2));
+        line.push('"');
+    }
+    Some(line)
 }
 
 #[cfg(test)]

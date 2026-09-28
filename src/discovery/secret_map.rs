@@ -10,14 +10,15 @@
 //! reports, logs, errors) sees the keys only.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Placeholder emitted in place of every value outside the config writer.
 pub const REDACTED: &str = "<redacted>";
 
 /// A key-to-value map whose values never leave through `Debug` or `Serialize`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
 pub struct SecretMap(BTreeMap<String, String>);
 
@@ -43,6 +44,20 @@ impl SecretMap {
     #[must_use]
     pub fn expose(&self) -> &BTreeMap<String, String> {
         &self.0
+    }
+}
+
+impl fmt::Debug for SecretMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|k| (k, REDACTED)))
+            .finish()
+    }
+}
+
+impl Serialize for SecretMap {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.keys().map(|k| (k, REDACTED)))
     }
 }
 

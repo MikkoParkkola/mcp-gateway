@@ -13,6 +13,7 @@ use tracing::debug;
 use crate::Result;
 use crate::config::{BackendConfig, TransportConfig};
 
+mod client_entry;
 pub mod config_scanner;
 mod jsonc;
 pub mod process_scanner;
@@ -116,10 +117,14 @@ impl DiscoveredServer {
     /// Convert to backend config
     #[must_use]
     pub fn to_backend_config(&self) -> BackendConfig {
+        // The one path that sees env and header values: the backend the
+        // config writer persists owner-only.
         BackendConfig {
             description: self.description.clone(),
             enabled: true,
             transport: self.transport.clone(),
+            env: self.env.expose().clone().into_iter().collect(),
+            headers: self.headers.expose().clone().into_iter().collect(),
             ..Default::default()
         }
     }

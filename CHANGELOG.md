@@ -59,6 +59,8 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 ### Changed
 
+- **`DiscoveredServer` carries `env` and `headers` and is `#[non_exhaustive]`.** Library code builds it with `DiscoveredServer::new`; the new fields are `SecretMap`s whose `Debug` and `Serialize` show keys only (UPGRADING-4.0 item 80).
+
 - **One gateway writes an audit log path.** The transparency log takes a writer lease on
   `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
   error naming the path, whatever the auth setting. A restart overlap waits up to
@@ -119,6 +121,8 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
   (A11, MIK-7570.RECONNECT.1)
 
 ### Fixed
+
+- **Discovery keeps a server's `env`, `headers` and argument boundaries, and reads commented Zed settings.** `cap discover --write-config` writes them into the owner-only config; discovery output shows the keys only. `setup export --target zed` into a commented file prints the entry to paste instead of failing (#1876).
 
 - **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
 

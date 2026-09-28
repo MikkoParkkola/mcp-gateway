@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
 load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70 and 74 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 74 and 80 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -102,6 +102,12 @@ upgrading a running deployment.
 | 72 | Reserved: lands with a pending change | None yet |
 | 73 | Reserved: lands with a pending change | None yet |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
+| 75 | Reserved: lands with a pending change | None yet |
+| 76 | Reserved: lands with a pending change | None yet |
+| 77 | Reserved: lands with a pending change | None yet |
+| 78 | Reserved: lands with a pending change | None yet |
+| 79 | Reserved: lands with a pending change | None yet |
+| 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1797,6 +1803,36 @@ holds whichever saved last.
 
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## 80. Discovery keeps env, headers and argument boundaries
+
+`mcp-gateway cap discover` and the setup wizard import MCP servers from client config files
+(Claude, Cursor, Windsurf, Codex, Zed). They used to keep only the command line or URL:
+
+- a server's `env` (stdio) and `headers` (HTTP) were dropped, so an imported backend could not
+  start or authenticate;
+- `args` were joined with spaces, so an argument containing a space or a quote changed;
+- Zed's `settings.json`, which allows comments and trailing commas, was skipped when it had any.
+
+In 4.0 all three survive. `cap discover --write-config` writes the `env` and `headers` values
+into the backend it adds; the config file is owner-only (item 35). Those values are usually
+credentials, so everywhere else they are shown by key only: discover's table, JSON and YAML
+output, `--shadow` reports, logs and `Debug` output print `<redacted>` for every value.
+
+A value that contains `${VAR}` is expanded by the gateway when the config loads, like any backend
+`env` or `headers` value; if `VAR` is not set, the load is refused and the error names the field
+(`backends.<name>.env.<KEY>`).
+
+`setup export --target zed` into a settings file with comments or trailing commas no longer fails
+with a bare parse error: it leaves the file untouched and prints the entry to paste by hand.
+
+For code that uses the library, `mcp_gateway::discovery::DiscoveredServer` gains the fields `env`
+and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is now
+`#[non_exhaustive]`. Build one with `DiscoveredServer::new` and set the fields after.
+
+**Action:** after `cap discover --write-config`, review the written backends: they now carry the
+credentials the client config held. Library users replace struct literals with
+`DiscoveredServer::new`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -7,16 +7,79 @@
 /// trailing comma before `}` or `]` dropped, ready for a strict JSON parser.
 /// `None` for an unterminated block comment or string.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "red-first stub; wired into the Zed reader by the fix"
-    )
-)]
-#[expect(clippy::unnecessary_wraps, reason = "red-first stub")]
 pub(crate) fn strip_jsonc(text: &str) -> Option<String> {
-    Some(text.to_string())
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                out.push('"');
+                loop {
+                    let c = chars.next()?;
+                    out.push(c);
+                    match c {
+                        '\\' => out.push(chars.next()?),
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.peek().is_some_and(|&c| c != '\n') {
+                    chars.next();
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = '\0';
+                loop {
+                    let c = chars.next()?;
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+                out.push(' ');
+            }
+            _ => out.push(c),
+        }
+    }
+    Some(drop_trailing_commas(&out))
+}
+
+/// Remove a `,` whose next non-space character is `}` or `]`. Runs after
+/// comments are gone, and skips string contents.
+fn drop_trailing_commas(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' {
+                if let Some(&next) = chars.get(i + 1) {
+                    out.push(next);
+                    i += 1;
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+        } else if c == ',' {
+            let next = chars[i + 1..].iter().find(|c| !c.is_whitespace());
+            if !matches!(next, Some('}' | ']')) {
+                out.push(c);
+            }
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]
