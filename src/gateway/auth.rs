@@ -40,7 +40,7 @@ pub use api_key::ResolvedApiKey;
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Now, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{Now, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};

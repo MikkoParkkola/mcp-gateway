@@ -9,7 +9,8 @@ use axum::response::Response;
 use tracing::warn;
 
 use super::{
-    AuthState, Now, bearer_unauthorized_response, cookie_secure, session_cookie, session_limits,
+    AuthState, Now, Redemption, bearer_unauthorized_response, cookie_secure, session_cookie,
+    session_limits,
 };
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
@@ -124,7 +125,8 @@ pub(super) fn try_dashboard_bootstrap(
                  Enable mtls or remove public_url.",
             )));
         }
-        let Some(not_after) = state.dashboard_bootstrap.consume_capped(&candidate) else {
+        let Some(Redemption { not_after }) = state.dashboard_bootstrap.consume_capped(&candidate)
+        else {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
                 "Bootstrap link is invalid or already used. Run `mcp-gateway \

@@ -98,19 +98,17 @@ pub(super) async fn dashboard_link(
     // A session opened by this link ends no later than the key that minted
     // it: otherwise a key used minutes before its expiry would buy a full
     // absolute limit of access after it.
-    let not_after = (client.credential_kind == CredentialKind::ApiKey)
-        .then(|| {
-            state
-                .live_config
-                .get()
-                .auth
-                .api_keys
-                .iter()
-                .find(|k| k.name == client.name)
-                .and_then(|k| k.expires_at)
-        })
-        .flatten()
-        .map(std::time::SystemTime::from);
+    // A key missing from the live config (renamed or removed by a reload)
+    // cannot prove its expiry, so it may not mint: fail closed, never uncapped.
+    let not_after = if client.credential_kind == CredentialKind::ApiKey {
+        let live = state.live_config.get();
+        let Some(key) = live.auth.api_keys.iter().find(|k| k.name == client.name) else {
+            return admin_auth_required().into_response();
+        };
+        key.expires_at.map(std::time::SystemTime::from)
+    } else {
+        None
+    };
     if cookies_are_secure(&state.live_config) && !state.live_config.running().mtls.enabled {
         // The session cookie would be `Secure` over a plain-HTTP loopback
         // listener, and a browser discards it: the link would be spent for

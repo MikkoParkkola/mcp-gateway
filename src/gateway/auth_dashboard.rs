@@ -27,6 +27,13 @@ pub struct DashboardBootstrap {
     sessions: Mutex<HashMap<String, SessionTimes>>,
 }
 
+/// A redeemed bootstrap value: when the session it opens must end by, if the
+/// credential that minted it expires.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Redemption {
+    pub(crate) not_after: Option<SystemTime>,
+}
+
 /// When a session was issued and when it last saw operator activity.
 #[derive(Debug, Clone, Copy)]
 struct SessionTimes {
@@ -137,10 +144,12 @@ impl DashboardBootstrap {
     }
 
     /// Consume the value if it matches, returning the cap it was minted with.
-    pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Option<SystemTime>> {
+    pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Redemption> {
         let mut guard = self.value.lock().ok()?;
         match guard.as_ref() {
-            Some((expected, _)) if expected == candidate => guard.take().map(|(_, cap)| cap),
+            Some((expected, _)) if expected == candidate => {
+                guard.take().map(|(_, not_after)| Redemption { not_after })
+            }
             _ => None,
         }
     }

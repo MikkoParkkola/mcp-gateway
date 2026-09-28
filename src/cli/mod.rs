@@ -311,7 +311,6 @@ pub enum Command {
     },
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
-    #[cfg(feature = "webui")]
     DashboardLink {
         /// Gateway base URL (default as for `stats`).
         #[arg(short, long)]

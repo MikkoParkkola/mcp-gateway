@@ -118,6 +118,13 @@ async fn run() -> ExitCode {
                 }
             }
         }
+        // The endpoint it calls exists only with the web UI; say so rather
+        // than let the command fail with a bare 404.
+        #[cfg(not(feature = "webui"))]
+        Some(Command::DashboardLink { .. }) => {
+            eprintln!("dashboard-link: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
         Some(Command::Validate {
             paths,
             format,

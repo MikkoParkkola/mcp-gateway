@@ -343,7 +343,10 @@ fn a_capped_session_ends_at_its_cap() {
     let now = Now::read();
     let limits = SessionLimits::default();
     let value = store.rearm_until(Some(now.wall + Duration::from_secs(600)));
-    let not_after = store.consume_capped(&value).expect("the value redeems");
+    let not_after = store
+        .consume_capped(&value)
+        .expect("the value redeems")
+        .not_after;
     let handle = store.issue_session_until(now, &limits, not_after);
     let at = |secs| Now {
         mono: now.mono + Duration::from_secs(secs),
