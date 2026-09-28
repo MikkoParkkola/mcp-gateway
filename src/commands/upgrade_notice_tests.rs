@@ -78,6 +78,7 @@ fn notice_4_0_0_discloses_the_3_x_files_the_migration_and_its_one_way_door() {
         // must be typed. A notice naming a command that does not exist is
         // worse than one naming none.
         "accounts migrate-credentials",
+        "--config",
         "--descriptor-id",
         "--legacy-issuer",
         // And the one-way door: the old file stops being a fallback the
@@ -103,6 +104,8 @@ fn the_migration_command_named_in_the_notice_is_one_the_cli_accepts() {
         "mcp-gateway",
         "accounts",
         "migrate-credentials",
+        "--config",
+        "/etc/mcp-gateway/gateway.yaml",
         "--descriptor-id",
         "workspace-personal",
         "--legacy-issuer",
