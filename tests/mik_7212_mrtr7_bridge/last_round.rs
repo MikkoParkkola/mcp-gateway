@@ -221,3 +221,47 @@ fn ac_mrtr_7a_an_exhausted_error_does_not_print_the_backend_state() {
         "expected the variant named, got {shown}"
     );
 }
+
+/// An undeclared last round is refused by the bridge itself rather than
+/// handed back for the caller to check, so no caller of `run` can receive a
+/// round the session never declared (#2173).
+#[tokio::test]
+async fn ac_mrtr_7a_an_undeclared_last_round_is_refused_by_the_bridge() {
+    let content = json!({"branch": "main"});
+    let client = FakeClient::new(accepts(6, &content));
+    let mut rounds = vec![asking(&[("k", ask("again?"))]); 2];
+    rounds.push(asking(&[(
+        "k",
+        entry("sampling/createMessage", &json!({"messages": []})),
+    )]));
+    let backend = FakeBackend::new(rounds);
+    let gate = MarkerGate::new(BLOCKED);
+    let records = Records::default();
+    let elicitation_only = declared(&json!({"elicitation": {"form": {}}}));
+
+    let outcome = bridge_gated(
+        &client,
+        &backend,
+        &gate,
+        &records,
+        elicitation_only,
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            outcome,
+            Err(BridgeError::Undeclared {
+                reason: Refusal::Capability("sampling"),
+                ..
+            })
+        ),
+        "expected the bridge to refuse the undeclared last round, got {outcome:?}"
+    );
+    assert_eq!(
+        gate.inspected().len(),
+        3,
+        "expected only the asked rounds gated"
+    );
+}
