@@ -208,7 +208,8 @@ pub(super) fn recover(
             if event.as_deref() == Some(EV_SEALED) {
                 // Crash after the seal, before the rename: finish it.
                 let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                std::fs::rename(path, segments::sealed_path(path, seq))?;
+                let sealed = segments::sealed_path(path, seq);
+                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
                 segments::sync_dir(path)?;
                 open_after_seal(
                     path,
@@ -287,7 +288,10 @@ fn resume_active(
     let counter = hw
         .filter(|h| h.segment_seq == seq)
         .map_or(counter, |h| h.counter.max(counter));
-    let file = OpenOptions::new().append(true).open(path)?;
+    let file = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(segments::ctx("open", path))?;
     Ok(Recovered {
         seg: SegState {
             seq,
@@ -317,7 +321,8 @@ pub(super) fn open_after_seal(
             .create(true)
             .write(true)
             .truncate(true)
-            .open(path)?;
+            .open(path)
+            .map_err(segments::ctx("create", path))?;
         stamp_created(&file)?;
         Ok::<_, io::Error>(file)
     };
@@ -332,7 +337,10 @@ pub(super) fn open_after_seal(
         let hw_counter = hw.map_or(0, |h| h.counter);
         if hw_counter == 0 {
             drop(fresh()?);
-            let file = OpenOptions::new().append(true).open(path)?;
+            let file = OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(segments::ctx("open", path))?;
             return Ok(Recovered {
                 file,
                 counter: 0,
@@ -361,7 +369,10 @@ pub(super) fn open_after_seal(
             &hw.entry_hash,
         )?;
         return Ok(Recovered {
-            file: OpenOptions::new().append(true).open(path)?,
+            file: OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(segments::ctx("open", path))?,
             counter: hw.counter + 1,
             last_entry_hash: hash,
             seg: file_seg(hw.segment_seq),
@@ -390,7 +401,10 @@ pub(super) fn open_after_seal(
     );
     let hash = write_synced(&mut fresh()?, config, fields, counter, &seal_hash)?;
     Ok(Recovered {
-        file: OpenOptions::new().append(true).open(path)?,
+        file: OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(segments::ctx("open", path))?,
         counter,
         last_entry_hash: hash,
         seg: file_seg(seq),
@@ -409,7 +423,11 @@ fn repair_torn_tail(
     newest_sealed: Option<&Segment>,
 ) -> io::Result<()> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(segments::ctx("open", path))?;
     let len = file.metadata()?.len();
     let window = len.min(2 * MAX_TAIL_SCAN_BYTES);
     file.seek(SeekFrom::Start(len - window))?;
@@ -446,7 +464,10 @@ fn repair_torn_tail(
     let dropped = len - keep_len;
     tracing::warn!(bytes = dropped, "audit log: dropped a torn final line");
     if keep_len > 0 && !before.trim().is_empty() {
-        let mut file = OpenOptions::new().append(true).open(path)?;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(segments::ctx("open", path))?;
         let fields = housekeeping(EV_TORN, &[("bytes", dropped.into())]);
         write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
     }
@@ -512,35 +533,87 @@ pub(crate) enum WriteFault {
     ExpirySyncFails,
     /// ENOSPC on the open-record write right after a rename, once.
     FullAfterRename,
+    /// A plain I/O error (not ENOSPC) on the next line write, once.
+    WriteError,
+    /// A plain I/O error on the next synced append's `sync_all`, once.
+    SyncError,
 }
 
-/// F20: holds one write "in the kernel" until the test opens it, or for at
-/// most three seconds. The deadline turns an unbounded append (a mutant) into
-/// a failed timing assertion instead of a hung test run.
+/// F20: holds one write "in the kernel" until the test opens it. Every test
+/// opens it explicitly (the guard from `stall_next_write_for_test` also
+/// opens it on drop); the 60 s deadline is only a hang guard, turning an
+/// unbounded append (a mutant) into a failed assertion, never a timing bound.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct StallGate {
-    open: std::sync::Mutex<bool>,
+    state: std::sync::Mutex<GateState>,
     cv: std::sync::Condvar,
 }
 
 #[cfg(test)]
 impl StallGate {
-    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+    pub(crate) const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 
-    /// Block the writer until opened or the deadline passes.
+    /// Record entry, then block the writer until opened or the deadline.
     pub(crate) fn hold(&self) {
-        let guard = self.open.lock().expect("gate lock");
+        let mut s = self.state.lock().expect("gate lock");
+        s.entered = true;
+        self.cv.notify_all();
         let _ = self
             .cv
-            .wait_timeout_while(guard, Self::DEADLINE, |open| !*open)
+            .wait_timeout_while(s, Self::DEADLINE, |s| !s.open)
             .expect("gate lock");
+    }
+
+    /// Wait until a write has entered `hold` (up to the deadline); whether
+    /// it did.
+    pub(crate) fn wait_entered(&self) -> bool {
+        let s = self.state.lock().expect("gate lock");
+        self.cv
+            .wait_timeout_while(s, Self::DEADLINE, |s| !s.entered)
+            .expect("gate lock")
+            .0
+            .entered
+    }
+
+    /// Whether a write has reached `hold` (no wait).
+    pub(crate) fn is_entered(&self) -> bool {
+        self.state.lock().expect("gate lock").entered
     }
 
     /// Let the held write finish.
     pub(crate) fn release(&self) {
-        *self.open.lock().expect("gate lock") = true;
+        self.state.lock().expect("gate lock").open = true;
         self.cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct GateState {
+    /// A write has reached `hold`.
+    entered: bool,
+    /// The test let the write go.
+    open: bool,
+}
+
+/// Opens its gate on drop, so a failed assertion never leaves a write held.
+#[cfg(test)]
+#[must_use = "dropping the guard releases the stalled write at once"]
+pub(crate) struct StallRelease(pub(crate) std::sync::Arc<StallGate>);
+
+#[cfg(test)]
+impl std::ops::Deref for StallRelease {
+    type Target = StallGate;
+    fn deref(&self) -> &StallGate {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for StallRelease {
+    fn drop(&mut self) {
+        self.0.release();
     }
 }
 

@@ -35,8 +35,13 @@
 //!
 //! **Tool-argument URLs** — capability `endpoint` fields, GraphQL/JSON-RPC
 //! endpoints injected at call time, UI import URLs, and any URL that flows
-//! from untrusted input — are **always** pinned through [`PinningResolver`].
-//! They never receive the configured-backend trust exemption.
+//! from untrusted input — are pinned through [`PinningResolver`] by clients
+//! built from [`pinned_client_builder`], which also ignores `HTTP(S)_PROXY`
+//! from the environment: a proxied request is resolved by the proxy, so the
+//! pin would never see it (#1881). They never receive the configured-backend
+//! trust exemption. The one exception is an operator-set
+//! `capabilities.egress_proxy`: capability calls then go to that proxy, which
+//! resolves names itself, while IP literals are still refused.
 //!
 //! # Covered ranges
 //!
@@ -114,6 +119,15 @@ pub(crate) use redirect::{RedirectDecision, redirect_decision};
 #[allow(unused_imports)]
 pub(crate) use redirect::MAX_REDIRECT_HOPS;
 
+/// A client builder for untrusted destinations: every name is resolved once
+/// and pinned by [`PinningResolver`], and `HTTP(S)_PROXY` from the environment
+/// is ignored, since a proxy would resolve the name instead of the pin.
+pub(crate) fn pinned_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(PinningResolver::new(SystemResolver))
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -129,6 +143,10 @@ pub(crate) use redirect::MAX_REDIRECT_HOPS;
 ///
 /// Returns `Error::Protocol` if the URL is malformed or targets a blocked range.
 pub fn validate_url_not_ssrf(url_str: &str) -> Result<()> {
+    // Errors name the value an operator mistyped without its userinfo, query
+    // or fragment (#2113); the path stays visible by design. Every caller
+    // shares this one redaction.
+    let shown = crate::security::sanitize::redact_url_keep_path(url_str);
     let parsed = url::Url::parse(url_str).map_err(|e| {
         // A relative URL (no scheme://host) is the common symptom of an
         // unconfigured or path-only backend/capability base URL. Name the
@@ -136,10 +154,10 @@ pub fn validate_url_not_ssrf(url_str: &str) -> Result<()> {
         // "Invalid URL: relative URL without a base" surfaced to tool callers.
         if e == url::ParseError::RelativeUrlWithoutBase {
             Error::Protocol(format!(
-                "URL {url_str:?} is not absolute (missing scheme://host) — check the backend or capability base URL configuration"
+                "URL {shown:?} is not absolute (missing scheme://host) — check the backend or capability base URL configuration"
             ))
         } else {
-            Error::Protocol(format!("Invalid URL {url_str:?}: {e}"))
+            Error::Protocol(format!("Invalid URL {shown:?}: {e}"))
         }
     })?;
 
@@ -147,7 +165,7 @@ pub fn validate_url_not_ssrf(url_str: &str) -> Result<()> {
         // e.g. "localhost:8080" parses with scheme="localhost" and no host —
         // the classic scheme-less host:port misconfiguration.
         return Err(Error::Protocol(format!(
-            "URL {url_str:?} has no host — if this is a host:port, prefix it with a scheme (e.g. http://)"
+            "URL {shown:?} has no host — if this is a host:port, prefix it with a scheme (e.g. http://)"
         )));
     };
 

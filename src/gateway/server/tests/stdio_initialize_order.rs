@@ -107,12 +107,15 @@ async fn serve(
     );
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("config loads");
-    let gateway = Gateway::new(config).await.expect("gateway boots");
+    let gateway = Gateway::new(config)
+        .await
+        .expect("gateway boots")
+        .with_data_dir(dir.path().to_path_buf());
     let (client, input) = tokio::io::duplex(64 * 1024);
     let task = tokio::spawn(async move {
         drop(gateway.run_stdio_on(input, output, gate).await);
     });
-    // The config directory is returned so it outlives the serving task.
+    // The config and data directory are returned so they outlive the serving task.
     (client, seen, task, dir)
 }
 
@@ -288,6 +291,31 @@ async fn stdio_2_held_writer_emits_initialize_before_a_ready_question() {
     assert!(
         handshake < question,
         "STDIO.2: the input request overtook the queued initialize response: {frames:?}"
+    );
+    task.abort();
+}
+
+/// R33: the in-process gateway reads and writes the test's data directory,
+/// never the developer's. The durable protocol-telemetry window is created
+/// when the stdio loop opens its sink, so it is the first file to appear.
+#[tokio::test]
+async fn stdio_test_gateway_uses_the_override_data_dir() {
+    let (output, reader) = tokio::io::duplex(1 << 20);
+    let (mut client, _seen, task, dir) = serve(output, None).await;
+    let mut lines = BufReader::new(reader).lines();
+    send(&mut client, &initialize(1)).await;
+    let answered = timeout(ARRIVAL, lines.next_line()).await;
+    assert!(
+        matches!(answered, Ok(Ok(Some(_)))),
+        "control: the gateway never answered initialize"
+    );
+    let window = dir
+        .path()
+        .join(crate::protocol_revision_telemetry::DURABLE_TELEMETRY_DIR)
+        .join(crate::protocol_revision_telemetry::DURABLE_WINDOW_FILE);
+    assert!(
+        window.exists(),
+        "the stdio gateway wrote its telemetry window outside the test's data directory"
     );
     task.abort();
 }

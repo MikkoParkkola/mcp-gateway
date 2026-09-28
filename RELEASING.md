@@ -18,7 +18,7 @@ outputs from, another:
 | Workflow | Publishes | Jobs, in order |
 |---|---|---|
 | `release.yml` | GitHub release + binaries, crates.io, npm, Homebrew tap | `security-gate`, `secret-leak-lint`, `release-criteria`, `task-sdk-recovery` → `verify` → `build` → `release` → `publish`, `npm-publish`, `homebrew-update` (in parallel) |
-| `ci.yml` | ghcr.io images (`:VERSION`, `:latest`, `:MAJOR.MINOR`, each also `-full`), MCP Registry listing | the CI suite plus `release-criteria` → `docker-build` (amd64, arm64) → `docker-manifest` → `publish-mcp-registry` |
+| `ci.yml` | ghcr.io images (`:VERSION`, `:latest`, `:MAJOR.MINOR`, each also `-full`), MCP Registry listing | the CI suite plus `release-criteria` and `release-script-tests` → `docker-build` (amd64, arm64) → `docker-manifest` → `publish-mcp-registry` |
 | `docker.yml` | nothing on a tag | builds, scans and smoke-tests the image; its push steps are off on tags |
 
 The VS Code and Cursor install buttons in `README.md` are deeplinks that run
@@ -44,6 +44,9 @@ necessary, not sufficient.** It checks that the tag, `Cargo.toml` and `Cargo.loc
 on the version and classifies stable versus prerelease. It says nothing about whether the
 release is ready.
 
+The release tooling's unit tests run in `ci.yml`'s `release-script-tests` job and fail
+every pull request that breaks them. Only the live ledger checks are report-only off a tag.
+
 Readiness is gated by the `release-criteria` job (in both `release.yml` and `ci.yml`), in
 particular `Require completed acceptance in publishing context`, which runs
 `scripts/release/check_scope_acceptance.py --publish-check`. On a tag whose version is
@@ -63,6 +66,22 @@ applies only when the manifest or tag version is `4.0.0`.** On any other version
 Run from a clean checkout of the release commit (the tip of the release line).
 
 ### 1. Preconditions (before any tag exists)
+
+First land the changelog. Pull requests add `changelog.d/<number>.<type>.md` rather
+than editing the shared section, so the release folds them in: on a branch cut from
+the release line, run the commands below, rename `## [Unreleased]` to the release
+heading, add a new empty `## [Unreleased]` above it, and merge that as a pull request. The *Changelog fragment* check accepts a
+`CHANGELOG.md` edit only in a pull request that deletes fragments and leaves none, and
+a fragment may be deleted only in such a pull request. A release with no pending
+fragments needs no fold; if its heading rename still edits `CHANGELOG.md`, apply the
+`no-changelog` label.
+
+```sh
+python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # review
+python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
+```
+
+Then, once that pull request has merged:
 
 ```sh
 git fetch origin && git switch --detach origin/docs/ranking-1-release-line   # or the release branch
@@ -214,8 +233,9 @@ this runbook does not edit the ledger.
 
 1. **Re-run failed jobs in the same run. Do not re-push the tag or dispatch a new run.**
    `gh run rerun <run-id> --failed` re-runs only the failed jobs and the jobs that depend
-   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` with
-   `tag: v4.0.0`) repeats every publish that already succeeded. On crates.io and npm that
+   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` at
+   `--ref v4.0.0` with `tag: v4.0.0`; a dispatch from any other ref is refused) repeats
+   every publish that already succeeded. On crates.io and npm that
    is a hard failure, because the version already exists.
    **A re-run builds the tagged commit again.** It cannot pick up a fix pushed to a
    branch afterwards. Re-run only for a transient failure: a runner, network or registry

@@ -12,7 +12,7 @@ use std::fs;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use crate::security::ssrf::{PinningResolver, RedirectDecision, SystemResolver, redirect_decision};
+use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
@@ -152,9 +152,8 @@ impl OpenApiConverter {
             }
         }
 
-        let response = reqwest::Client::builder()
+        let response = crate::security::ssrf::pinned_client_builder()
             .user_agent(format!("mcp-gateway/{}", env!("CARGO_PKG_VERSION")))
-            .dns_resolver(PinningResolver::new(SystemResolver))
             .redirect(reqwest::redirect::Policy::custom(
                 |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
                 {

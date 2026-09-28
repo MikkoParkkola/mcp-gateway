@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+<!-- New entries go in changelog.d/<number>.<type>.md (see CONTRIBUTING.md); they are folded in here at release. -->
 
 ### Highlights
 
@@ -19,11 +19,18 @@ and cached results, notifications and subscriptions stay per caller. SSO `role_m
 rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
 with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
 with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read, an unresolved secret or, with auth
-on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+unrecognised config key, a config file other users can read (Unix only), an unresolved secret
+(except `server.metrics_token`, which warns and keeps `/metrics` closed, and a personal-account `client_secret_ref`, which is read only when a token is requested) or, with auth on, cleartext
+HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
 ### Added
 
+- **The task store and the personal-account store run on Windows.** Directories and files are
+  created owner-only and checked on every open (owner, grants, inheritance, junctions, network
+  and non-ACL volumes), the directories are held open while the store runs, and custody uses a
+  Windows file lock. A 3.x token file other accounts can read is refused with the `icacls` lines
+  that fix it. One Windows-only module uses `unsafe` for the Win32 security calls (ADR-016).
+  (#1473)
 - `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
   launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
   and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
@@ -58,6 +65,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **One gateway writes an audit log path.** The transparency log takes a writer lease on
+  `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
+  error naming the path, whatever the auth setting. A restart overlap waits up to
+  10 seconds (not configurable). Appends no longer take a file lock.
+  `audit show` and the SIEM exporter rescan once when the log rotates under them, and I/O errors
+  from the log name the operation and the path. See UPGRADING item 49.
 - A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
   refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
   idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
@@ -113,16 +126,23 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
+
+- The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
+  command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
 - **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
   binaries and image digests handed between jobs expired after a day, so a later re-run
   published a release with no binaries or failed to find the digests. They now last the
   repository's 14-day artifact retention, and a CI check keeps every such handoff there.
-
 - **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
   row let a release pass while the burnup still listed it as held. A test also pins the
   approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
   cannot leave its approval behind.
-
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record

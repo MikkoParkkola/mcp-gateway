@@ -19,6 +19,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The one commit this release is built, tested and published from is
+  # GITHUB_SHA: the commit the event names (an annotated tag peeled), which a
+  # re-run keeps. Every checkout of this repository and both called workflows
+  # use it by default (checkout's default for the triggering repository is the
+  # event's commit), so none names a ref: a tag name, looked up again later,
+  # could have moved. A dispatch must run at the tag it names
+  # (`--ref <tag> -f tag=<tag>`); from any other ref it is refused here, and
+  # every job waits for this, so the `tag` input can never name a commit other
+  # than the one checked out.
+  resolve:
+    name: Refuse a dispatch away from the tag
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::dispatched from '$GITHUB_REF', not the tag '$TAG': run with --ref $TAG -f tag=$TAG"
+            exit 1
+          fi
+          echo "release commit: $GITHUB_SHA"
+
   # Release backstop for the dependency-vulnerability gate. ci.yml runs
   # `cargo audit` on every PR/push (RustSec advisories); this re-scans the
   # Cargo.lock against OSV at tag time so a known fixable vuln cannot ship via
@@ -29,6 +52,7 @@ jobs:
   # Exceptions are time-boxed in .github/osv-scanner.toml.
   security-gate:
     name: Security gate (block release on known vulns)
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -60,6 +84,7 @@ jobs:
   # If CodeQL is added later, wire it into this same needs: chain.
   secret-leak-lint:
     name: Secret-leak lint (CWE-532)
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,6 +104,7 @@ jobs:
   # and every publishing job names `verify` in its own needs:.
   release-criteria:
     name: Release criteria ledger (header matches rows)
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,9 +142,17 @@ jobs:
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
   task-sdk-recovery:
+    needs: resolve
     uses: ./.github/workflows/task-sdk-recovery.yml
-    with:
-      ref: ${{ inputs.tag || github.ref }}
+
+  # The tests run from the packaged crate, as anyone installing it would. A
+  # file the tests read that `include` leaves out passes the checkout-based
+  # tests in `verify` and fails only here, so `release` waits on this, and
+  # every publishing job waits on `release`: a crates.io or npm version
+  # cannot be replaced once published.
+  packaged-suite:
+    needs: resolve
+    uses: ./.github/workflows/packaged-suite.yml
 
   verify:
     needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
@@ -161,7 +195,7 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # No build cache: a restored cache is input nobody reviewed at the tag.
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -252,7 +286,7 @@ jobs:
           retention-days: 14
 
   release:
-    needs: [build, verify]
+    needs: [build, verify, packaged-suite]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -369,6 +403,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
 
       # Node 22 bundles npm 10.x; OIDC trusted publishing requires npm >= 11.5.1,
       # and current npm@latest (12.x) requires Node >= 22.22.2, so pin Node 22.
