@@ -552,11 +552,7 @@ async fn backend_handler_inner(
             crate::security::log_agent_identity(&agent_identity, audit, None);
         }
         Err(reason) => {
-            crate::security::log_agent_identity(
-                &agent_identity,
-                crate::security::IdentityAudit::Clean,
-                Some(&reason),
-            );
+            // mutant: refusal audit call removed
             return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN);
         }
     }
