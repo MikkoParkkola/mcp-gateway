@@ -355,6 +355,190 @@ def write_outputs(out: Path, platform: str, meta: dict, results: list[dict]) -> 
             f.write("\n".join(md) + "\n")
 
 
+
+# In-PR evidence modes: signatures only (red-first commit).
+FILTER_RE = re.compile(r".*")
+MAX_FILTERS = 20
+_batch = {"dir": MUTANTS_DIR, "head": None}
+
+
+def env_sha(name: str) -> str:
+    return os.environ.get(name, "")
+
+
+def parse_filters(value: str) -> list[str]:
+    return [value]
+
+
+def find_red_first(base: str, head: str) -> tuple[str, list[str]]:
+    raise Abort("not implemented")
+
+
+def judge_red(run: Outcome) -> Verdict:
+    return Verdict("FAIL", "not implemented")
+
+
+def judge_green(run: Outcome) -> Verdict:
+    return Verdict("FAIL", "not implemented")
+
+
+def redfirst(out: Path) -> int:
+    return 2
+
+
+def plan_pr() -> list[Row]:
+    raise Abort("not implemented")
+
+
+def read_expect(folder: Path) -> dict[str, str] | None:
+    return None
+
+
+def pr_batch_errors(results: list[dict], expect: dict[str, str] | None) -> list[str]:
+    return []
+
+
+def evidence_self_test() -> list[str]:
+    """Cases for the in-PR evidence modes: filters, red/green judging, the
+    trailer walk over a real temporary repository, PR-mode planning and the
+    PR batch verdict."""
+    errs: list[str] = []
+    for value, ok in (("a::b", True), ("a::b, c-d::e_f", True), ("", False), ("a b", False),
+                      ("x;rm", False), ("$(id)", False), (",".join(["t"] * 21), False)):
+        try:
+            parse_filters(value)
+            got = True
+        except Abort:
+            got = False
+        if got != ok:
+            errs.append(f"filters {value[:20]!r}: accepted={got}, expected {ok}")
+    one_red = ("running 1 test\ntest t ... FAILED\n\n---- t stdout ----\nassertion `left == right` failed\n\n"
+               "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out\n")
+    two_red = one_red.replace("0 passed; 1 failed", "0 passed; 2 failed")
+    one_ok = "running 1 test\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
+    none = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
+    for name, got, want in (
+        ("red: one failing test", judge_red(Outcome(101, one_red, False)), "RED"),
+        ("red: two tests selected", judge_red(Outcome(101, two_red, False)), "FAIL"),
+        ("red: already passes", judge_red(Outcome(0, one_ok, False)), "FAIL"),
+        ("red: selects nothing", judge_red(Outcome(0, none, False)), "FAIL"),
+        ("red: timeout", judge_red(Outcome(137, one_red, True)), "FAIL"),
+        ("head: passes", judge_green(Outcome(0, one_ok, False)), "PASS"),
+        ("head: still fails", judge_green(Outcome(101, one_red, False)), "FAIL"),
+        ("head: selects nothing", judge_green(Outcome(0, none, False)), "FAIL"),
+        ("head: two tests selected", judge_green(Outcome(0, one_ok.replace("1 passed", "2 passed"), False)), "FAIL"),
+    ):
+        if got.result != want:
+            errs.append(f"{name}: {got.result}, expected {want}")
+    rows = [{"id": "k", "result": "RED", "detail": ""}, {"id": "n", "result": "SURVIVED", "detail": ""}]
+    for name, results, expect, want_fail in (
+        ("killed + declared survivor", rows, {"n": "SURVIVED"}, False),
+        ("killed + survivor, no expect file", rows, None, False),
+        ("undeclared survivor", rows, {"k": "RED"}, True),
+        ("nothing killed", rows[1:], None, True),
+        ("an ERROR row", rows + [{"id": "e", "result": "ERROR", "detail": "crash"}], None, True),
+    ):
+        if bool(pr_batch_errors(results, expect)) != want_fail:
+            errs.append(f"PR batch {name}: failed={not want_fail}, expected {want_fail}")
+    errs += walk_check()
+    return errs
+
+
+def walk_check() -> list[str]:
+    """find_red_first and plan_pr over a real temporary repository."""
+    errs: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp, "r")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+        def g(*args) -> str:
+            done = subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True)
+            if done.returncode != 0:
+                raise Abort(f"fixture `git {' '.join(args)}` failed: {done.stderr.strip()}")
+            return done.stdout.strip()
+
+        def commit(msg: str) -> str:
+            g("commit", "-q", "--allow-empty", "-m", msg)
+            return g("rev-parse", "HEAD")
+
+        here, saved = os.getcwd(), dict(os.environ)
+        try:
+            repo.mkdir()
+            g("init", "-q", "-b", "base")
+            b1 = commit("b1")
+            g("checkout", "-q", "-b", "pr")
+            p1 = commit("p1\n\nRed-first: a::t1")
+            commit("p2 fix")
+            g("checkout", "-q", "base")
+            b2 = commit("b2\n\nRed-first: base::not_ours")
+            g("checkout", "-q", "pr")
+            g("merge", "-q", "--no-edit", "base")
+            head = commit("p3")
+            os.chdir(repo)
+            os.environ.clear()
+            os.environ.update(env)
+            # BASE_SHA older than the merged-in b2: only a first-parent walk skips b2's trailer.
+            cases = (("own trailer behind a merged-in base trailer", b1, head, p1, ["a::t1"]),
+                     ("diverged base (base tip includes b2)", b2, head, p1, ["a::t1"]))
+            for name, base, tip, want_sha, want_filters in cases:
+                try:
+                    got = find_red_first(base, tip)
+                    if got != (want_sha, want_filters):
+                        errs.append(f"walk {name}: {got}, expected {(want_sha, want_filters)}")
+                except Abort as exc:
+                    errs.append(f"walk {name}: {exc}")
+            p4 = commit("p4\n\nRed-first: a::t2, a::t3")
+            if find_red_first(b2, p4) != (p4, ["a::t2", "a::t3"]):
+                errs.append("walk: the newest trailer is not the one picked")
+            g("checkout", "-q", "-b", "none", b2)
+            bare = commit("no trailer")
+            try:
+                find_red_first(b2, bare)
+                errs.append("walk: a PR without a trailer passed")
+            except Abort:
+                pass
+            # PR mode: manifest under the PR number, naming an ancestor of the head.
+            g("checkout", "-q", "pr")
+            folder = repo / MUTANTS_DIR / "7"
+            folder.mkdir(parents=True)
+            (folder / "m.patch").write_text("x\n")
+            (folder / "manifest.tsv").write_text(f"head_sha\t{p1}\nk\tlinux\tm.patch\ta::t1\n")
+            g("add", "-A")
+            tip = commit("mutants")
+            os.environ.update(PR_NUMBER="7", HEAD_SHA=tip)
+            try:
+                if [r.id for r in plan_pr()] != ["k"]:
+                    errs.append("plan_pr: rows not read")
+            except Abort as exc:
+                errs.append(f"plan_pr on a valid batch: {exc}")
+            (folder / "manifest.tsv").write_text(f"head_sha\t{'0' * 40}\nk\tlinux\tm.patch\ta::t1\n")
+            g("add", "-A")
+            tip = commit("bad head")
+            os.environ["HEAD_SHA"] = tip
+            try:
+                plan_pr()
+                errs.append("plan_pr: a manifest naming a non-ancestor passed")
+            except Abort:
+                pass
+            os.environ["PR_NUMBER"] = "8"
+            try:
+                plan_pr()
+                errs.append("plan_pr: a missing .mutants/<number>/ manifest passed")
+            except Abort:
+                pass
+        except Abort as exc:
+            errs.append(str(exc))
+        finally:
+            os.chdir(here)
+            os.environ.clear()
+            os.environ.update(saved)
+            _batch.update(dir=MUTANTS_DIR, head=None)
+    return errs
+
+
+
 def self_test() -> int:
     ok = "running 3 tests\ntest a ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
     empty = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n"
@@ -430,6 +614,9 @@ def self_test() -> int:
         if bool(REF_RE.match(ref)) != (ref in refs_ok):
             print(f"self-test: ref {ref} misclassified", file=sys.stderr)
             rc = 1
+    for err in evidence_self_test():
+        print(f"self-test: evidence: {err}", file=sys.stderr)
+        rc = 1
     if rc == 0:
         total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad)
         print(f"self-test: {total} classifier, manifest and ref cases as expected")
