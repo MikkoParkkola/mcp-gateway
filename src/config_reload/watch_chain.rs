@@ -258,7 +258,7 @@ pub(super) fn spawn_rewatch_task(
                     // No memo: a file that differs is re-triggered every tick
                     // until a reload succeeds; the debounce coalesces them.
                     if let Some(trigger) = poller.tick(env_poll_every).await {
-                        let _ = reload.try_send(trigger);
+                        let _ = trigger;
                     }
                     // After a stalled read the interval is ready again at once
                     // and select picks at random, so shutdown is checked here:
