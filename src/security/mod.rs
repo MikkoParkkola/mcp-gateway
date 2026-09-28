@@ -24,6 +24,7 @@ pub mod firewall;
 pub mod http_diagnostics;
 pub mod message_signing;
 pub mod policy;
+pub mod posture;
 pub mod remote_provenance;
 pub mod response_contract;
 pub mod response_inspect;

@@ -26,6 +26,7 @@ use mcp_gateway::{
 use serde_json::{Value, json};
 
 mod health;
+mod posture;
 mod remedy;
 mod shadow;
 mod ws_reach;
