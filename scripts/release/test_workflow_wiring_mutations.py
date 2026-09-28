@@ -1016,14 +1016,16 @@ CASES = [
         # It no longer has a step-level `push:` to reopen -- the build pushes
         # by digest under no name -- so the way back in is the condition that
         # decides whether the manifest job runs at all. Anchored to the line
-        # above it: the job-level condition is a prefix of the step-level ones,
-        # so on its own it matches four times and mutates the wrong copy.
+        # above it: the job-level condition is identical to the step-level ones,
+        # so on its own it matches several times and mutates the wrong copy.
+        # The mutation re-admits tags beside the main-only pin.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
         "    needs: build\n"
-        "    if: github.event_name != 'pull_request'"
-        " && !startsWith(github.ref, 'refs/tags/v')",
-        "    needs: build\n    if: github.event_name != 'pull_request'",
+        "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+        "    needs: build\n"
+        "    if: github.event_name == 'push' && (github.ref == 'refs/heads/main'"
+        " || startsWith(github.ref, 'refs/tags/v'))",
         CAUGHT,
     ),
     (
@@ -1342,6 +1344,46 @@ CASES += [
      "          name: some-other-artifact\n          pattern: image-digests-*\n", CAUGHT),
 ]
 
+
+# The tooling unit tests fail every ref; only live-ledger checks are
+# report-only. Each anchor names the new job's own header or steps.
+UNIT_JOB = "    name: Release tooling unit tests\n    runs-on: ubuntu-latest\n"
+MUTATIONS_STEP = (
+    "      - name: Test that the workflow-wiring assertions catch their mutations\n"
+    "        run: python3 scripts/release/test_workflow_wiring_mutations.py\n"
+)
+_CI_TEXT = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+_RC_FIRST = (
+    "      - name: Check the release-criteria ledger header against its rows\n"
+    "        run: python3 scripts/release/count-release-criteria.py --check\n"
+)
+_RELEASE_CRITERIA_SPAN = _CI_TEXT[
+    _CI_TEXT.index(MUTATIONS_STEP) : _CI_TEXT.index(_RC_FIRST) + len(_RC_FIRST)
+]
+CASES += [
+    ("unit-tests-swallowed", "ci.yml", UNIT_JOB,
+     UNIT_JOB + "    continue-on-error: true\n", CAUGHT),
+    ("unit-tests-swallowed-off-a-tag", "ci.yml", UNIT_JOB,
+     UNIT_JOB + "    continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}\n", CAUGHT),
+    ("unit-tests-explicitly-blocking", "ci.yml", UNIT_JOB,
+     UNIT_JOB + "    continue-on-error: false\n", TOLERATED),
+    ("publish-gate-test-back-in-the-report-only-job", "ci.yml",
+     "      - name: Test the tag/manifest publish gate\n"
+     "        run: python3 scripts/release/test_check_tag_manifest.py\n",
+     "", CAUGHT),
+    ("mutation-harness-dropped", "ci.yml",
+     MUTATIONS_STEP + "\n  release-criteria:\n",
+     "\n  release-criteria:\n", CAUGHT),
+    # Moved, not dropped: still run, but inside the job whose failure is
+    # swallowed off a tag. The span runs from the step to the first step of
+    # release-criteria, so the edit is one contiguous replacement.
+    ("mutation-harness-moved-to-the-report-only-job", "ci.yml",
+     _RELEASE_CRITERIA_SPAN,
+     _RELEASE_CRITERIA_SPAN.replace(MUTATIONS_STEP, "", 1)
+     + MUTATIONS_STEP, CAUGHT),
+    ("docker-build-stops-waiting-for-unit-tests", "ci.yml",
+     "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
+]
 
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""

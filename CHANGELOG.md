@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+<!-- New entries go in changelog.d/<number>.<type>.md (see CONTRIBUTING.md); they are folded in here at release. -->
 
 ### Highlights
 
@@ -120,18 +120,7 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 ### Fixed
 
-- **Env files follow a retargeted link.** An env file reached through a link (`current/.env` after
-  a release switch, or an env file that is itself a symlink) kept reloading from the old target,
-  because its directory watch was fixed at startup. A gateway serving HTTP from a config named
-  with `--config` or `MCP_GATEWAY_CONFIG` now re-reads env files every 2 seconds and reloads when
-  their content differs from what is loaded, which also works on NFS and FUSE mounts; a stdio
-  gateway, or one that found its config on its own, watches no files, as before. A file that fails
-  to load keeps the running values and is retried, with at most one warning a minute per file
-  unless the error changes. A lookup error on an env file (a link loop, a directory the gateway
-  cannot search) now fails the load instead of reading as a missing file. After a failed reload
-  the gateway retries every 2 seconds until one succeeds, so a config edit that failed alongside a
-  broken env file still applies once the env file is fixed. See `docs/DEPLOYMENT.md` and
-  `docs/UPGRADING-4.0.md` item 72. (#1286)
+- **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
 
 - The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
   command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.

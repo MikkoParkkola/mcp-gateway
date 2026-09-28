@@ -164,6 +164,7 @@ impl Transport for MyTransport {
 
 - **Formatting:** `cargo fmt` before every commit. CI rejects unformatted code.
 - **Linting:** `cargo clippy --all-features -- -D warnings`. Pedantic warnings are promoted to errors in CI.
+- **Feature sets:** test targets are supported with the default feature set only; builds without default features are covered for the library and binary alone (the *Feature combination* job in `.github/workflows/ci.yml`).
 - **Safety:** `unsafe` code is denied at the crate level. No exceptions.
 - **Errors:** `thiserror` for typed errors, `anyhow` for application-level.
 - **Logging:** `tracing` macros (`info!`, `debug!`, `warn!`), never `println!`.
@@ -176,11 +177,23 @@ Allowed clippy exceptions (in `Cargo.toml`): `module_name_repetitions`, `must_us
 
 1. **Branch** from `main`: `git checkout -b feature/your-feature`
 2. **Verify:** `cargo fmt --all -- --check && cargo clippy --all-features -- -D warnings && cargo test --all-features && python3 benchmarks/token_savings.py --scenario readme --json`
-3. **Document:** Update README.md for user-facing features. Add CHANGELOG.md entry.
+3. **Document:** Update README.md for user-facing features. Add a changelog fragment (below).
 4. **Open PR** with a clear description of what changed and why.
 5. **CI must pass.** Formatting, clippy pedantic, and the full test suite.
 
 Smaller PRs are reviewed faster. For large changes, open an issue first.
+
+**What runs where.** Every pull request runs the CI workflow. The container image build and
+CodeQL code scanning run once per merge, on the push to the release branch (and on `main` and
+tags), not on each pull-request push; a pull request into the release branch still builds the
+image when it changes `Dockerfile`, `.dockerignore`, `Cargo.toml`, `Cargo.lock`,
+`deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything.
+Maintainer `throwaway/` branches (red-first and mutation-proof runs, never merged) run only the
+test suite (`Tests (throwaway)`), on a hosted runner until the project's own arm64 runner is
+registered, then on that runner; see `scripts/ci/trusted-runner/`.
+Mutation proofs are batched: push `throwaway/mutants-<pr>` as the pull request's head plus one
+commit adding `.mutants/manifest.tsv` and the patches; one run of the Mutants workflow classifies
+every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).
 
 ## Architecture Decisions
 
@@ -251,7 +264,14 @@ We want your PR to merge fast. Here is what helps.
 
 ### Strongly encouraged
 
-- [ ] **CHANGELOG entry** under `[Unreleased]` if the change is user-visible.
+- [ ] **Changelog fragment** if the change is user-visible: add `changelog.d/<number>.<type>.md`,
+  where `<number>` is the PR (or issue) number and `<type>` is one of `added`, `changed`,
+  `removed`, `fixed`, `security`. It holds your bullet(s) exactly as they should read in
+  CHANGELOG.md, for example `- doctor: report why a stdio backend died (#526)`. Do not edit
+  CHANGELOG.md itself: a shared section makes every open PR conflict whenever one merges.
+  A PR that changes `src/` (or a `crates/*/src/`) without a fragment, or edits CHANGELOG.md
+  by hand, fails the *Changelog fragment* check; a maintainer can apply the `no-changelog`
+  label when no entry is warranted.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
 - [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.

@@ -22,10 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-use rcgen::string::Ia5String;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose, SanType, date_time_ymd,
+    KeyUsagePurpose, date_time_ymd,
 };
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, CertificateRevocationListDer, PrivateKeyDer};
@@ -159,7 +158,9 @@ pub struct LeafCertParams<'a> {
     pub cn: &'a str,
     /// Organisational Unit (optional).
     pub ou: Option<&'a str>,
-    /// Subject Alternative Names — DNS entries.
+    /// Subject Alternative Names — DNS entries. An IP literal (`127.0.0.1`,
+    /// `::1`, `[::1]`) is written as an IP SAN instead, which an mTLS policy's
+    /// `san_dns` pattern does not match. Surrounding whitespace is ignored.
     pub san_dns: Vec<String>,
     /// Subject Alternative Names — URI entries (e.g. SPIFFE IDs).
     pub san_uris: Vec<String>,
@@ -247,19 +248,7 @@ impl CertGenerator {
         leaf_params.not_after = validity_to_date(params.validity_days)?;
         leaf_params.use_authority_key_identifier_extension = true;
 
-        // Add SANs — rcgen 0.14 uses Ia5String (from rcgen::string) for DNS and URI SAN types
-        let mut sans: Vec<SanType> = Vec::new();
-        for dns in &params.san_dns {
-            let ia5 = Ia5String::try_from(dns.as_str())
-                .map_err(|e| Error::Config(format!("Invalid DNS SAN '{dns}': {e}")))?;
-            sans.push(SanType::DnsName(ia5));
-        }
-        for uri in &params.san_uris {
-            let ia5 = Ia5String::try_from(uri.as_str())
-                .map_err(|e| Error::Config(format!("Invalid URI SAN '{uri}': {e}")))?;
-            sans.push(SanType::URI(ia5));
-        }
-        leaf_params.subject_alt_names = sans;
+        leaf_params.subject_alt_names = super::san::leaf_sans(&params.san_dns, &params.san_uris)?;
 
         // rcgen 0.14: signed_by takes (&signing_key, &Issuer)
         let leaf_cert = leaf_params
@@ -441,6 +430,8 @@ fn validity_to_date(days: u32) -> Result<time::OffsetDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rcgen::SanType;
+    use rcgen::string::Ia5String;
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 

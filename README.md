@@ -574,7 +574,7 @@ not, and that needs to be published rather than assumed.
 
 1. Fork and branch (`git checkout -b feature/your-feature`)
 2. Test (`cargo test`) and lint (`cargo fmt && cargo clippy -- -D warnings`)
-3. Open a PR against `main` with a clear description and a [CHANGELOG](CHANGELOG.md) entry
+3. Open a PR against `main` with a clear description and a changelog fragment in `changelog.d/` (see [CONTRIBUTING](CONTRIBUTING.md))
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted) to get started.
 

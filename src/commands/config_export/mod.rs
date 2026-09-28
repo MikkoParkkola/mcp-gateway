@@ -23,8 +23,8 @@
 //! | VS Code Copilot| `servers`         | `.vscode/mcp.json` (workspace-rel)     |
 //! | Windsurf       | `mcpServers`      | `~/.codeium/windsurf/mcp_config.json`  |
 //! | Cline          | `mcpServers`      | `.cline/mcp_servers.json` (ws-rel)     |
-//! | Zed            | `context_servers` | `~/.config/zed/settings.json`          |
-//! | Generic        | `mcpServers`      | stdout or `--output`                   |
+//! | Zed            | `context_servers` | platform-specific (Zed's config dir)   |
+//! | Generic        | `mcpServers`      | stdout                                 |
 
 mod watch;
 
