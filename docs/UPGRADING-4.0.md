@@ -1824,7 +1824,8 @@ calls together.
 - The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
   are off by default.
 - Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
-  transitions) any admitted caller's calls shape what counts as usual after it.
+  transitions, plus any calls already in flight when it reaches 20) any admitted caller's calls
+  shape what counts as usual after it.
 
 **Action:** if you set `anomaly_detection: true`, expect real scores and, with a block threshold,
 real refusals once each tool has 20 recorded transitions. Check that `anomaly_threshold` is above

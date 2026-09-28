@@ -137,15 +137,22 @@ impl TransitionTracker {
         true
     }
 
-    /// Every transition recorded out of `from_tool`, across all successors.
+    /// Transitions out of `from_tool`: `(all successors, to_tool only)`.
+    ///
+    /// One pass that reads each counter once, so the pair is a consistent
+    /// snapshot: `to_tool`'s count is part of the total it is divided by,
+    /// even while other callers are recording.
     #[cfg(feature = "firewall")]
-    pub(crate) fn successor_total(&self, from_tool: &str) -> u64 {
-        self.transitions.get(from_tool).map_or(0, |successors| {
-            successors
-                .iter()
-                .map(|e| e.value().load(Ordering::Relaxed))
-                .sum()
-        })
+    pub(crate) fn successor_counts(&self, from_tool: &str, to_tool: &str) -> (u64, u64) {
+        self.transitions
+            .get(from_tool)
+            .map_or((0, 0), |successors| {
+                successors.iter().fold((0, 0), |(total, to), entry| {
+                    let count = entry.value().load(Ordering::Relaxed);
+                    let to = if entry.key() == to_tool { count } else { to };
+                    (total + count, to)
+                })
+            })
     }
 
     /// Predict the most likely next tools after `from_tool`.

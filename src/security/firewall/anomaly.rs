@@ -251,16 +251,20 @@ impl AnomalyDetector {
     /// The score of `current` after `prev`, or `WarmingUp` when `prev` has
     /// fewer recorded transitions than the configured minimum.
     fn score_after(&self, prev: &str, current: &str) -> Observation {
-        if self.tracker.successor_total(prev) < self.min_observations {
+        // One snapshot for the warm-up check and the score: concurrent
+        // commits by other callers cannot push a confidence above 1.0.
+        let (total, seen) = self.tracker.successor_counts(prev, current);
+        if total < self.min_observations {
             return Observation::WarmingUp;
         }
-        let predictions = self.tracker.predict_next(prev, 0.0, 0);
-        match predictions.iter().find(|p| p.tool == current) {
-            Some(p) => Observation::Scored(1.0 - p.confidence),
+        if seen == 0 {
             // Never seen: the most unusual a transition can be, so never
             // below a rare one (`1 - confidence` approaches 1.0 from below).
-            None => Observation::Scored(1.0),
+            return Observation::Scored(1.0);
         }
+        #[allow(clippy::cast_precision_loss)] // counts far below 2^52
+        let confidence = seen as f64 / total as f64;
+        Observation::Scored(1.0 - confidence)
     }
 
     fn stripe(&self, identity: &str) -> &parking_lot::Mutex<()> {
