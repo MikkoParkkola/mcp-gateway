@@ -37,18 +37,33 @@ async fn healthy_invocation(l: &Arc<TransparencyLogger>) -> io::Result<()> {
     invocation(l).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// The held write times out at exactly the configured bound. Tokio's clock
+/// is paused and moved by hand, so this pins the deadline without depending
+/// on runner speed: one tick before the bound the call is still waiting, at
+/// the bound it returns `TimedOut` with the write still held.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn stalled_append_times_out() {
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
-    let start = std::time::Instant::now();
-    // The gate holds the write for up to a minute, so returning while it is
-    // still held (is_stalled) is the bound; a timer never fires early, so
-    // the lower bound holds on any runner.
-    let err = invocation(&l).await.unwrap_err();
+    let l2 = Arc::clone(&l);
+    let call = tokio::spawn(async move { invocation(&l2).await });
+    // Once the write is held, the call has registered its deadline. Real
+    // time here is only a hang guard.
+    let guard = std::time::Instant::now();
+    while !release.is_entered() {
+        assert!(
+            guard.elapsed() < Duration::from_secs(60),
+            "the write never started"
+        );
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(BOUND.saturating_sub(Duration::from_millis(1))).await;
+    tokio::task::yield_now().await;
+    assert!(!call.is_finished(), "gave up before the bound");
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let err = call.await.unwrap().unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
-    assert!(start.elapsed() >= BOUND, "refused without waiting");
     assert!(l.is_stalled());
     release.release();
 }

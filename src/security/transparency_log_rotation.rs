@@ -576,6 +576,11 @@ impl StallGate {
             .entered
     }
 
+    /// Whether a write has reached `hold` (no wait).
+    pub(crate) fn is_entered(&self) -> bool {
+        self.state.lock().expect("gate lock").entered
+    }
+
     /// Let the held write finish.
     pub(crate) fn release(&self) {
         self.state.lock().expect("gate lock").open = true;
