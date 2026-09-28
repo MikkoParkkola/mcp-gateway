@@ -436,9 +436,11 @@ impl ConfigScanner {
             .await
     }
 
-    /// Scan Zed editor configuration (`~/.config/zed/settings.json`).
+    /// Scan Zed editor configuration (Zed's config directory, see
+    /// [`Self::zed_config_path`]).
     ///
-    /// Format: `{ "context_servers": { "<name>": { "command": { "path": "...", "args": [...] } } } }`
+    /// Format: `{ "context_servers": { "<name>": { "command": "...", "args": [...] } } }`,
+    /// or `{ "url": "..." }` for an HTTP server.
     ///
     /// # Errors
     ///
@@ -514,47 +516,23 @@ impl ConfigScanner {
     }
 
     /// Parse a single Zed context-server entry.
+    ///
+    /// Zed's entries are flat, the same shape as an `mcpServers` entry:
+    /// `{"command": "<path>", "args": [...]}` for stdio or `{"url": ...}` for
+    /// HTTP (zed-industries/zed @ 1a28cff4,
+    /// `crates/settings_content/src/project.rs:517-615`). An extension entry
+    /// has neither and is not imported.
     fn parse_zed_server(
         name: &str,
         config: &Value,
         config_path: &Path,
     ) -> Option<DiscoveredServer> {
-        // Zed wraps the command under `{ "command": { "path": "...", "args": [...] } }`
-        let cmd_obj = config.get("command")?;
-        let path_str = cmd_obj.get("path").and_then(|v| v.as_str())?;
-        let args: Vec<String> = cmd_obj
-            .get("args")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let full_command = if args.is_empty() {
-            path_str.to_string()
-        } else {
-            format!("{} {}", path_str, args.join(" "))
-        };
-
-        Some(DiscoveredServer {
-            name: name.to_string(),
-            description: format!("MCP server from {:?}", DiscoverySource::Zed),
-            source: DiscoverySource::Zed,
-            transport: TransportConfig::Stdio {
-                command: full_command.clone(),
-                cwd: None,
-                protocol_version: None,
-            },
-            metadata: ServerMetadata {
-                config_path: Some(config_path.to_path_buf()),
-                pid: None,
-                port: None,
-                command: Some(full_command),
-                working_dir: None,
-            },
-        })
+        let flat =
+            config.get("command").is_some_and(Value::is_string) || config.get("url").is_some();
+        if !flat {
+            return None;
+        }
+        Self::parse_server_config(name, config, &DiscoverySource::Zed, config_path)
     }
 
     // ── Continue.dev-specific parser ───────────────────────────────────────
@@ -617,16 +595,27 @@ impl ConfigScanner {
         Ok(home.join(".cursor/mcp.json"))
     }
 
-    /// Get Zed settings path (`~/.config/zed/settings.json`).
+    /// Get Zed settings path: `~/.config/zed/settings.json` on macOS, the OS
+    /// config directory joined with `zed` (Linux) or `Zed` elsewhere.
     fn zed_config_path() -> Result<PathBuf> {
         let home = dirs::home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
+        // Zed's `config_dir()` (zed-industries/zed @ 1a28cff4,
+        // `crates/paths/src/paths.rs:133-152`): `~/.config/zed` on macOS, the
+        // OS config dir elsewhere. ponytail: Zed's Flatpak override
+        // (`FLATPAK_XDG_CONFIG_HOME`) is not followed; add it if a Flatpak user
+        // reports a miss.
         #[cfg(target_os = "macos")]
         let path = home.join(".config/zed/settings.json");
-
-        #[cfg(not(target_os = "macos"))]
-        let path = home.join(".config/zed/settings.json");
+        #[cfg(target_os = "linux")]
+        let path = dirs::config_dir()
+            .unwrap_or(home.join(".config"))
+            .join("zed/settings.json");
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let path = dirs::config_dir()
+            .unwrap_or(home.join(".config"))
+            .join("Zed/settings.json");
 
         Ok(path)
     }
@@ -791,3 +780,7 @@ mod tests {
 #[cfg(test)]
 #[path = "config_scanner_ws_tests.rs"]
 mod ws_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_zed_tests.rs"]
+mod zed_tests;

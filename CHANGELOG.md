@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+<!-- New entries go in changelog.d/<number>.<type>.md (see CONTRIBUTING.md); they are folded in here at release. -->
 
 ### Highlights
 
@@ -25,6 +25,12 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 ### Added
 
+- **The task store and the personal-account store run on Windows.** Directories and files are
+  created owner-only and checked on every open (owner, grants, inheritance, junctions, network
+  and non-ACL volumes), the directories are held open while the store runs, and custody uses a
+  Windows file lock. A 3.x token file other accounts can read is refused with the `icacls` lines
+  that fix it. One Windows-only module uses `unsafe` for the Win32 security calls (ADR-016).
+  (#1473)
 - `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
   launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
   and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
@@ -119,6 +125,8 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
   (A11, MIK-7570.RECONNECT.1)
 
 ### Fixed
+
+- **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
 
 - The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
   command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.

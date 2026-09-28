@@ -260,10 +260,13 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     // resolution (PinningResolver validates every resolved IP, closing the
     // rebinding TOCTOU window — MIK-4019) and re-validate every redirect hop,
     // stopping at >=5 hops. This mirrors the canonical fetch path in
-    // `capability::executor::build_http_client` and `openapi::convert_url`. The
+    // `capability::executor::client::build` and `openapi::convert_url`. The
     // guards stay gated on `ssrf_protection` so an operator may deliberately
     // disable them for trusted internal specs.
+    // Never an environment proxy: it would resolve the name instead of the
+    // pin below (#1881).
     let mut builder = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("mcp-gateway/openapi-importer");
     if ssrf_protection {

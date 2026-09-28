@@ -53,7 +53,7 @@ use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, Watch
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use std::fmt::Write as _;
 
@@ -62,7 +62,6 @@ use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::config::{
     BackendConfig, Config, EnvOverlay, LiveEnv, ResolvedEnvFiles, RuntimeConfig, ServerConfig,
 };
-use crate::identity_grants::{GrantSubject, IdentityGrant, LocalIdentityGrantStore};
 
 // ============================================================================
 // Public types
@@ -997,8 +996,10 @@ pub async fn apply_patch(
 enum ReloadTrigger {
     /// The main `config.yaml` was modified.
     ConfigFile,
-    /// One of the watched env files was modified.
+    /// A recorded env file's content differs from the live overlay (#1286).
     EnvFile(PathBuf),
+    /// The last reload failed; retried each poll until one succeeds.
+    Retry(PathBuf),
 }
 
 /// Returns `true` for create/modify events on the watched config file.
@@ -1021,18 +1022,6 @@ fn is_config_event_for(event: &Event, named_config_path: &std::path::Path) -> bo
     is_config_event(event, &config_watch_paths(named_config_path.to_path_buf()))
 }
 
-/// Returns `Some(path)` when the event matches any of the watched env files,
-/// `None` otherwise.
-fn matching_env_file(event: &Event, env_paths: &[PathBuf]) -> Option<PathBuf> {
-    if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
-        return None;
-    }
-    env_paths
-        .iter()
-        .find(|ep| event.paths.iter().any(|p| p == *ep))
-        .cloned()
-}
-
 // ============================================================================
 // File watcher
 // ============================================================================
@@ -1047,6 +1036,9 @@ pub struct ConfigWatcher {
     /// it watches. The rewatch task holds it too, and drops the watcher when
     /// the gateway shuts down.
     _chain: Arc<watch_chain::ChainWatch>,
+    /// What the reload task did with `EnvFile` triggers.
+    #[cfg(all(test, target_os = "linux"))]
+    env_reloads: Arc<env_poll::EnvReloadCounts>,
 }
 
 impl ConfigWatcher {
@@ -1061,8 +1053,14 @@ impl ConfigWatcher {
         &self._chain
     }
 
-    /// Start watching `config_path` and any env files listed in the initial
-    /// config for changes.
+    /// What the reload task did with `EnvFile` triggers so far.
+    #[cfg(all(test, target_os = "linux"))]
+    fn env_reloads(&self) -> &env_poll::EnvReloadCounts {
+        &self.env_reloads
+    }
+
+    /// Start watching `config_path`, and polling the env files startup
+    /// recorded, for changes.
     ///
     /// Spawns a debounced background task that re-parses the file and calls
     /// [`apply_patch`] on each detected change.
@@ -1082,23 +1080,13 @@ impl ConfigWatcher {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
         let config_path = watch_chain::named_config_path(config_path);
-        // The paths startup recorded, never `initial_config.env_files`: a `~`
-        // entry resolved once, and resolving the spelling again could watch a
-        // different file than the one the gateway reads.
-        let env_file_paths: Vec<PathBuf> = env
-            .env_paths()
-            .as_paths()
-            .iter()
-            .cloned()
-            .map(absolute_watch_path)
-            .collect();
 
         let (wake_tx, mut wake_rx) = tokio::sync::watch::channel(());
-        let chain =
-            Self::create_notify_watcher(event_tx.clone(), wake_tx, &config_path, &env_file_paths)?;
+        let chain = Self::create_notify_watcher(event_tx.clone(), wake_tx, &config_path)?;
         // One resolve as soon as the watches are live: a retarget that landed
         // between resolving the chain and installing them is followed.
         wake_rx.mark_changed();
+        let env_reloads = Arc::new(env_poll::EnvReloadCounts::default());
         watch_chain::spawn_rewatch_task(
             config_path.clone(),
             Arc::clone(&chain),
@@ -1106,6 +1094,12 @@ impl ConfigWatcher {
             event_tx,
             shutdown_rx.resubscribe(),
             watch_chain::CHAIN_RETRY,
+            env_poll::EnvPoller::new(
+                Arc::clone(&env),
+                Arc::clone(&env_reloads),
+                config_path.clone(),
+            ),
+            env_poll::POLL_EVERY,
         );
 
         let failsafe_cfg = initial_config.failsafe.clone();
@@ -1121,27 +1115,30 @@ impl ConfigWatcher {
             identity_grants,
             event_rx,
             shutdown_rx,
+            Arc::clone(&env_reloads),
         );
 
-        Ok(Self { _chain: chain })
+        Ok(Self {
+            _chain: chain,
+            #[cfg(all(test, target_os = "linux"))]
+            env_reloads,
+        })
     }
 
     /// Create the low-level `notify` watcher and register all watch paths.
     ///
     /// The config's link chain is watched through [`watch_chain::ChainWatch`],
-    /// which the rewatch task keeps following; each env file's parent directory
-    /// is watched once, `NonRecursive`, as before.
+    /// which the rewatch task keeps following. Env files are not watched: the
+    /// rewatch task polls them (#1286).
     fn create_notify_watcher(
         event_tx: tokio::sync::mpsc::Sender<ReloadTrigger>,
         wake_tx: tokio::sync::watch::Sender<()>,
         config_path: &std::path::Path,
-        env_file_paths: &[PathBuf],
     ) -> Result<Arc<watch_chain::ChainWatch>> {
         let named_config_path = config_path.to_path_buf();
         let closure_config_path = named_config_path.clone();
-        let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
-        let mut watcher = RecommendedWatcher::new(
+        let watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
@@ -1155,8 +1152,6 @@ impl ConfigWatcher {
                 }
                 if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
-                } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
-                    let _ = event_tx.try_send(ReloadTrigger::EnvFile(path));
                 }
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
@@ -1165,16 +1160,11 @@ impl ConfigWatcher {
             crate::Error::ConfigWatcher(format!("Failed to create config watcher: {e}"))
         })?;
 
-        let env_dirs = watch_chain::watch_env_dirs(&mut watcher, env_file_paths);
-
         let wanted = watch_chain::startup_dirs(&named_config_path);
-        let chain = watch_chain::ChainWatch::new(watcher, env_dirs.clone());
+        let chain = watch_chain::ChainWatch::new(watcher);
         chain.reconcile(&wanted);
         let in_ledger = chain.watched_now();
-        if let Some(missing) = wanted
-            .iter()
-            .find(|dir| !in_ledger.contains(*dir) && !env_dirs.contains(*dir))
-        {
+        if let Some(missing) = wanted.iter().find(|dir| !in_ledger.contains(*dir)) {
             return Err(crate::Error::ConfigWatcher(format!(
                 "Failed to watch config path: {}",
                 missing.display()
@@ -1195,12 +1185,16 @@ impl ConfigWatcher {
         identity_grants: Option<Arc<IdentityGrantSink>>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        env_reloads: Arc<env_poll::EnvReloadCounts>,
     ) {
+        use env_poll::{DEBOUNCE, RELOAD_TICK};
         tokio::spawn(async move {
-            const DEBOUNCE: Duration = Duration::from_millis(500);
             let mut last_event: Option<Instant> = None;
             let mut pending_trigger: Option<ReloadTrigger> = None;
-            let mut ticker = tokio::time::interval(Duration::from_millis(100));
+            let mut ticker = tokio::time::interval(RELOAD_TICK);
+            // The poll re-triggers a failing env file every tick; this keeps
+            // its warning to one a minute unless the error changes.
+            let mut env_warns = env_poll::WarnLimiter::default();
 
             // The watcher runs the same reload transaction as the meta-tool and
             // the admin UI, through the same function (#397). It used to have a
@@ -1229,26 +1223,39 @@ impl ConfigWatcher {
                         {
                             let trigger = pending_trigger.take().unwrap();
                             last_event = None;
-                            log_reload_trigger(&trigger);
-                            match ctx.reload_outcome().await {
-                                Ok(outcome) if outcome.changes == NO_CHANGES_SUMMARY => {
+                            env_poll::log_trigger(&trigger);
+                            env_reloads.count_attempt(&trigger);
+                            let result = ctx.reload_outcome().await;
+                            let error = result.as_ref().err().map(String::as_str);
+                            env_reloads.settled(&mut env_warns, error, &trigger);
+                            match (result, &trigger) {
+                                (Ok(outcome), ReloadTrigger::EnvFile(path)) => {
+                                    env_poll::report_reloaded(path, &outcome);
+                                }
+                                (Ok(outcome), _) if outcome.changes == NO_CHANGES_SUMMARY => {
                                     tracing::debug!("Config reload: no changes detected");
                                 }
-                                Ok(outcome) => {
+                                (Ok(outcome), _) => {
                                     info!(
                                         changes = %outcome.changes,
                                         restart_required = outcome.restart_required,
                                         "Config reload: complete"
                                     );
                                 }
-                                Err(e) if is_posture_refusal(&e) => {
+                                (Err(e), trigger)
+                                    if !matches!(trigger, ReloadTrigger::ConfigFile)
+                                        && !e.starts_with(SHUTDOWN_ABORTED_ERROR) =>
+                                {
+                                    env_reloads.report_failure(&mut env_warns, trigger, &e);
+                                }
+                                (Err(e), _) if is_posture_refusal(&e) => {
                                     // Its own arm, ahead of the generic one: a
                                     // posture refusal is a decision about this
                                     // config, not a file the operator must fix
                                     // the syntax of.
                                     warn!("Config reload: {e}");
                                 }
-                                Err(e) if e.starts_with(SHUTDOWN_ABORTED_ERROR) => {
+                                (Err(e), _) if e.starts_with(SHUTDOWN_ABORTED_ERROR) => {
                                     warn!(
                                         "Config reload: aborted, the gateway is \
                                          shutting down; keeping the previous live \
@@ -1257,7 +1264,7 @@ impl ConfigWatcher {
                                          registered"
                                     );
                                 }
-                                Err(e) => {
+                                (Err(e), _) => {
                                     // Every other error out of `reload_outcome`
                                     // comes from reading or parsing the file:
                                     // that call has exactly two failure sources
@@ -1280,21 +1287,6 @@ impl ConfigWatcher {
                 }
             }
         });
-    }
-}
-
-/// Emit an INFO log describing what triggered the pending reload.
-fn log_reload_trigger(trigger: &ReloadTrigger) {
-    match trigger {
-        ReloadTrigger::ConfigFile => {
-            info!("Config watcher: config file changed, triggering reload");
-        }
-        ReloadTrigger::EnvFile(path) => {
-            info!(
-                path = %path.display(),
-                "Config watcher: env file changed, triggering reload"
-            );
-        }
     }
 }
 
@@ -1439,92 +1431,6 @@ pub struct ReloadContext {
     /// that never wrote one — the reload step then reports nothing rather
     /// than inventing an empty store and revoking everything.
     identity_grants: Option<Arc<IdentityGrantSink>>,
-}
-
-/// The publish target for a grant reload, plus the lock that serializes it.
-///
-/// GRANTS GET THEIR OWN LOCK, not `lock_reload_within`. That was settled in
-/// review: `apply_patch`'s interleaving hazard is backend double-registration,
-/// and grants register no backends, so a grant reload can neither cause it nor
-/// suffer it. Keeping the shared lock would instead put a revocation behind
-/// `backend.stop()` per modified backend — sequential, tens of seconds each —
-/// for an entirely unrelated config edit. Serializing grant reloads against
-/// each other is still required: two triggers can interleave read-file and
-/// publish, the older file wins, and a revocation is silently lost.
-#[derive(Debug)]
-pub struct IdentityGrantSink {
-    store: Arc<parking_lot::RwLock<LocalIdentityGrantStore>>,
-    epoch: Arc<std::sync::atomic::AtomicU64>,
-    path: PathBuf,
-    lock: tokio::sync::Mutex<()>,
-}
-
-impl IdentityGrantSink {
-    /// Wrap the live store, its epoch and the file they reload from.
-    #[must_use]
-    pub fn new(
-        store: Arc<parking_lot::RwLock<LocalIdentityGrantStore>>,
-        epoch: Arc<std::sync::atomic::AtomicU64>,
-        path: PathBuf,
-    ) -> Self {
-        Self {
-            store,
-            epoch,
-            path,
-            lock: tokio::sync::Mutex::new(()),
-        }
-    }
-}
-
-/// The subjects whose authorization changed between two grant snapshots.
-///
-/// A row present in one snapshot and absent from the other, or present in both
-/// and unequal, contributes a subject. **An unequal row contributes BOTH its
-/// outgoing and its incoming subject**, and that clause is the whole reason
-/// this is a function rather than a one-line iterator. A grant whose `subject`
-/// is edited A→B under an UNCHANGED `grant_id` is one unequal row: taking only
-/// the incoming subject evicts B's slots and leaves A's catalogue bytes live,
-/// with no log line naming A — a reassignment that silently preserves the
-/// previous holder's view.
-///
-/// One rule covers both nouns the criterion names: a revocation changes
-/// `revoked_at`, a rotation changes `scope`/`tool`/`expires_at`/`agent`, and a
-/// removal or addition is a presence difference.
-fn changed_grant_subjects(
-    outgoing: &[IdentityGrant],
-    incoming: &[IdentityGrant],
-) -> Vec<GrantSubject> {
-    use std::collections::BTreeMap;
-
-    let by_id = |rows: &[IdentityGrant]| {
-        rows.iter()
-            .map(|row| (row.grant_id.clone(), row.clone()))
-            .collect::<BTreeMap<_, _>>()
-    };
-    let (before, after) = (by_id(outgoing), by_id(incoming));
-
-    let mut subjects: Vec<GrantSubject> = Vec::new();
-    let mut push = |subject: &GrantSubject| {
-        if !subjects.contains(subject) {
-            subjects.push(subject.clone());
-        }
-    };
-    for (id, old) in &before {
-        match after.get(id) {
-            None => push(&old.subject),
-            Some(new) if new != old => {
-                push(&old.subject);
-                push(&new.subject);
-            }
-            Some(_) => {}
-        }
-    }
-    for (id, new) in &after {
-        if !before.contains_key(id) {
-            push(&new.subject);
-        }
-    }
-    subjects
 }
 
 impl ReloadContext {
@@ -1778,112 +1684,6 @@ impl ReloadContext {
         tokio::time::timeout(wait, self.registry.lock_reload())
             .await
             .map_err(|_| ConfigWriteError::Busy)
-    }
-
-    /// Reload the identity-grant file, publish it, and evict the pool slots
-    /// whose grants changed.
-    ///
-    /// ITS OWN STEP, ITS OWN OUTCOME, ITS OWN LOCK. A revocation's validity has
-    /// nothing to do with config hygiene, so an operator mid-way through
-    /// enabling message signing must not hold one hostage: neither step's
-    /// refusal refuses the other. Returns `None` when no grants file is
-    /// configured.
-    ///
-    /// FAIL OPEN. An unreadable or unparseable file keeps the live store and
-    /// publishes nothing — dropping live grants because a file was briefly
-    /// unmountable would turn a read error into a mass revocation. A file that
-    /// is VALID with zero grants is applied, because "revoke everything" has to
-    /// stay expressible or fail-open becomes a hole.
-    ///
-    /// NO-CHANGE IS DEFINED ON NORMALISED STORE CONTENTS, never file bytes.
-    /// `LocalIdentityGrantStore` is a `BTreeMap` keyed by grant id, so loading
-    /// normalises row order for free — but only if the comparison happens on
-    /// the LOADED store. Comparing bytes, or the file's `Vec` order, reports a
-    /// change whenever an operator reorders rows, and the epoch is global: one
-    /// bump strands every caller's result cache, not just the edited one.
-    ///
-    /// PUBLISH FIRST, EVICT SECOND. The reverse order leaves a window where a
-    /// slot is evicted, a concurrent request refills it against the old grants
-    /// still in the store, and the refilled catalogue is stale again — an
-    /// eviction that ran and achieved nothing.
-    pub async fn reload_identity_grants(&self) -> Option<std::result::Result<String, String>> {
-        let sink = self.identity_grants.as_ref()?;
-        // Bounded like `lock_reload_within`: busy is its own refusal, so an
-        // operator retries instead of inspecting a grants file that is fine.
-        let Ok(_grants_guard) = tokio::time::timeout(RELOAD_LOCK_WAIT, sink.lock.lock()).await
-        else {
-            error!(path = %sink.path.display(), "Identity-grant reload busy");
-            return Some(Err(
-                "identity grants reload busy: another grant reload is in progress; retry"
-                    .to_string(),
-            ));
-        };
-
-        let file = match crate::identity_grants::read_identity_grants_file(&sink.path).await {
-            Ok(file) => file,
-            Err(reason) => {
-                error!(
-                    path = %sink.path.display(),
-                    %reason,
-                    "Identity-grant reload refused; the live grants still apply"
-                );
-                return Some(Err(format!(
-                    "identity grants not reloaded from {}: {reason}",
-                    sink.path.display()
-                )));
-            }
-        };
-
-        let incoming = LocalIdentityGrantStore::from_grants(file.grants);
-        let outgoing: Vec<_> = sink.store.read().values().cloned().collect();
-        let incoming_rows: Vec<_> = incoming.values().cloned().collect();
-        if outgoing == incoming_rows {
-            return Some(Ok("identity grants unchanged".to_string()));
-        }
-
-        let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
-        let delta = grant_delta::grant_delta(&outgoing, &incoming_rows);
-        crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming);
-
-        // Three distinct outcomes, and they must not share a counter:
-        // "skipped by construction" is expected for a non-issuer authority,
-        // while "considered, matched nothing" is the reconstruction failing to
-        // find a live slot — benign when the caller had none, and the only
-        // tripwire for a stored subject that diverges from its binding.
-        let mut skipped: Vec<String> = Vec::new();
-        let mut evicted = 0usize;
-        let mut matched_nothing = 0usize;
-        for subject in subjects {
-            let Some(prefix) = crate::identity_propagation::identity_binding_prefix(&subject)
-            else {
-                // Skipped, never fallen through to a match: no `idp:` slot can
-                // exist for a grant whose authority is not an issuer.
-                skipped.push(subject.authority.clone());
-                continue;
-            };
-            let mut hit = 0usize;
-            for backend in self.registry.all() {
-                hit += backend.evict_identity_slots(&prefix).await;
-            }
-            if hit == 0 {
-                matched_nothing += 1;
-            }
-            evicted += hit;
-        }
-
-        info!(
-            path = %sink.path.display(),
-            rows = incoming_rows.len(),
-            %delta,
-            slots_evicted = evicted,
-            subjects_matching_no_slot = matched_nothing,
-            subjects_skipped = ?skipped,
-            "Identity grants reloaded"
-        );
-        Some(Ok(format!(
-            "identity grants reloaded ({} rows, {delta}, {evicted} pool slots evicted)",
-            incoming_rows.len()
-        )))
     }
 
     /// The reload transaction itself. The caller must already hold the reload
@@ -2280,7 +2080,12 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
     }
 }
 
+mod env_poll;
+#[cfg(all(test, target_os = "linux"))]
+mod env_poll_e2e_tests;
 mod grant_delta;
+mod grant_reload;
+pub use grant_reload::IdentityGrantSink;
 mod watch_chain;
 
 #[cfg(test)]

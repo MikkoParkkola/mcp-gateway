@@ -25,7 +25,6 @@
 
 use super::service::ConsentExpectation;
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
-#[cfg(unix)]
 use super::{Authority, StoreConfig};
 
 /// Outcome of a guarded commit. A fenced expectation is an ordinary refusal:
@@ -41,11 +40,8 @@ pub(crate) enum GuardedCommit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum GuardedCommitError {
     #[error("guarded consent commit is not implemented")]
-    // `unix` in the predicate, not just `not(test)`: on a non-unix target the
-    // module-level expectation in `super` already covers every dead item here,
-    // and two expectations over one diagnostic leave the inner one unfulfilled.
     #[cfg_attr(
-        all(not(test), unix),
+        not(test),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
@@ -72,34 +68,23 @@ impl PersonalAccountStore {
         record: &GrantRecord,
         provenance: Option<&str>,
     ) -> Result<GuardedCommit, GuardedCommitError> {
-        #[cfg(not(unix))]
-        {
-            // No durable writers exist on this target, so there is no guarded
-            // commit to perform — and none to pretend to.
-            let _ = (account, expected, record, provenance);
-            Err(GuardedCommitError::RuntimeNotImplemented)
-        }
-        #[cfg(unix)]
-        {
-            let digest = account.digest()?;
-            let mut authority = self.lock_authority();
-            Ok(commit_if_unchanged_locked(
-                &self.config,
-                &mut authority,
-                &digest,
-                account,
-                expected,
-                record,
-                provenance,
-            )?)
-        }
+        let digest = account.digest()?;
+        let mut authority = self.lock_authority();
+        Ok(commit_if_unchanged_locked(
+            &self.config,
+            &mut authority,
+            &digest,
+            account,
+            expected,
+            record,
+            provenance,
+        )?)
     }
 }
 
 /// The compare-and-commit of `commit_grant_if_unchanged`, for a caller that
 /// already holds the authority lock: `slot` must be that guard's contents.
 /// `digest` is `account.digest()`.
-#[cfg(unix)]
 pub(super) fn commit_if_unchanged_locked(
     config: &StoreConfig,
     slot: &mut Option<Authority>,

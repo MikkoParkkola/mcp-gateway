@@ -67,6 +67,22 @@ Run from a clean checkout of the release commit (the tip of the release line).
 
 ### 1. Preconditions (before any tag exists)
 
+First land the changelog. Pull requests add `changelog.d/<number>.<type>.md` rather
+than editing the shared section, so the release folds them in: on a branch cut from
+the release line, run the commands below, rename `## [Unreleased]` to the release
+heading, add a new empty `## [Unreleased]` above it, and merge that as a pull request. The *Changelog fragment* check accepts a
+`CHANGELOG.md` edit only in a pull request that deletes fragments and leaves none, and
+a fragment may be deleted only in such a pull request. A release with no pending
+fragments needs no fold; if its heading rename still edits `CHANGELOG.md`, apply the
+`no-changelog` label.
+
+```sh
+python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # review
+python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
+```
+
+Then, once that pull request has merged:
+
 ```sh
 git fetch origin && git switch --detach origin/docs/ranking-1-release-line   # or the release branch
 git status --short                                  # must print nothing
@@ -217,8 +233,9 @@ this runbook does not edit the ledger.
 
 1. **Re-run failed jobs in the same run. Do not re-push the tag or dispatch a new run.**
    `gh run rerun <run-id> --failed` re-runs only the failed jobs and the jobs that depend
-   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` with
-   `tag: v4.0.0`) repeats every publish that already succeeded. On crates.io and npm that
+   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` at
+   `--ref v4.0.0` with `tag: v4.0.0`; a dispatch from any other ref is refused) repeats
+   every publish that already succeeded. On crates.io and npm that
    is a hard failure, because the version already exists.
    **A re-run builds the tagged commit again.** It cannot pick up a fix pushed to a
    branch afterwards. Re-run only for a transient failure: a runner, network or registry

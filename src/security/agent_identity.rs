@@ -191,11 +191,15 @@ impl AgentIdentityConfig {
             return Ok(());
         }
         if !self.enabled {
-            tracing::warn!(
-                entries = ?declared,
-                "agent_identity.known_agents has declared entries, dormant while agent_identity \
-                 is disabled; enabling it without allow_unverified_agent_identity refuses them"
-            );
+            // Once per entry list per process: every reload validates.
+            if crate::config::log_once::first_time(&format!("agent_identity:{declared:?}")) {
+                tracing::warn!(
+                    entries = ?declared,
+                    "agent_identity.known_agents has declared entries, dormant while \
+                     agent_identity is disabled; enabling it without \
+                     allow_unverified_agent_identity refuses them"
+                );
+            }
             return Ok(());
         }
         Err(crate::Error::ConfigValidation(format!(

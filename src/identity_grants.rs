@@ -98,6 +98,10 @@ pub enum GrantScope {
     Any,
 }
 
+#[doc(hidden)]
+pub mod journal;
+#[cfg(test)]
+mod journal_tests;
 #[path = "identity_grants_matching.rs"]
 mod matching;
 pub use matching::GrantAgentKey;
