@@ -749,7 +749,7 @@ impl Config {
     /// As [`Config::validate`], resolving `env:` references through `overlay`.
     ///
     /// A separate entry point rather than a field on `Config`: validation runs against
-    /// the environment the load produced, not part of the config it validates.
+    /// the environment the load produced, which is not part of the config it validates.
     ///
     /// # Errors
     ///

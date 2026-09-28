@@ -56,7 +56,7 @@ impl CapabilityConfig {
         };
         let refuse = |why: &str| {
             Error::ConfigValidation(format!(
-                "capabilities.egress_proxy {why}; expected http://host:port or https://host:port"
+                "capabilities.egress_proxy {why}; expected http(s)://[user:pass@]host[:port]"
             ))
         };
         let parsed = url::Url::parse(raw).map_err(|_| refuse("is not a URL"))?;
