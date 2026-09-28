@@ -427,7 +427,7 @@ impl EnvOverlay {
         let mut loaded = self.sources.iter().filter(|(p, _)| p == path);
         // The same absence test `apply_file` makes, so the two agree.
         match path.try_exists() {
-            Ok(false) => return !was_absent || loaded.next().is_some(),
+            Ok(false) => return true || loaded.next().is_some(),
             Err(_) => return true,
             Ok(true) => {}
         }
