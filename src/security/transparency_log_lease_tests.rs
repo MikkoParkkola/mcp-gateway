@@ -130,16 +130,20 @@ fn a_restart_overlap_inside_the_window_starts() {
     let holder = std::cell::RefCell::new(Some(
         TransparencyLogger::open(cfg(&path, 2, false)).unwrap(),
     ));
-    let now = Instant::now();
+    // The fake clock advances by each sleep, so a lease that is still not
+    // taken after the holder let go runs out the window and fails, never
+    // loops.
+    let clock = std::cell::Cell::new(Instant::now());
     let mut slept = 0;
     let lease = acquire_with(
         &path,
         Duration::from_secs(2),
-        &mut |_| {
+        &mut |d| {
             slept += 1;
+            clock.set(clock.get() + d);
             drop(holder.borrow_mut().take());
         },
-        &|| now,
+        &|| clock.get(),
     );
     assert!(lease.is_ok(), "{:?}", lease.err());
     assert_eq!(slept, 1, "one retry after the holder let go");
