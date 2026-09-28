@@ -190,7 +190,9 @@ pub(crate) async fn apply_change_with(
     {
         use std::os::unix::fs::PermissionsExt as _;
         let journal = journal_path(grants);
+        // A link reports 0777 whatever it points at; append_line refuses links.
         if let Ok(meta) = tokio::fs::symlink_metadata(&journal).await
+            && meta.is_file()
             && meta.permissions().mode() & 0o022 != 0
         {
             return Err(ChangeError::Refused(writable_journal(&journal)));
