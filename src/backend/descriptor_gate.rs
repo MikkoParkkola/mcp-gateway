@@ -137,8 +137,8 @@ pub(crate) struct DescriptorGate {
 
 /// Record a log line; `true` when it was not recorded before.
 ///
-/// ponytail: a backend that keeps sending fresh descriptions cannot grow the
-/// set past the cap; at the cap it restarts, at the cost of logging a
+/// Memory bound: a backend that keeps sending fresh descriptions cannot grow
+/// the set past the cap; at the cap it restarts, at the cost of logging a
 /// descriptor again.
 fn first_time(logged: &mut HashSet<(String, String, bool)>, line: (String, String, bool)) -> bool {
     if logged.len() >= LOGGED_CAP && !logged.contains(&line) {
