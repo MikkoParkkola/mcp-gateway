@@ -130,7 +130,7 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>
         match read {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
-            Ok(found) if stable => return Ok(found),
+            Ok(found) if stable && attempt == 1 => return Ok(found),
             Ok(_) => {}
         }
         if attempt == 1 {
