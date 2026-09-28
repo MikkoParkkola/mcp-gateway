@@ -278,8 +278,7 @@ async fn x7_a_name_withheld_for_many_callers_stays_blocked() {
 }
 
 /// X8: one poisoned name past the blocked-name cap is still refused by name
-/// (the backend is saturated and fails closed), while a tool the caller's
-/// validated listing holds still passes.
+/// and so is every other tool: the backend is saturated and fails closed.
 #[tokio::test]
 async fn x8_past_the_cap_an_untracked_name_is_refused() {
     let backend = per_user_backend();
@@ -304,11 +303,17 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
             .is_some(),
         "the name past the cap is callable"
     );
+    // Fail closed: the cap left names unrecorded, and another caller's clean
+    // copy of any of them cannot be told apart, so every call is refused.
     assert!(
         backend
             .undeclared_key_refusal(Some("a"), "clean_tool", &json!({}))
-            .is_none(),
-        "a validated tool was refused"
+            .is_some(),
+        "a saturated backend still forwarded a call"
+    );
+    assert!(
+        backend.is_blocked_tool("clean_tool"),
+        "a saturated backend still serves a tool it will not call"
     );
     // A second caller's complete, clean listing proves nothing about the
     // names the cap left untracked: the backend stays saturated.
@@ -321,6 +326,37 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
             "a clean listing reopened the name past the cap for {caller}"
         );
     }
+}
+
+/// X12: past the cap, a poisoned name that could not be recorded is refused
+/// even to a caller whose own catalogue holds a clean copy of that name.
+#[tokio::test]
+async fn x12_past_the_cap_a_clean_cached_copy_does_not_reopen_a_name() {
+    let backend = per_user_backend();
+    let _ = backend.remember_listed_tools(Some("a"), false, &catalogue_with("Reads a file."));
+    assert!(
+        backend
+            .undeclared_key_refusal(Some("a"), POISONED, &json!({}))
+            .is_none(),
+        "premise: caller a holds a clean copy"
+    );
+    let mut listing: Vec<Value> = (0..4096)
+        .map(|n| {
+            json!({
+                "name": format!("p{n:04}"),
+                "description": PAYLOAD,
+                "inputSchema": { "type": "object" }
+            })
+        })
+        .collect();
+    listing.extend(catalogue());
+    let _ = backend.remember_listed_tools(Some("b"), false, &listing);
+    assert!(
+        backend
+            .undeclared_key_refusal(Some("a"), POISONED, &json!({}))
+            .is_some(),
+        "a clean cached copy reopened a poisoned name the cap could not record"
+    );
 }
 
 /// X10: a direct drain that met a page with no tools array is not a complete
@@ -355,5 +391,76 @@ async fn x10b_an_unreadable_drain_is_stored_as_truncated() {
     assert!(
         backend.cached_tools_snapshot_and_truncated().1,
         "a partial catalogue was stored as complete"
+    );
+}
+
+/// X6b: a named entry that does not parse is withheld on first sight, not
+/// only kept blocked when an earlier listing had already blocked it.
+#[tokio::test]
+async fn x6b_a_first_seen_unparseable_entry_is_withheld() {
+    let backend = per_user_backend();
+    let mut broken = catalogue();
+    broken[0]["annotations"] = json!("not an object");
+    let _ = backend.remember_listed_tools(Some("a"), false, &broken);
+    assert!(
+        refused(&backend, "b", POISONED),
+        "a named entry that could not be judged was left callable"
+    );
+}
+
+/// Counts the notifications that reach the upstream.
+#[derive(Default)]
+struct NotifyCounter(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for NotifyCounter {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// X11: a `tools/call` sent as a notification is refused for a withheld
+/// name, as a request is; the upstream never receives it.
+#[tokio::test]
+async fn x11_a_withheld_tool_is_refused_as_a_notification() {
+    let backend = Arc::new(Backend::new(
+        "evil",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let wire = Arc::new(NotifyCounter::default());
+    backend.set_transport_for_test(Arc::clone(&wire) as Arc<dyn crate::transport::Transport>);
+    let _ = backend.remember_listed_tools(None, false, &catalogue());
+    assert!(backend.is_blocked_tool(POISONED), "premise: withheld");
+
+    let sent = backend
+        .notify(
+            "tools/call",
+            Some(json!({ "name": POISONED, "arguments": { "q": "x" } })),
+        )
+        .await;
+    assert!(sent.is_err(), "a withheld tool was sent as a notification");
+    assert_eq!(
+        wire.0.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the upstream received a notification for a withheld tool"
     );
 }

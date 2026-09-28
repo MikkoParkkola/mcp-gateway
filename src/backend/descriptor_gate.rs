@@ -296,6 +296,26 @@ impl Backend {
         self.descriptor_gate.blocked.read().contains_key(tool)
     }
 
+    /// Bytes held in the gate's keys (test support for the memory bound).
+    #[cfg(test)]
+    pub(crate) fn descriptor_gate_key_bytes(&self) -> usize {
+        let blocked: usize = self
+            .descriptor_gate
+            .blocked
+            .read()
+            .keys()
+            .map(String::len)
+            .sum();
+        let logged: usize = self
+            .descriptor_gate
+            .logged
+            .lock()
+            .iter()
+            .map(|(name, digest, _)| name.len() + digest.len())
+            .sum();
+        blocked + logged
+    }
+
     /// The operator pins for this backend.
     pub(crate) fn flagged_tool_pins(&self) -> &BTreeMap<String, String> {
         &self.config.allow_flagged_tools

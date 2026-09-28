@@ -312,3 +312,49 @@ async fn x9_a_catalogue_emptied_by_blocks_can_be_invalidated() {
         "a catalogue emptied by blocks was kept"
     );
 }
+
+/// #1441: on the cached discovery fill, one entry that does not parse must
+/// neither fail the whole fill nor hide its siblings from judging: the clean
+/// sibling is served and the unparseable named entry is withheld.
+#[tokio::test]
+async fn an_unparseable_entry_on_a_discovery_fill_is_withheld_not_fatal() {
+    let mut broken = tool(POISONED, PAYLOAD);
+    broken["annotations"] = json!("not an object");
+    let (backend, _upstream) = backend(
+        BackendConfig::default(),
+        vec![broken, tool("clean_read", "Reads a file.")],
+    );
+    let served_tools = backend
+        .get_tools_shared()
+        .await
+        .expect("a malformed entry failed the whole discovery fill");
+    assert_eq!(
+        served_tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        ["clean_read"]
+    );
+    assert!(
+        refused(&backend, POISONED),
+        "an unparseable named entry on a discovery fill was left callable"
+    );
+}
+
+/// #1441: a withheld name is held at a fixed size whatever its length, so
+/// the name cap bounds memory, not only the entry count.
+#[tokio::test]
+async fn a_withheld_name_is_held_at_a_fixed_size() {
+    let long = "n".repeat(1 << 20);
+    let (backend, _upstream) = backend(BackendConfig::default(), Vec::new());
+    let _ = backend.remember_listed_tools(None, false, &[tool(&long, PAYLOAD)]);
+    assert!(
+        refused(&backend, &long),
+        "premise: the long name is withheld"
+    );
+    assert!(
+        backend.descriptor_gate_key_bytes() <= 256,
+        "a withheld name is held at its full length: {} bytes",
+        backend.descriptor_gate_key_bytes()
+    );
+}
