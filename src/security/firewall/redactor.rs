@@ -21,8 +21,10 @@
 //! Matched fragments are truncated to 40 characters in `Finding::matched` so
 //! credential values are not propagated into audit logs or structured spans.
 
+use std::collections::{HashMap, HashSet};
+
 use regex::{Regex, RegexSet};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{Finding, FindingLocation, ScanType, Severity};
 
@@ -105,8 +107,10 @@ impl Redactor {
 
     /// Scan a JSON value for credentials. Redact in place and return findings.
     ///
-    /// String values that match one or more credential patterns are replaced
-    /// with `[REDACTED:credential]` in the matched spans.
+    /// String values and object keys that match one or more credential
+    /// patterns have the matched spans replaced with `[REDACTED:credential]`.
+    /// A redacted key keeps its entry and gets a unique name (`#2`, `#3`, ...
+    /// on collision).
     pub fn scan_and_redact(&self, value: &mut Value) -> Vec<Finding> {
         let mut findings = Vec::new();
         self.scan_recursive(value, &mut findings);
@@ -116,31 +120,7 @@ impl Redactor {
     fn scan_recursive(&self, value: &mut Value, findings: &mut Vec<Finding>) {
         match value {
             Value::String(s) => {
-                let matched_indices: Vec<usize> =
-                    self.set.matches(s.as_str()).into_iter().collect();
-
-                if !matched_indices.is_empty() {
-                    for &idx in &matched_indices {
-                        findings.push(Finding {
-                            scan_type: ScanType::Credentials,
-                            severity: Severity::High,
-                            description: format!("Credential detected: {}", self.descriptions[idx]),
-                            // Truncate so the actual secret is not propagated.
-                            matched: truncate(s, 40),
-                            location: FindingLocation::ResponseContent,
-                        });
-                    }
-
-                    // In-place redaction: apply replace_all for each matched pattern.
-                    // Only the matched credential spans are replaced; surrounding
-                    // text is preserved (e.g. "token: ghp_xxx rest" becomes
-                    // "token: [REDACTED:credential] rest").
-                    let mut redacted = s.clone();
-                    for &idx in &matched_indices {
-                        redacted = self.regexes[idx]
-                            .replace_all(&redacted, "[REDACTED:credential]")
-                            .into_owned();
-                    }
+                if let Some(redacted) = self.redact_text(s, Site::Value, findings) {
                     *s = redacted;
                 }
             }
@@ -153,11 +133,83 @@ impl Redactor {
                 for val in map.values_mut() {
                     self.scan_recursive(val, findings);
                 }
+                // Keys are backend-controlled text the client sees too (#2114).
+                if map.keys().any(|key| self.set.is_match(key)) {
+                    self.redact_keys(map, findings);
+                }
             }
             // Numbers, booleans, and nulls cannot contain credential patterns.
             _ => {}
         }
     }
+
+    /// Record one finding per matched pattern and return `text` with every
+    /// matched span replaced, or `None` when nothing matched. Surrounding text
+    /// is preserved ("token: <secret> rest" -> "token: [REDACTED:credential] rest").
+    fn redact_text(&self, text: &str, site: Site, findings: &mut Vec<Finding>) -> Option<String> {
+        let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
+        if matched.is_empty() {
+            return None;
+        }
+        let mut redacted = text.to_owned();
+        for &idx in &matched {
+            redacted = self.regexes[idx]
+                .replace_all(&redacted, "[REDACTED:credential]")
+                .into_owned();
+        }
+        // A key finding shows the redacted key: a bare 40-char token would
+        // otherwise survive the truncation whole into the audit log.
+        let (suffix, shown) = match site {
+            Site::Value => ("", text),
+            Site::Key => (" (object key)", redacted.as_str()),
+        };
+        for &idx in &matched {
+            findings.push(Finding {
+                scan_type: ScanType::Credentials,
+                severity: Severity::High,
+                description: format!("Credential detected: {}{suffix}", self.descriptions[idx]),
+                // Truncate so the actual secret is not propagated.
+                matched: truncate(shown, 40),
+                location: FindingLocation::ResponseContent,
+            });
+        }
+        Some(redacted)
+    }
+
+    /// Rename credential-bearing keys without losing an entry. Clean keys keep
+    /// their names; each redacted key takes its redacted text, or the first
+    /// free `<text>#n`, so two keys never collapse into one. A per-name counter
+    /// keeps n colliding keys linear rather than re-probing from `#2`.
+    fn redact_keys(&self, map: &mut Map<String, Value>, findings: &mut Vec<Finding>) {
+        let entries = std::mem::take(map);
+        let mut taken: HashSet<String> = entries
+            .keys()
+            .filter(|key| !self.set.is_match(key))
+            .cloned()
+            .collect();
+        let mut next: HashMap<String, usize> = HashMap::new();
+        for (key, value) in entries {
+            let Some(candidate) = self.redact_text(&key, Site::Key, findings) else {
+                map.insert(key, value);
+                continue;
+            };
+            let n = next.entry(candidate.clone()).or_insert(1);
+            let mut name = candidate.clone();
+            while taken.contains(&name) {
+                *n += 1;
+                name = format!("{candidate}#{n}");
+            }
+            taken.insert(name.clone());
+            map.insert(name, value);
+        }
+    }
+}
+
+/// Where a scanned string sits in the JSON tree.
+#[derive(Clone, Copy)]
+enum Site {
+    Value,
+    Key,
 }
 
 impl Default for Redactor {
@@ -397,5 +449,86 @@ mod tests {
             .unwrap();
         assert_eq!(f.severity, Severity::High);
         assert_eq!(f.location, FindingLocation::ResponseContent);
+    }
+
+    // ── Object keys (#2114) ───────────────────────────────────────────────────
+
+    /// Plainly synthetic 40-char GitHub-shaped tokens, built at runtime like
+    /// the fixture above so no token-shaped literal sits in the source.
+    fn token_a() -> String {
+        format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz1234567890")
+    }
+
+    fn token_b() -> String {
+        format!("{}{}0", "ghp_", "EXAMPLE".repeat(5))
+    }
+
+    #[test]
+    fn redacts_credential_in_object_key() {
+        let mut v = json!({ token_a(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 1, "one finding for the key: {findings:?}");
+        assert!(findings[0].description.contains("(object key)"));
+        assert_eq!(v, json!({ "[REDACTED:credential]": 1 }));
+    }
+
+    /// Synthetic 0x + 64-hex key. It sorts BEFORE `[`, so it is visited ahead
+    /// of the clean `[REDACTED:credential]` key: a rebuild that does not
+    /// reserve clean names first would let that clean key overwrite it.
+    fn hex_key() -> String {
+        format!("0x{}", "ab".repeat(32))
+    }
+
+    #[test]
+    fn redacted_keys_stay_unique() {
+        let mut v = json!({
+            hex_key(): 1,
+            token_b(): 2,
+            "[REDACTED:credential]": 3,
+            "[REDACTED:credential]#2": 4,
+        });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 2);
+        // Clean keys keep their names; redacted keys take suffixes in map order.
+        assert_eq!(
+            v,
+            json!({
+                "[REDACTED:credential]": 3,
+                "[REDACTED:credential]#2": 4,
+                "[REDACTED:credential]#3": 1,
+                "[REDACTED:credential]#4": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn redacts_nested_key_and_keeps_surrounding_text() {
+        let mut v = json!({ "outer": { format!("x-{} y", token_a()): token_b() } });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 2, "one for the key, one for its value");
+        assert_eq!(
+            v,
+            json!({ "outer": { "x-[REDACTED:credential] y": "[REDACTED:credential]" } })
+        );
+    }
+
+    #[test]
+    fn clean_keys_are_untouched() {
+        let mut v = json!({ "plain": "text", "nested": { "also_plain": 1 } });
+        let original = v.clone();
+        assert!(redactor().scan_and_redact(&mut v).is_empty());
+        assert_eq!(v, original);
+    }
+
+    #[test]
+    fn key_finding_does_not_carry_the_secret() {
+        let mut v = json!({ token_a(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            !findings[0].matched.contains("ghp_"),
+            "a 40-char token survives truncation whole: {:?}",
+            findings[0].matched
+        );
     }
 }
