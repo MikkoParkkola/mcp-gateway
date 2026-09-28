@@ -113,6 +113,51 @@ pub fn split_command_windows(command: &str) -> Option<Vec<String>> {
     Some(args)
 }
 
+/// The inverse of [`split_command`] on this host: one command line whose
+/// split is exactly `argv`, or `None` when an argument cannot be quoted (a
+/// NUL). Discovery uses it so a client's `command` and `args` survive the
+/// string the transport stores (#1876).
+#[must_use]
+#[expect(dead_code, reason = "red-first stub; wired into discovery by the fix")]
+pub fn join_command(argv: &[String]) -> Option<String> {
+    #[cfg(windows)]
+    {
+        join_command_windows(argv)
+    }
+    #[cfg(not(windows))]
+    {
+        join_command_unix(argv)
+    }
+}
+
+/// The inverse of [`split_command_unix`].
+#[must_use]
+#[cfg_attr(
+    all(not(test), windows),
+    expect(
+        dead_code,
+        reason = "the Unix rule set; Windows builds use it only in tests"
+    )
+)]
+pub fn join_command_unix(argv: &[String]) -> Option<String> {
+    let _ = argv;
+    None
+}
+
+/// The inverse of [`split_command_windows`].
+#[must_use]
+#[cfg_attr(
+    all(not(test), not(windows)),
+    expect(
+        dead_code,
+        reason = "the Windows rule set; other builds use it only in tests"
+    )
+)]
+pub fn join_command_windows(argv: &[String]) -> Option<String> {
+    let _ = argv;
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +231,52 @@ mod tests {
             parts,
             vec!["npx".to_string(), "-y".to_string(), "pkg".to_string()]
         );
+    }
+
+    fn argv_table() -> Vec<Vec<String>> {
+        let v = |xs: &[&str]| xs.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        vec![
+            v(&["npx"]),
+            v(&["npx", "-y", "some-server"]),
+            v(&["/Applications/My Tools/server", "--flag"]),
+            v(&["prog", "a b", "c"]),
+            v(&["prog", r#"say "hi""#]),
+            v(&["prog", r"back\slash", "trailing\\"]),
+            v(&["prog", "q\\\"x"]),
+            v(&["prog", ""]),
+            v(&["prog", "it's"]),
+        ]
+    }
+
+    /// #1876: joining then splitting gives back the same argv, per rule set.
+    #[test]
+    fn join_then_split_round_trips_unix() {
+        for argv in argv_table() {
+            let line = join_command_unix(&argv).unwrap_or_else(|| panic!("join {argv:?}"));
+            assert_eq!(
+                split_command_unix(&line),
+                Some(argv.clone()),
+                "via {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn join_then_split_round_trips_windows() {
+        for argv in argv_table() {
+            let line = join_command_windows(&argv).unwrap_or_else(|| panic!("join {argv:?}"));
+            assert_eq!(
+                split_command_windows(&line),
+                Some(argv.clone()),
+                "via {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nul_argument_cannot_be_joined() {
+        let argv = vec!["prog".to_string(), "a\u{0}b".to_string()];
+        assert_eq!(join_command_unix(&argv), None);
+        assert_eq!(join_command_windows(&argv), None);
     }
 }

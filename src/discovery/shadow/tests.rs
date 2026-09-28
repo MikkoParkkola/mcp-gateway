@@ -16,23 +16,23 @@ fn stdio_server(
     pid: Option<u32>,
     port: Option<u16>,
 ) -> DiscoveredServer {
-    DiscoveredServer {
-        name: name.to_string(),
-        description: description.to_string(),
+    DiscoveredServer::new(
+        name.to_string(),
+        description.to_string(),
         source,
-        transport: TransportConfig::Stdio {
+        TransportConfig::Stdio {
             command: command.to_string(),
             cwd: None,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: config_path.map(PathBuf::from),
             pid,
             port,
             command: Some(command.to_string()),
             working_dir: None,
         },
-    }
+    )
 }
 
 fn http_server(
@@ -43,23 +43,23 @@ fn http_server(
     pid: Option<u32>,
     port: Option<u16>,
 ) -> DiscoveredServer {
-    DiscoveredServer {
-        name: name.to_string(),
-        description: description.to_string(),
+    DiscoveredServer::new(
+        name.to_string(),
+        description.to_string(),
         source,
-        transport: TransportConfig::Http {
+        TransportConfig::Http {
             http_url: url.to_string(),
             streamable_http: false,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: None,
             pid,
             port,
             command: None,
             working_dir: None,
         },
-    }
+    )
 }
 
 fn report(discovered: &[DiscoveredServer], registered: &[&str]) -> ShadowScanReport {

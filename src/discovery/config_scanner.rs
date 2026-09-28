@@ -251,19 +251,19 @@ impl ConfigScanner {
                 // writes a credential into the log because discovery ran.
                 debug!("Found MCP server in environment: {name} (from {key})");
 
-                servers.push(DiscoveredServer {
-                    name: name.clone(),
-                    description: format!("MCP server from environment variable {key}"),
-                    source: DiscoverySource::Environment,
-                    transport: TransportConfig::for_url(&value),
-                    metadata: ServerMetadata {
+                servers.push(DiscoveredServer::new(
+                    name.clone(),
+                    format!("MCP server from environment variable {key}"),
+                    DiscoverySource::Environment,
+                    TransportConfig::for_url(&value),
+                    ServerMetadata {
                         config_path: None,
                         pid: None,
                         port: None,
                         command: None,
                         working_dir: None,
                     },
-                });
+                ));
             }
         }
 
@@ -356,42 +356,42 @@ impl ConfigScanner {
                 .and_then(|v| v.as_str())
                 .map(PathBuf::from);
 
-            return Some(DiscoveredServer {
-                name: name.to_string(),
-                description: format!("MCP server from {source:?}"),
-                source: source.clone(),
-                transport: TransportConfig::Stdio {
+            return Some(DiscoveredServer::new(
+                name.to_string(),
+                format!("MCP server from {source:?}"),
+                source.clone(),
+                TransportConfig::Stdio {
                     command: full_command.clone(),
                     cwd: working_dir
                         .as_ref()
                         .map(|p| p.to_string_lossy().into_owned()),
                     protocol_version: None,
                 },
-                metadata: ServerMetadata {
+                ServerMetadata {
                     config_path: Some(config_path.to_path_buf()),
                     pid: None,
                     port: None,
                     command: Some(full_command),
                     working_dir,
                 },
-            });
+            ));
         }
 
         // Extract URL (HTTP transport)
         if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
-            return Some(DiscoveredServer {
-                name: name.to_string(),
-                description: format!("MCP server from {source:?}"),
-                source: source.clone(),
-                transport: TransportConfig::for_url(url),
-                metadata: ServerMetadata {
+            return Some(DiscoveredServer::new(
+                name.to_string(),
+                format!("MCP server from {source:?}"),
+                source.clone(),
+                TransportConfig::for_url(url),
+                ServerMetadata {
                     config_path: Some(config_path.to_path_buf()),
                     pid: None,
                     port: Self::extract_port_from_url(url),
                     command: None,
                     working_dir: None,
                 },
-            });
+            ));
         }
 
         warn!("Unsupported server config format for {name}");
@@ -784,3 +784,7 @@ mod ws_tests;
 #[cfg(test)]
 #[path = "config_scanner_zed_tests.rs"]
 mod zed_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_entry_tests.rs"]
+mod entry_tests;

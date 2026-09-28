@@ -35,30 +35,30 @@ fn sweep2_oauth_error_body_is_not_reachable_as_token_json() {
 
 #[test]
 fn sweep4_discovery_json_redacts_command_and_url() {
-    let server = DiscoveredServer {
-        name: "leaky".into(),
-        description: "d".into(),
-        source: DiscoverySource::Environment,
-        transport: TransportConfig::Stdio {
+    let server = DiscoveredServer::new(
+        "leaky".into(),
+        "d".into(),
+        DiscoverySource::Environment,
+        TransportConfig::Stdio {
             command: format!("node --token {CANARY} server.js"),
             cwd: None,
             protocol_version: None,
         },
-        metadata: ServerMetadata::default(),
-    };
+        ServerMetadata::default(),
+    );
     let json = server.diagnostic_value().to_string();
     assert!(!json.contains(CANARY), "{json}");
-    let http = DiscoveredServer {
-        name: "http".into(),
-        description: "d".into(),
-        source: DiscoverySource::Environment,
-        transport: TransportConfig::Http {
+    let http = DiscoveredServer::new(
+        "http".into(),
+        "d".into(),
+        DiscoverySource::Environment,
+        TransportConfig::Http {
             http_url: format!("https://user:{CANARY}@api.example.com/mcp?t={CANARY}"),
             streamable_http: false,
             protocol_version: None,
         },
-        metadata: ServerMetadata::default(),
-    };
+        ServerMetadata::default(),
+    );
     let json = http.diagnostic_value().to_string();
     assert!(!json.contains(CANARY), "{json}");
     assert!(json.contains("https://api.example.com"), "{json}");
