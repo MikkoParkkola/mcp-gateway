@@ -17,6 +17,7 @@
 //! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
+mod client;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
@@ -42,8 +43,6 @@ use super::{
 };
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
-use crate::security::ssrf::{PinningResolver, SystemResolver};
-use crate::security::validate_url_not_ssrf;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
 
@@ -175,38 +174,6 @@ pub(super) async fn send_with_retry(
 }
 
 impl CapabilityExecutor {
-    /// Build a pooled HTTP client suitable for capability execution.
-    ///
-    /// Matches the pooling parameters used by [`HttpTransport`] so all
-    /// outbound HTTP shares the same connection-management strategy and avoids
-    /// per-request FD creation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
-    fn build_http_client() -> Client {
-        // PinningResolver: resolves each domain name once, validates all returned
-        // IPs against the SSRF deny list, and hands the checked SocketAddrs to
-        // reqwest. This eliminates the DNS-rebinding TOCTOU window (MIK-4019).
-        Client::builder()
-            .timeout(Duration::from_secs(60))
-            .pool_max_idle_per_host(10)
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(30))
-            .dns_resolver(PinningResolver::new(SystemResolver))
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    return attempt.stop();
-                }
-                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
-                    return attempt.error(e.to_string());
-                }
-                attempt.follow()
-            }))
-            .build()
-            .expect("Failed to create HTTP client")
-    }
-
     /// Create a new executor.
     ///
     /// # Panics
@@ -216,7 +183,7 @@ impl CapabilityExecutor {
         let token_storage = TokenStorage::default_location().ok().map(Arc::new);
 
         Self {
-            client: Self::build_http_client(),
+            client: client::build(None),
             cache: ResponseCache::new(),
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
@@ -229,11 +196,20 @@ impl CapabilityExecutor {
     }
 
     /// A new executor whose calls go through `capabilities.egress_proxy` when
-    /// it is set, and direct and pinned otherwise (#1881).
+    /// it is set, and direct and pinned otherwise (#1881). A value the load
+    /// check would refuse is ignored here, which only ever means direct.
     #[must_use]
     pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
-        let _ = config;
-        Self::new()
+        let mut executor = Self::new();
+        if let Ok(Some(proxy)) = config.egress_proxy_url() {
+            tracing::warn!(
+                proxy = %crate::config::CapabilityConfig::egress_proxy_for_log(&proxy),
+                "capability calls go through capabilities.egress_proxy; the proxy, not the \
+                 gateway, resolves their destinations"
+            );
+            executor.client = client::build(Some(&proxy));
+        }
+        executor
     }
 
     /// Share the gateway policy epoch so capability reload can bump it.
@@ -321,7 +297,7 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn with_token_storage(token_storage: Arc<TokenStorage>) -> Self {
         Self {
-            client: Self::build_http_client(),
+            client: client::build(None),
             cache: ResponseCache::new(),
             token_storage: Some(token_storage),
             oauth_tokens: RwLock::new(DashMap::new()),

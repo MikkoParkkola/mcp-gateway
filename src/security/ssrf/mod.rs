@@ -35,8 +35,13 @@
 //!
 //! **Tool-argument URLs** — capability `endpoint` fields, GraphQL/JSON-RPC
 //! endpoints injected at call time, UI import URLs, and any URL that flows
-//! from untrusted input — are **always** pinned through [`PinningResolver`].
-//! They never receive the configured-backend trust exemption.
+//! from untrusted input — are pinned through [`PinningResolver`] by clients
+//! built from [`pinned_client_builder`], which also ignores `HTTP(S)_PROXY`
+//! from the environment: a proxied request is resolved by the proxy, so the
+//! pin would never see it (#1881). They never receive the configured-backend
+//! trust exemption. The one exception is an operator-set
+//! `capabilities.egress_proxy`: capability calls then go to that proxy, which
+//! resolves names itself, while IP literals are still refused.
 //!
 //! # Covered ranges
 //!
@@ -113,6 +118,15 @@ pub(crate) use redirect::{RedirectDecision, redirect_decision};
 // though every current crate-internal use goes through `redirect_decision`.
 #[allow(unused_imports)]
 pub(crate) use redirect::MAX_REDIRECT_HOPS;
+
+/// A client builder for untrusted destinations: every name is resolved once
+/// and pinned by [`PinningResolver`], and `HTTP(S)_PROXY` from the environment
+/// is ignored, since a proxy would resolve the name instead of the pin.
+pub(crate) fn pinned_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(PinningResolver::new(SystemResolver))
+}
 
 // ============================================================================
 // Public API

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 // ── Capability ─────────────────────────────────────────────────────────────────
 
@@ -51,14 +51,32 @@ impl CapabilityConfig {
     /// or `https://` URL with a host. A bad value is refused, never ignored:
     /// ignoring it would silently send the calls direct.
     pub fn egress_proxy_url(&self) -> Result<Option<url::Url>> {
-        Ok(None)
+        let Some(raw) = self.egress_proxy.as_deref() else {
+            return Ok(None);
+        };
+        let refuse = |why: &str| {
+            Error::ConfigValidation(format!(
+                "capabilities.egress_proxy {why}; expected http://host:port or https://host:port"
+            ))
+        };
+        let parsed = url::Url::parse(raw).map_err(|_| refuse("is not a URL"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(refuse("must use http or https"));
+        }
+        if parsed.host_str().is_none_or(str::is_empty) {
+            return Err(refuse("has no host"));
+        }
+        Ok(Some(parsed))
     }
 
     /// `scheme://host:port` of the egress proxy, for logs: never its userinfo.
     #[must_use]
     pub fn egress_proxy_for_log(url: &url::Url) -> String {
-        let _ = url;
-        String::new()
+        let host = url.host_str().unwrap_or_default();
+        match url.port_or_known_default() {
+            Some(port) => format!("{}://{host}:{port}", url.scheme()),
+            None => format!("{}://{host}", url.scheme()),
+        }
     }
 }
 
