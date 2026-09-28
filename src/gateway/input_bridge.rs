@@ -501,7 +501,8 @@ impl InputBridge<'_> {
                 Some(next) => interim = next,
                 None => return Ok(result),
             }
-            last = Some(Box::new(result));
+            drop(result);
+            last = None;
         }
         Err(BridgeError::RoundsExhausted { last })
     }
