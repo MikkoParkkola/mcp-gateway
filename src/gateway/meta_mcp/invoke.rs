@@ -152,6 +152,7 @@ mod bridge_settle;
 use bridge_settle::arm;
 pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
+mod withheld_evidence;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
 mod account_mint;
@@ -2933,7 +2934,7 @@ impl MetaMcp {
             "schema_version": &evaluation.schema_version,
             "content_sha256": &evaluation.content_sha256,
             "provenance": &evaluation.provenance,
-            "classification": &evaluation.classification,
+            "classification": withheld_evidence::delivered(evaluation),
             "policy": &evaluation.policy,
             "audit": &evaluation.audit,
         });
