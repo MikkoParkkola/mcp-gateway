@@ -1022,7 +1022,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941."
+      "note": "Pending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1942.HARDEN.1",
@@ -1030,7 +1030,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. The team preset covers context integrity only (src/config/features/security.rs:516-530); the other controls are separate opt-ins. Anomaly blocking is inert until #1756 is fixed (its transition tracker is never fed), so that conjunct cannot be met before #1756. Tracked in #1942."
+      "note": "Pending. The team preset covers context integrity only (src/config/features/security.rs:516-530); the other controls are separate opt-ins. Anomaly blocking is inert until #1756 is fixed (its transition tracker is never fed), so that conjunct cannot be met before #1756. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1943.PROV.1",
@@ -1038,7 +1038,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Provenance is enforced only when require_for_remote_backends is set (src/security/remote_provenance.rs:21-23) and nothing reports that it is off. Tracked in #1943."
+      "note": "Pending. Provenance is enforced only when require_for_remote_backends is set (src/security/remote_provenance.rs:21-23) and nothing reports that it is off. Tracked in #1943. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1944.CHAIN.1",
@@ -1046,7 +1046,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944."
+      "note": "Pending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1945.COLLUDE.1",
@@ -1054,7 +1054,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Today's ASI10 controls bound one gateway's behaviour (kill switch and error budgets, src/kill_switch/; cost budgets; attestation scope); firewall anomaly scoring is inert (#1756) and is not evidence. Tracked in #1945."
+      "note": "Pending. Today's ASI10 controls bound one gateway's behaviour (kill switch and error budgets, src/kill_switch/; cost budgets; attestation scope); firewall anomaly scoring is inert (#1756) and is not evidence. Tracked in #1945. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1625.BOTREVIEW.1",
@@ -1062,7 +1062,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Umbrella issue #1625 tracks the backlog of unread automated review findings; the builder brief now blocks merge on unread bot comments."
+      "note": "Pending. Umbrella issue #1625 tracks the backlog of unread automated review findings; the builder brief now blocks merge on unread bot comments. Decision row 25 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     }
   ],
   "decisions": [

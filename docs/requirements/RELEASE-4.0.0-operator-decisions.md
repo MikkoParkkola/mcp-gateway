@@ -58,7 +58,6 @@ operator rulings until the owner ratifies them.
 |---|---|---|---|
 | 20 | 2026-09-25 | MIK-7217.DISCOVER.3 is amended to "byte-identical to 3.5.0 except the capability corrections in UPGRADING-4.0 item 52" (F24). The 3.5.0 goldens stay as captured, and the test applies the three-flag delta. `nfr_compat_2` pins no capability flags, so it needs no delta. | Coordinator decision, flagged to owner |
 | 21 | 2026-09-27 | MIK-7570.AUDIT.4 (governance audit record, actor absent, for grant approve and revoke applied through the grant file, directly or via the `identity grants` CLI) is added as a pending 4.0.0 criterion. | Maintainer decision under the standing owner rule that every 4.0 follow-up ships in 4.0 (no deferral to 4.0.x); explicit owner confirmation pending. If the owner declines, the row moves out of scope in a follow-up change. CLI actor attribution needs an authenticated CLI identity; not in 4.0 scope unless the owner asks. |
-| 25 | 2026-09-27 | Every automated pull-request reviewer finding on 4.0 work is read, verified at source, and fixed or answered before merge; the backlog is tracked in #1625 (GH1625.BOTREVIEW.1). | Release coordinator; owner ratification pending |
 
 ## Maintainer decisions under delegated authority
 
@@ -67,12 +66,6 @@ Decided by the maintainer under authority the owner delegated, each after two in
 | # | Date | Decision | By |
 |---|---|---|---|
 | 22 | 2026-09-28 | MIK-7570.AUDIT.4 design: the `identity grants` CLI appends each change to an append-only sidecar journal (0600; actor `unknown`, OS account as an unauthenticated hint) and never writes the gateway's audit log (one-writer lease, #1570); the gateway ingests unseen journal entries at startup and on every reload; the startup `loaded` snapshot is a reconciliation check, and a journal/snapshot mismatch is recorded as an out-of-band edit. Journal entries carry verb, grant id, content digest, expiry and timestamp. Supersedes row 21, including its note that explicit owner confirmation is pending. Ledger decision `audit_4_owner_ratification`. | Maintainer decision under delegated authority; two independent reviews |
-
-## Owner decisions stated directly (not through the question tool)
-
-Stated by the owner and recorded by the release coordinator; they did not pass through the question tool, so they are kept apart from the first table.
-
-| # | Date | Decision | By |
-|---|---|---|---|
-| 23 | 2026-09-27 | OWASP gaps are fixed in 4.0.0, not only documented. ASI04: release binaries are signed (cosign keyless, as the image and chart) and ship an SBOM (GH1941.SIGN.1). Remote backend provenance: assess before changing any default; visibility ships now (GH1943.PROV.1). Every PARTIAL or GAP row in the OWASP matrix becomes a 4.0 fix item. | Owner |
-| 24 | 2026-09-27 | OWASP hardening: one opt-in hardened switch extending the `team_shared` preset, with a startup and `doctor` warning when off (GH1942.HARDEN.1); build for 4.0 multi-gateway signature chaining (ASI07, GH1944.CHAIN.1) and multi-agent collusion detection (ASI10, GH1945.COLLUDE.1). All design-first, two-seat reviewed. | Owner |
+| 23 | 2026-09-27 | OWASP ASI04 gaps are fixed in 4.0.0, not only documented: release binaries are signed with an SBOM bound to each binary (GH1941.SIGN.1), and remote backend provenance becomes visible at startup and in `doctor` with no default change (GH1943.PROV.1). Two independent decision reviews, gpt run 20260928T060442Z-13762, grok run 20260928T060442Z-13763; their fixes are in the criterion text. | Maintainer decision under delegated authority |
+| 24 | 2026-09-27 | OWASP hardening built for 4.0.0: the hardened switch (GH1942.HARDEN.1), multi-gateway signature chaining against a configured chain (GH1944.CHAIN.1), and collusion detection with at least verbatim relay plus negative controls (GH1945.COLLUDE.1). Same reviews, gpt run 20260928T060442Z-13762, grok run 20260928T060442Z-13763. | Maintainer decision under delegated authority |
+| 25 | 2026-09-27 | Every automated reviewer finding on pull requests merged to the release line is resolved by a fix or an individual disposition verified at source, and the #1625 backlog is closed (GH1625.BOTREVIEW.1). Same reviews, gpt run 20260928T060442Z-13762, grok run 20260928T060442Z-13763. | Maintainer decision under delegated authority |
