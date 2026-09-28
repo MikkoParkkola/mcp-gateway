@@ -264,5 +264,10 @@ class Cli(unittest.TestCase):
         self.assertEqual((self.root / "CHANGELOG.md").read_text(encoding="utf-8"), CHANGELOG)
 
 
+class ThrowawayProof(unittest.TestCase):
+    def test_deliberate_failure(self):
+        self.fail("throwaway: a Python red must fail Tests (throwaway)")
+
+
 if __name__ == "__main__":
     unittest.main()
