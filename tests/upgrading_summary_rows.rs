@@ -217,9 +217,18 @@ fn numbers_in(text: &str) -> BTreeSet<u32> {
     out
 }
 
+/// The intro, line endings normalised: a Windows checkout reads the guide
+/// with CRLF, and the blank line after each list lead is then `\r\n\r\n`.
+static INTRO: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    DOC.split("## What changed")
+        .next()
+        .unwrap()
+        .replace("\r\n", "\n")
+});
+
 /// The text between `after` and the next `until` in the intro.
 fn intro_span(after: &str, until: &str) -> &'static str {
-    let intro = DOC.split("## What changed").next().unwrap();
+    let intro: &'static str = INTRO.as_str();
     let start = intro
         .find(after)
         .unwrap_or_else(|| panic!("intro lost `{after}`"))

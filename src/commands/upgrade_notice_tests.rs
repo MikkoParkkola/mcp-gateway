@@ -150,8 +150,12 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
 
 /// The item numbers the guide says the first start prints: the `- Item N`
 /// bullets after the notice paragraph, one per line, up to the next blank line.
+///
+/// Line endings are normalised first: a Windows checkout reads the guide with
+/// CRLF, and the blank line that ends the lead is then `\r\n\r\n`.
 fn guide_notice_items(doc: &str) -> std::collections::BTreeSet<u32> {
     const LEAD: &str = "`RUST_LOG` filters cannot swallow it.\n\n";
+    let doc = doc.replace("\r\n", "\n");
     let start = doc
         .find(LEAD)
         .expect("the guide no longer says which items the notice lists")
@@ -165,6 +169,16 @@ fn guide_notice_items(doc: &str) -> std::collections::BTreeSet<u32> {
                 .unwrap_or_else(|| panic!("not a `- Item N` bullet: {line:?}"))
         })
         .collect()
+}
+
+/// A CRLF checkout (Windows) reads the same list as an LF one.
+#[test]
+fn guide_notice_items_reads_crlf() {
+    let doc = "`RUST_LOG` filters cannot swallow it.\r\n\r\n- Item 1\r\n- Item 6\r\n\r\nNext.";
+    assert_eq!(
+        guide_notice_items(doc),
+        std::collections::BTreeSet::from([1, 6])
+    );
 }
 
 /// The guide's list of notice items matches the notice. A notice item the list
