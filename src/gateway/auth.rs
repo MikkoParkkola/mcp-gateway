@@ -550,11 +550,18 @@ pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> boo
             .is_some_and(is_https_url)
 }
 
-/// `true` for an `https://` URL. Shared by the cookie-security check, the
-/// startup-banner link refusal and the OIDC issuer/`jwks_uri` checks, so one
-/// fix covers all of them.
+/// `true` for a URL whose scheme is `https`, in any letter case or spacing.
+///
+/// Parses with the same WHATWG URL parser `origin_guard::public_url_parts` and
+/// `cleartext::public_url_host` already use, rather than a byte prefix: the
+/// scheme is case-insensitive (RFC 3986 section 3.1) and the parser also
+/// trims leading ASCII whitespace, so `url.starts_with("https://")` rejects
+/// values the rest of the gateway accepts — leaving cookies without `Secure`
+/// behind a front end this parser agrees is HTTPS. Shared by the cookie
+/// security check, the startup-banner link refusal and the OIDC
+/// issuer/`jwks_uri` checks, so one fix covers all of them.
 pub(crate) fn is_https_url(url: &str) -> bool {
-    url.starts_with("https://")
+    url::Url::parse(url).is_ok_and(|u| u.scheme() == "https")
 }
 
 /// Whether a session cookie set or cleared now must be `Secure`: the listener
