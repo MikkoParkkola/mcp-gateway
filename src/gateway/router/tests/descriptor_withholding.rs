@@ -46,6 +46,8 @@ pub(super) fn catalogue() -> Vec<Value> {
 pub(super) struct Upstream {
     tools: Vec<Value>,
     pub(super) calls: parking_lot::Mutex<Vec<String>>,
+    /// Answer `tools/list` with an error frame that still carries a result.
+    pub(super) error_frame: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -53,6 +55,11 @@ impl crate::transport::Transport for Upstream {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         match method {
+            "tools/list" if self.error_frame.load(std::sync::atomic::Ordering::SeqCst) => {
+                let mut frame = JsonRpcResponse::error(Some(id), -32000, "upstream error");
+                frame.result = Some(json!({ "tools": self.tools }));
+                Ok(frame)
+            }
             "tools/list" => Ok(JsonRpcResponse::success(id, json!({ "tools": self.tools }))),
             "tools/call" => {
                 let name = params
@@ -118,6 +125,7 @@ pub(super) async fn build(
     let upstream = Arc::new(Upstream {
         tools,
         calls: parking_lot::Mutex::new(Vec::new()),
+        error_frame: std::sync::atomic::AtomicBool::new(false),
     });
     let backend = Arc::new(Backend::new(
         "evil",
