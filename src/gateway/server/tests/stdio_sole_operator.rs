@@ -446,9 +446,12 @@ async fn http_run_path_refuses_a_multi_key_caller_the_managed_account() {
     let auth = format!(
         "auth:\n  enabled: true\n  single_user: true\n  api_keys:\n    \
          - name: keyA\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n    \
-         - name: keyB\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n",
+         - name: keyB\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n\
+         security:\n  transparency_log:\n    enabled: true\n    path: {}\n",
         api_key_digest_spec(b"scoped-key-a"),
         api_key_digest_spec(b"scoped-key-b"),
+        // Auth on requires a working audit log (UPGRADING-4.0 item 43).
+        fixture.root.join("audit.jsonl").display(),
     );
     let gateway = e2e_gateway(&fixture, port, &auth).await;
     let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
