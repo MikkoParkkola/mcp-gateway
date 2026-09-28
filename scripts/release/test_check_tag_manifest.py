@@ -2239,6 +2239,20 @@ class WorkflowWiring(unittest.TestCase):
         below = [f"{wf}: cosign v{'.'.join(map(str, v))}" for wf, v in found if v < COSIGN_FLOOR]
         self.assertEqual(below, [], f"cosign pins below the patched floor v{'.'.join(map(str, COSIGN_FLOOR))}")
 
+    def test_no_workflow_reuses_yaml_through_an_alias(self):
+        # Actions resolves YAML aliases, and these checks read the text: a step
+        # `uses: *installer` (or a whole step or job reused as `*name`) installs
+        # cosign under a name no check sees. None is used today, so any alias
+        # in a value position fails here rather than escaping the floor.
+        alias = re.compile(r"""^\s*(?:-\s+)?(?:["']?[\w-]+["']?\s*:\s*)?\*[\w-]+\s*(?:#.*)?$""")
+        found = [
+            f"{path.name}:{number}: {line.strip()}"
+            for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if alias.match(line)
+        ]
+        self.assertEqual(found, [], "a YAML alias hides what a step installs from these checks")
+
     def test_throwaway_runs_carry_the_release_tooling_python_suites(self):
         # A throwaway pull request skips `release-script-tests`, so without its
         # own run of the Python suites a workflow-wiring or release-script red
