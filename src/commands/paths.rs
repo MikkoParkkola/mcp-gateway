@@ -29,9 +29,7 @@ pub fn claude_desktop_path() -> PathBuf {
 /// `~/.config` on Linux, `%APPDATA%` on Windows).
 #[cfg(not(target_os = "macos"))]
 pub fn config_dir_path(rel: &str) -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| home_path(".config"))
-        .join(rel)
+    home_path(".config").join(rel)
 }
 
 /// Zed's settings file: Zed's own `config_dir()` joined with `settings.json`
