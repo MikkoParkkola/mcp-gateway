@@ -30,9 +30,17 @@ pub(crate) struct Verdicts {
     allowed: BTreeMap<String, String>,
     /// Every name this listing served. A served name is no longer blocked.
     served: BTreeSet<String>,
+    /// Names of entries that could not be judged (they did not parse). The
+    /// listing says nothing about them, so it never clears their block.
+    unjudged: BTreeSet<String>,
 }
 
 impl Verdicts {
+    /// Record names this listing carried but could not judge.
+    pub(crate) fn add_unjudged(&mut self, names: impl IntoIterator<Item = String>) {
+        self.unjudged.extend(names);
+    }
+
     /// The names this listing withheld.
     pub(crate) fn withheld_names(&self) -> BTreeSet<String> {
         self.withheld.keys().cloned().collect()
@@ -120,6 +128,15 @@ pub(crate) enum Judging {
     AlreadyJudged,
 }
 
+/// Callers tracked per blocked name before the set collapses to
+/// [`MANY_SOURCES`].
+const SOURCES_CAP: usize = 64;
+/// A source no listing can clear: the name stays blocked until restart.
+const MANY_SOURCES: &str = "\u{0}many";
+/// Blocked names remembered per backend; memory bound against a backend that
+/// invents names per caller.
+const BLOCKED_NAMES_CAP: usize = 4096;
+
 /// Distinct (tool, digest, outcome) log lines remembered per backend.
 const LOGGED_CAP: usize = 1024;
 
@@ -159,8 +176,9 @@ impl Backend {
         // lists at all. A truncated listing clears only what it served, since
         // a name missing from it may sit on a page it never fetched.
         blocked.retain(|name, sources| {
-            let cleared = verdicts.served.contains(name)
-                || (listing == Listing::Complete && !verdicts.withheld.contains_key(name));
+            let cleared = !verdicts.unjudged.contains(name)
+                && (verdicts.served.contains(name)
+                    || (listing == Listing::Complete && !verdicts.withheld.contains_key(name)));
             if cleared {
                 sources.remove(source);
             }
@@ -179,7 +197,20 @@ impl Backend {
                     "Tool withheld: its description failed the tool-poisoning check"
                 );
             }
-            blocked.entry(name).or_default().insert(source.to_string());
+            if !blocked.contains_key(&name) && blocked.len() >= BLOCKED_NAMES_CAP {
+                // Still withheld from this listing; not remembered for a later
+                // call by name. Logged once per descriptor like any withholding.
+                continue;
+            }
+            let sources = blocked.entry(name).or_default();
+            if sources.len() >= SOURCES_CAP && !sources.contains(source) {
+                // Held by too many callers to track one by one: the name stays
+                // blocked until restart, since no single listing can clear it.
+                sources.clear();
+                sources.insert(MANY_SOURCES.to_string());
+            } else if !sources.contains(MANY_SOURCES) {
+                sources.insert(source.to_string());
+            }
         }
         for (name, digest) in verdicts.allowed {
             if first_time(&mut logged, (name.clone(), digest.clone(), false)) {

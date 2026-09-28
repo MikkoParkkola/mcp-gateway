@@ -245,3 +245,34 @@ async fn x5_a_complete_listing_that_omits_a_name_clears_its_block() {
         "a name the only withholding source no longer lists stayed blocked"
     );
 }
+
+/// X6: a listing whose entry for a blocked name does not parse cannot judge
+/// that name, so it does not clear the block, even as a complete listing.
+#[tokio::test]
+async fn x6_an_unparseable_entry_does_not_clear_a_block() {
+    let backend = per_user_backend();
+    let _ = backend.remember_listed_tools(Some("a"), false, &catalogue());
+    let mut broken = catalogue();
+    broken[0]["annotations"] = json!("not an object");
+    let _ = backend.remember_listed_tools(Some("a"), false, &broken);
+    assert!(
+        refused(&backend, "b", POISONED),
+        "an unjudged entry cleared the block"
+    );
+}
+
+/// X7: past the per-name caller cap the block no longer tracks callers one
+/// by one, so no single caller's clean listing can clear it.
+#[tokio::test]
+async fn x7_a_name_withheld_for_many_callers_stays_blocked() {
+    let backend = per_user_backend();
+    for n in 0..65 {
+        let caller = format!("c{n}");
+        let _ = backend.remember_listed_tools(Some(&caller), false, &catalogue());
+    }
+    let _ = backend.remember_listed_tools(Some("c0"), false, &catalogue_with("Reads a file."));
+    assert!(
+        refused(&backend, "b", POISONED),
+        "one caller's clean listing cleared a name many callers withheld"
+    );
+}

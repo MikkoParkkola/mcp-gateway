@@ -263,6 +263,19 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
+        // Every `tools/call` funnels through here, public library callers
+        // included, so a withheld tool is refused at this one chokepoint as
+        // well as by the routes' own earlier checks (#1441).
+        if method == "tools/call"
+            && let Some(refusal) = params
+                .as_ref()
+                .and_then(|p| p.get("name"))
+                .and_then(Value::as_str)
+                .and_then(|tool| self.blocked_tool_refusal(tool))
+        {
+            return Err(crate::Error::Protocol(refusal));
+        }
+
         // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
         // progress token. This sits here for the same reason the param mirror
         // below does -- meta-MCP invoke and the router's direct backend route
