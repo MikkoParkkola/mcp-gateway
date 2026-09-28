@@ -161,7 +161,30 @@ pub(in super::super) fn gateway(
     custody: &Arc<dyn AccountCustody>,
     identity_slots: &[String],
 ) -> (MetaMcp, Arc<Dispatches>) {
-    let config = fixture_config(binds, descriptors.compiled);
+    gateway_in(
+        binds,
+        descriptors,
+        custody,
+        identity_slots,
+        ServeMode::Http,
+        crate::config::AuthConfig::default(),
+    )
+}
+
+/// [`gateway`] installed for a given serve mode and `auth` block, which is
+/// what decides the deployment's sole-operator assertion (#1961).
+pub(in super::super) fn gateway_in(
+    binds: &[(&str, Bind<'_>)],
+    descriptors: &Descriptors<'_>,
+    custody: &Arc<dyn AccountCustody>,
+    identity_slots: &[String],
+    mode: ServeMode,
+    auth: crate::config::AuthConfig,
+) -> (MetaMcp, Arc<Dispatches>) {
+    let config = Config {
+        auth,
+        ..fixture_config(binds, descriptors.compiled)
+    };
     // The production compilation, refusals included: an invalid fixture
     // configuration fails HERE rather than reaching a dispatch assertion.
     let bound = compile(&config).expect("fixture configuration must compile");
@@ -227,7 +250,7 @@ pub(in super::super) fn gateway(
         Some(custody),
         &gateway_key,
         &meta,
-        ServeMode::Http,
+        mode,
     )
     .expect("the shared installer must accept the fixture configuration");
     (meta, dispatches)
@@ -237,11 +260,20 @@ pub(in super::super) fn gateway(
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
 fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<'_> {
+    caller_as(verified_identity, None)
+}
+
+/// [`caller`] that also presented a credential the gateway accepted, named by
+/// its principal (`STDIO_CREDENTIAL_PRINCIPAL` for the stdio transport).
+fn caller_as<'a>(
+    verified_identity: Option<&'a VerifiedIdentity>,
+    credential_principal: Option<&'a str>,
+) -> MetaMcpCallerContext<'a> {
     MetaMcpCallerContext {
         task: None,
         signing: None,
         execution: None,
-        credential_principal: None,
+        credential_principal,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
@@ -273,6 +305,19 @@ pub(in super::super) async fn execute(
     let context = caller(caller_identity);
     // ONE tool and ONE argument set for every principal: identical requests are
     // what make a crossed cache entry observable.
+    let args = json!({ "tool": format!("{server}:read"), "arguments": { "folder": "inbox" } });
+    meta.code_mode_execute(&args, Some("fixture-session"), &context)
+        .await
+}
+
+/// [`execute`] for a caller with no verified identity that presented the
+/// credential named `credential_principal` (#1961).
+pub(in super::super) async fn execute_as(
+    meta: &MetaMcp,
+    server: &str,
+    credential_principal: Option<&str>,
+) -> crate::Result<Value> {
+    let context = caller_as(None, credential_principal);
     let args = json!({ "tool": format!("{server}:read"), "arguments": { "folder": "inbox" } });
     meta.code_mode_execute(&args, Some("fixture-session"), &context)
         .await

@@ -614,5 +614,6 @@ impl crate::transport::Transport for CapturingTransport {
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
 pub(super) use gateway::{
-    Bind, Descriptors, execute, execute_bridged, external_cfg, gateway, slots,
+    Bind, Descriptors, execute, execute_as, execute_bridged, external_cfg, gateway, gateway_in,
+    slots,
 };
