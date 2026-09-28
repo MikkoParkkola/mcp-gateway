@@ -1423,7 +1423,7 @@ async fn meta_mcp_dispatch(
                         target.tool,
                         target.arguments,
                         caller_name,
-                        &control_identity,
+                        "",
                     );
                     if verdict.action == FirewallAction::Warn {
                         warn!(
