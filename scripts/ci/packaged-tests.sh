@@ -34,6 +34,7 @@ crate="$target/package/mcp-gateway-$version.crate"
 test -s "$crate"
 
 unpacked="$(mktemp -d)"
+trap 'rm -rf -- "$unpacked"' EXIT
 tar -xzf "$crate" -C "$unpacked"
 cd "$unpacked/mcp-gateway-$version"
 

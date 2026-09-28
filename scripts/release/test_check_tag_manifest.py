@@ -2169,7 +2169,9 @@ class WorkflowWiring(unittest.TestCase):
         self.assertIn("package-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
 
         on = "\n".join(live_lines("packaged-suite.yml"))
-        trigger = on[on.index("on:") : on.index("jobs:")]
+        self.assertRegex(on, r"(?m)^on:$", "packaged-suite.yml has no on: block")
+        self.assertRegex(on, r"(?m)^jobs:$", "packaged-suite.yml has no jobs: block")
+        trigger = on[on.index("\non:") : on.index("\njobs:")]
         self.assertRegex(trigger, r"(?m)^  push:\n    branches: \[[^\]]*\bdocs/ranking-1-release-line\b")
         self.assertNotRegex(trigger, r"(?m)^  pull_request", "a PR trigger would run the suite twice per PR")
         self.assertRegex(trigger, r"(?m)^  workflow_call:")
@@ -2185,7 +2187,7 @@ class WorkflowWiring(unittest.TestCase):
 
         # The packaged run skips what ci.yml `test` skips, plus only the tests
         # that read repository files deliberately kept out of the crate.
-        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text()
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
         test_cmd = " ".join(c for b in steps("ci.yml", "test") for c in joined(b))
         packaged_only = {"mik_5843_"}  # repo-only competitive notes
         self.assertEqual(
