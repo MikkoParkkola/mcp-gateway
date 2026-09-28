@@ -314,7 +314,7 @@ impl EnvReloadCounts {
     ) {
         self.failed.store(error.is_some(), Ordering::SeqCst);
         match (error, trigger) {
-            (None, _) => *limiter = WarnLimiter::default(),
+            (None, _) => {}
             (Some(error), ReloadTrigger::ConfigFile) => {
                 limiter.primed = Some((error.to_owned(), Instant::now()));
             }
