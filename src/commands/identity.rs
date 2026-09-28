@@ -12,7 +12,7 @@ use mcp_gateway::{
     cli::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand, output::OutputFormat},
     identity_grants::{
         GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant, IdentityGrantFile,
-        read_identity_grants_file,
+        journal, read_identity_grants_file,
     },
     security::ProofSource,
 };
@@ -133,7 +133,6 @@ struct LocalGrantInput {
 
 async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, IdentityGrant), String> {
     let path = expand_home_path(&input.file);
-    let mut grant_file = read_or_create_grant_file(&path).await?;
 
     let subject = parse_subject_spec(&input.subject, input.subject_label, "subject")?;
     let owner = match input.owner {
@@ -158,22 +157,33 @@ async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, Identity
         reason: non_empty(&input.reason, "reason")?,
     };
 
-    let existing = grant_file
-        .grants
-        .iter()
-        .any(|existing| existing.grant_id == grant.grant_id);
-    if existing && !input.replace {
-        return Err(format!(
-            "grant id '{}' already exists; pass --replace to overwrite it",
-            grant.grant_id
-        ));
-    }
-
-    grant_file
-        .grants
-        .retain(|existing| existing.grant_id != grant.grant_id);
-    grant_file.grants.push(grant.clone());
-    mcp_gateway::identity_grants::write_identity_grants_file(&path, &grant_file).await?;
+    let replace = input.replace;
+    let change: journal::GrantChange = Box::new(move |grant_file: &mut IdentityGrantFile| {
+        let existing = grant_file
+            .grants
+            .iter()
+            .any(|existing| existing.grant_id == grant.grant_id);
+        if existing && !replace {
+            return Err(format!(
+                "grant id '{}' already exists; pass --replace to overwrite it",
+                grant.grant_id
+            ));
+        }
+        grant_file
+            .grants
+            .retain(|existing| existing.grant_id != grant.grant_id);
+        let grant_id = grant.grant_id.clone();
+        grant_file.grants.push(grant);
+        let verb = if existing {
+            journal::JournalVerb::Replace
+        } else {
+            journal::JournalVerb::Add
+        };
+        Ok((verb, grant_id))
+    });
+    let grant = journal::apply_change(&path, true, change)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok((path, grant))
 }
 
@@ -183,29 +193,25 @@ async fn revoke_local_grant(
     revoked_at: Option<&str>,
 ) -> Result<(PathBuf, IdentityGrant), String> {
     let path = expand_home_path(file);
-    let mut grant_file = read_identity_grants_file(&path).await?;
     let revoked_at = revoked_at.map_or_else(
         || Ok(Utc::now()),
         |value| parse_timestamp(value, "revoked-at"),
     )?;
-    let grant = grant_file
-        .grants
-        .iter_mut()
-        .find(|grant| grant.grant_id == grant_id)
-        .ok_or_else(|| format!("grant id '{grant_id}' was not found in {}", path.display()))?;
-
-    grant.revoked_at = Some(revoked_at);
-    let updated = grant.clone();
-    mcp_gateway::identity_grants::write_identity_grants_file(&path, &grant_file).await?;
+    let grant_id = grant_id.to_string();
+    let shown = path.display().to_string();
+    let change: journal::GrantChange = Box::new(move |grant_file: &mut IdentityGrantFile| {
+        let grant = grant_file
+            .grants
+            .iter_mut()
+            .find(|grant| grant.grant_id == grant_id)
+            .ok_or_else(|| format!("grant id '{grant_id}' was not found in {shown}"))?;
+        grant.revoked_at = Some(revoked_at);
+        Ok((journal::JournalVerb::Revoke, grant_id))
+    });
+    let updated = journal::apply_change(&path, false, change)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok((path, updated))
-}
-
-async fn read_or_create_grant_file(path: &Path) -> Result<IdentityGrantFile, String> {
-    match read_identity_grants_file(path).await {
-        Ok(file) => Ok(file),
-        Err(_error) if !path.exists() => Ok(IdentityGrantFile::new(Vec::new())),
-        Err(error) => Err(error),
-    }
 }
 
 fn print_grants(path: &Path, grants: &[IdentityGrant], format: OutputFormat) {
@@ -275,8 +281,8 @@ fn print_grant_result(action: &str, path: &Path, grant: &IdentityGrant, format: 
             // the file. The ticket only ever named `revoke`, but an `add` that
             // nobody reloads is just as inert.
             println!(
-                "note: written to disk only. A running gateway applies this on \
-                 its next config reload."
+                "note: written to disk and journalled. A running gateway applies this \
+                 on its next config reload."
             );
         }
     }

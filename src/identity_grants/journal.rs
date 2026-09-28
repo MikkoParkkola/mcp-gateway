@@ -85,23 +85,37 @@ impl std::fmt::Display for ChangeError {
 /// The journal beside `grants`: the grant file's name plus `.journal.jsonl`.
 #[must_use]
 pub fn journal_path(grants: &Path) -> PathBuf {
-    let _ = grants;
-    PathBuf::new()
+    let mut name = grants.file_name().unwrap_or_default().to_os_string();
+    name.push(".journal.jsonl");
+    grants.with_file_name(name)
 }
 
 /// The lock file both the CLI and the gateway take around a grant change.
-#[allow(dead_code, reason = "red-first stub")]
+///
+/// A separate file that is never renamed, so a held lock survives the grant
+/// file's atomic replace.
 #[must_use]
 pub(crate) fn lock_path(grants: &Path) -> PathBuf {
-    let _ = grants;
-    PathBuf::new()
+    let mut name = std::ffi::OsString::from(".");
+    name.push(grants.file_name().unwrap_or_default());
+    name.push(".journal.lock");
+    grants.with_file_name(name)
 }
 
 /// `sha256:<hex>` over the serialised row.
+///
+/// Serde field order is declaration order, so the bytes are stable. A new
+/// field on `IdentityGrant` must be skipped when default, or every existing
+/// grant's digest changes and reads as an out-of-band edit.
 #[must_use]
 pub fn grant_digest(grant: &IdentityGrant) -> String {
-    let _ = grant;
-    String::new()
+    let bytes = serde_json::to_vec(grant).unwrap_or_default();
+    sha256_tag(&bytes)
+}
+
+fn sha256_tag(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
 }
 
 /// A change the CLI applies to the grant file: mutate it and name what it did.
@@ -130,12 +144,17 @@ pub async fn apply_change(
     .await
 }
 
+/// The OS account running the CLI, from the environment. A hint only: the
+/// variable is whatever the caller's shell says.
 fn os_account() -> Option<String> {
-    None
+    ["USER", "USERNAME"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Test seams for the change sequence; production passes the default.
-#[allow(dead_code, reason = "red-first stub")]
 #[derive(Default)]
 pub(crate) struct Hooks {
     /// Fail the grant-file write (the lock is taken normally).
@@ -153,24 +172,110 @@ pub(crate) async fn apply_change_with(
     os_account: Option<String>,
     hooks: &Hooks,
 ) -> Result<IdentityGrant, ChangeError> {
-    let _ = (os_account, hooks);
+    // Held until this function returns: from before the read to after the
+    // append, so a gateway reload never sees the file without its entry.
+    let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
+
     let mut file = match super::read_identity_grants_file(grants).await {
         Ok(file) => file,
         Err(_) if create_if_missing && !grants.exists() => IdentityGrantFile::new(Vec::new()),
         Err(error) => return Err(ChangeError::Refused(error)),
     };
-    let (_, grant_id) = change(&mut file).map_err(ChangeError::Refused)?;
+    let before: std::collections::BTreeMap<String, String> = file
+        .grants
+        .iter()
+        .map(|row| (row.grant_id.clone(), grant_digest(row)))
+        .collect();
+    let (verb, grant_id) = change(&mut file).map_err(ChangeError::Refused)?;
+    let row = file
+        .grants
+        .iter()
+        .find(|row| row.grant_id == grant_id)
+        .cloned()
+        .ok_or_else(|| ChangeError::Refused(format!("grant id '{grant_id}' not written")))?;
+
+    if hooks.fail_grant_write {
+        return Err(ChangeError::Refused(
+            "injected grant-file write failure".to_string(),
+        ));
+    }
     super::write_identity_grants_file(grants, &file)
         .await
         .map_err(ChangeError::Refused)?;
-    file.grants
-        .into_iter()
-        .find(|row| row.grant_id == grant_id)
-        .ok_or_else(|| ChangeError::Refused(format!("grant id '{grant_id}' not written")))
+    if let Some(hook) = &hooks.after_grant_write {
+        hook();
+    }
+
+    let entry = JournalEntry {
+        v: JOURNAL_VERSION,
+        entry_id: uuid::Uuid::new_v4().to_string(),
+        verb,
+        prev_digest: before.get(&grant_id).cloned(),
+        grant_id,
+        digest: grant_digest(&row),
+        expires_at: row.expires_at,
+        at: Utc::now(),
+        actor: UNKNOWN_ACTOR.to_string(),
+        os_account,
+    };
+    if hooks.fail_append {
+        return Err(ChangeError::Unjournalled(
+            "injected append failure".to_string(),
+        ));
+    }
+    let mut line =
+        serde_json::to_vec(&entry).map_err(|e| ChangeError::Unjournalled(e.to_string()))?;
+    line.push(b'\n');
+    let journal = journal_path(grants);
+    tokio::task::spawn_blocking(move || append_line(&journal, &line))
+        .await
+        .map_err(|e| ChangeError::Unjournalled(e.to_string()))?
+        .map_err(|e| ChangeError::Unjournalled(e.to_string()))?;
+    Ok(row)
+}
+
+/// Take the journal lock off the runtime; the CLI may wait behind a reload.
+async fn acquire_lock(grants: &Path) -> Result<crate::fs_lock::ExclusiveFileLock, String> {
+    let lock = lock_path(grants);
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = lock.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::fs_lock::ExclusiveFileLock::acquire(&lock)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("could not lock the grant journal: {e}"))
+}
+
+/// Append one line, owner-only, and flush it to disk. A journal whose last
+/// byte is not a newline (a torn earlier append) gets one first, so the new
+/// entry starts on its own line.
+fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
+    use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true).read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut file = opts.open(journal)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    if file.metadata()?.len() > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::End(-1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n")?;
+        }
+    }
+    file.write_all(line)?;
+    file.sync_data()
 }
 
 /// The journal read back: entries in file order and the lines that did not parse.
-#[allow(dead_code, reason = "red-first stub")]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct ParsedJournal {
     /// Parsed entries, in file order.
@@ -181,9 +286,24 @@ pub(crate) struct ParsedJournal {
 
 /// Parse journal bytes. A final line with no newline is a CLI mid-append and
 /// is left for the next read; a bad line that later bytes follow is torn.
-#[allow(dead_code, reason = "red-first stub")]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the gateway reads the journal once ingestion lands"
+    )
+)]
 #[must_use]
 pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
-    let _ = bytes;
-    ParsedJournal::default()
+    let mut parsed = ParsedJournal::default();
+    let mut lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+    // The segment after the last newline is unterminated: wait for it.
+    lines.pop();
+    for line in lines.into_iter().filter(|line| !line.is_empty()) {
+        match serde_json::from_slice::<JournalEntry>(line) {
+            Ok(entry) => parsed.entries.push(entry),
+            Err(_) => parsed.torn.push(sha256_tag(line)),
+        }
+    }
+    parsed
 }
