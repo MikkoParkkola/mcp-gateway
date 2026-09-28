@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2147: after the shutdown signal the listener waits for open requests at
 //! most `server.shutdown_timeout`, and no less.
 

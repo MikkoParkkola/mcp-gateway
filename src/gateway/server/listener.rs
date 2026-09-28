@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The gateway's HTTP listener, plain or mTLS, and how it stops (#2147).
 
 use std::future::Future;
