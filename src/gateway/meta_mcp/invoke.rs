@@ -985,7 +985,10 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                     .meta
                     .bridged_refused_fill(at, e, self.managed, checked_at, parked);
                 let message = fill.await;
-                return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
+                return Err(crate::gateway::input_bridge::BridgeError::BackendFailed {
+                    message,
+                    dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
+                });
             }
         };
         if let Some(refusal) = refusal {
