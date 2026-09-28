@@ -110,7 +110,6 @@ include = [
     "docs/runtime/substrate_mapping.md",
     "docs/SHADOW_SCAN.md",
     "docs/TEAM_DEPLOYMENT.md",
-    "docs/trustcard.md",
     "docs/UPGRADING-4.0.md",
     "gateway.example.yaml",
     "scripts/release/nfr_upgrade_1_rehearsal.sh",
