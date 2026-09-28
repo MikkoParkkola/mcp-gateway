@@ -615,6 +615,9 @@ impl InputBridge<'_> {
         if let Some(fields) = shown.as_object_mut() {
             fields.remove("requestState");
         }
+        // ponytail: keys are repeated as string values only because the
+        // response scanners walk object values and skip keys (#2114); drop
+        // `keys` once they read keys too.
         let keys: Vec<&str> = interim
             .requests
             .iter()
