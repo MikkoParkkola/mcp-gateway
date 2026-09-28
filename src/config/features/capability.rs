@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 // ── Capability ─────────────────────────────────────────────────────────────────
 
 /// Capability configuration for direct REST API integration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CapabilityConfig {
     /// Enable capability system.
@@ -28,6 +28,26 @@ pub struct CapabilityConfig {
     /// `http://` destination sends its URL and headers, credentials included,
     /// to the proxy. Restart-only.
     pub egress_proxy: Option<String>,
+}
+
+// Manual `Debug` (CWE-532): `egress_proxy` may carry `user:password@` in its
+// URL, and a derived `Debug` would print it with any config dump. Only the
+// scheme, host and port are shown.
+impl std::fmt::Debug for CapabilityConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let proxy = self.egress_proxy.as_deref().map(|raw| {
+            url::Url::parse(raw).map_or_else(
+                |_| "<unparseable>".to_string(),
+                |url| Self::egress_proxy_for_log(&url),
+            )
+        });
+        f.debug_struct("CapabilityConfig")
+            .field("enabled", &self.enabled)
+            .field("name", &self.name)
+            .field("directories", &self.directories)
+            .field("egress_proxy", &proxy)
+            .finish()
+    }
 }
 
 impl Default for CapabilityConfig {
@@ -119,6 +139,23 @@ mod tests {
             let err = with(bad).egress_proxy_url().unwrap_err().to_string();
             assert!(err.contains("capabilities.egress_proxy"), "{bad}: {err}");
         }
+    }
+
+    // CWE-532: a derived `Debug` would print the proxy's password with the
+    // whole config.
+    #[test]
+    fn debug_redacts_egress_proxy_credentials() {
+        let sentinel = "SENTINEL_PW_9f3a";
+        let dbg = format!(
+            "{:?}",
+            with(&format!("http://probe-user:{sentinel}@proxy.internal:8080"))
+        );
+        assert!(!dbg.contains(sentinel), "leaked proxy password: {dbg}");
+        assert!(!dbg.contains("probe-user"), "leaked proxy userinfo: {dbg}");
+        assert!(
+            dbg.contains("proxy.internal:8080"),
+            "proxy host missing: {dbg}"
+        );
     }
 
     #[test]
