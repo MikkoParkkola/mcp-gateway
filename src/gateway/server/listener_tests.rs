@@ -163,3 +163,24 @@ async fn a_request_that_ends_within_the_timeout_completes_and_no_new_one_is_acce
         .expect("server task")
         .expect("serve");
 }
+
+/// `listener::serve` forwards the shutdown signal with one call to
+/// `graceful_shutdown`, which may run before the accept loop first waits, or
+/// between two accepts. That is safe only because `axum_server` stores the
+/// signal as a flag the loop reads on every iteration (#2202). This pins that
+/// property: a signal sent before the server even exists still stops it.
+#[tokio::test]
+async fn a_shutdown_signal_sent_before_the_server_first_waits_is_not_lost() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let handle = axum_server::Handle::<SocketAddr>::new();
+    handle.graceful_shutdown(Some(Duration::from_secs(10)));
+    let server = axum_server::from_tcp(listener)
+        .expect("server")
+        .handle(handle)
+        .serve(Router::new().into_make_service_with_connect_info::<SocketAddr>());
+    timeout(HANG_STOP, server)
+        .await
+        .expect("a signal sent before the first poll was lost: the server kept running")
+        .expect("serve");
+}
