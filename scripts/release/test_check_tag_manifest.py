@@ -829,11 +829,12 @@ class WorkflowWiring(unittest.TestCase):
     catch the rewiring mistakes that are silent at author time and only visible
     once a release has already gone to the wrong channel.
 
-    Textual, deliberately: the gate runs on stdlib alone in three workflows, so
-    a YAML parser is a dependency it does not get to have. The cost is that
-    equivalence is handled case by case — comments stripped, optional quotes,
-    folded conditions, continuations joined, step blocks scoped — rather than
-    decided by a parser. Every case here is pinned by
+    Mostly textual: equivalence is handled case by case — comments stripped,
+    optional quotes, folded conditions, continuations joined, step blocks
+    scoped. The cosign floor is the exception: it reads a strict YAML parse
+    (PyYAML 6.0.2, which every job running this suite installs first),
+    because a text scan kept missing spellings of one installer step, and the
+    text recogniser is held to the parser's steps. Every case here is pinned by
     `test_workflow_wiring_mutations.py`, which is what keeps the list honest:
     a spelling nobody thought of fails loudly instead of passing silently.
     """
@@ -2329,7 +2330,7 @@ class WorkflowWiring(unittest.TestCase):
                 installed = False
                 for block in steps(path.name, job):
                     text = "\n".join(block)
-                    if "pyyaml==6.0.2" in text:
+                    if "yaml.__version__ != \"6.0.2\"" in text and "pyyaml==6.0.2" in text:
                         installed = True
                     elif not installed and any(
                         suite in text for suite in ("test_check_tag_manifest.py", "test_workflow_wiring_mutations.py", "scripts/release/test_*.py")
