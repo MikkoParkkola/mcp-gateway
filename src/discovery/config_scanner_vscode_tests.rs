@@ -96,4 +96,16 @@ async fn a_settings_file_with_comments_and_trailing_commas_is_read() {
     .await;
     let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["files"]);
+    match &servers[0].transport {
+        TransportConfig::Stdio { command, .. } => assert_eq!(
+            crate::transport::split_command(command),
+            Some(vec![
+                "npx".to_string(),
+                "-y".to_string(),
+                "fs-server".to_string()
+            ]),
+            "args next to a trailing comma survive"
+        ),
+        other => panic!("expected stdio, got {other:?}"),
+    }
 }
