@@ -378,4 +378,5 @@ Two independent reviews per round; three rounds.
   discontinuity records. All fixed in rev 3 (invariant in 5.2, gap kept on recovery, refuse unplannable
   changes, ordinal ids, seeded pre-state, `missing_reported`, T3e, T4i, T4j, T6b, T7c).
 - Round 3: a failed commit write let a later snapshot bury the still-pending plan (HIGH). Fixed: a pending
-  plan whose commit failed is a barrier until its commit succeeds (5.2, section 8, T8b).
+  plan whose commit failed is a barrier until its commit succeeds (5.2, section 8, T8b). The second
+  review of rev 4 found no HIGH or MEDIUM defect (SHIP).
