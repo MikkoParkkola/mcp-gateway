@@ -2388,6 +2388,9 @@ impl MetaMcp {
                         interim = crate::protocol::mrtr::InputRequired::from_result(&result);
                     }
                     refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&uncertain_side_effect());
+                    }
                 }
                 // A policy refusal keeps its type across the bridge boundary.
                 // `error_response_preserving_status` carries a dedicated
