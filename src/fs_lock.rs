@@ -144,7 +144,8 @@ impl ExclusiveFileLock {
     /// every platform: `Ok(None)` when another handle holds it, `Err` for any
     /// other failure (a directory in the way, a read-only volume, locking
     /// unsupported). A separate constructor from [`Self::try_acquire`], which
-    /// must stay unavailable off unix: the task store relies on that refusal.
+    /// judges its sidecar's privacy on Windows and refuses on any platform
+    /// with neither unix nor Windows custody.
     pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Option<Self>> {
         #[cfg(test)]
         count_attempt(lock_path);
@@ -153,7 +154,7 @@ impl ExclusiveFileLock {
         set_owner_only(&mut opts);
         let file = opts.open(lock_path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Some(Self { file })),
+            Ok(()) => Ok(Some(Self::held(file))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => Err(e),
         }
