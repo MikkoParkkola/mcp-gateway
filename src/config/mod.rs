@@ -11,6 +11,7 @@ mod config_file;
 mod env_overlay;
 mod features;
 mod input_schema;
+mod remote_provenance_posture;
 pub(crate) mod log_once;
 mod secret_file;
 mod secret_ref;
