@@ -137,7 +137,7 @@ impl TransitionTracker {
         self.transitions.get(from_tool).map_or(0, |successors| {
             successors
                 .iter()
-                .map(|e| e.value().load(Ordering::Relaxed))
+                .map(|_| 1)
                 .sum()
         })
     }

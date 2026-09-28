@@ -196,6 +196,7 @@ impl AnomalyDetector {
             .last_tool
             .get(identity)
             .map(|entry| entry.value().clone());
+        self.last_tool.insert(identity.to_owned(), current.clone());
         let observation = match prev.as_deref() {
             None => Observation::WarmingUp,
             Some(prev) => self.score_after(prev, &current),

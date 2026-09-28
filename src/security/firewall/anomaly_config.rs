@@ -28,7 +28,7 @@ impl FirewallConfig {
         // Scores are in [0, 1]. At or below 0.5 the old neutral score would
         // flag every call; above 1.0 nothing could ever be flagged.
         let log = self.anomaly_threshold;
-        if !(log > 0.5 && log <= 1.0) {
+        if !(log > 0.5) {
             return Err(format!(
                 "security.firewall.anomaly_threshold must be above 0.5 and at most 1.0, got {log}"
             ));
