@@ -1914,9 +1914,10 @@ decision. The alternative, refusing every name the caller has not listed first, 
 because it breaks every client that calls a remembered tool name without listing.
 
 The gateway remembers at most 4,096 withheld tool names per backend. A backend that withholds more
-is marked saturated, with one warning naming the cap: from then on a call by name to that backend
-is refused unless the caller's own validated listing holds the tool. The mark clears only on
-restart. A name withheld by more than 64 callers stays blocked
+is marked saturated, with one warning naming the cap: from then on every tool of that backend is
+withheld from every list and refused by name, since a name past the cap could not be recorded. The
+mark clears only on restart. A tool entry that cannot be parsed is withheld too, and one such entry
+no longer fails the rest of the list. A name withheld by more than 64 callers stays blocked
 until restart.
 
 To serve a withheld tool you trust, pin its current description:

@@ -95,19 +95,10 @@ impl Backend {
     ) -> std::collections::BTreeSet<String> {
         let key = self.pool_key_for(identity_key);
         // Entry by entry, as `normalize_tools_list_response` reads them: one
-        // malformed tool must not leave the slot cold for every other one.
-        let mut parsed: Vec<crate::protocol::Tool> = Vec::with_capacity(tools.len());
-        // An entry that does not parse is still named: its block must survive
-        // a listing that could not judge it (#1441).
-        let mut unjudged = Vec::new();
-        for tool in tools {
-            match serde_json::from_value(tool.clone()) {
-                Ok(parsed_tool) => parsed.push(parsed_tool),
-                Err(_) => {
-                    unjudged.extend(tool.get("name").and_then(Value::as_str).map(str::to_string));
-                }
-            }
-        }
+        // malformed tool must not leave the slot cold for every other one. A
+        // named entry that does not parse cannot be judged, so it is withheld
+        // (fail closed, #1441).
+        let (mut parsed, unparseable) = super::descriptor_gate::parse_listed(tools);
         // The same normalisation a discovery fill applies; the resend set it
         // returns stays with discovery, so this fill grants no retries. The
         // list is raw here (the direct route redacts only afterwards), so this
@@ -119,7 +110,7 @@ impl Backend {
             &mut parsed,
         );
         let mut verdicts = prepared.verdicts;
-        verdicts.add_unjudged(unjudged);
+        verdicts.add_unparseable(unparseable);
         let withheld = verdicts.withheld_names();
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
             // Not stored, but observed: a blocked name is per backend. Keyed

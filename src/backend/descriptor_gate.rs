@@ -30,15 +30,18 @@ pub(crate) struct Verdicts {
     allowed: BTreeMap<String, String>,
     /// Every name this listing served. A served name is no longer blocked.
     served: BTreeSet<String>,
-    /// Names of entries that could not be judged (they did not parse). The
-    /// listing says nothing about them, so it never clears their block.
-    unjudged: BTreeSet<String>,
 }
 
 impl Verdicts {
-    /// Record names this listing carried but could not judge.
-    pub(crate) fn add_unjudged(&mut self, names: impl IntoIterator<Item = String>) {
-        self.unjudged.extend(names);
+    /// Withhold named entries that did not parse: the rule cannot judge them,
+    /// so they fail closed (#1441). Each is `(name, digest of the raw entry)`.
+    pub(crate) fn add_unparseable(&mut self, entries: impl IntoIterator<Item = (String, String)>) {
+        for (name, digest) in entries {
+            self.withheld.insert(
+                name,
+                (digest, vec!["descriptor could not be parsed".to_string()]),
+            );
+        }
     }
 
     /// The names this listing withheld.
@@ -118,6 +121,44 @@ pub(crate) enum Listing {
     Truncated,
 }
 
+/// Parse a raw `tools` array entry by entry: one malformed entry must not
+/// fail the whole list or hide its siblings from judging. A named entry that
+/// does not parse is returned with a digest of its raw JSON, to be withheld.
+pub(crate) fn parse_listed(raw: &[serde_json::Value]) -> (Vec<Tool>, Vec<(String, String)>) {
+    let mut parsed = Vec::with_capacity(raw.len());
+    let mut unparseable = Vec::new();
+    for entry in raw {
+        match serde_json::from_value::<Tool>(entry.clone()) {
+            Ok(tool) => parsed.push(tool),
+            Err(_) => {
+                if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
+                    let bytes = serde_json::to_vec(entry).unwrap_or_default();
+                    unparseable.push((name.to_string(), hex(&Sha256::digest(bytes))));
+                }
+            }
+        }
+    }
+    (parsed, unparseable)
+}
+
+/// A blocked name as held: its SHA-256, so the cap bounds memory whatever
+/// length the backend gives its names (#1441).
+type NameKey = [u8; 32];
+
+fn name_key(name: &str) -> NameKey {
+    Sha256::digest(name.as_bytes()).into()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}
+
 /// Whether [`super::prepare_tool_metadata`] judges the descriptors it is given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Judging {
@@ -146,15 +187,16 @@ pub(crate) struct DescriptorGate {
     /// Withheld tool name -> the slots whose listing withheld it. A name stays
     /// blocked while any slot's latest listing withheld it: another caller's
     /// clean copy of the name clears only that caller's entry.
-    blocked: parking_lot::RwLock<BTreeMap<String, BTreeSet<String>>>,
+    blocked: parking_lot::RwLock<BTreeMap<NameKey, BTreeSet<String>>>,
     /// Keyed (tool, digest, withheld?): one line per distinct descriptor per
     /// process, across slots and routes.
-    logged: parking_lot::Mutex<HashSet<(String, String, bool)>>,
-    /// Set when the blocked-name map hit its cap: from then on a by-name call
-    /// is refused unless the caller's own validated catalogue holds the name,
-    /// so a backend cannot flood its way past the cap (fail closed). Cleared
-    /// only by a restart: no single listing can prove the untracked names are
-    /// gone from every caller's catalogue.
+    /// Keyed by the descriptor digest, which already covers the name.
+    logged: parking_lot::Mutex<HashSet<(String, bool)>>,
+    /// Set when the blocked-name map hit its cap: from then on every by-name
+    /// call is refused and every served list is empty. A name past the cap
+    /// could not be recorded, and another caller's clean copy of it cannot be
+    /// told apart from it, so the backend fails closed (#1441). Cleared only
+    /// by a restart.
     saturated: std::sync::atomic::AtomicBool,
 }
 
@@ -163,7 +205,7 @@ pub(crate) struct DescriptorGate {
 /// Memory bound: a backend that keeps sending fresh descriptions cannot grow
 /// the set past the cap; at the cap it restarts, at the cost of logging a
 /// descriptor again.
-fn first_time(logged: &mut HashSet<(String, String, bool)>, line: (String, String, bool)) -> bool {
+fn first_time(logged: &mut HashSet<(String, bool)>, line: (String, bool)) -> bool {
     if logged.len() >= LOGGED_CAP && !logged.contains(&line) {
         logged.clear();
     }
@@ -176,15 +218,17 @@ impl Backend {
     /// (and, for a complete listing, on what it no longer lists), and log
     /// each distinct descriptor once.
     pub(crate) fn commit_verdicts(&self, source: &str, listing: Listing, verdicts: Verdicts) {
+        // Hashed once here, so every comparison inside the map is by digest.
+        let served: HashSet<NameKey> = verdicts.served.iter().map(|n| name_key(n)).collect();
+        let withheld: HashSet<NameKey> = verdicts.withheld.keys().map(|n| name_key(n)).collect();
         let mut blocked = self.descriptor_gate.blocked.write();
         // What `source` no longer withholds loses `source`'s block: a name it
         // served, and, when the listing is complete, a name it no longer
         // lists at all. A truncated listing clears only what it served, since
         // a name missing from it may sit on a page it never fetched.
-        blocked.retain(|name, sources| {
-            let cleared = !verdicts.unjudged.contains(name)
-                && (verdicts.served.contains(name)
-                    || (listing == Listing::Complete && !verdicts.withheld.contains_key(name)));
+        blocked.retain(|key, sources| {
+            let cleared =
+                served.contains(key) || (listing == Listing::Complete && !withheld.contains(key));
             if cleared {
                 sources.remove(source);
             }
@@ -192,7 +236,7 @@ impl Backend {
         });
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
-            if first_time(&mut logged, (name.clone(), digest.clone(), true)) {
+            if first_time(&mut logged, (digest.clone(), true)) {
                 warn!(
                     backend = %self.name,
                     tool = %name,
@@ -203,7 +247,8 @@ impl Backend {
                     "Tool withheld: its description failed the tool-poisoning check"
                 );
             }
-            if !blocked.contains_key(&name) && blocked.len() >= BLOCKED_NAMES_CAP {
+            let key = name_key(&name);
+            if !blocked.contains_key(&key) && blocked.len() >= BLOCKED_NAMES_CAP {
                 // Past the cap: fail closed for the whole backend rather than
                 // leave this name callable (maintainer decision, #1441).
                 let was = self
@@ -214,13 +259,13 @@ impl Backend {
                     warn!(
                         backend = %self.name,
                         cap = BLOCKED_NAMES_CAP,
-                        "Blocked tool names reached the cap: only tools in a validated \
-                         listing may now be called on this backend"
+                        "Blocked tool names reached the cap: every tool of this backend \
+                         is now withheld and refused until restart"
                     );
                 }
                 continue;
             }
-            let sources = blocked.entry(name).or_default();
+            let sources = blocked.entry(key).or_default();
             if sources.len() >= SOURCES_CAP && !sources.contains(source) {
                 // Held by too many callers to track one by one: the name stays
                 // blocked until restart, since no single listing can clear it.
@@ -231,7 +276,7 @@ impl Backend {
             }
         }
         for (name, digest) in verdicts.allowed {
-            if first_time(&mut logged, (name.clone(), digest.clone(), false)) {
+            if first_time(&mut logged, (digest.clone(), false)) {
                 info!(
                     backend = %self.name,
                     tool = %name,
@@ -246,39 +291,58 @@ impl Backend {
     /// Refusal text when `tool` is blocked on this backend.
     pub(crate) fn blocked_tool_refusal(
         &self,
-        identity_key: Option<&str>,
+        _identity_key: Option<&str>,
         tool: &str,
     ) -> Option<String> {
-        if self.descriptor_gate.blocked.read().contains_key(tool) {
+        if self
+            .descriptor_gate
+            .blocked
+            .read()
+            .contains_key(&name_key(tool))
+        {
             return Some(format!(
                 "tool `{tool}` is withheld: its description failed the tool-poisoning \
                  check (AX-010); the gateway log names the finding"
             ));
         }
-        let saturated = self
-            .descriptor_gate
-            .saturated
-            .load(std::sync::atomic::Ordering::SeqCst);
-        (saturated && self.get_cached_tool_for(identity_key, tool).is_none()).then(|| {
+        self.gate_saturated().then(|| {
             format!(
                 "tool `{tool}` is refused: this backend withheld more tool descriptions \
-                 than the gateway tracks, so only tools in a validated listing may be called"
+                 than the gateway tracks, so none of its tools may be called until restart"
             )
         })
+    }
+
+    /// Whether the blocked-name map overflowed (sticky until restart).
+    fn gate_saturated(&self) -> bool {
+        self.descriptor_gate
+            .saturated
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// `tools` without the names this backend has blocked since they were
     /// cached: a slot filled before another caller's listing blocked a name
     /// must not keep serving it. The same `Arc` when nothing is blocked.
     pub(crate) fn without_blocked(&self, tools: Arc<Vec<Tool>>) -> Arc<Vec<Tool>> {
+        if self.gate_saturated() {
+            return if tools.is_empty() {
+                tools
+            } else {
+                Arc::new(Vec::new())
+            };
+        }
         let blocked = self.descriptor_gate.blocked.read();
-        if blocked.is_empty() || !tools.iter().any(|t| blocked.contains_key(&t.name)) {
+        if blocked.is_empty()
+            || !tools
+                .iter()
+                .any(|t| blocked.contains_key(&name_key(&t.name)))
+        {
             return tools;
         }
         Arc::new(
             tools
                 .iter()
-                .filter(|t| !blocked.contains_key(&t.name))
+                .filter(|t| !blocked.contains_key(&name_key(&t.name)))
                 .cloned()
                 .collect(),
         )
@@ -287,31 +351,36 @@ impl Backend {
     /// Whether every tool in `tools` is blocked, decided from one snapshot of
     /// the blocked set so a concurrent listing cannot change it midway.
     pub(crate) fn all_blocked(&self, tools: &[Tool]) -> bool {
+        if self.gate_saturated() {
+            return true;
+        }
         let blocked = self.descriptor_gate.blocked.read();
-        tools.iter().all(|t| blocked.contains_key(&t.name))
+        tools
+            .iter()
+            .all(|t| blocked.contains_key(&name_key(&t.name)))
     }
 
     /// Whether a served list may carry `tool`.
     pub(crate) fn is_blocked_tool(&self, tool: &str) -> bool {
-        self.descriptor_gate.blocked.read().contains_key(tool)
+        self.gate_saturated()
+            || self
+                .descriptor_gate
+                .blocked
+                .read()
+                .contains_key(&name_key(tool))
     }
 
     /// Bytes held in the gate's keys (test support for the memory bound).
     #[cfg(test)]
     pub(crate) fn descriptor_gate_key_bytes(&self) -> usize {
-        let blocked: usize = self
-            .descriptor_gate
-            .blocked
-            .read()
-            .keys()
-            .map(String::len)
-            .sum();
+        let blocked: usize =
+            self.descriptor_gate.blocked.read().len() * std::mem::size_of::<NameKey>();
         let logged: usize = self
             .descriptor_gate
             .logged
             .lock()
             .iter()
-            .map(|(name, digest, _)| name.len() + digest.len())
+            .map(|(digest, _)| digest.len())
             .sum();
         blocked + logged
     }

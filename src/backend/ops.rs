@@ -266,13 +266,7 @@ impl Backend {
         // Every `tools/call` funnels through here, public library callers
         // included, so a withheld tool is refused at this one chokepoint as
         // well as by the routes' own earlier checks (#1441).
-        if method == "tools/call"
-            && let Some(refusal) = params
-                .as_ref()
-                .and_then(|p| p.get("name"))
-                .and_then(Value::as_str)
-                .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
-        {
+        if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
             return Err(crate::Error::Protocol(refusal));
         }
 
@@ -543,6 +537,12 @@ impl Backend {
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
 
+        // A tool call sent as a notification is refused as a request is: the
+        // backend never receives a withheld tool (#1441).
+        if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
+            return Err(crate::Error::Protocol(refusal));
+        }
+
         // Derive the same slot `request_with_headers` would use for this
         // identity, and gate/record against ITS failsafe (mirrors fix 1).
         let key = self.pool_key_for(identity_key);
@@ -588,6 +588,23 @@ impl Backend {
         self.record_dispatch_latency(latency);
 
         result
+    }
+
+    /// The refusal for a `tools/call` naming a withheld tool, shared by the
+    /// request and notification paths so neither can skip it (#1441).
+    fn blocked_call_refusal(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        identity_key: Option<&str>,
+    ) -> Option<String> {
+        if method != "tools/call" {
+            return None;
+        }
+        params
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
     }
 
     /// Return `true` if this backend is configured for pass-through mode.

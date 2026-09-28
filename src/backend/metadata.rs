@@ -346,7 +346,17 @@ impl Backend {
                 },
                 extra_headers,
                 |result, entry| {
-                    let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
+                    // Entry by entry: one malformed entry must neither fail the
+                    // fill nor hide its siblings from judging; a named one that
+                    // does not parse is withheld (#1441).
+                    let (mut tools, unparseable) =
+                        match result.get("tools").and_then(Value::as_array) {
+                            Some(raw) => super::descriptor_gate::parse_listed(raw),
+                            None => (
+                                serde_json::from_value::<ToolsListResult>(result)?.tools,
+                                Vec::new(),
+                            ),
+                        };
                     // Discovery is where the explicit annotations are still readable,
                     // and it always precedes a `tools/call` (ADR-012 A1). Written
                     // THROUGH THE LEASE THIS FILL ALREADY HOLDS, not through a second
@@ -363,7 +373,9 @@ impl Backend {
                         &mut tools,
                     );
                     *entry.resend_permitted.write() = prepared.resend_permitted;
-                    Ok((tools, Some(prepared.verdicts)))
+                    let mut verdicts = prepared.verdicts;
+                    verdicts.add_unparseable(unparseable);
+                    Ok((tools, Some(verdicts)))
                 },
             )
             .await?;
