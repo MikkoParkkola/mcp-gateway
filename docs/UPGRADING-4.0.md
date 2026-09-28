@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
 load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70 and 74 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 62, 63, 65, 66, 67, 70 and 74 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -89,7 +89,7 @@ upgrading a running deployment.
 | 59 | Reserved: lands with #1364 | None yet |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
-| 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
+| 62 | A bridged input exchange that runs out of rounds returns the backend's last question with a continuation instead of `-32003` | A client that treated `-32003` as final: answer the returned `inputRequests` and resend with the `requestState` it carries, or treat it as unfinished |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
@@ -1665,6 +1665,25 @@ earlier 4.0 binary refuses an authority file with a field it does not know, so i
 custody does not start, and with it the gateway. The file is sealed, so the field cannot be
 removed by hand. It is removed for an account when that account's token next rotates or the
 user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
+
+## 62. A bridged exchange that runs out of rounds can be resumed
+
+The gateway asks a 2025-era (legacy) client a backend's questions in-band and retries the
+backend with the answers, for a bounded number of rounds (three). When a backend was still asking after
+the last round, the call failed with `-32003` ("asked for input and the bridged exchange
+could not be completed"). The backend's progress was lost, and a retry started over.
+
+Now the call returns the backend's **last** interim result: its `inputRequests`, and a
+`requestState` holding a gateway-sealed continuation of that round. Resending `tools/call`
+with the answers in `inputResponses` and that `requestState` resumes the exchange where the
+backend stopped. The continuation is bound to the caller like any other (MRTR.2). The last
+round's questions are held to the client's declared capabilities first, so an undeclared one
+is still refused. The idempotency key is not settled, as before: a backend that stopped to
+ask has not acted.
+
+Action: a client that treated `-32003` from a bridged call as final now gets a result it can
+answer. If it cannot answer, it can treat the result as unfinished, the same as any
+`input_required` result.
 
 ## 63. Error results are never served from a response cache
 
