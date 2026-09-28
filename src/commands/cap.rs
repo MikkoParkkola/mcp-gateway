@@ -283,20 +283,32 @@ async fn cap_discover(
                 .await;
             }
 
+            // In json/yaml mode stdout carries only the document; every other
+            // line goes to stderr so the output parses as one value (#1909).
+            let say = |text: &str| {
+                if structured_output {
+                    eprintln!("{text}");
+                } else {
+                    println!("{text}");
+                }
+            };
             if servers.is_empty() {
-                print_discover_empty();
+                if structured_output {
+                    print_discovered_servers(&servers, &format);
+                }
+                say(DISCOVER_EMPTY);
                 return ExitCode::SUCCESS;
             }
             print_discovered_servers(&servers, &format);
             if write_config {
-                println!("\n📝 Writing discovered servers to config...");
+                say("\n📝 Writing discovered servers to config...");
                 match crate::write_discovered_to_config(&servers, config_path.as_deref()) {
                     Ok(path) => {
-                        println!("✅ Config written to {}", path.display());
-                        println!(
+                        say(&format!("✅ Config written to {}", path.display()));
+                        say(&format!(
                             "\nTo use discovered servers, start gateway with: mcp-gateway -c {}",
                             path.display()
-                        );
+                        ));
                     }
                     Err(e) => {
                         eprintln!("❌ Failed to write config: {e}");
@@ -304,8 +316,8 @@ async fn cap_discover(
                     }
                 }
             } else {
-                println!("\n💡 To add these servers to your gateway config, run:");
-                println!("   mcp-gateway cap discover --write-config");
+                say("\n💡 To add these servers to your gateway config, run:");
+                say("   mcp-gateway cap discover --write-config");
             }
             ExitCode::SUCCESS
         }
@@ -470,16 +482,15 @@ fn print_shadow_report(report: &ShadowScanReport) {
     println!("   mcp-gateway cap discover --shadow --write-config");
 }
 
-fn print_discover_empty() {
-    println!("No MCP servers found.");
-    println!("\nSearched locations:");
-    println!("  • Claude Desktop config");
-    println!("  • VS Code/Cursor MCP configs");
-    println!("  • Windsurf config");
-    println!("  • ~/.config/mcp/*.json");
-    println!("  • Running processes (pieces, surreal, etc.)");
-    println!("  • Environment variables (MCP_SERVER_*_URL)");
-}
+const DISCOVER_EMPTY: &str = "No MCP servers found.
+
+Searched locations:
+  • Claude Desktop config
+  • VS Code/Cursor MCP configs
+  • Windsurf config
+  • ~/.config/mcp/*.json
+  • Running processes (pieces, surreal, etc.)
+  • Environment variables (MCP_SERVER_*_URL)";
 
 fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer], format: &str) {
     match format {
