@@ -479,6 +479,77 @@ def test_open_rows_differs_from_the_blocking_count_it_is_mistaken_for():
     assert len(counter.open_rows(OPEN_LEDGER)) == 2
 
 
+BOARD_OK = "\n".join(
+    [
+        "| # | cluster | rows | design |",
+        "|---|---|---|---|",
+        "| A | envelope (`MRTR.1`, `MRTR.3`) | 2 | yes |",
+    ]
+)
+
+
+def test_a_letter_retired_in_prose_cannot_head_a_new_open_cluster():
+    rollup = ROLLUP + "\n\nCluster A left the table on 2026-09-20.\n"
+    problems = counter.reused_cluster_letters(rollup, BOARD_OK)
+    assert any("cluster A was retired" in p for p in problems), problems
+
+
+def test_a_letter_cleared_in_a_list_cannot_head_a_new_open_cluster():
+    rollup = ROLLUP + "\n\nClusters A, C and N have cleared.\n"
+    problems = counter.reused_cluster_letters(rollup, BOARD_OK)
+    assert any("cluster A was retired" in p for p in problems), problems
+
+
+def test_a_letter_on_two_rows_of_one_table_is_flagged():
+    board = BOARD_OK + "\n| A | a different cluster | 0 | no |"
+    problems = counter.reused_cluster_letters(ROLLUP, board)
+    assert problems == ["readiness board names cluster A on more than one row"], problems
+
+
+def test_every_retirement_phrasing_in_the_rollup_is_recognised():
+    for prose in (
+        "Cluster A is not in the table because it has nothing left to block on.",
+        "Cluster A is gone from the table for the same reason.",
+        "**2026-09-24: A and O have cleared too**",
+        "(letters A and Q were already used by earlier, closed clusters)",
+    ):
+        problems = counter.reused_cluster_letters(ROLLUP + "\n\n" + prose + "\n", BOARD_OK)
+        assert any("cluster A was retired" in p for p in problems), (prose, problems)
+
+
+def test_a_letter_on_two_rows_of_the_rollup_table_is_flagged():
+    row = next(line for line in ROLLUP.splitlines() if line.startswith("| A |"))
+    problems = counter.reused_cluster_letters(ROLLUP + "\n" + row, BOARD_OK)
+    assert "rollup names cluster A on more than one row" in problems, problems
+
+
+def test_a_letter_whose_board_row_tracks_other_criteria_is_flagged():
+    # No prose retires A here: the board row alone keeps the letter's history.
+    board = BOARD_OK.replace("envelope (`MRTR.1`, `MRTR.3`)", "interim rounds (`MRTR.12`)")
+    problems = counter.reused_cluster_letters(ROLLUP, board)
+    assert any("cluster A's readiness board row names none of its criteria" in p for p in problems), problems
+
+
+def test_a_short_id_on_one_side_matches_its_qualified_form_on_the_other():
+    board = BOARD_OK.replace("envelope (`MRTR.1`, `MRTR.3`)", "envelope (`MIK-7212.MRTR.1`)")
+    assert counter.reused_cluster_letters(ROLLUP, board) == []
+
+
+def test_a_board_range_names_every_row_in_it():
+    board = BOARD_OK.replace("envelope (`MRTR.1`, `MRTR.3`)", "envelope (`MRTR.2-3`)")
+    assert counter.reused_cluster_letters(ROLLUP, board) == []
+
+
+def test_unique_letters_with_no_retirement_pass():
+    assert counter.reused_cluster_letters(ROLLUP, BOARD_OK) == []
+
+
+def test_a_retired_letter_kept_at_zero_rows_is_allowed():
+    rollup = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2 |", "`MRTR.1`, `MRTR.3` | 0 |")
+    rollup += "\nCluster A left the table.\n"
+    assert counter.reused_cluster_letters(rollup, BOARD_OK) == []
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted

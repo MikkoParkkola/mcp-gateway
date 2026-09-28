@@ -21,6 +21,8 @@
 //! - `confidence ≥ min_confidence` — expressed as a fraction (0.0–1.0)
 
 use std::path::Path;
+#[cfg(feature = "firewall")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
@@ -58,6 +60,9 @@ pub struct TransitionTracker {
     transitions: DashMap<String, DashMap<String, AtomicU64>>,
     /// `session_id -> last_invoked_tool`
     last_per_session: DashMap<String, Mutex<Option<String>>>,
+    /// Distinct pairs added through [`Self::record_pair`], for its cap.
+    #[cfg(feature = "firewall")]
+    distinct_pairs: AtomicUsize,
 }
 
 impl TransitionTracker {
@@ -67,6 +72,8 @@ impl TransitionTracker {
         Self {
             transitions: DashMap::new(),
             last_per_session: DashMap::new(),
+            #[cfg(feature = "firewall")]
+            distinct_pairs: AtomicUsize::new(0),
         }
     }
 
@@ -97,6 +104,55 @@ impl TransitionTracker {
                 .or_insert_with(|| AtomicU64::new(0))
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Record one `from -> to` transition without touching per-session state.
+    ///
+    /// For a caller that tracks its own predecessor (the firewall's anomaly
+    /// detector keys on the authenticated caller, not a session). Returns
+    /// `false`, recording nothing, when `to` would be a new pair and the
+    /// tracker already holds `max_pairs` distinct pairs; an existing pair is
+    /// always counted. Only the firewall's anomaly detector learns this way.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn record_pair(&self, from: &str, to: &str, max_pairs: usize) -> bool {
+        if let Some(inner) = self.transitions.get(from)
+            && let Some(count) = inner.get(to)
+        {
+            count.fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+        // The cap check and the insert are not atomic, so racing
+        // new pairs can overshoot `max_pairs` by the number of racers.
+        if self.distinct_pairs.load(Ordering::Relaxed) >= max_pairs {
+            return false;
+        }
+        let inner = self.transitions.entry(from.to_string()).or_default();
+        inner
+            .entry(to.to_string())
+            .or_insert_with(|| {
+                self.distinct_pairs.fetch_add(1, Ordering::Relaxed);
+                AtomicU64::new(0)
+            })
+            .fetch_add(1, Ordering::Relaxed);
+        true
+    }
+
+    /// Transitions out of `from_tool`: `(all successors, to_tool only)`.
+    ///
+    /// One pass that reads each counter once, so the pair is a consistent
+    /// snapshot: `to_tool`'s count is part of the total it is divided by,
+    /// even while other callers are recording.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn successor_counts(&self, from_tool: &str, to_tool: &str) -> (u64, u64) {
+        self.transitions
+            .get(from_tool)
+            .map_or((0, 0), |successors| {
+                successors.iter().fold((0, 0), |(total, to), entry| {
+                    let count = entry.value().load(Ordering::Relaxed);
+                    let to = if entry.key() == to_tool { count } else { to };
+                    (total + count, to)
+                })
+            })
     }
 
     /// Predict the most likely next tools after `from_tool`.
@@ -605,5 +661,47 @@ mod tests {
         }
 
         assert_eq!(tracker.total_transitions(), 9);
+    }
+
+    // ── record_pair (#1756) ──────────────────────────────────────────────────
+
+    #[cfg(feature = "firewall")]
+    #[test]
+    fn record_pair_leaves_session_map_empty() {
+        let tracker = TransitionTracker::new();
+        assert!(tracker.record_pair("s:a", "s:b", 10));
+        assert!(
+            tracker.last_per_session.is_empty(),
+            "record_pair must not track sessions"
+        );
+        let predictions = tracker.predict_next("s:a", 0.0, 0);
+        assert_eq!(predictions.len(), 1, "the pair must be learned");
+        assert_eq!(predictions[0].tool, "s:b");
+    }
+
+    #[cfg(feature = "firewall")]
+    #[test]
+    fn pair_cap_drops_counts_and_passes() {
+        let tracker = TransitionTracker::new();
+        assert!(tracker.record_pair("s:a", "s:b", 2));
+        assert!(tracker.record_pair("s:a", "s:c", 2));
+        assert!(
+            !tracker.record_pair("s:a", "s:d", 2),
+            "a third distinct pair exceeds 2"
+        );
+        assert!(
+            tracker.record_pair("s:a", "s:b", 2),
+            "an existing pair is still counted"
+        );
+        let tools: Vec<String> = tracker
+            .predict_next("s:a", 0.0, 0)
+            .into_iter()
+            .map(|p| p.tool)
+            .collect();
+        assert!(
+            !tools.contains(&"s:d".to_string()),
+            "the dropped pair is not stored"
+        );
+        assert_eq!(tracker.total_transitions(), 3);
     }
 }
