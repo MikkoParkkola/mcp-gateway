@@ -2046,3 +2046,6 @@ async fn ac_mrtr_7a_the_backend_request_key_is_neither_scanned_nor_delivered() {
         );
     }
 }
+
+#[path = "mik_7212_mrtr7_bridge/last_round.rs"]
+mod last_round;
