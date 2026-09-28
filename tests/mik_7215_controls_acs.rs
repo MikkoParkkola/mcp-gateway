@@ -42,11 +42,13 @@ fn ac_control_1_scoring_without_a_key_is_unobservable_not_neutral() {
 fn ac_control_1_a_principal_key_restores_observation() {
     // The replacement for the session: the authenticated principal. Same
     // control, a key that still exists after the migration.
+    // A first call is warming up (#1756), which is an observation: the
+    // detector can see this caller and is learning its history.
     let detector = detector();
-    assert!(matches!(
+    assert_ne!(
         detector.observe(Some("principal:abc"), "srv", "tool"),
-        Observation::Scored(_)
-    ));
+        Observation::Unobservable
+    );
 }
 
 #[test]
@@ -59,7 +61,7 @@ fn ac_control_1_transitions_are_tracked_per_principal_not_globally() {
 
     assert_eq!(
         b_first,
-        Observation::Scored(0.5),
+        Observation::WarmingUp,
         "a second caller's first observation has no prior context of its own, \
          whatever the first caller did"
     );
@@ -102,7 +104,7 @@ mod firewall {
         // And the shape that makes the mistake impossible: matching on the
         // enum has no arm that silently falls through, which an `f64` did.
         let acted_on = match Observation::Unobservable {
-            Observation::Scored(_) => false,
+            Observation::Scored(_) | Observation::WarmingUp => false,
             Observation::Unobservable => true,
         };
         assert!(acted_on, "every caller must handle the unobservable arm");

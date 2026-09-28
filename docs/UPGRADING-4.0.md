@@ -1,12 +1,39 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 or 54 refuses it
-(listed in bold below).
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of the
+items listed under the bold heading below refuses it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 55 and 58 below, then stamps the new version. The notice is printed rather than logged, so
+the items below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
+
+- Item 1
+- Item 2
+- Item 3
+- Item 4
+- Item 6
+- Item 11
+- Item 23
+- Item 24
+- Item 25
+- Item 26
+- Item 27
+- Item 30
+- Item 31
+- Item 32
+- Item 33
+- Item 34
+- Item 37
+- Item 39
+- Item 43
+- Item 45
+- Item 47
+- Item 48
+- Item 49
+- Item 55
+- Item 58
+- Item 59
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -14,15 +41,67 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54 and 76 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 83, 84 and 85 print no notice: read them here
-before upgrading.
+that names it. The items below print no notice: read them here before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
-with one warning, and the gateway starts without it.** Read those first if you are
-upgrading a running deployment.
+- Item 14
+- Item 15
+- Item 22
+- Item 28
+- Item 36
+- Item 42
+- Item 50
+- Item 52
+- Item 53
+- Item 61
+- Item 63
+- Item 65
+- Item 66
+- Item 67
+- Item 68
+- Item 70
+- Item 72
+- Item 73
+- Item 74
+- Item 77
+- Item 78
+- Item 80
+- Item 83
+- Item 84
+- Item 85
+- Item 86
+- Item 87
+
+**These items refuse the gateway's start. Read them first if you are upgrading a running
+deployment.**
+
+- Item 2
+- Item 8
+- Item 12
+- Item 13
+- Item 16, only while `trust_caller_identity_headers` is still set
+- Item 17, only for a `key_server` rule without a configured issuer or with a blank matcher
+- Item 27, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
+- Item 29
+- Item 30, only for a bad `GATEWAY_ATTESTATION_MODE`
+- Item 34
+- Item 35
+- Item 37, only above one declared replica
+- Item 38, only for a credential over plain HTTP on a network bind without mTLS
+- Item 39, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+- Item 40, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
+- Item 41, only for an API key configured as plaintext `key`
+- Item 43, only with auth on and no working audit log
+- Item 44, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
+- Item 46, only for `enforce` without a signing key
+- Item 51, only for a `role: admin` rule whose only condition is `domain`
+- Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
+- Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
+
+**Item 7 permanently fails the backend it names, with one warning, and the gateway starts
+without it.**
 
 ## What changed
 
@@ -86,7 +165,7 @@ upgrading a running deployment.
 | 56 | Reserved: lands with a pending change | None yet |
 | 57 | Never assigned | None |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
-| 59 | Reserved: lands with #1364 | None yet |
+| 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
 | 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
@@ -103,16 +182,18 @@ upgrading a running deployment.
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 | 75 | Reserved: lands with a pending change | None yet |
-| 76 | Reserved: lands with a pending change | None yet |
+| 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Reserved: lands with a pending change | None yet |
-| 80 | Reserved: lands with a pending change | None yet |
+| 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
+| 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
+| 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -741,8 +822,9 @@ backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
 
 - **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
   `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
-  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
-  unchecked and counted as `input_schema_unknown`.
+  `tools/list` returned. The first time a caller uses a tool the gateway has not yet listed for
+  it, the gateway lists that backend's tools once, as that caller, before judging the call; §59
+  describes what happens when that list cannot be read.
 - **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
   now honoured, which relaxes 3.x behaviour.
 - An object schema that lists `properties` (at least one) or `patternProperties` without stating
@@ -1611,6 +1693,68 @@ the caller has no credential, so the gateway now treats it as a secret.
   no longer public, and `get_or_create_session(Some(id))` returns `id` only when
   that session is already live.
 
+## 59. A tool call on a cold catalogue lists the backend first
+
+The first time a caller uses a tool the gateway has not yet listed for it, the gateway lists that
+backend's tools once, as that caller, before judging the call (§31). Before this release such a
+call was forwarded unchecked. A call on a catalogue older than the backend's `cache_ttl` refreshes it the
+same way; if that refresh fails, the call is judged against the last list.
+
+- **If the backend cannot be reached** (connection refused, no answer within its `timeout`, or
+  a transport error), the call gets the same error a failed tool call to that backend gets, and
+  under `closed` it counts toward the error budget as a failed call does. Nothing changes for a
+  dead backend except that the first call now fails at the list rather than at the call.
+- **If the backend answers but its tool list cannot be read** (it returns an error or a list the
+  gateway cannot parse), `closed` refuses the call with "the gateway could not read this tool's
+  input schema for you; list the backend's tools and retry". Such a refusal is not counted as a
+  backend failure. `standard` forwards the call in both cases and counts `input_schema_unknown`,
+  so the call itself then succeeds or fails. `off` never lists.
+- **A tool name the backend's fresh, complete list does not contain is now refused under
+  `closed`**, where it used to be forwarded. A backend that serves tools it does not list can no
+  longer have those tools called under `closed`; set that backend's `input_schema_enforcement:
+  standard` to keep serving them (counted as `input_schema_absent_forward`).
+- **When the gateway cannot read a backend's whole tool list** (the list is longer than the
+  32-page cap, repeats a page cursor, or takes longer than the list time budget), a tool outside
+  the part read cannot be checked: `closed` refuses it; set that backend's
+  `input_schema_enforcement: standard` to forward such calls (counted as
+  `input_schema_truncated_forward`). `mcp_backend_list_truncated_total`'s `reason` label says
+  which stop fired.
+- **Shared catalogues.** On a backend whose catalogue is shared (no per-user propagation), a call
+  that carries the caller's own credential never triggers this list, because the shared list runs
+  under the gateway's login and would judge the caller against a catalogue it was never shown.
+  Such a call stays on the "could not read" refusal under `closed` until discovery,
+  `gateway_search` or a credential-free list warms the catalogue.
+- **Latency.** The list is bounded by the backend's `timeout` and the call itself by another, so
+  the first cold call to a slow backend can take up to about twice `timeout` under `standard`,
+  once per backend slot per cooldown window.
+- **Cooldown.** After a failed or timed-out tool list, or one whose result could not be kept
+  because the cache was invalidated meanwhile, the gateway does not ask that backend again for
+  10 s. Inside that window cold tool calls, discovery and `gateway_search` on that backend fail
+  fast instead of each waiting out a fresh list, and each gets the error the failed list got. A
+  list that failed with an HTTP error status or an I/O or TLS error starts no window, so the next
+  call lists again and gets the backend's own error; the circuit breaker bounds those retries. A
+  caller that disconnects mid-list does not start this window.
+- **Circuit breaker and rate limit.** The list obeys the caller's slot failsafe. An open breaker
+  refuses the call with the same circuit-open error a dispatch gets, and a failed or successful
+  list counts toward the breaker as a dispatch does. A cold call spends a token for its metadata
+  fetch, at most once per slot per `cache_ttl` (and at most once per cooldown window after a
+  failed fetch), so a limit of 1 can refuse a cold call as rate-limited. A refusal from the
+  breaker or the limiter is counted as `input_schema_fill_refused` with `reason="circuit"` or
+  `reason="rate"`.
+- **`Mcp-Param-*` headers.** The first call may now carry them, which earlier 4.0 builds sent only
+  after a list.
+- **New `mcp_input_schema_events_total` kinds.** `input_schema_fetched`,
+  `input_schema_fetch_failed`, `input_schema_fill_cancelled`, `input_schema_fill_cooldown`,
+  `input_schema_fill_refused` (with `reason`), `input_schema_refused_unavailable`,
+  `input_schema_refused_truncated`, `input_schema_refused_absent`,
+  `input_schema_truncated_forward`, `input_schema_absent_forward` and
+  `input_schema_fetch_skipped_a3`, beside the existing `input_schema_unknown`. See
+  [DEPLOYMENT.md](DEPLOYMENT.md#prometheus-metrics).
+- No new config key.
+
+The 32 pages and the 10 s above are the values of `LIST_MAX_PAGES` and `LIST_FILL_COOLDOWN` at
+release; a test fails the build if either constant changes without this text.
+
 ## 60. Capability pins read CRLF line endings as LF
 
 A capability's `sha256:` pin used to be computed over the file's raw bytes. A pinned file that
@@ -1891,6 +2035,38 @@ holds whichever saved last.
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
 
+## 76. Anomaly detection now learns, and its blocks stand
+
+`security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
+against a transition record that nothing wrote to, so every call scored a neutral 0.5 and no
+threshold above 0.5 ever flagged or blocked anything. The detector now learns from the calls the
+firewall admits, on both the meta route and the per-backend `/mcp/{name}` route. Each call is
+scored against its caller's own previous call; what counts as usual is learned from all admitted
+calls together.
+
+- A caller's first call, or a call after a tool with fewer than
+  `security.firewall.anomaly_min_observations` recorded transitions (new, default 20), is
+  *warming up*. It is not scored, never flagged and never blocked.
+- A transition never seen after a warmed-up tool scores 1.0, and a seen one scores
+  `1 - confidence`. The old never-seen score was 0.95, below a rarely seen one.
+- A call refused by the firewall is not learned, so retrying a blocked call cannot teach the
+  detector to accept it.
+- A score at or above `anomaly_block_threshold` is refused, and a firewall rule can no longer
+  downgrade that refusal to allow or warn. The refusal carries JSON-RPC error `-32002` on every
+  route; the per-backend `/mcp/{name}` route used to answer `-32600`.
+- With `anomaly_detection: true`, the gateway refuses to start when `anomaly_threshold` is not
+  above 0.5 and at most 1.0, when `anomaly_block_threshold` is not above `anomaly_threshold` and
+  at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
+- The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
+  are off by default.
+- Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
+  transitions, plus any calls already in flight when it reaches 20) any admitted caller's calls
+  shape what counts as usual after it.
+
+**Action:** if you set `anomaly_detection: true`, expect real scores and, with a block threshold,
+real refusals once each tool has 20 recorded transitions. Check that `anomaly_threshold` is above
+0.5, and drop any firewall rule you relied on to soften anomaly blocks.
+
 ## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
 
 Capability calls, OpenAPI import by URL (`mcp-gateway cap import`), capability discovery
@@ -1942,6 +2118,41 @@ account store lives, so this grants no one new access. Several stdio gateways sh
 directory share its accounts.
 
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
+
+## 80. Discovery keeps env, headers and argument boundaries
+
+`mcp-gateway cap discover` and the setup wizard import MCP servers from client config files
+(Claude, Cursor, Windsurf, Codex, Zed). They used to keep only the command line or URL:
+
+- a server's `env` (stdio) and `headers` (HTTP) were dropped, so an imported backend could not
+  start or authenticate;
+- `args` were joined with spaces, so an argument containing a space or a quote changed;
+- Zed's `settings.json`, which allows comments and trailing commas, was skipped when it had any.
+
+In 4.0 all three survive. `cap discover --write-config` writes the `env` and `headers` values
+into the backend it adds; on Unix the config file is written owner-only (item 35). Those values are usually
+credentials, so everywhere else they are shown by key only: discover's JSON and YAML output,
+logs and `Debug` output print `<redacted>` for every value; the table and `--shadow` reports
+do not show them.
+
+A client's `${env:NAME}` is written as the gateway's `${NAME}`. A key whose value uses a variable
+only the client resolves (`${input:…}`, `${workspaceFolder}`, `${userHome}`) is left out, with a
+warning naming the client, server and key, so the written config always loads.
+
+A value that contains `${VAR}` is expanded by the gateway when the config loads, like any backend
+`env` or `headers` value; if `VAR` is not set, the load is refused and the error names the field
+(`backends.<name>.env.<KEY>`).
+
+`setup export --target zed` into a settings file with comments or trailing commas no longer fails
+with a bare parse error: it leaves the file untouched and prints the entry to paste by hand.
+
+For code that uses the library, `mcp_gateway::discovery::DiscoveredServer` gains the fields `env`
+and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is now
+`#[non_exhaustive]`. Build one with `DiscoveredServer::new` and set the fields after.
+
+**Action:** after `cap discover --write-config`, review the written backends: they now carry the
+credentials the client config held. Library users replace struct literals with
+`DiscoveredServer::new`.
 
 ## 83. `MigratedCredential` has a public `reachability` field
 
@@ -2000,6 +2211,35 @@ credential or prompt injection placed in an object key reached the client unchan
 
 **Action:** none for most deployments. If a backend uses credential-shaped strings as
 object keys, expect those keys to be renamed; use other key names.
+
+## 86. `kubernetes controller --watch --format json` prints JSON Lines
+
+A watch runs until it is stopped, so its JSON output is a stream. Each reconcile cycle now
+prints its report as one compact JSON document on its own line (JSON Lines, also called NDJSON).
+Earlier releases printed each report as indented JSON over many lines, so no line parsed on its
+own. Without `--watch`, `--format json` still prints one indented document (#1909).
+
+**Action:** a script reading `--watch --format json` parses each line on its own, for example
+with `jq -c .` or a line-by-line JSON reader.
+
+## 87. `cap import-url` refuses names that resolve to internal addresses
+
+`mcp-gateway cap import-url` refused a private or loopback IP address written in the URL,
+but a host name was resolved when the request was sent and never checked. A name that
+resolved to a loopback, private, link-local or cloud metadata address, in the base URL or
+in a redirect, was fetched.
+
+In 4.0 `cap import-url` checks every address a name resolves to on each connection and
+connects only to those checked addresses, as capability calls and `cap import` of a spec
+by URL already do:
+
+- A base URL whose host resolves to a blocked address fails with
+  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to private/reserved address <ip>`.
+- A redirect to such a name is not followed.
+- Public names are unaffected. Environment proxies stay ignored (item 77).
+
+**Action:** to build capabilities from an internal API, download its spec and run
+`mcp-gateway cap import <file>`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -39,6 +39,7 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
+pub(crate) use secret_ref::is_template_syntax;
 
 // New items (F18), not widened ones: the one mode-checked read for files
 // outside `config`.
@@ -781,7 +782,7 @@ impl Config {
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
-        self.security.transparency_log.validate(self.auth.enabled)?;
+        self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
