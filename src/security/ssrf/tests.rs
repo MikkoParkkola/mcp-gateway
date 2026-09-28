@@ -412,6 +412,7 @@ fn url_errors_name_the_value_without_its_credentials() {
         "/rpc?token=SECRET3#SECRET4",
         "http://u:SECRET5@[bad/path",
         "localhost:8080/mcp?token=SECRET6",
+        "//carol:SECRET7@idp.invalid/token",
     ] {
         let err = validate_url_not_ssrf(raw)
             .expect_err("each shape is refused")
