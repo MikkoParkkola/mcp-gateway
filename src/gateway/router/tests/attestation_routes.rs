@@ -56,7 +56,9 @@ impl Transport for RecordingTransport {
             ]);
         }
         let result = match method {
-            "tools/list" => json!({"tools": []}),
+            // F13: a cold `tools/call` lists the backend before R2 judges it,
+            // so the catalogue holds the tool the rows call.
+            "tools/list" => json!({"tools": [{"name": TOOL, "inputSchema": {"type": "object"}}]}),
             "resources/list" => json!({"resources": []}),
             "prompts/list" => json!({"prompts": []}),
             _ => json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),

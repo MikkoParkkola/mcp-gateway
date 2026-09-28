@@ -33,6 +33,11 @@ the items below, then stamps the new version. The notice is printed rather than 
 - Item 49
 - Item 55
 - Item 58
+- Item 59
+- Item 90
+- Item 91
+- Item 92
+- Item 93
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -165,7 +170,7 @@ without it.**
 | 56 | Reserved: lands with a pending change | None yet |
 | 57 | Never assigned | None |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
-| 59 | Reserved: lands with #1364 | None yet |
+| 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
 | 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
@@ -195,6 +200,11 @@ without it.**
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
 | 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
+| 89 | Reserved: lands with #2195 | None yet |
+| 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
+| 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -231,9 +241,10 @@ the supported set as the gateway's own statement of what it speaks, so an invent
 that list was a false claim. Negotiation itself was never affected: `negotiate_version` matches
 exactly, and no conforming client can request a revision that does not exist.
 
-Nothing is rejected. A client naming `2024-10-07` in `initialize` gets `2025-11-25` back —
+Nothing is rejected at `initialize`. A client naming `2024-10-07` there gets `2025-11-25` back —
 the same fallback any unrecognized version string gets, before and after this release
-(`tests/integration.rs:37`). There is no error and no refused session.
+(`tests/integration.rs:37`). There is no error and no refused session. A request that names
+`2024-10-07` in its `MCP-Protocol-Version` header is refused; see item 90.
 
 `2024-11-05` and every later revision negotiate exactly as before. The startup notice advises
 upgrading a client that speaks only `2024-10-07`; in practice such a client would have been
@@ -823,8 +834,9 @@ backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
 
 - **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
   `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
-  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
-  unchecked and counted as `input_schema_unknown`.
+  `tools/list` returned. The first time a caller uses a tool the gateway has not yet listed for
+  it, the gateway lists that backend's tools once, as that caller, before judging the call; §59
+  describes what happens when that list cannot be read.
 - **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
   now honoured, which relaxes 3.x behaviour.
 - An object schema that lists `properties` (at least one) or `patternProperties` without stating
@@ -1693,6 +1705,68 @@ the caller has no credential, so the gateway now treats it as a secret.
   no longer public, and `get_or_create_session(Some(id))` returns `id` only when
   that session is already live.
 
+## 59. A tool call on a cold catalogue lists the backend first
+
+The first time a caller uses a tool the gateway has not yet listed for it, the gateway lists that
+backend's tools once, as that caller, before judging the call (§31). Before this release such a
+call was forwarded unchecked. A call on a catalogue older than the backend's `cache_ttl` refreshes it the
+same way; if that refresh fails, the call is judged against the last list.
+
+- **If the backend cannot be reached** (connection refused, no answer within its `timeout`, or
+  a transport error), the call gets the same error a failed tool call to that backend gets, and
+  under `closed` it counts toward the error budget as a failed call does. Nothing changes for a
+  dead backend except that the first call now fails at the list rather than at the call.
+- **If the backend answers but its tool list cannot be read** (it returns an error or a list the
+  gateway cannot parse), `closed` refuses the call with "the gateway could not read this tool's
+  input schema for you; list the backend's tools and retry". Such a refusal is not counted as a
+  backend failure. `standard` forwards the call in both cases and counts `input_schema_unknown`,
+  so the call itself then succeeds or fails. `off` never lists.
+- **A tool name the backend's fresh, complete list does not contain is now refused under
+  `closed`**, where it used to be forwarded. A backend that serves tools it does not list can no
+  longer have those tools called under `closed`; set that backend's `input_schema_enforcement:
+  standard` to keep serving them (counted as `input_schema_absent_forward`).
+- **When the gateway cannot read a backend's whole tool list** (the list is longer than the
+  32-page cap, repeats a page cursor, or takes longer than the list time budget), a tool outside
+  the part read cannot be checked: `closed` refuses it; set that backend's
+  `input_schema_enforcement: standard` to forward such calls (counted as
+  `input_schema_truncated_forward`). `mcp_backend_list_truncated_total`'s `reason` label says
+  which stop fired.
+- **Shared catalogues.** On a backend whose catalogue is shared (no per-user propagation), a call
+  that carries the caller's own credential never triggers this list, because the shared list runs
+  under the gateway's login and would judge the caller against a catalogue it was never shown.
+  Such a call stays on the "could not read" refusal under `closed` until discovery,
+  `gateway_search` or a credential-free list warms the catalogue.
+- **Latency.** The list is bounded by the backend's `timeout` and the call itself by another, so
+  the first cold call to a slow backend can take up to about twice `timeout` under `standard`,
+  once per backend slot per cooldown window.
+- **Cooldown.** After a failed or timed-out tool list, or one whose result could not be kept
+  because the cache was invalidated meanwhile, the gateway does not ask that backend again for
+  10 s. Inside that window cold tool calls, discovery and `gateway_search` on that backend fail
+  fast instead of each waiting out a fresh list, and each gets the error the failed list got. A
+  list that failed with an HTTP error status or an I/O or TLS error starts no window, so the next
+  call lists again and gets the backend's own error; the circuit breaker bounds those retries. A
+  caller that disconnects mid-list does not start this window.
+- **Circuit breaker and rate limit.** The list obeys the caller's slot failsafe. An open breaker
+  refuses the call with the same circuit-open error a dispatch gets, and a failed or successful
+  list counts toward the breaker as a dispatch does. A cold call spends a token for its metadata
+  fetch, at most once per slot per `cache_ttl` (and at most once per cooldown window after a
+  failed fetch), so a limit of 1 can refuse a cold call as rate-limited. A refusal from the
+  breaker or the limiter is counted as `input_schema_fill_refused` with `reason="circuit"` or
+  `reason="rate"`.
+- **`Mcp-Param-*` headers.** The first call may now carry them, which earlier 4.0 builds sent only
+  after a list.
+- **New `mcp_input_schema_events_total` kinds.** `input_schema_fetched`,
+  `input_schema_fetch_failed`, `input_schema_fill_cancelled`, `input_schema_fill_cooldown`,
+  `input_schema_fill_refused` (with `reason`), `input_schema_refused_unavailable`,
+  `input_schema_refused_truncated`, `input_schema_refused_absent`,
+  `input_schema_truncated_forward`, `input_schema_absent_forward` and
+  `input_schema_fetch_skipped_a3`, beside the existing `input_schema_unknown`. See
+  [DEPLOYMENT.md](DEPLOYMENT.md#prometheus-metrics).
+- No new config key.
+
+The 32 pages and the 10 s above are the values of `LIST_MAX_PAGES` and `LIST_FILL_COOLDOWN` at
+release; a test fails the build if either constant changes without this text.
+
 ## 60. Capability pins read CRLF line endings as LF
 
 A capability's `sha256:` pin used to be computed over the file's raw bytes. A pinned file that
@@ -2048,8 +2122,9 @@ carries no verified end-user identity".
 In 4.0 a stdio gateway serves its managed accounts to its one caller, the local process that
 started it, whatever the `auth` block says. `auth` configures the HTTP listener only. An HTTP
 gateway is unchanged: it serves the sole-operator account only under the single-user settings
-above. This covers a REST capability bound with `auth.account`; an account bound to an MCP
-backend still needs a verified end-user identity on either transport (#1961).
+above. This covers a REST capability bound with `auth.account` and an MCP backend bound to
+the account when it is called through `gateway_invoke`; the direct `/mcp/{name}` route still
+needs a verified end-user identity.
 
 Anyone who can start the gateway as the same OS user already holds its data directory, where the
 account store lives, so this grants no one new access. Several stdio gateways sharing one data
@@ -2095,8 +2170,9 @@ credentials the client config held. Library users replace struct literals with
 ## 83. `MigratedCredential` has a public `reachability` field
 
 `accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
-when the configuration asserts a single user, in each case through a REST capability bound to
-the account; an MCP backend bound to it still needs a verified end-user identity (#1961). For
+when the configuration asserts a single user, in each case through a REST capability or an MCP
+backend bound to the account; over HTTP the direct `/mcp/{name}` route still needs a verified
+end-user identity. For
 library users, the report type
 `MigratedCredential` gains a public `reachability: String` field and is marked
 `#[non_exhaustive]`.
@@ -2197,6 +2273,64 @@ In 4.0 both listeners stop the same way (#2147):
 **Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
 orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) above
 twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
+
+## 90. A request header naming an unserved protocol version is refused
+
+3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
+4.0.0 reads it. A header that names a revision the gateway does not serve gets HTTP 400 with
+JSON-RPC error `-32022` ("unsupported protocol version"), and `data.supportedVersions` lists the
+stateless revisions it does serve; the list is empty when `server.modern_protocol` is off.
+`2024-10-07` counts as unserved. A request without the header, or with a served revision, is
+answered as before.
+
+**Action:** a client that sends this header must send a revision the gateway serves, or omit it.
+
+## 91. Agent identity rests on proof, not on a label the caller sends
+
+In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
+query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
+any client could name itself onto the allowlist. Only a proven principal satisfies them now: the
+mTLS client-certificate subject (first SAN URI, else CN) or the `sub` of an agent token the
+gateway validated. The unsigned JWT claim is no longer read; the header and query label are kept
+for telemetry and cost attribution.
+
+A label that differs from the proven principal is refused unless
+`security.agent_identity.principal_labels` lists it for that principal. With mTLS, where subjects
+cannot be compared with short labels, `security.agent_identity.incomparable_proof_sources`
+(for example `[mtls]`) accepts and audits the mismatch for that source only.
+
+**Action:** move callers that relied on a label to mTLS or validated agent tokens. To let a label
+satisfy `require_id` and `known_agents` again, set
+`security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
+their source (item 27). Nothing changes with agent identity disabled.
+
+## 92. Six meta-tools leave the default tool list
+
+`gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
+`gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list` unconditionally.
+Each is now listed only when it can answer: a cost registry, a non-empty playbook engine, a
+configured routing profile, and for statistics `meta_mcp.expose_stats_tool: true`. The default
+HTTP list drops from 17 tools to 11, stdio from 16 to 10.
+
+Every meta-tool name still dispatches by name, over HTTP and stdio alike. A caller that invokes one
+it was not shown gets the tool's own answer: some succeed, others return that tool's own error, and
+none answers "no such tool".
+
+**Action:** a client that calls only what `tools/list` shows reaches these six once the feature
+behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gateway_get_stats`.
+
+## 93. The key server refuses a token request that misses the policy
+
+In 3.x, a token request to the key server whose requested backends or tools did not overlap the
+matching policy rule got an empty scope list, and an empty list means "all": the token reached
+every backend and tool. The exchange now answers 403 and issues no token. A request that leaves
+`backends` or `tools` empty is still granted the rule's full scope, as before.
+
+A rule whose own `backends` list is empty is a different case, covered in item 32.
+
+**Action:** a client that requests scopes must request only ones its matching rule allows. A
+requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
+gets 403 `access_denied`, whose message reads as though no policy matched.
 
 ## Upgrading from 3.5.x: a walkthrough
 
