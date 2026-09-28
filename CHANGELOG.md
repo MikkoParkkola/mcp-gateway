@@ -19,8 +19,9 @@ and cached results, notifications and subscriptions stay per caller. SSO `role_m
 rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
 with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
 with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read, an unresolved secret or, with auth
-on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+unrecognised config key, a config file other users can read (Unix only), an unresolved secret
+(except `server.metrics_token`, which warns and keeps `/metrics` closed, and a personal-account `client_secret_ref`, which is read only when a token is requested) or, with auth on, cleartext
+HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
 ### Added
 
@@ -59,6 +60,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 ### Changed
 
 - CI: the container image build and CodeQL scanning run once per merge to the release branch instead of on every pull-request push (image inputs still build on the pull request; pull requests into `main` are unchanged). Maintainer `throwaway/` test runs use a dedicated self-hosted arm64 runner that admits only same-repository branches. Mutation proofs run as one batched workflow per pull request, with a per-mutant RED / SURVIVED / VOID result.
+- **One gateway writes an audit log path.** The transparency log takes a writer lease on
+  `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
+  error naming the path, whatever the auth setting. A restart overlap waits up to
+  10 seconds (not configurable). Appends no longer take a file lock.
+  `audit show` and the SIEM exporter rescan once when the log rotates under them, and I/O errors
+  from the log name the operation and the path. See UPGRADING item 49.
 - A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
   refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
   idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
@@ -114,11 +121,28 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
+  command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
+- **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
+  binaries and image digests handed between jobs expired after a day, so a later re-run
+  published a release with no binaries or failed to find the digests. They now last the
+  repository's 14-day artifact retention, and a CI check keeps every such handoff there.
+- **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
+  row let a release pass while the burnup still listed it as held. A test also pins the
+  approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
+  cannot leave its approval behind.
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
   carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
-  text redacted. The stderr never goes to MCP clients. (#526)
+  text redacted. The stderr never goes to MCP clients. A build without the `firewall` feature has
+  no credential recogniser, so it logs a withheld marker instead of the text. `doctor
+  --start-stdio` caps a whole start at 15 s. (#526, #1568)
 - **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
   about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
   thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
@@ -182,9 +206,11 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 - **The OWASP self-assessment matches the shipped controls.** It had claimed a
   tool-descriptor validator and a grant-collision check that never run on a request, a removed
-  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites only
-  request-path controls, states which are on by default, adds the 4.0 multi-user controls, and
-  reads 3/10 COVERED, 7/10 PARTIAL. CI fails when it cites a path or test that no longer exists.
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites
+  request-path and config-load controls (plus release-time supply-chain controls for ASI04),
+  states which are on by default, adds the 4.0 multi-user controls, uses the 2026 OWASP ASI
+  risk names, and reads 2/10 COVERED, 8/10 PARTIAL.
+  CI fails when it cites a path or test that no longer exists.
   Withholding poisoned tool descriptors is tracked in #1441.
 
 - **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed

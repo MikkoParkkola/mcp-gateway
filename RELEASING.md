@@ -18,7 +18,7 @@ outputs from, another:
 | Workflow | Publishes | Jobs, in order |
 |---|---|---|
 | `release.yml` | GitHub release + binaries, crates.io, npm, Homebrew tap | `security-gate`, `secret-leak-lint`, `release-criteria`, `task-sdk-recovery` → `verify` → `build` → `release` → `publish`, `npm-publish`, `homebrew-update` (in parallel) |
-| `ci.yml` | ghcr.io images (`:VERSION`, `:latest`, `:MAJOR.MINOR`, each also `-full`), MCP Registry listing | the CI suite plus `release-criteria` → `docker-build` (amd64, arm64) → `docker-manifest` → `publish-mcp-registry` |
+| `ci.yml` | ghcr.io images (`:VERSION`, `:latest`, `:MAJOR.MINOR`, each also `-full`), MCP Registry listing | the CI suite plus `release-criteria` and `release-script-tests` → `docker-build` (amd64, arm64) → `docker-manifest` → `publish-mcp-registry` |
 | `docker.yml` | nothing on a tag | builds, scans and smoke-tests the image; its push steps are off on tags |
 
 The VS Code and Cursor install buttons in `README.md` are deeplinks that run
@@ -43,6 +43,9 @@ the same script in their `Extract tag` steps. **Exit 0 from `check_tag_manifest.
 necessary, not sufficient.** It checks that the tag, `Cargo.toml` and `Cargo.lock` agree
 on the version and classifies stable versus prerelease. It says nothing about whether the
 release is ready.
+
+The release tooling's unit tests run in `ci.yml`'s `release-script-tests` job and fail
+every pull request that breaks them. Only the live ledger checks are report-only off a tag.
 
 Readiness is gated by the `release-criteria` job (in both `release.yml` and `ci.yml`), in
 particular `Require completed acceptance in publishing context`, which runs
@@ -228,15 +231,19 @@ this runbook does not edit the ledger.
 3. **Do not move or delete the `v4.0.0` git tag once anything is published.** crates.io
    and npm hold the tag's contents for good, and Homebrew and the MCP Registry point at
    that tag's assets and images. A fix ships forward as `4.0.1`.
-4. **The build artifacts expire after one day.** `release.yml` `build` uploads with
-   `retention-days: 1`. Re-running `release` more than about 24 hours later finds nothing
-   to download. A full re-run (`gh run rerun <run-id>`) is safe only in that situation:
+4. **The build artifacts expire after 14 days.** `release.yml` `build` uploads with
+   `retention-days: 14`, which is the repository's artifact retention setting and the
+   most that takes effect (a larger value is clamped to it). Re-run a failed `release`
+   job within 14 days of the run. After that it finds nothing to download, and a full
+   re-run (`gh run rerun <run-id>`) is safe only in that situation:
    `publish`, `npm-publish` and `homebrew-update` all need `release`, so none of them has
    run yet. `ci.yml` has the same limit: `docker-build` uploads the `image-digests-*`
-   artifacts with `retention-days: 1`. After that, re-running `docker-manifest` alone
+   artifacts with `retention-days: 14`. After that, re-running `docker-manifest` alone
    cannot find the leg digests. Re-running `docker-build` pushes new digests, so the
    index that gets signed and promoted is a new one, not whatever an earlier attempt
-   pushed.
+   pushed. If the repository retention setting changes, change these three
+   `retention-days` values and `HANDOFF_RETENTION_DAYS` in
+   `scripts/release/test_check_tag_manifest.py` with it.
 
 ### Per target
 

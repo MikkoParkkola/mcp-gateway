@@ -75,6 +75,9 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 // D1-f failure policy and degraded state, split out for the file-size ceiling.
 #[path = "transparency_log_degraded.rs"]
 mod degraded;
+#[path = "transparency_log_lease.rs"]
+mod lease;
+pub(crate) use lease::is_lease_held;
 // D6 segment files, rotation and recovery, multi-segment verify.
 #[path = "transparency_log_append.rs"]
 mod append;
@@ -123,6 +126,10 @@ pub struct TransparencyLogConfig {
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: RotationConfig,
 }
+
+/// How long open waits for the writer lease: long enough for a supervisor
+/// restart to let the old process exit. Not configurable in 4.0.
+pub(crate) const DEFAULT_LEASE_WAIT_SECS: u64 = 10;
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
 // #323). A derived `Debug` would print the resolved signing secret verbatim
@@ -184,6 +191,8 @@ struct Inner {
 pub struct TransparencyLogger {
     inner: Mutex<Inner>,
     config: Arc<TransparencyLogConfig>,
+    /// The writer lease on `<path>.lock`, held for the logger's lifetime.
+    lease: crate::fs_lock::ExclusiveFileLock,
     #[cfg(test)]
     fail_next_append: std::sync::atomic::AtomicBool,
     #[cfg(test)]
@@ -253,6 +262,17 @@ impl TransparencyLogger {
     /// Returns an `io::Error` if the parent directory cannot be created, if
     /// the file cannot be opened, or if the last existing line is malformed.
     pub fn open(config: Arc<TransparencyLogConfig>) -> io::Result<Self> {
+        Self::open_with_wait(
+            config,
+            std::time::Duration::from_secs(DEFAULT_LEASE_WAIT_SECS),
+        )
+    }
+
+    /// [`Self::open`] with the lease wait given (tests refuse at once).
+    pub(crate) fn open_with_wait(
+        config: Arc<TransparencyLogConfig>,
+        wait: std::time::Duration,
+    ) -> io::Result<Self> {
         let path = expand_tilde(&config.path);
 
         if let Some(parent) = path.parent()
@@ -264,11 +284,11 @@ impl TransparencyLogger {
         // D6 2.6: take `<path>.lock` (another process may be mid-rotation),
         // list the segments before touching the active path, then choose the
         // seed. Genesis only with no active record and no sealed segment.
-        let recovered = {
-            let guard =
-                crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?;
-            rotation::recover(&path, &config, &guard, rotation::now_secs(0))?
-        };
+        // The writer lease, held until the logger drops: every rotation,
+        // retention and recovery below runs under it, and a second writer of
+        // this path is refused.
+        let lease = lease::acquire(&path, wait)?;
+        let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 file: recovered.file,
@@ -277,6 +297,7 @@ impl TransparencyLogger {
                 seg: recovered.seg,
             }),
             config,
+            lease,
             #[cfg(test)]
             hooks: rotation::TestHooks::default(),
             #[cfg(test)]
@@ -503,8 +524,8 @@ impl TransparencyLogger {
             .inner
             .lock()
             .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
-        // Rotation, the disk-full path and the one `<path>.lock` acquisition
-        // all run under `Inner`, so `record_append` sees only the final result.
+        // Rotation and the disk-full path run under `Inner` (and the lease
+        // held since open), so `record_append` sees only the final result.
         self.append_locked(&mut inner, fields, resync)
     }
 }
@@ -562,6 +583,10 @@ fn bounded_read_to_string(path: &Path, max_bytes: u64) -> io::Result<String> {
 ///
 /// Returns `io::Error` if the file cannot be opened, seeked, or read.
 fn read_last_nonempty_line(path: &Path) -> io::Result<Option<String>> {
+    read_last_nonempty_line_raw(path).map_err(segments::ctx("read", path))
+}
+
+fn read_last_nonempty_line_raw(path: &Path) -> io::Result<Option<String>> {
     let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
     if file_len == 0 {
@@ -724,6 +749,15 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 #[cfg(test)]
 #[path = "transparency_log_bounded_tests.rs"]
 mod bounded_tests;
+#[cfg(test)]
+#[path = "transparency_log_errors_tests.rs"]
+mod errors_tests;
+#[cfg(test)]
+#[path = "transparency_log_lease_tests.rs"]
+mod lease_tests;
+#[cfg(test)]
+#[path = "transparency_log_reader_tests.rs"]
+mod reader_tests;
 #[cfg(test)]
 #[path = "transparency_log_recovery_tests.rs"]
 mod recovery_tests;

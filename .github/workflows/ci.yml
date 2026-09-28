@@ -28,6 +28,13 @@ on:
         type: boolean
         default: false
 
+# A new push to a pull request cancels that PR's superseded run. Every other
+# event (branch push, tag, dispatch) gets a group of its own run id, so it is
+# never cancelled, and never queued behind or replaced by another run.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -521,6 +528,31 @@ jobs:
       - name: Validate public claim consistency
         run: cargo test --test public_claims_validation
 
+  # The release tooling's own unit tests read nothing live, so they fail every
+  # ref. Left in the report-only job below, a broken publish-gate test merged
+  # green and was first seen on a tag.
+  release-script-tests:
+    name: Release tooling unit tests
+    runs-on: ubuntu-latest
+    # Below runs-on: the wiring mutation harness anchors on name + runs-on.
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the counter (fail on parser regression)
+        run: python3 scripts/release/test_count_release_criteria.py
+      - name: Test supplemental acceptance checks
+        run: python3 scripts/release/test_scope_acceptance.py
+      - name: Test the tag/manifest publish gate
+        run: python3 scripts/release/test_check_tag_manifest.py
+      - name: Test the NFR.DEMO.1 recording gate
+        run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
+      # Proves the workflow-wiring assertions still discriminate: each case
+      # breaks one rule, or restates it in an equivalent spelling, and the
+      # suite has to return the stated verdict. Runs against a copy of the
+      # workflows, so nothing here edits this file.
+      - name: Test that the workflow-wiring assertions catch their mutations
+        run: python3 scripts/release/test_workflow_wiring_mutations.py
+
   release-criteria:
     name: Release criteria ledger (report-only off a tag, blocking on one)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
@@ -530,27 +562,14 @@ jobs:
     # tag this job blocks, and the container publish below depends on it —
     # release.yml's copy cannot, because a workflow cannot gate another
     # workflow's jobs. Same script everywhere: scripts/release/count-release-criteria.py.
+    # Only live ledger and evidence checks belong here; unit tests go above.
     continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test the counter (fail on parser regression)
-        run: python3 scripts/release/test_count_release_criteria.py
       - name: Check the release-criteria ledger header against its rows
         run: python3 scripts/release/count-release-criteria.py --check
-      - name: Test supplemental acceptance checks
-        run: python3 scripts/release/test_scope_acceptance.py
-      - name: Test the tag/manifest publish gate
-        run: python3 scripts/release/test_check_tag_manifest.py
-      - name: Test the NFR.DEMO.1 recording gate
-        run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
       - name: Check the NFR.DEMO.1 recording manifest against its transcripts
         run: python3 scripts/release/check_nfr_demo_1_recordings.py
-      # Proves the workflow-wiring assertions still discriminate: each case
-      # breaks one rule, or restates it in an equivalent spelling, and the
-      # suite has to return the stated verdict. Runs against a copy of the
-      # workflows, so nothing here edits this file.
-      - name: Test that the workflow-wiring assertions catch their mutations
-        run: python3 scripts/release/test_workflow_wiring_mutations.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
@@ -717,7 +736,7 @@ jobs:
     # previously this job's needs: covered clippy/test/fmt/audit but not the
     # security jobs, so a red secrets-scan or leak-lint would not have
     # blocked ghcr.io publish.
-    needs: [check, test, task-sdk-recovery, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria]
+    needs: [check, test, task-sdk-recovery, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria, release-script-tests]
     permissions:
       contents: read
       packages: write
@@ -860,7 +879,10 @@ jobs:
         with:
           name: image-digests-${{ matrix.arch }}
           path: digests/
-          retention-days: 1
+          # Read by docker-manifest. Kept for the repository's 14-day retention
+          # cap so a failed manifest job can be retried without rebuilding the
+          # legs (RELEASING.md rule 4).
+          retention-days: 14
           if-no-files-found: error
 
   docker-manifest:

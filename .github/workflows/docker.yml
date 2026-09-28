@@ -9,6 +9,13 @@ on:
   pull_request:
     branches: [main, docs/ranking-1-release-line]
 
+# A new push to a pull request cancels that PR's superseded run. Every other
+# event (branch push, tag) gets a group of its own run id, so it is never
+# cancelled, and never queued behind or replaced by another run.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -365,7 +372,10 @@ jobs:
         with:
           name: image-digest-${{ matrix.arch }}
           path: digests/${{ matrix.arch }}
-          retention-days: 1
+          # Read by the manifest job. Kept for the repository's 14-day retention
+          # cap so a failed manifest job can be retried without rebuilding the
+          # legs (RELEASING.md rule 4).
+          retention-days: 14
           if-no-files-found: error
 
   # Branch protection requires a status check literally named `build`, which the
