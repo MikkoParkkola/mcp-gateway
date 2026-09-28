@@ -20,6 +20,8 @@ mod order2_fsm;
 #[path = "empty_session_gate_tests.rs"]
 mod empty_session_gate;
 
+#[path = "context_integrity_evidence_tests.rs"]
+mod context_integrity_evidence;
 #[path = "session_fp_tests.rs"]
 mod session_fp;
 
