@@ -160,7 +160,7 @@ impl Backend {
         // a name missing from it may sit on a page it never fetched.
         blocked.retain(|name, sources| {
             let cleared = verdicts.served.contains(name)
-                || (listing == Listing::Complete && !verdicts.withheld.contains_key(name));
+                || (listing == Listing::Complete && false && !verdicts.withheld.contains_key(name));
             if cleared {
                 sources.remove(source);
             }
