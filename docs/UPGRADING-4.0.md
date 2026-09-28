@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 72, 73, 74, 78 and 83 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 72, 73, 74, 77, 78 and 83 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -104,7 +104,7 @@ upgrading a running deployment.
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 | 75 | Reserved: lands with a pending change | None yet |
 | 76 | Reserved: lands with a pending change | None yet |
-| 77 | Reserved: lands with a pending change | None yet |
+| 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Reserved: lands with a pending change | None yet |
 | 80 | Reserved: lands with a pending change | None yet |
@@ -1864,6 +1864,39 @@ holds whichever saved last.
 
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
+
+Capability calls, OpenAPI import by URL (`mcp-gateway cap import`), capability discovery
+(`mcp-gateway cap discover`) and the web UI's import followed `HTTP_PROXY`, `HTTPS_PROXY`
+and `ALL_PROXY` from the environment. A proxied request is resolved by the proxy, not the
+gateway, so it skipped the gateway's SSRF check on resolved addresses: with a proxy set, a
+capability could reach loopback, private networks or a cloud metadata endpoint through it.
+
+In 4.0 these clients ignore the proxy environment variables and connect directly;
+capability calls and imports check every resolved address. To proxy capability calls, name
+the proxy in config:
+
+```yaml
+capabilities:
+  egress_proxy: "http://proxy.internal:3128"
+```
+
+- Every capability call then goes to that proxy, and the proxy resolves destination names.
+  Private-range enforcement for names becomes the proxy's job; IP-literal destinations are
+  still refused. A plain `http://` destination sends its URL and headers, credentials
+  included, to the proxy.
+- The value must be an `http://` or `https://` URL with a host; anything else fails the
+  config load. It applies at restart. Startup logs a warning naming the proxy (without
+  credentials).
+- Imports and discovery have no proxy setting and always connect directly. So do one-shot
+  capability calls from the CLI (`mcp-gateway cap test`, `mcp-gateway tool invoke`); the key
+  applies to the gateway's own capability calls.
+- Unchanged: backend connections still follow the environment proxy.
+
+**Action:** if capability calls must leave through a proxy, set `capabilities.egress_proxy`.
+Imports that could only reach their spec through a proxy must be fetched another way, for
+example downloaded and imported from a file.
 
 ## 78. A stdio gateway serves its local operator's personal accounts
 
