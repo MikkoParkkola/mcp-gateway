@@ -343,21 +343,27 @@ fn s9_load(
     Err("s9: the load ran".to_owned())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn s9_shutdown_stops_a_reload_queued_on_the_lock() {
     let stop = tokio_util::sync::CancellationToken::new();
     let registry = Arc::new(BackendRegistry::new());
-    let ctx = Arc::new(
-        context_on(Arc::clone(&registry))
-            .with_load(s9_load)
-            .with_stop(stop.clone()),
-    );
+    let ctx = context_on(Arc::clone(&registry))
+        .with_load(s9_load)
+        .with_stop(stop.clone());
     // Held by the test until the end: only the stop token can free the reload.
     let _held = registry.lock_reload().await;
-    let task = tokio::spawn(async move { ctx.reload_outcome().await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut reload = Box::pin(ctx.reload_outcome());
+    // One poll takes it through the (empty) grants step to the lock wait.
+    assert!(
+        futures::poll!(&mut reload).is_pending(),
+        "the reload did not queue"
+    );
     stop.cancel();
-    stopped(task).await;
+    let refused = tokio::time::timeout(DEADLINE, reload)
+        .await
+        .expect("the reload ignored the stop token")
+        .expect_err("a stopped reload refuses");
+    assert!(refused.contains(STOPPING), "{refused}");
     assert_eq!(S9_ENTRIES.load(Ordering::SeqCst), 0, "the load ran");
 }
 
@@ -389,15 +395,12 @@ async fn s10_a_reload_after_shutdown_reads_nothing() {
         .with_load(s10_load)
         .with_identity_grant_sink(grants)
         .with_stop(stop);
-    let refused = tokio::time::timeout(DEADLINE, ctx.reload_outcome())
-        .await
-        .expect("a reload after shutdown finished")
+    // Finished on its first poll: the grants step reads its file through
+    // `spawn_blocking`, so a reload that started it would still be pending.
+    let refused = futures::FutureExt::now_or_never(ctx.reload_outcome())
+        .expect("a reload after shutdown started reading the grants file")
         .expect_err("a reload after shutdown refuses");
     assert!(refused.contains(STOPPING), "{refused}");
-    assert!(
-        !refused.contains("identity grants"),
-        "grants read: {refused}"
-    );
     assert_eq!(S10_ENTRIES.load(Ordering::SeqCst), 0, "the load ran");
 }
 
@@ -424,18 +427,28 @@ async fn s11_shutdown_stops_a_reload_waiting_on_the_read_slot() {
     })
     .await;
     first.abort();
-    drop(tokio::time::timeout(Duration::from_secs(1), first).await);
+    let aborted = tokio::time::timeout(DEADLINE, first)
+        .await
+        .expect("the abandoned reload ended");
+    assert!(aborted.is_err_and(|e| e.is_cancelled()), "not cancelled");
 
+    // The reload lock is free now; the stalled thread still holds the slot.
     let stop = tokio_util::sync::CancellationToken::new();
-    let ctx = Arc::new(
-        context_on(registry)
-            .with_load(s11_load)
-            .with_stop(stop.clone()),
+    let ctx = context_on(registry)
+        .with_load(s11_load)
+        .with_stop(stop.clone());
+    let mut reload = Box::pin(ctx.reload_outcome());
+    // One poll takes it through the grants step and the lock to the slot wait.
+    assert!(
+        futures::poll!(&mut reload).is_pending(),
+        "the reload did not queue"
     );
-    let task = tokio::spawn(async move { ctx.reload_outcome().await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
     stop.cancel();
-    stopped(task).await;
+    let refused = tokio::time::timeout(DEADLINE, reload)
+        .await
+        .expect("the reload ignored the stop token")
+        .expect_err("a stopped reload refuses");
+    assert!(refused.contains(STOPPING), "{refused}");
     assert_eq!(
         S11_ENTRIES.load(Ordering::SeqCst),
         1,
