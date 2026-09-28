@@ -2076,8 +2076,9 @@ async fn mik_1990_a_malformed_input_required_round_is_not_a_completed_call() {
         )
         .await;
 
+        assert_eq!(backend.calls().len(), 1, "one retry reached the backend");
         assert!(
-            outcome.is_err(),
+            matches!(outcome, Err(BridgeError::MalformedInterim)),
             "a body that claims input_required and cannot be carried must fail the \
              exchange, not return as the terminal result: {malformed} -> {outcome:?}"
         );
