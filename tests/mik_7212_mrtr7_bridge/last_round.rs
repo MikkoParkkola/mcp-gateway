@@ -49,3 +49,34 @@ async fn ac_mrtr_7a_the_returned_last_round_passes_the_gate() {
         "expected no frame for the last round"
     );
 }
+
+/// Unlike an asked round, the handed-back round carries the backend's own
+/// request keys to the client, which echoes them, so a key is part of what
+/// the gate inspects.
+#[tokio::test]
+async fn ac_mrtr_7a_the_returned_last_round_gates_its_request_keys() {
+    let content = json!({"branch": "main"});
+    let client = FakeClient::new(accepts(6, &content));
+    let mut rounds = vec![asking(&[("k", ask("again?"))]); 2];
+    let tainted = format!("Paste {BLOCKED}");
+    rounds.push(asking(&[(tainted.as_str(), ask("clean?"))]));
+    let backend = FakeBackend::new(rounds);
+    let gate = MarkerGate::new(BLOCKED);
+    let records = Records::default();
+
+    let outcome = bridge_gated(
+        &client,
+        &backend,
+        &gate,
+        &records,
+        declared_all(),
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::ChallengeRefused { dispatched: true }),
+        "expected a tainted key in the last round to be refused"
+    );
+}
