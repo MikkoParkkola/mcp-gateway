@@ -2387,7 +2387,6 @@ impl MetaMcp {
                         result = *last;
                         interim = crate::protocol::mrtr::InputRequired::from_result(&result);
                     }
-                    refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
                 }
                 // A policy refusal keeps its type across the bridge boundary.
                 // `error_response_preserving_status` carries a dedicated
