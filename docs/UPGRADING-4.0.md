@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 72 and 74 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 72, 73 and 74 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -100,7 +100,7 @@ upgrading a running deployment.
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Reserved: lands with a pending change | None yet |
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
-| 73 | Reserved: lands with a pending change | None yet |
+| 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 
 
@@ -1808,6 +1808,35 @@ In 4.0:
 
 **Action:** none required. A broken or refused `config.yaml` now stays in retry until it is
 fixed or reverted, so fix it rather than waiting for the next file event.
+
+## 73. Task calls to surfaced tools are confirmed unless known to be harmless
+
+The confirmation gate for a task-augmented `tools/call` to a surfaced tool read the tool's
+`destructiveHint` from the shared tool list. On a backend with `identity_propagation`, calls
+run on the caller's own session, whose tool list the shared one does not describe; an empty or
+different shared list let a destructive task call run without confirmation.
+
+In 4.0:
+
+- On a backend with `identity_propagation`, every modern task-augmented call to a surfaced tool
+  from a caller with a verified identity is confirmed. The prompt says the tool could not be
+  classified rather than calling it destructive. A caller with no verified identity runs on the
+  shared tool list, so it is classified from that list like any other backend.
+- On other backends, a surfaced tool missing from the shared tool list (an upstream that refuses
+  an anonymous `tools/list`, or before warm-start finishes) is confirmed the same way, with a
+  warning in the log naming the server and tool.
+- A client without the `elicitation` capability gets JSON-RPC -32021 for these calls. The
+  confirmation runs before attestation, so under attestation enforce an unattested call to
+  such a tool gets -32021 (or the confirmation prompt) rather than the attestation refusal
+  -32002.
+- Calls without `task`, legacy-revision calls and non-surfaced tools are unchanged.
+- A confirmation is bound to the caller's verified identity. A caller with none (authentication
+  off) cannot be confirmed, so its task call to a destructive or unclassified surfaced tool is
+  refused with JSON-RPC -32003 whatever it declares; it can call without `task`, or authenticate.
+- A confirmation already granted is honoured even if the tool list changes before the answer.
+
+**Action:** clients that make task calls to surfaced tools on these backends should declare
+`elicitation` and answer the prompt, or call without `task`.
 
 ## 74. A stdio gateway writes `costs.json`
 
