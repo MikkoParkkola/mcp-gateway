@@ -126,7 +126,6 @@ impl TransparencyLogger {
                 && s.in_flight == Some(generation)
             {
                 s.in_flight = None;
-                s.stalled = false;
             }
             drop(permit);
             result
