@@ -1758,6 +1758,32 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
 
+## 69. Per-backend routes run the same dispatch controls as `gateway_invoke`
+
+`POST /mcp/{name}` `tools/call` skipped controls that `gateway_invoke` enforces: the kill
+switch, capability auto-disable, the session's routing profile, cost budgets, the error budget,
+response gates, and a response-firewall Block. A caller could reach a killed backend, spend past
+its budget, or receive a result `gateway_invoke` would have refused.
+
+In 4.0, both routes run one implementation of each control:
+
+- A killed backend, a disabled capability, a tool outside the session's profile, or a key over
+  its cost budget is refused on `POST /mcp/{name}` with the JSON-RPC error `gateway_invoke`
+  returns (HTTP 200). Nothing reaches the backend.
+- Direct calls record spend and count toward the error budget, so they can auto-kill a backend.
+- Response contract, inspection and context-integrity settings apply to direct results.
+- A result the response firewall blocks is refused with -32600 "Response blocked by security
+  firewall", as on `gateway_invoke`; a retry with the same idempotency key replays that refusal.
+- With message signing on, `tools/call` on `POST /mcp/{name}` is refused with -32001
+  "message signing is enabled; use gateway_invoke".
+- The kill switch and capability auto-disable are now checked at admission: task creation,
+  admission plans and signing preparation refuse a killed backend or disabled capability up
+  front (-32000) instead of at dispatch.
+
+**Action:** a client that called backends directly under message signing must move to
+`gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
+`gateway_invoke` calls are.
+
 ## 70. Secrets stay out of the request URI and its trace
 
 The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
