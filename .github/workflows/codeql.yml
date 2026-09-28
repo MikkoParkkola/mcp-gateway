@@ -1,0 +1,49 @@
+name: CodeQL
+
+# Code scanning runs once per merge, not on every pull-request push: each
+# language is a job, and the Rust analysis alone holds a runner for most of an
+# hour. Findings land as code-scanning alerts on the branch after merge.
+#
+# This file replaces the repository's default CodeQL setup, which scanned every
+# pull request and could not be limited to pushes. Default setup must be turned
+# off for this workflow's uploads to be accepted; the two cannot upload at once.
+#
+# `schedule:` fires only from the default branch's copy of this file.
+on:
+  push:
+    branches: [main, docs/ranking-1-release-line]
+    tags: ["v*"]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # The languages default setup scanned (its javascript and typescript
+        # entries are the one javascript-typescript extractor).
+        language: [actions, javascript-typescript, python, ruby, rust]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - name: Analyze
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}

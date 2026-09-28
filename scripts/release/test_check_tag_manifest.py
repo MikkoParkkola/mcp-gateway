@@ -1620,9 +1620,19 @@ class WorkflowWiring(unittest.TestCase):
             conditions.extend(line.split(":", 1)[1].strip() for line in guard)
         conditions.append(job_if("docker.yml", "manifest"))
         for condition in conditions:
+            # Either spelling excludes a tag: the old `!startsWith(... 'refs/tags/v')`,
+            # or the current pin to main alone (a release-line push builds the
+            # image but must publish nothing, so the sites name main exactly).
             self.assertRegex(
                 condition,
-                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)"
+                r"|github\.ref\s*==\s*'refs/heads/main'",
+                f"docker.yml pushes on a tag again: {condition}",
+            )
+            # A main pin OR-ed with a tag test would still match the pin above.
+            self.assertNotRegex(
+                condition,
+                r"(?<!!)\bstartsWith\(\s*github\.ref\s*,\s*'refs/tags/",
                 f"docker.yml pushes on a tag again: {condition}",
             )
         self.assertEqual(
