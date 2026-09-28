@@ -2229,7 +2229,17 @@ class WorkflowWiring(unittest.TestCase):
         # request does not pay for a second test run.
         body = jobs("ci.yml").get("package-tests")
         self.assertIsNotNone(body, "ci.yml has no package-tests job")
-        self.assertNotRegex(body, r"(?m)^ {4}(if|continue-on-error):", "package-tests must run and block on every ref")
+        self.assertNotRegex(body, r"(?m)^ {4}continue-on-error:", "package-tests must block")
+        # The one condition allowed is the throwaway skip every other ci.yml job
+        # carries: a same-repo `throwaway/` PR is never merged and runs only
+        # `Tests (throwaway)`. Anything else would let some ref merge unbuilt.
+        conditions = re.findall(r"(?m)^ {4}if:\s*(.*)$", body)
+        throwaway_only = (
+            "${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' "
+            "&& github.event.pull_request.head.repo.full_name == github.repository "
+            "&& startsWith(github.head_ref, 'throwaway/')) }}"
+        )
+        self.assertIn(conditions, ([], [throwaway_only]), "package-tests must run on every ref but throwaway PRs")
         built = [c for b in steps("ci.yml", "package-tests") for c in joined(b)]
         self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+build\b", c) for c in built), built)
         self.assertIn("package-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
