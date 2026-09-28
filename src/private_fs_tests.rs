@@ -431,3 +431,34 @@ fn wt6_symlink_record_refuses() {
         "WT-ASSERT W-T6"
     );
 }
+
+// W-T27: a store path past MAX_PATH works through each Win32 call, as it does
+// through `std::fs`. Each call runs on its own std-made fixture, so a failure
+// names every call that refused.
+#[test]
+fn wt27_long_path_reaches_every_win32_call() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().join("d".repeat(150)).join("e".repeat(150));
+    std::fs::create_dir_all(&base).expect("WT-FIXTURE W-T27: std creates long parents");
+    std::fs::write(base.join("staged.json"), b"{}").expect("WT-FIXTURE W-T27: std writes");
+    let moved = base.join("moved.json");
+    let failed: Vec<String> = [
+        (
+            "CreateDirectoryW",
+            create_dir_private(&base.join("store")).err(),
+        ),
+        (
+            "CreateFileW",
+            create_file_private(&base.join("record.json"), Share::Exclusive).err(),
+        ),
+        (
+            "MoveFileExW",
+            replace(base.join("staged.json"), &moved).err(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(call, error)| error.map(|e| format!("{call}: {e}")))
+    .collect();
+    assert!(failed.is_empty(), "WT-ASSERT W-T27: {failed:?}");
+    assert_eq!(std::fs::read(&moved).unwrap(), b"{}", "WT-ASSERT W-T27");
+}
