@@ -70,7 +70,7 @@ pub(crate) struct ChainLink {
     pub(crate) out: Option<String>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) prev: Option<String>,
-    #[serde(deserialize_with = "Option::deserialize")]
+    #[serde(default)]
     pub(crate) nonce: Option<String>,
     pub(crate) ts: u64,
     pub(crate) sig: String,
