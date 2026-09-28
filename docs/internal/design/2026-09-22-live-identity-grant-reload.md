@@ -528,8 +528,9 @@ governance event by that definition, so it belongs there and not in the invocati
 
 **The hole, stated rather than papered over.** **V** `build_control_plane_store` returns
 `None` — disabling the governance routes, which then answer 503 — **when auth is disabled**,
-and also *"if the data directory or the audit log cannot be opened; never fatal to startup"*
-(`src/gateway/server/control_plane_store.rs:76-81` for auth off, `:104` for an unopenable default directory). **I** Therefore *"a grant reload is audited"* is **false on an
+and also when the default store directory cannot be opened, which only warns; an explicitly configured
+directory that cannot be opened, or a writer lease held by another gateway, refuses startup
+(`src/gateway/server/control_plane_store.rs:76-81` for auth off, `:98-109` for the open failures). **I** Therefore *"a grant reload is audited"* is **false on an
 auth-disabled gateway** and false when the data dir is unavailable. In those configurations
 the only record is the tracing event.
 
