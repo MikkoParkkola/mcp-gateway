@@ -18,6 +18,9 @@ use crate::identity_grants::journal::{
     JournalEntry, JournalVerb, grant_digest, parse_journal, served_rows,
 };
 
+/// The only state file format this build reads and writes.
+pub(super) const STATE_VERSION: u32 = 1;
+
 /// The state file (design 5.1).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct State {
@@ -44,7 +47,7 @@ impl State {
     /// A state with no baseline for `grants`.
     pub(super) fn fresh(grants: &Path) -> Self {
         Self {
-            v: 1,
+            v: STATE_VERSION,
             grants_path: grants.display().to_string(),
             ..Self::default()
         }
@@ -56,7 +59,20 @@ impl State {
     /// lost pending plan would append its records a second time.
     pub(super) fn load(path: &Path, grants: &Path) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+            Ok(text) => {
+                let state: Self =
+                    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+                // A later format may mean something else: refuse, never guess.
+                let pending_v = state.pending.as_ref().map_or(STATE_VERSION, |p| p.next.v);
+                if state.v != STATE_VERSION || pending_v != STATE_VERSION {
+                    return Err(format!(
+                        "{}: grant audit state version {}/{pending_v} is not supported (expected {STATE_VERSION})",
+                        path.display(),
+                        state.v
+                    ));
+                }
+                Ok(state)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::fresh(grants)),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }
