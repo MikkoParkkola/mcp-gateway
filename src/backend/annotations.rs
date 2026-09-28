@@ -168,6 +168,7 @@ pub(crate) fn prepare_tool_metadata(
 ) -> PreparedTools {
     // First, so a poisoned tool that also breaks a header rule is still
     // recorded as withheld and refused by name (#1441).
+    exclude_invalid_header_tools(server, tools);
     let verdicts = match judging {
         super::descriptor_gate::Judging::Judge => super::descriptor_gate::judge(tools, pins),
         super::descriptor_gate::Judging::AlreadyJudged => {
