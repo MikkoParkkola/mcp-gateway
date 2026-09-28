@@ -967,15 +967,17 @@ order.
    throwaway rep costs ~17% at six arms and removes any carry-over from the
    previous cycle's tail; whether that carry-over exists is untested.
 4. **An arm at first-parent index 38 (`37ddab1e`, the last 3.5.1 commit) — this
-   answers question 3 at achievable `n`.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈220 (Finding 3's formula) and is out of
+   can answer question 3 at achievable `n` if the rise is one persistent step.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈220 (Finding 3's formula) and is out of
    reach. But **locating a step does not require resolving small differences**:
    the idx27→69 rise is 8.42pp as a difference of pooled `X/A` medians (`P3/A` − `B/A`),
    or +10.96% as the pooled paired per-cycle ratio `P3/B` = 1.1096; the two are
    different aggregations of the same segment, and both clear the noise floor. `4.0.0`
    opens at **index 39 (`0f04a179`), inside that window**, and that commit changes
    code itself, so the arm goes at index 38: it splits the window exactly at the
-   version boundary — a step in idx27→38 predates 4.0.0, a step in idx38→69
-   belongs to it. That is question 3, answered rather than retired.
+   version boundary — a single step in idx27→38 predates 4.0.0, a single step in
+   idx38→69 belongs to it. If the rise is instead several smaller changes on both sides
+   (say ~4pp each), both halves fall below the 6.13% floor and the arm does not answer
+   question 3; the follow-up must then be sized to resolve each half (Finding 3).
 
    A seventh arm was expensive under rotation because it forced `n` to a
    multiple of 7. **Randomisation removes that constraint** — slot balance then
