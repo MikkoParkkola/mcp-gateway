@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 810c4174d..791ea42f2 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2372,7 +2372,8 @@ impl MetaMcp {
+                         method: &method,
+                         reason,
+                     };
+-                    return Err(undeclared_gate::refusal(&refused, server, tool, trace_id));
++                    let _ = refused;
++                    return Err(Error::json_rpc(-32003, "undeclared"));
+                 }
+                 // A policy refusal keeps its type across the bridge boundary.
+                 // `error_response_preserving_status` carries a dedicated

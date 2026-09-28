@@ -1,0 +1,17 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 7119ed5ed..b2ba72e47 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -539,9 +539,10 @@ impl InputBridge<'_> {
+                     reason: refused.reason,
+                 });
+             }
+-            Self::plan(&interim, declared, slice)?;
++            let prompts = Self::plan(&interim, declared, slice)?;
++            let _ = body;
+             self.gate
+-                .admit(&Self::handed_back(body))
++                .admit(&Self::challenge(&prompts))
+                 .map_err(|error| match error {
+                     BridgeError::ChallengeRefused { .. } => {
+                         BridgeError::ChallengeRefused { dispatched }

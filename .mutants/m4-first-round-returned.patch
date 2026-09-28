@@ -1,0 +1,16 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 810c4174d..9ff4b26d6 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2357,10 +2357,7 @@ impl MetaMcp {
+                 // to MRTR.9 already, refusing it as `Undeclared` below; the key
+                 // keeps its release default, since a backend that asked has not acted.
+                 Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
+-                    if let Some(last) = last {
+-                        result = *last;
+-                        interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+-                    }
++                    drop(last);
+                 }
+                 Err(crate::gateway::input_bridge::BridgeError::Undeclared {
+                     key,
