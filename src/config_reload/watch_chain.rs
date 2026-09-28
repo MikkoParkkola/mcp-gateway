@@ -244,6 +244,7 @@ pub(super) fn spawn_rewatch_task(
         // Env files are polled by content, never watched (#1286): a watch
         // goes stale when a link in the path is retargeted.
         let mut env_poll = tokio::time::interval(env_poll_every);
+        let mut last_sent: Option<String> = None;
         env_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
@@ -258,7 +259,11 @@ pub(super) fn spawn_rewatch_task(
                     // No memo: a file that differs is re-triggered every tick
                     // until a reload succeeds; the debounce coalesces them.
                     if let Some(trigger) = poller.tick(env_poll_every).await {
-                        let _ = reload.try_send(trigger);
+                        let key = format!("{trigger:?}");
+                        if last_sent.as_ref() != Some(&key) {
+                            let _ = reload.try_send(trigger);
+                            last_sent = Some(key);
+                        }
                     }
                     // After a stalled read the interval is ready again at once
                     // and select picks at random, so shutdown is checked here:
