@@ -33,12 +33,16 @@ SKIPPED = {
 # Every job that runs tests stays on docs-only PRs: tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
-    "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "orphan-test-modules", "public-claims", "release-script-tests",
+    "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "orphan-test-modules",
+    # Compiles every test target from the packaged crate: a test that reads a
+    # repository file (docs included) the package leaves out only fails here.
+    "package-tests", "public-claims", "release-script-tests",
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes",
 }
 # Never run on an ordinary pull request (tag, dispatch or throwaway only).
-NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry"}
+NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
+              "packaged-suite-rehearsal"}  # dispatch-only
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 
