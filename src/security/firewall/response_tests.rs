@@ -705,3 +705,46 @@ fn firewall_response_modern_input_required_protects_state_and_questions() {
         FirewallAction::Allow,
     );
 }
+
+/// #2114: a credential only in an `inputRequests` map key (the key the client
+/// echoes) refuses the result; the same key in a plain result is renamed.
+#[test]
+fn firewall_response_credential_in_object_key() {
+    for (mutation, allowed) in [
+        (ResponseMutationPolicy::PreserveInputRequired, false),
+        (ResponseMutationPolicy::Redact, true),
+    ] {
+        let (firewall, _dir, path) = response_fixture(FirewallConfig {
+            rules: vec![response_rule("inspect_me", FirewallAction::Allow)],
+            ..FirewallConfig::default()
+        });
+        let mut response = json!({
+            "resultType":"input_required", "inputRequests":{ CANARY: {"method":"elicitation/create"} },
+            "requestState":"opaque-synthetic-state"
+        });
+        let original = response.clone();
+        let verdict = firewall
+            .check_response_artifact(
+                &mut response,
+                &[target("backend-a", "inspect_me")],
+                &correlation(),
+                ResponseArtifactKind::FinalResponse,
+                mutation,
+            )
+            .expect("nonempty server-bound targets");
+        assert_eq!(verdict.allowed, allowed, "{mutation:?}");
+        let expected = if allowed {
+            json!({
+                "resultType":"input_required",
+                "inputRequests":{ "[REDACTED:credential]": {"method":"elicitation/create"} },
+                "requestState":"opaque-synthetic-state"
+            })
+        } else {
+            original
+        };
+        assert_eq!(response, expected, "{mutation:?}");
+        let events = audit_entries(&path);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["findings"][0]["scan_type"], "credentials");
+    }
+}
