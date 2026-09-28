@@ -18,6 +18,9 @@ concurrency:
 jobs:
   fragment:
     name: Changelog fragment present
+    # Skipped for a `throwaway/` branch of this repository: red-first and
+    # mutant PRs never merge, so they need no entry. A fork is never skipped.
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
