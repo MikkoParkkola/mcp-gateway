@@ -66,9 +66,11 @@ impl Backend {
         // between the caller observing emptiness and acting on it, which would
         // turn a backend that had just become discoverable back into an
         // invisible one. The check happens under the cache's own write lock.
+        // "Empty" is what callers are served: a list whose every tool has
+        // since been blocked reads as empty, so it is discarded too (#1441).
         self.tools_slot(None)
             .tools_cache
-            .invalidate_if(Vec::is_empty);
+            .invalidate_if(|tools| tools.iter().all(|t| self.is_blocked_tool(&t.name)));
     }
 
     /// Number of tools cached on `binding`'s slot (non-blocking, no network I/O).

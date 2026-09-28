@@ -293,3 +293,22 @@ async fn t9_a_superseded_fill_cannot_clear_a_newer_withholding() {
         "an empty fill applied the superseded fill's verdicts"
     );
 }
+
+/// X9: a shared catalogue whose every tool has since been blocked reads as
+/// empty, so the warm-up's empty-list retry can discard it and ask again.
+#[tokio::test]
+async fn x9_a_catalogue_emptied_by_blocks_can_be_invalidated() {
+    let (backend, _) = backend(BackendConfig::default(), vec![]);
+    let _ = backend.remember_listed_tools(None, false, &[tool(POISONED, "Reads a file.")]);
+    // A caller's own credentialed page is not stored, but it blocks the name.
+    let _ = backend.remember_listed_tools(Some("u"), true, &[tool(POISONED, PAYLOAD)]);
+    assert!(
+        backend.get_cached_tools_snapshot().is_empty(),
+        "control: served as empty"
+    );
+    backend.invalidate_tools_cache();
+    assert!(
+        !backend.has_cached_tools(),
+        "a catalogue emptied by blocks was kept"
+    );
+}
