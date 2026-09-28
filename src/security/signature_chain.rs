@@ -171,6 +171,7 @@ fn canonical_link(link: &ChainLink, with_sig: bool) -> Vec<u8> {
     let mut value = serde_json::to_value(link).unwrap_or(Value::Null);
     if !with_sig && let Some(members) = value.as_object_mut() {
         members.remove("sig");
+        members.remove("domain");
     }
     // A link holds only strings, small integers and nulls, so JCS cannot fail.
     serde_json_canonicalizer::to_vec(&value).unwrap_or_default()
