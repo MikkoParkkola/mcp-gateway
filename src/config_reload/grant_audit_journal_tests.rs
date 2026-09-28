@@ -287,3 +287,33 @@ fn a_switched_path_survives_removing_the_old_spelling() {
         "consumed ids were dropped once the old spelling was removed"
     );
 }
+
+/// A state file of a later format version is refused, not read with this
+/// build's meaning: the reload or start fails closed.
+#[test]
+fn a_later_state_version_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let grants = dir.path().join("grants.yaml");
+    let path = dir.path().join("state.json");
+    let mut state = super::grant_audit_plan::State::fresh(&grants);
+    state.v += 1;
+    state.save(&path).unwrap();
+
+    let loaded = super::grant_audit_plan::State::load(&path, &grants);
+
+    assert!(loaded.is_err(), "a v{} state file was accepted", state.v);
+
+    // The pending plan carries the next state: its version is checked too.
+    let mut next = super::grant_audit_plan::State::fresh(&grants);
+    next.v += 1;
+    let mut state = super::grant_audit_plan::State::fresh(&grants);
+    state.pending = Some(super::grant_audit_plan::Pending {
+        records: Vec::new(),
+        next: Box::new(next),
+    });
+    state.save(&path).unwrap();
+
+    let loaded = super::grant_audit_plan::State::load(&path, &grants);
+
+    assert!(loaded.is_err(), "a later-version pending plan was accepted");
+}
