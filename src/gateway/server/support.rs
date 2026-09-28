@@ -152,7 +152,7 @@ pub(super) fn log_startup_banner(
 /// Start the HTTPS (mTLS) server using `axum-server`.
 ///
 /// Builds a `rustls::ServerConfig` from `mtls_config`, wraps it in
-/// `axum-server`'s `RustlsConfig`, and runs until the `shutdown_fut` resolves.
+/// `axum-server`'s `RustlsConfig`, and runs until `handle` shuts it down.
 /// Takes an ALREADY BOUND listener rather than an address.
 ///
 /// It used to bind its own, while the caller had bound the same address for the
@@ -166,7 +166,7 @@ pub(super) async fn serve_tls(
     listener: std::net::TcpListener,
     addr: SocketAddr,
     mtls_config: &crate::mtls::MtlsConfig,
-    shutdown_fut: impl std::future::Future<Output = ()> + Send + 'static,
+    handle: axum_server::Handle<SocketAddr>,
 ) -> crate::Result<()> {
     use crate::mtls::cert_manager::build_tls_config;
 
@@ -178,15 +178,6 @@ pub(super) async fn serve_tls(
         require_client_cert = mtls_config.require_client_cert,
         "mTLS listener starting"
     );
-
-    let handle = axum_server::Handle::new();
-    let handle_for_shutdown = handle.clone();
-
-    // Bridge our broadcast-based shutdown signal to the axum-server handle
-    tokio::spawn(async move {
-        shutdown_fut.await;
-        handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
-    });
 
     let acceptor = PeerCertIdentityAcceptor::new(RustlsAcceptor::new(rustls_config));
 
