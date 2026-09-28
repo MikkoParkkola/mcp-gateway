@@ -188,6 +188,7 @@ fn an_anomaly_block_logs_the_session_by_fingerprint() {
             anomaly_detection: true,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: Some(0.9),
+            anomaly_min_observations: 1,
             ..FirewallConfig::default()
         },
         Some(tracker),
