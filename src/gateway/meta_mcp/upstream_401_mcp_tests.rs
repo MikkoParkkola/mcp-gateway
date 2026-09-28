@@ -286,8 +286,9 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
         &installed,
         &slots(&[("alice", WORK)]),
     );
+    let keys = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
     meta.enable_idempotency(
-        std::sync::Arc::new(crate::idempotency::IdempotencyCache::new()),
+        std::sync::Arc::clone(&keys),
         std::time::Duration::from_secs(300),
     );
     let backend = meta
@@ -332,6 +333,9 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
         1,
         "no call after the refused list"
     );
+    // Released, not settled: the retry below fails at credential minting
+    // before any key lookup, so the cache itself is the witness (M32).
+    assert_eq!(keys.len(), 0, "the refused round settled its key");
 
     let again = Box::pin(execute_bridged_keyed(
         &meta,

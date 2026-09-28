@@ -675,10 +675,8 @@ async fn f13_t9_cold_caller_fetches_its_own_catalogue_with_its_own_token() {
     }
 }
 
-/// F13-T12: the caller's breaker is open, cold, `closed`: the call fails with
-/// zero `tools/list` and `input_schema_fill_refused{reason="circuit"}` is
-/// counted. Red on base: the dispatch returns `CircuitOpen` already, but the
-/// fill-origin label does not exist.
+/// F13-T12: open breaker, cold, `closed`: fails with no list and counts
+/// `input_schema_fill_refused{reason="circuit"}` (a label base lacks).
 #[cfg(feature = "metrics")]
 #[test]
 fn f13_t12_open_breaker_refuses_the_fill_and_counts_it() {
@@ -687,10 +685,14 @@ fn f13_t12_open_breaker_refuses_the_fill_and_counts_it() {
         fx.backend.trip_circuit_breaker_for_test();
         let (status, body) =
             call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-        (status, body, fx.rec)
+        let refused = fx.rec.lists();
+        // A refusal stamps no cooldown (M11b): once the breaker closes, a call lists.
+        fx.backend.reset_circuit_breaker();
+        let _ = call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
+        (status, body, (refused, fx.rec.lists(), fx.rec.calls()))
     });
     assert!(failed(status, &body), "{body}");
-    assert_eq!((rec.lists(), rec.calls()), (0, 0));
+    assert_eq!(rec, (0, 1, 0), "lists at refusal, after reset; calls");
     assert!(
         counted(&rendered, &["input_schema_fill_refused", "circuit"]),
         "the fill-origin refusal was not counted: {rendered}"
@@ -705,10 +707,8 @@ fn breaker(threshold: u32) -> FailsafeConfig {
     failsafe
 }
 
-/// F13-T12b: rate limit of one token, cold, `closed`, a valid call: the fill
-/// spends the token and sends one `tools/list`; the dispatch is refused as
-/// rate-limited. Red on base: no list, and the dispatch spends the token and
-/// succeeds.
+/// F13-T12b: one token, cold, `closed`, a valid call: the fill spends it on one
+/// list and the dispatch is rate-limited (base: no list, the dispatch runs).
 #[tokio::test]
 async fn f13_t12b_one_token_is_spent_by_the_fill() {
     let mut failsafe = FailsafeConfig::default();

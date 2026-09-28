@@ -683,6 +683,8 @@ fn f13_t10_absence_from_a_truncated_list_is_its_own_outcome() {
                 if mode == InputSchemaEnforcement::Closed {
                     assert_eq!(out, Some(text_partial()), "{row}");
                     assert!(!text_partial().contains("input_schema_enforcement"));
+                    let cap = format!("{}-page cap", crate::backend::LIST_MAX_PAGES);
+                    assert!(text_partial().contains(&cap), "{row}: names another cap");
                     let refused = kind(&rendered, "input_schema_refused_truncated");
                     assert_eq!(refused, 1, "{row}: {rendered}");
                 } else {
