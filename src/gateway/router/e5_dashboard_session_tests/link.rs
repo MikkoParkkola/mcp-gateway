@@ -275,3 +275,102 @@ async fn a_stale_http_link_is_refused_before_it_is_spent() {
         out.body
     );
 }
+
+/// The session handle a redemption set.
+fn session_handle(out: &Reply) -> String {
+    out.set_cookie()
+        .split(';')
+        .next()
+        .and_then(|c| c.strip_prefix(&format!("{SESSION_COOKIE}=")))
+        .expect("a session cookie")
+        .to_string()
+}
+
+/// A link minted with an admin key that expires opens a session that ends
+/// when the key does, not a full absolute limit later.
+#[tokio::test]
+async fn a_link_minted_by_an_expiring_key_ends_with_the_key() {
+    let mut admin = api_key(ADMIN_KEY, true);
+    admin.expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some(BEARER.to_string()),
+        api_keys: vec![admin],
+        public_paths: vec!["/health".to_string()],
+        ..AuthConfig::default()
+    };
+    let (state, _dir) = test_router_app_state_with_auth_and_key_server(&auth, None).await;
+    let minted = mint(&state, Some(ADMIN_KEY), None).await;
+    assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+    let value = bootstrap_value(minted.json()["link"].as_str().unwrap_or_default());
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    let handle = session_handle(&out);
+    let limits = limits(&state);
+    let now = Now::read();
+    let at = |secs| Now {
+        mono: now.mono + Duration::from_secs(secs),
+        wall: now.wall + Duration::from_secs(secs),
+    };
+    // Kept active, so only the key's expiry can end it.
+    for secs in [1700, 3400] {
+        assert_eq!(
+            state
+                .dashboard_bootstrap
+                .check_session(&handle, at(secs), &limits, Touch::Yes),
+            SessionCheck::Valid
+        );
+    }
+    assert_eq!(
+        state
+            .dashboard_bootstrap
+            .check_session(&handle, at(3700), &limits, Touch::No),
+        SessionCheck::Expired,
+        "the key expired at one hour"
+    );
+}
+
+/// On `server.port: 0` the minted link names the port the listener bound.
+#[tokio::test]
+async fn a_minted_link_names_the_bound_port() {
+    let (state, _dir) = fixture().await;
+    state.dashboard_bootstrap.set_bound_port(43_210);
+    let out = mint(&state, Some(ADMIN_KEY), None).await;
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    let link = out.json()["link"].as_str().unwrap_or_default().to_string();
+    assert!(link.contains(":43210/dashboard?bootstrap="), "{link}");
+}
+
+/// An explicit admin credential decides the request even when the browser
+/// also sends a live session cookie; the cookie alone still may not mint.
+#[tokio::test]
+async fn an_admin_credential_beside_a_live_session_cookie_may_mint() {
+    let (state, _dir) = fixture().await;
+    let session = issue(&state);
+    let out = mint(&state, Some(ADMIN_KEY), Some(&session)).await;
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    let refused = mint(&state, None, Some(&session)).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+}
+
+/// A presented `Authorization` header decides alone: a wrong bearer is 401
+/// even beside a live session cookie, never a fallback to the cookie.
+#[tokio::test]
+async fn a_wrong_bearer_beside_a_live_session_cookie_is_refused() {
+    let (state, _dir) = fixture().await;
+    let session = issue(&state);
+    let out = send(
+        &state,
+        request(
+            "GET",
+            STATUS,
+            Some(&session),
+            Some("not-a-credential"),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    let cookie_only = send(&state, get(STATUS, Some(&session))).await;
+    assert_eq!(cookie_only.status, StatusCode::OK, "{}", cookie_only.body);
+}

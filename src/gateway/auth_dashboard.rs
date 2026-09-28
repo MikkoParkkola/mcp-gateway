@@ -171,6 +171,40 @@ impl DashboardBootstrap {
         fresh
     }
 
+    /// A session that also ends at `not_after`, when a cap is given.
+    #[allow(dead_code, reason = "red-first stub")]
+    pub(crate) fn issue_session_until(
+        &self,
+        now: Now,
+        limits: &SessionLimits,
+        _not_after: Option<SystemTime>,
+    ) -> String {
+        self.issue_session_at(now, limits)
+    }
+
+    /// Like [`Self::rearm`], with a wall-clock cap for the session it opens.
+    #[cfg(any(test, feature = "webui"))]
+    #[allow(dead_code, reason = "red-first stub")]
+    pub(crate) fn rearm_until(&self, _not_after: Option<SystemTime>) -> String {
+        self.rearm()
+    }
+
+    /// Consume the value if it matches, returning the cap it was minted with.
+    #[allow(dead_code, reason = "red-first stub")]
+    pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Option<SystemTime>> {
+        self.consume(candidate).then_some(None)
+    }
+
+    /// Record the port the listener actually bound.
+    #[allow(dead_code, reason = "red-first stub")]
+    pub(crate) fn set_bound_port(&self, _port: u16) {}
+
+    /// The port the listener actually bound, once known.
+    #[allow(dead_code, reason = "red-first stub")]
+    pub(crate) fn bound_port(&self) -> Option<u16> {
+        None
+    }
+
     /// Test seam: move both clocks of `handle` back by `by`, the same as `by`
     /// passing with no activity.
     #[cfg(test)]
