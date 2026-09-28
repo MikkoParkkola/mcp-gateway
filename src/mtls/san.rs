@@ -16,7 +16,7 @@ use crate::{Error, Result};
 pub(super) fn leaf_sans(san_dns: &[String], san_uris: &[String]) -> Result<Vec<SanType>> {
     let mut sans = Vec::with_capacity(san_dns.len() + san_uris.len());
     for entry in san_dns {
-        let entry = entry.trim();
+        let entry = entry.as_str();
         if let Some(ip) = ip_literal(entry) {
             sans.push(SanType::IpAddress(ip));
             continue;
