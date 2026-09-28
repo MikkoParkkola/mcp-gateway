@@ -13,7 +13,7 @@
 //!
 //! No case may reach the backend: there is no grant to dispatch with.
 
-use super::{Bind, Descriptors, WORK, custody_with, execute_as, gateway_in};
+use super::{Bind, Descriptors, WORK, custody_with, execute_as, external_cfg, gateway_in};
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::STDIO_CREDENTIAL_PRINCIPAL;
 use crate::gateway::server::account_bindings::ServeMode;
@@ -69,7 +69,7 @@ async fn refusal(
     (error, dispatches.count())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stdio_operator_is_served_the_account_on_an_mcp_backend() {
     let (error, dispatched) = refusal(
         ServeMode::Stdio,
@@ -84,7 +84,7 @@ async fn stdio_operator_is_served_the_account_on_an_mcp_backend() {
     assert_eq!(dispatched, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn single_user_http_operator_is_served_the_account_on_an_mcp_backend() {
     let (error, dispatched) = refusal(
         ServeMode::Http,
@@ -101,7 +101,7 @@ async fn single_user_http_operator_is_served_the_account_on_an_mcp_backend() {
 
 /// The guard that must not regress: two keys are two people, whatever
 /// `single_user` claims, so neither is served the stored grants.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn multi_key_http_caller_without_identity_is_still_refused() {
     let (error, dispatched) = refusal(
         ServeMode::Http,
@@ -124,7 +124,7 @@ async fn multi_key_http_caller_without_identity_is_still_refused() {
 }
 
 /// A sole-operator deployment still refuses a caller it never authenticated.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn anonymous_caller_on_a_sole_operator_deployment_is_refused() {
     let (error, dispatched) = refusal(ServeMode::Stdio, auth(false, Vec::new(), false), None).await;
     assert!(
@@ -132,4 +132,27 @@ async fn anonymous_caller_on_a_sole_operator_deployment_is_refused() {
         "an unauthenticated caller must never be the sole operator: {error}"
     );
     assert_eq!(dispatched, 0);
+}
+
+/// Only a managed account consults the sole-operator assertion: a backend
+/// minting through another strategy still needs a verified identity, even for
+/// the operator.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn operator_without_identity_is_refused_on_a_non_account_backend() {
+    let custody = custody_with(&[]);
+    let (meta, dispatches) = gateway_in(
+        &[(BACKEND, Bind::Propagation(external_cfg()))],
+        &Descriptors::same(&[WORK]),
+        &custody.installed(),
+        &[],
+        ServeMode::Stdio,
+        auth(false, Vec::new(), false),
+    );
+    let error = Box::pin(execute_as(&meta, BACKEND, Some(STDIO_CREDENTIAL_PRINCIPAL)))
+        .await
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| panic!("a propagation backend must refuse a caller with no identity"));
+    assert!(error.contains(NO_IDENTITY), "{error}");
+    assert_eq!(dispatches.count(), 0);
 }
