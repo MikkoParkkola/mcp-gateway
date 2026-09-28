@@ -94,16 +94,21 @@ impl Backend {
         let verdicts = prepared.verdicts;
         let withheld = verdicts.withheld_names();
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
-            // Not stored, but observed: a blocked name is per backend.
-            self.commit_verdicts(verdicts);
+            // Not stored, but observed: a blocked name is per backend. Keyed
+            // by the caller, whose own catalogue this page is.
+            self.commit_verdicts(identity_key.unwrap_or("credentialed"), verdicts);
             return withheld;
         }
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
         // A store, not a fill: it must not depend on the slot reading as
         // stale, nor queue behind a discovery fill already on the wire.
+        let source = match &key {
+            PoolKey::PerUser { binding } => binding.clone(),
+            PoolKey::Shared => String::new(),
+        };
         entry.tools_cache.replace(parsed, || {
-            self.commit_verdicts(verdicts);
+            self.commit_verdicts(&source, verdicts);
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);

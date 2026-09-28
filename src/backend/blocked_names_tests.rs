@@ -207,3 +207,22 @@ async fn x3_a_name_blocked_later_leaves_every_cached_catalogue() {
         "a name list still offers a blocked name"
     );
 }
+
+/// X4: a clean copy of the name on another caller's slot does not clear the
+/// block a poisoned copy put on it; the poisoned caller stays refused.
+#[tokio::test]
+async fn x4_another_callers_clean_copy_does_not_unblock_a_name() {
+    let backend = per_user_backend_serving(PAYLOAD, "Reads a file.");
+    backend
+        .get_tools_for_binding(Some("a"), &[])
+        .await
+        .expect("caller a lists the poisoned copy");
+    backend
+        .get_tools_for_binding(Some("b"), &[])
+        .await
+        .expect("caller b lists a clean copy");
+    assert!(
+        refused(&backend, "a", POISONED),
+        "a clean copy elsewhere unblocked the poisoned caller"
+    );
+}

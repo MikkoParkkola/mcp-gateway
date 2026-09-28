@@ -280,7 +280,7 @@ impl Backend {
                         flag(&entry).store(truncated, Ordering::SeqCst);
                     }
                     if let Some(verdicts) = verdicts {
-                        self.commit_verdicts(verdicts);
+                        self.commit_verdicts(identity_key.unwrap_or(""), verdicts);
                     }
                 },
             )

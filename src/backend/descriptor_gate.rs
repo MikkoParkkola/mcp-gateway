@@ -114,20 +114,28 @@ pub(crate) enum Judging {
 /// A backend's withheld tools and the log lines already written for them.
 #[derive(Debug, Default)]
 pub(crate) struct DescriptorGate {
-    /// Withheld tool name -> descriptor digest.
-    blocked: parking_lot::RwLock<BTreeMap<String, String>>,
+    /// Withheld tool name -> the slots whose listing withheld it. A name stays
+    /// blocked while any slot's latest listing withheld it: another caller's
+    /// clean copy of the name clears only that caller's entry.
+    blocked: parking_lot::RwLock<BTreeMap<String, BTreeSet<String>>>,
     /// Keyed (tool, digest, withheld?): one line per distinct descriptor per
     /// process, across slots and routes.
     logged: parking_lot::Mutex<HashSet<(String, String, bool)>>,
 }
 
 impl Backend {
-    /// Apply an accepted listing's verdicts: block what it withheld, unblock
-    /// what it served, and log each distinct descriptor once.
-    pub(crate) fn commit_verdicts(&self, verdicts: Verdicts) {
+    /// Apply an accepted listing from `source` (the slot it was listed on):
+    /// block what it withheld, clear `source`'s own block on what it served,
+    /// and log each distinct descriptor once.
+    pub(crate) fn commit_verdicts(&self, source: &str, verdicts: Verdicts) {
         let mut blocked = self.descriptor_gate.blocked.write();
         for name in &verdicts.served {
-            blocked.remove(name);
+            if let Some(sources) = blocked.get_mut(name) {
+                sources.remove(source);
+                if sources.is_empty() {
+                    blocked.remove(name);
+                }
+            }
         }
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
@@ -142,7 +150,7 @@ impl Backend {
                     "Tool withheld: its description failed the tool-poisoning check"
                 );
             }
-            blocked.insert(name, digest);
+            blocked.entry(name).or_default().insert(source.to_string());
         }
         for (name, digest) in verdicts.allowed {
             if logged.insert((name.clone(), digest.clone(), false)) {
