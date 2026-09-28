@@ -1801,6 +1801,9 @@ In 4.0:
   such a tool gets -32021 (or the confirmation prompt) rather than the attestation refusal
   -32002.
 - Calls without `task`, legacy-revision calls and non-surfaced tools are unchanged.
+- A confirmation is bound to the caller's verified identity. A caller with none (authentication
+  off) cannot be confirmed, so its task call to a destructive or unclassified surfaced tool is
+  refused with JSON-RPC -32003 whatever it declares; it can call without `task`, or authenticate.
 - A confirmation already granted is honoured even if the tool list changes before the answer.
 
 **Action:** clients that make task calls to surfaced tools on these backends should declare
