@@ -181,9 +181,13 @@ async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, Identity
         };
         Ok((verb, grant_id))
     });
-    let grant = journal::apply_change(&path, true, change)
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut grant_file = match read_identity_grants_file(&path).await {
+        Ok(file) => file,
+        Err(_) => IdentityGrantFile::new(Vec::new()),
+    };
+    let (_, grant_id) = change(&mut grant_file)?;
+    mcp_gateway::identity_grants::write_identity_grants_file(&path, &grant_file).await?;
+    let grant = grant_file.grants.into_iter().find(|g| g.grant_id == grant_id).unwrap();
     Ok((path, grant))
 }
 
