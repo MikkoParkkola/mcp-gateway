@@ -784,3 +784,7 @@ mod ws_tests;
 #[cfg(test)]
 #[path = "config_scanner_zed_tests.rs"]
 mod zed_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_vscode_tests.rs"]
+mod vscode_tests;
