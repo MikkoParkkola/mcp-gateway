@@ -41,8 +41,7 @@ pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
 pub(crate) use secret_ref::is_template_syntax;
 
-// New items (F18), not widened ones: the one mode-checked read for files
-// outside `config`.
+// New items (F18): the one mode-checked read for files outside `config`.
 pub(crate) use secret_file::{CheckedFile, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
@@ -763,7 +762,6 @@ impl Config {
         log_once::warn_port_zero(self.server.port, &log_once::PORT_ZERO_WARNED);
         // First, so no other reader touches a plaintext key (E4).
         self.auth.validate_api_key_material(overlay)?;
-        self.auth.dashboard_session.validate()?;
         // The router caps every body at this (C8), so 0 would refuse all of them.
         if self.server.max_body_size == 0 {
             return Err(Error::ConfigValidation(
