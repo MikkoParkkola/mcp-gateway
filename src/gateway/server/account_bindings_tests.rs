@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `rt-i3` T3 — table tests on [`super::sole_operator_asserted`].
-//!
-//! RED: every `ServeMode::Stdio` row asserts a value the RED body cannot
-//! produce yet (both modes still share one expression), so each one fails
-//! with a row-naming message until stdio gets its own predicate.
+//! Table tests on [`super::sole_operator_asserted`]: stdio always serves its
+//! local operator; HTTP only when every single-user term holds, each HTTP
+//! exclusion varied on its own from an otherwise eligible configuration.
 
 use super::{ServeMode, sole_operator_asserted};
 use crate::config::{ApiKeyConfig, AuthConfig, Config, KeyServerConfig, KeyServerProviderConfig};

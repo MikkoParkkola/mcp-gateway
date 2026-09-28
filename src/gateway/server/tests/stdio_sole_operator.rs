@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `rt-i3` T1/T2 — [`sole_operator_asserted`](super::super::account_bindings::sole_operator_asserted)
-//! observed through the REAL dispatch path, not the predicate in isolation.
+//! [`sole_operator_asserted`](super::super::account_bindings::sole_operator_asserted)
+//! observed through the install and the registry, not the predicate in
+//! isolation.
 //!
-//! Both tests drive the production sequence a capability dispatch actually
-//! runs: `install_account_strategies` (the one install, real for both
-//! listeners) followed by `AccountStrategyRegistry::resolve` against a real,
+//! Both tests call `install_account_strategies` with an explicit
+//! [`ServeMode`] and then `AccountStrategyRegistry::resolve` against a real,
 //! empty custody — a descriptor that is declared but never connected. Custody
 //! is real rather than scripted because the fact under test is WHICH refusal
 //! text a caller reaches, and `PropagationError::AccountNotConnected`'s own
@@ -15,13 +15,10 @@
 //! T1 (stdio): auth is off and `single_user` is not declared, and the caller
 //! presents nothing but the stdio transport itself. A stdio gateway is
 //! spawned BY its one operator (`CallerProvenance::LocalTransport`), so it
-//! must be served as the sole operator regardless of `auth.enabled` — RED
-//! shares one formula between both listeners, gated on `auth.enabled`, so
-//! this fails until stdio gets its own predicate.
+//! must be served as the sole operator regardless of `auth.enabled`.
 //!
-//! T2 (http): auth is on with two API keys — never a sole-operator shape,
-//! in RED or after the fix. A no-regression guard: this must keep failing
-//! the same way, over http, once T1 is fixed.
+//! T2 (http): auth is on with two API keys, never a sole-operator shape. The
+//! caller is refused before any mint.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -220,8 +217,8 @@ async fn http_multiple_api_keys_never_asserts_sole_operator() {
     let error = resolve_under(ServeMode::Http, auth, caller).await;
     assert!(
         error.contains("carries no verified end-user identity"),
-        "two configured API keys must never share stored OAuth grants under one sole-operator \
-         principal, over http or over stdio; got: {error}"
+        "over HTTP, two configured API keys must never share stored OAuth grants under one \
+         sole-operator principal; got: {error}"
     );
     assert!(
         !error.contains("no connected account (fail-closed)"),

@@ -276,7 +276,7 @@ fn the_override_names_the_file_when_the_backend_was_renamed_since_3_x() {
 }
 
 /// A named API key with every other field at its zero value, reused by the
-/// two `rt-i3` T4 reachability rows below.
+/// two reachability rows below.
 fn api_key(name: &str) -> ApiKeyConfig {
     ApiKeyConfig {
         key: None,
@@ -291,10 +291,8 @@ fn api_key(name: &str) -> ApiKeyConfig {
     }
 }
 
-/// `rt-i3` T4: a multi-key config is never eligible for the sole-operator
+/// A multi-key config is never eligible for the sole-operator
 /// principal, so the migrated grant is reachable over stdio only.
-///
-/// RED: `MigratedCredential::reachability()` is always `""`, so this fails.
 #[test]
 fn multi_api_key_config_reports_stdio_only_reachability() {
     let mut harness = Harness::new("");
@@ -309,17 +307,15 @@ fn multi_api_key_config_reports_stdio_only_reachability() {
     let report = harness.migrate(None).expect("must migrate");
     assert!(
         report
-            .reachability()
+            .reachability
             .contains("reachable over stdio only; this configuration does not expose it over HTTP"),
         "a multi-key config's reachability must name stdio-only reach, got {:?}",
-        report.reachability()
+        report.reachability
     );
 }
 
-/// `rt-i3` T4: an eligible single-user config serves the migrated grant to
+/// an eligible single-user config serves the migrated grant to
 /// any caller this gateway authenticates, over both transports.
-///
-/// RED: `MigratedCredential::reachability()` is always `""`, so this fails.
 #[test]
 fn eligible_single_user_config_reports_stdio_and_http_reachability() {
     let mut harness = Harness::new("");
@@ -334,9 +330,9 @@ fn eligible_single_user_config_reports_stdio_and_http_reachability() {
     let report = harness.migrate(None).expect("must migrate");
     assert!(
         report
-            .reachability()
+            .reachability
             .contains("reachable over stdio, and over HTTP by callers this gateway authenticates"),
         "an eligible single-user config's reachability must name both transports, got {:?}",
-        report.reachability()
+        report.reachability
     );
 }

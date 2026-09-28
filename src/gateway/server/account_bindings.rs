@@ -62,12 +62,16 @@ pub(crate) enum ServeMode {
 /// Whether stored OAuth grants are served under one fixed sole-operator
 /// principal for this listener's install.
 ///
-/// RED (`rt-i3`): both arms return today's single expression, unconditioned on
-/// `mode` — `sole_operator_asserted(cfg, Http) == sole_operator_asserted(cfg,
-/// Stdio)` for every `cfg`, so behaviour is unchanged until a later cell gives
-/// stdio its own predicate.
+/// STDIO: always. The only caller of a stdio gateway is the local process that
+/// spawned it and owns its stdin; its provenance is `LocalTransport`, which
+/// already establishes the operator. Nothing else reaches a stdio process's
+/// strategies: stdio binds no listener. `auth.*` configures the HTTP listener
+/// and is not consulted here.
 ///
-/// THE ADAPTER TERM IS NOT IN THE PREDICATE, deliberately.
+/// HTTP: the deployment must have asserted one user. The terms below are all
+/// required, and every one of them excludes a real multi-principal shape.
+///
+/// THE ADAPTER TERM IS NOT IN `grants_single_user_principal`, deliberately.
 /// `grants_single_user_principal` is an `AuthConfig` method and
 /// `accounts.adapters` is not auth configuration, so the predicate cannot see
 /// it. It matters for the same reason the OIDC term does: an adapter
@@ -83,7 +87,9 @@ pub(crate) enum ServeMode {
 /// already true of `auth.single_user` for request authorisation; this extends
 /// its reach to stored OAuth grants.
 pub(crate) fn sole_operator_asserted(config: &Config, mode: ServeMode) -> bool {
-    let _ = mode;
+    if mode == ServeMode::Stdio {
+        return true;
+    }
     let has_identity_adapter = config
         .accounts
         .as_ref()
@@ -123,12 +129,16 @@ pub(crate) fn install_account_strategies(
     // principal — otherwise a solo install has no principal at all and its
     // per-user credential store is unreachable (MIK-6744.STORE.1, open item O3).
     let sole_operator = sole_operator_asserted(config, mode);
-    if sole_operator {
-        tracing::info!(
+    match mode {
+        ServeMode::Stdio => tracing::info!(
+            "stdio: managed accounts are served to the local operator that started this gateway"
+        ),
+        ServeMode::Http if sole_operator => tracing::info!(
             "auth.single_user is asserted: managed accounts are served under one fixed \
              sole-operator principal, to callers this gateway authenticates. Anyone holding \
              this gateway's credential holds its stored OAuth grants."
-        );
+        ),
+        ServeMode::Http => {}
     }
 
     for compiled in compile_descriptors(config)? {

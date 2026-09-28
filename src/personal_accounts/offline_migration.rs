@@ -21,6 +21,7 @@ use super::{PersonalAccountStore, config, identity, storage};
 /// Names and paths only. No credential material, no account identity and no
 /// key bytes reach this type, the way `InitializedStore` carries none.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct MigratedCredential {
     /// The `accounts.descriptors` map key that was migrated.
     pub descriptor_id: String,
@@ -30,18 +31,22 @@ pub struct MigratedCredential {
     /// fenced without writing. A re-run reports this rather than failing.
     pub written: bool,
     /// Operator-facing sentence naming which transport(s) can reach the
-    /// migrated grant. RED (`rt-i3` T4): always empty; no listener's
-    /// sole-operator assertion is consulted yet.
-    reachability: String,
+    /// migrated grant, from the same predicate the running gateway installs
+    /// its strategies under.
+    pub reachability: String,
 }
 
-impl MigratedCredential {
-    /// The [`Self::reachability`] sentence for an operator report.
-    ///
-    /// RED (`rt-i3` T4): always `""`.
-    #[allow(dead_code, reason = "red-first stub")]
-    pub(crate) fn reachability(&self) -> &str {
-        &self.reachability
+/// Where a grant migrated under the sole operator can be used. A stdio
+/// gateway always serves its local operator; an HTTP gateway only when this
+/// configuration asserts one user. Both answers come from the predicate the
+/// gateway itself installs under, never from a second copy of its terms.
+fn reachability(config: &crate::config::Config) -> &'static str {
+    use crate::gateway::{ServeMode, sole_operator_asserted};
+    debug_assert!(sole_operator_asserted(config, ServeMode::Stdio));
+    if sole_operator_asserted(config, ServeMode::Http) {
+        "reachable over stdio, and over HTTP by callers this gateway authenticates"
+    } else {
+        "reachable over stdio only; this configuration does not expose it over HTTP"
     }
 }
 
@@ -236,7 +241,7 @@ fn migrate_from(
             descriptor_id: descriptor_id.to_owned(),
             source,
             written: outcome == storage::migration_entry::MigrationOutcome::Migrated,
-            reachability: String::new(),
+            reachability: reachability(gateway_config).to_owned(),
         }),
         Err(refusal) => Err(OfflineMigrationError::Refused(refusal.to_string())),
     }
