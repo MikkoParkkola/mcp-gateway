@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Docs-only gating check for ci.yml.
+
+Evaluates every job's `if:` against the `scope` job's possible outcomes and
+asserts, for a pull request into the release line:
+  * docs_only=true (scope succeeded): exactly the SKIPPED set is skipped and
+    every other job runs, including every job that reads documentation;
+  * scope failed, was cancelled, or produced no output: nothing is skipped
+    (fail-open: a broken decision never turns into a skipped required check);
+  * docs_only=false, and any push: nothing is skipped.
+Job sets are named here on purpose: adding a job to ci.yml makes this fail
+until someone decides which side of the line it belongs on.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_throwaway_routing import REPO, RELEASE_LINE, ROOT, evaluate  # noqa: E402
+
+SKIPPED = {
+    "check", "feature-combos", "windows-check", "kani", "fmt", "audit",
+    "helm-chart-smoke", "helm-oci-roundtrip", "helm-supply-chain", "helm-airgap",
+    "k8s-kind-rollback", "upgrade-rehearsal", "service-template-smoke",
+    "usability-smoke", "task-sdk-recovery", "orphan-test-modules",
+}
+KEPT = {
+    "scope", "public-repo-hygiene", "test", "public-claims", "release-script-tests",
+    "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
+    "file-size-ceiling", "control-drift-probes",
+}
+# Never run on an ordinary pull request (tag, dispatch or throwaway only).
+NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry"}
+BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
+
+
+def ctx(event: str, scope_result: str, docs_only: str | None) -> dict:
+    g = {"repository": REPO, "event_name": event, "ref": "refs/heads/x",
+         "base_ref": RELEASE_LINE if event == "pull_request" else "",
+         "head_ref": "feature/x" if event == "pull_request" else "",
+         "event": {"pull_request": {"head": {"repo": {"full_name": REPO}}}} if event == "pull_request" else {}}
+    outputs = {} if docs_only is None else {"docs_only": docs_only}
+    return {"github": g, "vars": {}, "inputs": {},
+            "needs": {"scope": {"result": scope_result, "outputs": outputs}},
+            "_status": {"cancelled": False, "success": scope_result == "success",
+                        "failure": scope_result == "failure"}}
+
+
+def runs(job: dict, c: dict) -> bool:
+    cond = job.get("if")
+    if cond is None:
+        # Without an `if:`, a job whose need did not succeed is skipped.
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        return all(c["needs"].get(n, {"result": "success"})["result"] == "success" for n in needs)
+    return evaluate(str(cond), c)
+
+
+def main() -> int:
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    errors = []
+    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS
+    if unclassified:
+        errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
+    cases = {
+        "docs-only PR": ctx("pull_request", "success", "true"),
+        "code PR": ctx("pull_request", "success", "false"),
+        "scope failed": ctx("pull_request", "failure", None),
+        "scope failed after emitting true": ctx("pull_request", "failure", "true"),
+        "scope cancelled after emitting true": ctx("pull_request", "cancelled", "true"),
+        "scope cancelled": ctx("pull_request", "cancelled", None),
+        "scope gave no output": ctx("pull_request", "success", None),
+        "push": ctx("push", "success", "false"),
+    }
+    for name, c in cases.items():
+        ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS and runs(j, c)}
+        want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
+        if ran != want:
+            errors.append(f"{name}: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
+        steps = {st.get("name"): st for st in jobs["capability-pins"]["steps"]}
+        for step in BINARY_STEPS:
+            cond = steps[step].get("if")
+            active = cond is None or evaluate(str(cond), c)
+            if active == (name == "docs-only PR"):
+                errors.append(f"{name}: capability-pins step '{step}' {'runs' if active else 'skips'}")
+    for e in errors:
+        print(f"docs-gating: {e}", file=sys.stderr)
+    if not errors:
+        print(f"docs-gating: {len(cases)} scope outcomes route {len(SKIPPED)} skippable and {len(KEPT)} kept jobs as expected")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
