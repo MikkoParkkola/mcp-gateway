@@ -21,7 +21,9 @@
 //! - `confidence ≥ min_confidence` — expressed as a fraction (0.0–1.0)
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(feature = "firewall")]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -59,6 +61,7 @@ pub struct TransitionTracker {
     /// `session_id -> last_invoked_tool`
     last_per_session: DashMap<String, Mutex<Option<String>>>,
     /// Distinct pairs added through [`Self::record_pair`], for its cap.
+    #[cfg(feature = "firewall")]
     distinct_pairs: AtomicUsize,
 }
 
@@ -69,6 +72,7 @@ impl TransitionTracker {
         Self {
             transitions: DashMap::new(),
             last_per_session: DashMap::new(),
+            #[cfg(feature = "firewall")]
             distinct_pairs: AtomicUsize::new(0),
         }
     }
@@ -108,7 +112,8 @@ impl TransitionTracker {
     /// detector keys on the authenticated caller, not a session). Returns
     /// `false`, recording nothing, when `to` would be a new pair and the
     /// tracker already holds `max_pairs` distinct pairs; an existing pair is
-    /// always counted.
+    /// always counted. Only the firewall's anomaly detector learns this way.
+    #[cfg(feature = "firewall")]
     pub(crate) fn record_pair(&self, from: &str, to: &str, max_pairs: usize) -> bool {
         if let Some(inner) = self.transitions.get(from)
             && let Some(count) = inner.get(to)
@@ -133,6 +138,7 @@ impl TransitionTracker {
     }
 
     /// Every transition recorded out of `from_tool`, across all successors.
+    #[cfg(feature = "firewall")]
     pub(crate) fn successor_total(&self, from_tool: &str) -> u64 {
         self.transitions.get(from_tool).map_or(0, |successors| {
             successors
@@ -652,6 +658,7 @@ mod tests {
 
     // ── record_pair (#1756) ──────────────────────────────────────────────────
 
+    #[cfg(feature = "firewall")]
     #[test]
     fn record_pair_leaves_session_map_empty() {
         let tracker = TransitionTracker::new();
@@ -665,6 +672,7 @@ mod tests {
         assert_eq!(predictions[0].tool, "s:b");
     }
 
+    #[cfg(feature = "firewall")]
     #[test]
     fn pair_cap_drops_counts_and_passes() {
         let tracker = TransitionTracker::new();
