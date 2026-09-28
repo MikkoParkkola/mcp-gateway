@@ -325,17 +325,7 @@ fn shell_word(value: &str) -> String {
 }
 
 pub(super) fn sanitize_url(raw: &str) -> Option<String> {
-    if let Ok(mut parsed) = url::Url::parse(raw) {
-        let _ = parsed.set_username("");
-        let _ = parsed.set_password(None);
-        parsed.set_query(None);
-        parsed.set_fragment(None);
-        Some(parsed.to_string())
-    } else if raw.is_empty() {
-        None
-    } else {
-        Some(raw.split(['?', '#']).next().unwrap_or(raw).to_string())
-    }
+    (!raw.is_empty()).then(|| crate::security::sanitize::redact_url_keep_path(raw))
 }
 
 pub(super) fn is_loopback_url(raw: &str) -> bool {

@@ -195,7 +195,7 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # No build cache: a restored cache is input nobody reviewed at the tag.
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -475,6 +475,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
 
       # Node 22 bundles npm 10.x; OIDC trusted publishing requires npm >= 11.5.1,
       # and current npm@latest (12.x) requires Node >= 22.22.2, so pin Node 22.
