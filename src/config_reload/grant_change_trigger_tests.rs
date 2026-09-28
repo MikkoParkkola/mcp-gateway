@@ -6,7 +6,7 @@
 //! Split out of `tests.rs` rather than appended to it: that file is already
 //! over the 800-line ceiling and the ratchet refuses further growth.
 
-use super::changed_grant_subjects;
+use super::grant_reload::changed_grant_subjects;
 use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant};
 
 // -------------------------------------------------------------------------
