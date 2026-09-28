@@ -269,4 +269,71 @@ mod tests {
         assert!(opts.prefix.is_none());
         assert_eq!(opts.timeout, std::time::Duration::from_secs(30));
     }
+
+    // -- #2027: names are pinned, not just IP literals --
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A loopback listener that only counts the connections it accepts.
+    async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        tokio::spawn(async move {
+            while listener.accept().await.is_ok() {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        (port, accepted)
+    }
+
+    /// The error and every source in its chain, joined.
+    fn error_chain(error: &dyn std::error::Error) -> String {
+        let mut text = error.to_string();
+        let mut source = error.source();
+        while let Some(inner) = source {
+            text.push_str(" | ");
+            text.push_str(&inner.to_string());
+            source = inner.source();
+        }
+        text
+    }
+
+    #[tokio::test]
+    async fn discover_refuses_a_base_name_resolving_to_loopback() {
+        let (port, accepted) = counting_listener().await;
+        let engine = DiscoveryEngine::new(DiscoveryOptions::default());
+        let error = engine
+            .discover(&format!("http://localhost:{port}"))
+            .await
+            .expect_err("a name resolving to loopback must be refused");
+        assert!(error.to_string().contains("SSRF"), "{error}");
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "the listener was reached"
+        );
+    }
+
+    /// The client also fetches HTML-found spec links and redirect targets,
+    /// which the base-URL check never sees: it must pin every name itself.
+    #[tokio::test]
+    async fn discovery_client_pins_names_on_every_request() {
+        let (port, accepted) = counting_listener().await;
+        let engine = DiscoveryEngine::new(DiscoveryOptions::default());
+        let error = engine
+            .client
+            .get(format!("http://localhost:{port}/openapi.json"))
+            .send()
+            .await
+            .expect_err("a name resolving to loopback must not connect");
+        assert!(error_chain(&error).contains("SSRF blocked"), "{error:?}");
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "the listener was reached"
+        );
+    }
 }
