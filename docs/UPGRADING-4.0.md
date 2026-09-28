@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74 and 77 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 83 and 85 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -105,6 +105,14 @@ upgrading a running deployment.
 | 75 | Reserved: lands with a pending change | None yet |
 | 76 | Reserved: lands with a pending change | None yet |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
+| 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
+| 79 | Reserved: lands with a pending change | None yet |
+| 80 | Reserved: lands with a pending change | None yet |
+| 81 | Reserved: lands with a pending change | None yet |
+| 82 | Reserved: lands with a pending change | None yet |
+| 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
+| 84 | Reserved: lands with a pending change | None yet |
+| 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1915,6 +1923,61 @@ capabilities:
 **Action:** if capability calls must leave through a proxy, set `capabilities.egress_proxy`.
 Imports that could only reach their spec through a proxy must be fetched another way, for
 example downloaded and imported from a file.
+
+## 78. A stdio gateway serves its local operator's personal accounts
+
+A `personal_managed` account served a stdio gateway's caller only when HTTP auth was on with
+`auth.single_user: true`, at most one API key, no OIDC issuer and no identity adapter. A stdio gateway
+with the default `auth.enabled: false` refused every account-bound call with "the request
+carries no verified end-user identity".
+
+In 4.0 a stdio gateway serves its managed accounts to its one caller, the local process that
+started it, whatever the `auth` block says. `auth` configures the HTTP listener only. An HTTP
+gateway is unchanged: it serves the sole-operator account only under the single-user settings
+above. This covers a REST capability bound with `auth.account`; an account bound to an MCP
+backend still needs a verified end-user identity on either transport (#1961).
+
+Anyone who can start the gateway as the same OS user already holds its data directory, where the
+account store lives, so this grants no one new access. Several stdio gateways sharing one data
+directory share its accounts.
+
+**Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
+
+## 83. `MigratedCredential` has a public `reachability` field
+
+`accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
+when the configuration asserts a single user, in each case through a REST capability bound to
+the account; an MCP backend bound to it still needs a verified end-user identity (#1961). For
+library users, the report type
+`MigratedCredential` gains a public `reachability: String` field and is marked
+`#[non_exhaustive]`.
+
+**Action:** library users only. Code that builds `MigratedCredential` with a struct literal, or
+destructures it without a trailing `..`, no longer compiles; read the fields of the value `migrate_legacy_credential_offline` returns instead.
+
+## 85. The response firewall scans object keys
+
+Before 4.0, the response firewall scanned only the values in a backend's JSON, so a
+credential or prompt injection placed in an object key reached the client unchanged. In
+4.0 both scanners scan keys as well.
+
+- A key that carries prompt-injection text is reported and acted on by the firewall rule,
+  like the same text in a value.
+- A key that carries a credential is reported and renamed: the credential span becomes
+  `[REDACTED:credential]`. The entry and its value are kept. If the new name is already in
+  use, the key gets the first free `#2`, `#3`, ... suffix, so no two keys merge.
+- A question the client must answer and echo (`inputRequests` in an `input_required`
+  result, or a question relayed by the input bridge) is never rewritten: a credential in
+  one of its keys refuses the response, as one in a value already did.
+- Detection is pattern-based. A key that only looks like a credential, such as a public
+  `0x`-prefixed 64-digit hex hash, is renamed too.
+- A key finding's description ends in `(object key)`, and its matched text is the redacted
+  key, never the credential. A prompt-injection finding's matched text, from a key or a
+  value, has credentials masked too. With `credential_redaction` off the payload is left
+  as it is and the finding carries no quote at all.
+
+**Action:** none for most deployments. If a backend uses credential-shaped strings as
+object keys, expect those keys to be renamed; use other key names.
 
 ## Upgrading from 3.5.x: a walkthrough
 

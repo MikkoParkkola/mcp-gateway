@@ -22,6 +22,7 @@ cannot exceed the review that guards it.
 """
 
 import os
+import re
 import pathlib
 import shutil
 import subprocess
@@ -266,8 +267,8 @@ CASES = [
     (
         "needs-verify-replaced-by-a-comment",
         "release.yml",
-        "    needs: [build, verify]",
-        "    needs: [build] # verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs: [build, packaged-suite] # verify",
         CAUGHT,
     ),
     (
@@ -560,8 +561,8 @@ CASES = [
     (
         "needs-in-block-form",
         "release.yml",
-        "    needs: [build, verify]",
-        "    needs:\n      - build\n      - verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs:\n      - build\n      - verify\n      - packaged-suite",
         TOLERATED,
     ),
     (
@@ -1382,7 +1383,93 @@ CASES += [
      _RELEASE_CRITERIA_SPAN.replace(MUTATIONS_STEP, "", 1)
      + MUTATIONS_STEP, CAUGHT),
     ("docker-build-stops-waiting-for-unit-tests", "ci.yml",
-     "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
+     "release-criteria, release-script-tests, package-tests]", "release-criteria, package-tests]", CAUGHT),
+]
+
+# #1812: packaged tests build on every ref and run after a merge.
+CASES += [
+    ("package-tests-swallowed", "ci.yml",
+     "    name: Tests build from the packaged crate\n",
+     "    name: Tests build from the packaged crate\n    continue-on-error: true\n", CAUGHT),
+    ("package-tests-only-on-push", "ci.yml",
+     "    name: Tests build from the packaged crate\n",
+     "    name: Tests build from the packaged crate\n    if: github.event_name == 'push'\n", CAUGHT),
+    ("package-tests-build-step-dropped", "ci.yml",
+     "      - name: Build the tests from the packaged crate\n"
+     "        run: scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
+    ("docker-build-stops-waiting-for-package-tests", "ci.yml",
+     "release-script-tests, package-tests]", "release-script-tests]", CAUGHT),
+    ("packaged-suite-leaves-the-release-line", "packaged-suite.yml",
+     "    branches: [main, docs/ranking-1-release-line]\n", "    branches: [main]\n", CAUGHT),
+    ("packaged-suite-runs-on-every-pr", "packaged-suite.yml",
+     "  workflow_dispatch:\n", "  pull_request:\n  workflow_dispatch:\n", CAUGHT),
+    ("packaged-suite-builds-instead-of-running", "packaged-suite.yml",
+     "scripts/ci/packaged-tests.sh run\n", "scripts/ci/packaged-tests.sh build\n", CAUGHT),
+    ("packaged-rehearsal-on-every-pr", "ci.yml",
+     "    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_packaged_suite",
+     "    if: github.event_name == 'pull_request' || (inputs.rehearse_packaged_suite", CAUGHT),
+    ("release-stops-waiting-for-the-packaged-suite", "release.yml",
+     "    needs: [build, verify, packaged-suite]\n", "    needs: [build, verify]\n", CAUGHT),
+    ("packaged-suite-dropped-from-the-release", "release.yml",
+     "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/packaged-suite.yml\n",
+     "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
+    ("crates-publish-stops-waiting-for-release", "release.yml",
+     "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
+    ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
+     "      # that job provisions, and the gate below `needs` that job.\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n",
+     "      # that job provisions, and the gate below `needs` that job.\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst --skip some_new_skip\n",
+     CAUGHT),
+]
+
+# The release is the event commit: a case per checkout and called workflow
+# that names a ref, and per way the dispatch guard can stop guarding. Each
+# checkout anchor runs from the job header to its checkout line, so it names
+# one site.
+def _release_checkout_sites():
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    sites = []
+    for m in re.finditer(r"(?m)^  ([a-z0-9-]+):\n", text):
+        nxt = re.search(r"(?m)^  [a-z0-9-]+:\n", text[m.end():])
+        body = text[m.start():m.end() + nxt.start() if nxt else len(text)]
+        for c in re.finditer(r"(?m)^( +)(?:- )?uses: actions/checkout@\S+ # v\S+\n", body):
+            rest = body[c.end():]
+            if re.match(r" +with:\n( +(?!ref:)\S.*\n)*? +repository:", rest):
+                continue  # another repository (the Homebrew tap)
+            anchor = body[:c.end()]
+            indent = " " * (len(c.group(1)) + (2 if c.group(0).lstrip().startswith("- ") else 0))
+            added = anchor + f"{indent}with:\n{indent}  ref: ${{{{ inputs.tag }}}}\n"
+            if rest.startswith(f"{indent}with:\n"):
+                anchor += f"{indent}with:\n"  # the ref joins the existing inputs
+            sites.append((m.group(1), anchor, added))
+    return sites
+
+
+for _job, _anchor, _added in _release_checkout_sites():
+    CASES += [(f"{_job}-checks-out-the-tag-name", "release.yml", _anchor, _added, CAUGHT)]
+for _job in ("task-sdk-recovery", "packaged-suite"):
+    CASES += [
+        (f"{_job}-is-passed-the-tag-name", "release.yml",
+         f"  {_job}:\n    needs: resolve\n    uses: ./.github/workflows/{_job}.yml\n",
+         f"  {_job}:\n    needs: resolve\n    uses: ./.github/workflows/{_job}.yml\n    with:\n      ref: ${{{{ inputs.tag || github.ref }}}}\n", CAUGHT),
+    ]
+CASES += [
+    ("packaged-suite-stops-waiting-for-resolve", "release.yml",
+     "  packaged-suite:\n    needs: resolve\n", "  packaged-suite:\n", CAUGHT),
+    ("security-gate-stops-waiting-for-resolve", "release.yml",
+     "    name: Security gate (block release on known vulns)\n    needs: resolve\n",
+     "    name: Security gate (block release on known vulns)\n", CAUGHT),
+    # The guard itself: a dispatch from a branch or another tag, and a second
+    # lookup of the tag, must each turn the suite red.
+    ("resolve-accepts-a-branch-dispatch", "release.yml",
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n', "          if false; then\n", CAUGHT),
+    ("resolve-accepts-any-tag-dispatch", "release.yml",
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n',
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [[ "$GITHUB_REF" != refs/tags/* ]]; then\n', CAUGHT),
+    ("resolve-looks-the-tag-up-again", "release.yml",
+     '          echo "release commit: $GITHUB_SHA"\n',
+     '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "release commit: $GITHUB_SHA"\n', CAUGHT),
 ]
 
 # Release jobs restore no cache: one case per way one comes back.
