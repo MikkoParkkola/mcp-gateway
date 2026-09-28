@@ -276,9 +276,10 @@ We want your PR to merge fast. Here is what helps.
   `removed`, `fixed`, `security`. It holds your bullet(s) exactly as they should read in
   CHANGELOG.md, for example `- doctor: report why a stdio backend died (#526)`. Do not edit
   CHANGELOG.md itself: a shared section makes every open PR conflict whenever one merges.
-  A PR that changes `src/` (or a `crates/*/src/`) without a fragment, or edits CHANGELOG.md
+  A PR that changes a shipped file without a fragment, or edits CHANGELOG.md
   by hand, fails the *Changelog fragment* check; a maintainer can apply the `no-changelog`
-  label when no entry is warranted.
+  label when no entry is warranted. Shipped files are `src/`, `crates/*/src/`, `Dockerfile*`,
+  `.github/workflows/docker*.yml`, `capabilities/`, `server.json` and `npm/`.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
 - [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.

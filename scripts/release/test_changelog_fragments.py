@@ -136,6 +136,21 @@ class Check(unittest.TestCase):
     def test_a_workspace_crate_counts_as_source(self):
         self.assertEqual(len(cf.check([("M", "crates/gateway-core/src/lib.rs")], set())), 1)
 
+    def test_shipped_files_outside_src_count_as_source(self):
+        for path in (
+            "Dockerfile",
+            "Dockerfile.full",
+            ".github/workflows/docker.yml",
+            "capabilities/search/brave.yaml",
+            "server.json",
+            "npm/package.json",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(len(cf.check([("M", path)], set())), 1)
+
+    def test_other_workflows_need_no_fragment(self):
+        self.assertEqual(cf.check([("M", ".github/workflows/ci.yml")], set()), [])
+
     def test_a_hand_edit_of_the_changelog_fails(self):
         errors = cf.check([("M", "CHANGELOG.md"), ("A", "changelog.d/5.fixed.md")], set())
         self.assertEqual(len(errors), 1)
