@@ -1400,14 +1400,10 @@ mod tests {
 
     // ── cleanup task (tokio) ──────────────────────────────────────────────────
 
-    // Paused clock: the task's interval and the wait below run on virtual
-    // time, which advances only when every task is idle, so the task has run
-    // its ticks before the wait returns however loaded the host is (#1821).
     #[tokio::test(start_paused = true)]
     async fn spawn_cleanup_task_evicts_expired_entries() {
-        // GIVEN: a cache with one stale completed entry
-        // WHEN: the cleanup task runs
-        // THEN: the entry is evicted
+        // A stale entry is evicted. On the paused clock the task's ticks run
+        // before the virtual wait returns, however loaded the host (#1821).
         let cache = Arc::new(IdempotencyCache::new());
         cache.entries.insert(
             "stale".to_string(),
