@@ -1,0 +1,12 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 09bc4bb53..f74360282 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -513,6 +513,7 @@ impl InputBridge<'_> {
+         // names the missing capability; the slice is not visible there, so a
+         // round outside it is refused here as it would be in-band.
+         if let Some(body) = last.as_deref()
++            && body.is_null()
+             && interim.undeclared(declared).is_none()
+         {
+             Self::plan(&interim, declared, slice)?;

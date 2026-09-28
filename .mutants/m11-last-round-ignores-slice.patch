@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 09bc4bb53..911e08c14 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -515,7 +515,7 @@ impl InputBridge<'_> {
+         if let Some(body) = last.as_deref()
+             && interim.undeclared(declared).is_none()
+         {
+-            Self::plan(&interim, declared, slice)?;
++            let _ = Self::plan(&interim, declared, slice);
+             self.gate
+                 .admit(&Self::handed_back(body))
+                 .map_err(|error| match error {
