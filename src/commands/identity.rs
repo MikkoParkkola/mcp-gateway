@@ -493,6 +493,41 @@ mod tests {
         );
     }
 
+    /// T1a through the CLI handlers: add, `--replace` and revoke each journal
+    /// one entry, and a refused duplicate journals nothing (MIK-7570.AUDIT.4).
+    #[tokio::test]
+    async fn cli_handlers_journal_every_successful_change() {
+        use mcp_gateway::identity_grants::journal::{JournalVerb, journal_path};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identity-grants.yaml");
+
+        upsert_local_grant(grant_input(path.clone())).await.unwrap();
+        upsert_local_grant(grant_input(path.clone()))
+            .await
+            .unwrap_err();
+        let mut replace = grant_input(path.clone());
+        replace.replace = true;
+        upsert_local_grant(replace).await.unwrap();
+        revoke_local_grant(&path, "grant-alice-calendar", None)
+            .await
+            .unwrap();
+
+        let journal = std::fs::read_to_string(journal_path(&path)).unwrap_or_default();
+        let verbs: Vec<JournalVerb> = journal
+            .lines()
+            .map(|line| {
+                serde_json::from_value(
+                    serde_json::from_str::<serde_json::Value>(line).unwrap()["verb"].clone(),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            verbs,
+            vec![JournalVerb::Add, JournalVerb::Replace, JournalVerb::Revoke]
+        );
+    }
+
     #[tokio::test]
     async fn grant_command_rejects_duplicate_without_replace() {
         let dir = tempfile::tempdir().unwrap();
