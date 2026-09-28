@@ -34,6 +34,9 @@ pub(crate) enum FillBound {
     /// A check-site fill: the drain is abandoned after this long, and the
     /// fill is gated on and recorded against the slot's failsafe.
     CallTimeout(Duration),
+    /// Startup warm-up (#1300).
+    #[allow(dead_code, reason = "red-first stub")]
+    Warmup,
 }
 
 /// Whether the list a check-site fill returned is the slot's whole catalogue.

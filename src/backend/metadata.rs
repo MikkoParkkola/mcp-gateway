@@ -348,6 +348,12 @@ impl Backend {
         self.get_tools_for_binding(None, &[]).await
     }
 
+    /// Startup warm-up's fill (#1300).
+    #[allow(dead_code, clippy::unused_async_trait_impl, reason = "red-first stub")]
+    pub(crate) async fn warm_tools(&self) -> Result<Arc<Vec<Tool>>> {
+        Ok(Arc::new(Vec::new()))
+    }
+
     /// The tool catalogue THIS CALLER's pool slot serves.
     ///
     /// `binding` is the caller's `PropagatedCredential::cache_binding`, and
