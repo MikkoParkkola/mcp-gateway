@@ -16,8 +16,8 @@ use super::cached_metadata::CachedMetadata;
 use super::fill_check::{
     Completeness, FillBound, FillEnd, FillGuard, LIST_FILL_COOLDOWN, admit_fill, run_bounded,
 };
-use super::pool::PoolKey;
 use super::list_drain::drain_list_pages;
+use super::pool::PoolKey;
 use crate::Error;
 use crate::Result;
 use crate::protocol::{
@@ -438,8 +438,7 @@ impl Backend {
                 // Entry by entry: one malformed entry must neither fail the
                 // fill nor hide its siblings from judging; a named one that
                 // does not parse is withheld (#1441).
-                let (mut tools, unparseable) = match result.get("tools").and_then(Value::as_array)
-                {
+                let (mut tools, unparseable) = match result.get("tools").and_then(Value::as_array) {
                     Some(raw) => super::descriptor_gate::parse_listed(raw),
                     None => (
                         serde_json::from_value::<ToolsListResult>(result)?.tools,
@@ -460,6 +459,9 @@ impl Backend {
                 );
                 prepared.verdicts.add_unparseable(unparseable);
                 Ok((tools, Some(prepared)))
+            },
+        )
+        .await
     }
 
     /// The caller's tool list for R2's check, and whether it is the slot's

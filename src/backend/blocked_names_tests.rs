@@ -298,9 +298,7 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
     }));
     let _ = backend.remember_listed_tools(Some("a"), false, &listing);
     assert!(
-        backend
-            .blocked_tool_refusal(Some("a"), "p4096")
-            .is_some(),
+        backend.blocked_tool_refusal(Some("a"), "p4096").is_some(),
         "the name past the cap is callable"
     );
     // Fail closed: the cap left names unrecorded, and another caller's clean
@@ -335,9 +333,7 @@ async fn x12_past_the_cap_a_clean_cached_copy_does_not_reopen_a_name() {
     let backend = per_user_backend();
     let _ = backend.remember_listed_tools(Some("a"), false, &catalogue_with("Reads a file."));
     assert!(
-        backend
-            .blocked_tool_refusal(Some("a"), POISONED)
-            .is_none(),
+        backend.blocked_tool_refusal(Some("a"), POISONED).is_none(),
         "premise: caller a holds a clean copy"
     );
     let mut listing: Vec<Value> = (0..4096)
@@ -354,9 +350,7 @@ async fn x12_past_the_cap_a_clean_cached_copy_does_not_reopen_a_name() {
     listing.extend(catalogue());
     let _ = backend.remember_listed_tools(Some("b"), false, &listing);
     assert!(
-        backend
-            .blocked_tool_refusal(Some("a"), POISONED)
-            .is_some(),
+        backend.blocked_tool_refusal(Some("a"), POISONED).is_some(),
         "a clean cached copy reopened a poisoned name the cap could not record"
     );
 }
@@ -385,8 +379,12 @@ async fn x10b_an_unreadable_drain_is_judged_but_not_stored() {
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    let withheld =
-        backend.remember_listed_tools_as(None, false, &catalogue(), crate::backend::Listing::Truncated);
+    let withheld = backend.remember_listed_tools_as(
+        None,
+        false,
+        &catalogue(),
+        crate::backend::Listing::Truncated,
+    );
     assert!(withheld.contains(POISONED), "the drain was not judged");
     assert!(backend.is_blocked_tool(POISONED), "the verdict was dropped");
     assert!(
