@@ -24,11 +24,19 @@ use mcp_gateway::capability::{
 use mcp_gateway::capability::{DiscoveryEngine, DiscoveryOptions};
 use mcp_gateway::config::CapabilityConfig;
 
-/// A loopback listener standing in for a proxy: it counts connections and
-/// answers each with a 200, so a proxied call would succeed.
-async fn recording_proxy() -> (String, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+/// A loopback listener standing in for a proxy, bound before any runtime or
+/// thread exists so the environment can be set first. Serve it with
+/// [`serve_recording_proxy`]; it counts connections and answers each with a
+/// 200, so a proxied call would succeed.
+fn bind_recording_proxy() -> (std::net::TcpListener, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
+    (listener, url)
+}
+
+fn serve_recording_proxy(listener: std::net::TcpListener) -> Arc<AtomicUsize> {
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
     let seen = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&seen);
     tokio::spawn(async move {
@@ -45,7 +53,34 @@ async fn recording_proxy() -> (String, Arc<AtomicUsize>) {
             let _ = stream.write_all(reply.as_bytes()).await;
         }
     });
-    (url, seen)
+    seen
+}
+
+/// Set every proxy variable to `proxy`. Called from the test's only thread,
+/// before the runtime starts, so nothing reads the environment meanwhile.
+fn set_env_proxy(proxy: &str) {
+    // SAFETY: single-threaded at this point (see above).
+    unsafe {
+        for var in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+        ] {
+            std::env::set_var(var, proxy);
+        }
+        for var in ["NO_PROXY", "no_proxy"] {
+            std::env::remove_var(var);
+        }
+    }
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
 }
 
 const PROBE: &str = "http://proxy-bypass-probe.example";
@@ -67,24 +102,15 @@ providers:
     .expect("probe capability parses")
 }
 
-#[tokio::test]
-async fn an_environment_proxy_carries_no_capability_import_or_discovery_traffic() {
-    let (proxy, seen) = recording_proxy().await;
-    // SAFETY: the only test in this binary; nothing else reads the environment.
-    unsafe {
-        for var in [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-        ] {
-            std::env::set_var(var, &proxy);
-        }
-        for var in ["NO_PROXY", "no_proxy"] {
-            std::env::remove_var(var);
-        }
-    }
+#[test]
+fn an_environment_proxy_carries_no_capability_import_or_discovery_traffic() {
+    let (listener, proxy) = bind_recording_proxy();
+    set_env_proxy(&proxy);
+    runtime().block_on(check_no_env_proxy_traffic(listener));
+}
+
+async fn check_no_env_proxy_traffic(listener: std::net::TcpListener) {
+    let seen = serve_recording_proxy(listener);
 
     // Capability execution, by both constructors.
     let capability = capability_at(PROBE);
