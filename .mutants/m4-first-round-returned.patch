@@ -1,0 +1,16 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 78deca83d..9174e60ac 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2357,10 +2357,7 @@ impl MetaMcp {
+                 // for the first time here, so MRTR.9 runs here; the key keeps
+                 // its release default, since a backend that asked has not acted.
+                 Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
+-                    if let Some(last) = last {
+-                        result = *last;
+-                        interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+-                    }
++                    drop(last);
+                     refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+                 }
+                 // A policy refusal keeps its type across the bridge boundary.

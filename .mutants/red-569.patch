@@ -1,0 +1,167 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 7cf13b771..cd069c584 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -203,15 +203,7 @@ pub enum BridgeError {
+         error: DeliveryError,
+     },
+     /// The backend kept asking past the retry bound.
+-    ///
+-    /// Carries the backend's last interim body, the round the caller can still
+-    /// resume: its questions and its `requestState` belong together, and the
+-    /// first round's would replay prompts already answered (#569). `None` when
+-    /// no round ran, so there is nothing newer than the interim the caller holds.
+-    RoundsExhausted {
+-        /// The last interim result the backend returned, whole.
+-        last: Option<Box<Value>>,
+-    },
++    RoundsExhausted,
+     /// The backend asked for more requests in total than the bound allows.
+     RequestBudgetExhausted,
+     /// The aggregate wall-clock budget for the call ran out.
+@@ -469,7 +461,6 @@ impl InputBridge<'_> {
+         let mut interim = first.clone();
+         let mut spent = 0_u32;
+         let mut dispatched = false;
+-        let mut last = None;
+         for _ in 0..self.bounds.rounds {
+             if started.elapsed() >= self.bounds.aggregate {
+                 return Err(BridgeError::Deadline);
+@@ -499,25 +490,8 @@ impl InputBridge<'_> {
+                 Some(next) => interim = next,
+                 None => return Ok(result),
+             }
+-            last = Some(Box::new(result));
+-        }
+-        // The last round is handed back to the caller rather than asked
+-        // in-band, but it is still a question the backend composed after an
+-        // answer, so it passes the same immutable gate every asked round did
+-        // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+-        if last.is_some()
+-            && let Ok(prompts) = Self::plan(&interim, declared, slice)
+-        {
+-            self.gate
+-                .admit(&Self::challenge(&prompts))
+-                .map_err(|error| match error {
+-                    BridgeError::ChallengeRefused { .. } => {
+-                        BridgeError::ChallengeRefused { dispatched }
+-                    }
+-                    other => other,
+-                })?;
+         }
+-        Err(BridgeError::RoundsExhausted { last })
++        Err(BridgeError::RoundsExhausted)
+     }
+ 
+     /// Gate one interim result, whole, before a single frame leaves.
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 78deca83d..db4598dbb 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -143,7 +143,6 @@ use super::super::trace;
+ use super::MetaMcp;
+ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
+ mod side_effect_markers;
+-mod undeclared_gate;
+ // D1: the invocation record, written around `invoke_tool_traced`.
+ mod audit;
+ 
+@@ -152,7 +151,6 @@ use super::support::{
+     idempotency_key_for, response_cache_key_for, strip_backend_provenance,
+ };
+ use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
+-use undeclared_gate::refuse_undeclared;
+ 
+ async fn call_capability_tool_with_identity(
+     cap: &crate::capability::CapabilityBackend,
+@@ -2232,13 +2230,25 @@ impl MetaMcp {
+         // survives the refusal. Relaying it instead leaves the client holding
+         // an `inputRequests` entry it has no handler for and the backend
+         // holding an exchange that can never be completed.
+-        refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
++        if let Some(interim) = &interim
++            && let Some(refused) = interim.undeclared(caller.input_capabilities)
++        {
++            warn!(
++                server,
++                tool,
++                trace_id,
++                request_key = refused.key,
++                method = refused.method,
++                "Backend asked for input of a type the client did not declare"
++            );
++            return Err(undeclared_input_request(server, tool, &refused));
++        }
+ 
+         // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
+-        // being handed a continuation envelope it has no vocabulary for. The
+-        // gateway would accept one back (`requestState` is read for every era),
+-        // but a 2025 client does not know to send it, so relaying it strands the
+-        // exchange at both ends. The envelope is the fallback, not the path.
++        // being handed a continuation envelope it has no vocabulary for. A 2025
++        // client cannot redeem one, so relaying it strands the exchange at both
++        // ends — the client holds a token it cannot spend and the backend holds
++        // a round nobody will finish.
+         //
+         // Placed between the two gates on purpose. After MRTR.9, because
+         // reaching this line means the question has already been found
+@@ -2338,31 +2348,20 @@ impl MetaMcp {
+                 // Stdio does not reach this arm. The serve loop passes a live
+                 // channel (MIK-7387), so its legacy caller is asked in-band;
+                 // the dispatchers outside it (a batch, `dispatch_single`)
+-                // carry `NoClientChannel` but declare `Declared::NONE`, so the
+-                // MRTR.9 gate above refuses the interim before the bridge. A
++                // carry `NoClientChannel` but declare `Declared::NONE`, so
++                // `plan` refuses as `Refused` before any delivery is tried. A
+                 // stdio context that did fall through would mint, bound by its
+                 // process nonce (MIK-7570.STDIO.1).
+                 //
+                 // ponytail: `run` walks rounds internally and a session lost on
+                 // round two surfaces the same way, so the mint would replay
+-                // prompts already answered. `RoundsExhausted` carries its last
+-                // round for exactly this; `Delivery` does not yet, because no
+-                // channel in tree fails later than round one.
++                // prompts already answered. Needs a progress signal out of
++                // `run` to tell the two apart; not built, because no channel in
++                // tree fails later than round one.
+                 Err(crate::gateway::input_bridge::BridgeError::Delivery {
+                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
+                     ..
+                 }) => {}
+-                // Out of rounds: hand back the LAST round, questions and state
+-                // together, sealed like any other (#569). It reaches the client
+-                // for the first time here, so MRTR.9 runs here; the key keeps
+-                // its release default, since a backend that asked has not acted.
+-                Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
+-                    if let Some(last) = last {
+-                        result = *last;
+-                        interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+-                    }
+-                    refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+-                }
+                 // A policy refusal keeps its type across the bridge boundary.
+                 // `error_response_preserving_status` carries a dedicated
+                 // `ResponseFirewallRefused` arm that builds the delivery-refusal
+@@ -2421,14 +2420,14 @@ impl MetaMcp {
+                     // key must not be readmitted. `BackendFailed` is the only
+                     // variant raised from the backend call itself; `NotAdmitted`
+                     // was refused above the dispatch, and `Deadline`,
+-                    // `RequestBudgetExhausted`, `Refused` and `Delivery` all
+-                    // leave the backend parked on a question that was never
+-                    // answered, and a backend that stopped to ask has not
+-                    // acted yet — the premise the `Ok` arm below rests on too.
+-                    // So their release-on-drop default still stands. A round
+-                    // that never left the gateway — no such backend, no such
+-                    // tool, an open circuit, a transport that never connected
+-                    // — is `NotAdmitted` rather than
++                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and
++                    // `RoundsExhausted` all leave the backend parked on a
++                    // question that was never answered, and a backend that
++                    // stopped to ask has not acted yet — the premise the `Ok`
++                    // arm below rests on too. So their release-on-drop default
++                    // still stands. A round that never left the gateway — no
++                    // such backend, no such tool, an open circuit, a transport
++                    // that never connected — is `NotAdmitted` rather than
+                     // `BackendFailed`, because `classify_bridged_dispatch_error`
+                     // defers to the error type's own pre-dispatch allowlist; it
+                     // is provably unexecuted, so it keeps the default too. Only

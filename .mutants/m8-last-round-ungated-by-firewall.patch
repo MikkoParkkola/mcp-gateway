@@ -1,0 +1,12 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 7cf13b771..f7c5546d2 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -506,6 +506,7 @@ impl InputBridge<'_> {
+         // answer, so it passes the same immutable gate every asked round did
+         // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+         if last.is_some()
++            && last.as_ref().is_some_and(|body| body.is_null())
+             && let Ok(prompts) = Self::plan(&interim, declared, slice)
+         {
+             self.gate
