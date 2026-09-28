@@ -123,11 +123,18 @@ fn stripe_lock_serializes_one_identity() {
         .hold_stripe("caller-1");
     let worker = Arc::clone(&fw);
     let (done, finished) = mpsc::channel();
+    let (started, running) = mpsc::channel();
     let handle = std::thread::spawn(move || {
+        let _ = started.send(());
         let _ = call(&worker, "caller-1", "tool_a");
         let _ = done.send(());
     });
-    let waited = finished.recv_timeout(Duration::from_millis(100));
+    // Wait until the worker is about to call, so the window below measures
+    // the lock and not thread start-up.
+    running
+        .recv_timeout(Duration::from_secs(5))
+        .expect("worker started");
+    let waited = finished.recv_timeout(Duration::from_millis(200));
     drop(guard);
     assert!(
         waited.is_err(),

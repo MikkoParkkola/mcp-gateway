@@ -307,6 +307,9 @@ impl AnomalyDetector {
     ///
     /// Register this via `SessionLifecycle::register` at gateway startup.
     pub fn remove_session(&self, session_id: &str) {
+        // Under the identity's scoring lock, so a call scored before the
+        // removal cannot commit after it and bring the entry back.
+        let _lock = self.stripe(session_id).lock();
         self.last_tool.remove(session_id);
     }
 }
