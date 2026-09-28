@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 74
+Approved supplemental criteria: 75
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -101,6 +101,7 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7570.CHART.2 | The Helm chart supports API-key and OIDC auth modes with secrets and persistent storage (B4). | ENTERPRISE |
 | MIK-7570.AUDIT.2 | Direct-route tool calls write the same invocation audit record as the meta route (D2). | ENTERPRISE |
 | MIK-7570.AUDIT.3 | Grant decisions, including refusals, are audited (D3). | ENTERPRISE |
+| MIK-7570.AUDIT.4 | Every grant approve, revoke or replacement made through the `identity grants` CLI is recorded in the governance audit log with verb, timestamp, grant id, content digest and expiry, and any other change to the grant file is recorded as an out-of-band edit. The `identity grants` CLI, which only edits the file and may run while a gateway is up, appends one entry per successful change to an append-only sidecar journal beside the grant file (mode 0600) with actor `unknown` and the OS account as an unauthenticated hint; it never writes the gateway's audit log. The gateway ingests unseen journal entries into its audit log at startup and on every reload. At startup it also records a `loaded` snapshot (one record per active grant plus a closing record with run id and count), and a mismatch between journal and snapshot is recorded as an out-of-band edit. No actor is ever synthesized. With auth disabled no governance log exists and the tracing event remains the only record. A failed audit append never reverts an applied change, and the outcome reports it as unrecorded (D3-e). | ENTERPRISE |
 | MIK-7570.METRICS.2 | Security-relevant events are exported as metrics without identities in labels (D4). | ENTERPRISE |
 | MIK-7570.SESSION.1 | Dashboard sessions expire after 30 minutes idle and 8 hours absolute, and logout ends them (E5). | ENTERPRISE |
 | MIK-7570.RECONNECT.1 | A managed personal account whose upstream token is rejected gets at most one forced refresh per token revision and then a reconnect prompt (A11). | ENTERPRISE |
