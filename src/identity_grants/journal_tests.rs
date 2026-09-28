@@ -354,10 +354,17 @@ async fn a_writable_by_others_journal_is_refused() {
     let before = std::fs::read(&journal).unwrap();
     std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o646)).unwrap();
 
+    let grants_before = std::fs::read(&path).unwrap();
+
     let r = change(&path, upsert(row("g2", "r"), false)).await;
 
-    assert!(matches!(r, Err(ChangeError::Unjournalled(_))), "{r:?}");
+    assert!(matches!(r, Err(ChangeError::Refused(_))), "{r:?}");
     assert_eq!(std::fs::read(&journal).unwrap(), before, "no line appended");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        grants_before,
+        "the grant file is untouched"
+    );
     let mode = std::fs::metadata(&journal).unwrap().permissions().mode();
     assert_eq!(
         mode & 0o777,
