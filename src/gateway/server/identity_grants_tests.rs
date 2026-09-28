@@ -520,11 +520,12 @@ async fn fail_on_error_applies_to_the_audited_startup_read() {
     assert!(started.is_err(), "the start was not refused");
 }
 
-/// A read never needs write access: a grant file in a directory the gateway
-/// cannot write (a read-only mount) still serves its grants at startup.
+/// A directory this process cannot write does not prove there is no writer
+/// (root or the file's owner can still run the CLI there), so the grant file
+/// is never read without the lock: with `fail_on_error` the start is refused.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_grant_file_in_a_read_only_directory_serves_its_grants() {
+async fn an_unwritable_grant_directory_is_not_read_without_the_lock() {
     use std::os::unix::fs::PermissionsExt as _;
     if rustix::process::geteuid().is_root() {
         return; // root ignores directory modes
@@ -539,14 +540,70 @@ async fn a_grant_file_in_a_read_only_directory_serves_its_grants() {
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
     let mut config = config(dir.path(), true);
     config.security.identity_grants.path = grants.to_string_lossy().into_owned();
+    config.security.identity_grants.fail_on_error = true;
 
     let s = Box::pin(Started::run(config)).await;
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let s = s.unwrap();
+    assert!(
+        s.is_err(),
+        "a grant file was read without the journal lock in an unwritable directory"
+    );
+}
+
+/// A grant directory that does not exist yet is an unreadable grant file:
+/// with `fail_on_error: false` the start keeps its audited sink, and the file
+/// created later is served by the next reload.
+#[tokio::test]
+async fn a_missing_grant_directory_still_reloads_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let grants = dir.path().join("later").join("grants.yaml");
+    let mut config = config(dir.path(), true);
+    config.security.identity_grants.path = grants.to_string_lossy().into_owned();
+    config.security.identity_grants.fail_on_error = false;
+    let s = Box::pin(Started::run(config.clone())).await.unwrap();
+    apply_change(&grants, true, add(row("g1", "r"))).await.unwrap();
+
+    reload_with(&config, s.sink.clone()).await;
+
     let (live, _) = s.meta.identity_grant_sink();
     assert!(
         live.read().values().any(|g| g.grant_id == "g1"),
-        "grants in a read-only directory were not served"
+        "a grant directory missing at startup disabled later reloads"
+    );
+}
+
+/// The first audited start with an unreadable journal still keeps a
+/// baseline: a grant later written directly into the file is recorded.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = grants_path(dir.path());
+    write_identity_grants_file(&path, &IdentityGrantFile::new(vec![row("g1", "r")]))
+        .await
+        .unwrap();
+    let journal = crate::identity_grants::journal::journal_path(&path);
+    std::fs::write(&journal, b"").unwrap();
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o666)).unwrap();
+    let config = config(dir.path(), true);
+    let s = Box::pin(Started::run(config.clone())).await.unwrap();
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
+    write_identity_grants_file(
+        &path,
+        &IdentityGrantFile::new(vec![row("g1", "r"), row("g2", "r")]),
+    )
+    .await
+    .unwrap();
+
+    reload_with(&config, s.sink.clone()).await;
+
+    assert!(
+        s.records()
+            .iter()
+            .any(|r| r.1 == "g2" && matches!(r.0, V::OutOfBand | V::Indeterminate)),
+        "a direct edit after an unreadable first journal went unrecorded: {:?}",
+        s.records()
     );
 }
