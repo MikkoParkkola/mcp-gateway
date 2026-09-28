@@ -821,6 +821,12 @@ security:
     path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 ```
 
+One gateway process writes an audit log path. A second one on the same path is refused at
+startup, after waiting up to 10 seconds for a
+restarting predecessor to exit. Replicas must not share a log path: give each replica its own
+volume, or put the pod name in the path. Keep the log on a local filesystem or one with working
+file locks (UPGRADING-4.0 item 49).
+
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
 
 ### API keys
