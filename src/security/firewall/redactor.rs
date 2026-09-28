@@ -21,8 +21,10 @@
 //! Matched fragments are truncated to 40 characters in `Finding::matched` so
 //! credential values are not propagated into audit logs or structured spans.
 
+use std::collections::{HashMap, HashSet};
+
 use regex::{Regex, RegexSet};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{Finding, FindingLocation, ScanType, Severity};
 
@@ -105,8 +107,10 @@ impl Redactor {
 
     /// Scan a JSON value for credentials. Redact in place and return findings.
     ///
-    /// String values that match one or more credential patterns are replaced
-    /// with `[REDACTED:credential]` in the matched spans.
+    /// String values and object keys that match one or more credential
+    /// patterns have the matched spans replaced with `[REDACTED:credential]`.
+    /// A redacted key keeps its entry and gets a unique name (`#2`, `#3`, ...
+    /// on collision).
     pub fn scan_and_redact(&self, value: &mut Value) -> Vec<Finding> {
         let mut findings = Vec::new();
         self.scan_recursive(value, &mut findings);
@@ -116,31 +120,7 @@ impl Redactor {
     fn scan_recursive(&self, value: &mut Value, findings: &mut Vec<Finding>) {
         match value {
             Value::String(s) => {
-                let matched_indices: Vec<usize> =
-                    self.set.matches(s.as_str()).into_iter().collect();
-
-                if !matched_indices.is_empty() {
-                    for &idx in &matched_indices {
-                        findings.push(Finding {
-                            scan_type: ScanType::Credentials,
-                            severity: Severity::High,
-                            description: format!("Credential detected: {}", self.descriptions[idx]),
-                            // Truncate so the actual secret is not propagated.
-                            matched: truncate(s, 40),
-                            location: FindingLocation::ResponseContent,
-                        });
-                    }
-
-                    // In-place redaction: apply replace_all for each matched pattern.
-                    // Only the matched credential spans are replaced; surrounding
-                    // text is preserved (e.g. "token: ghp_xxx rest" becomes
-                    // "token: [REDACTED:credential] rest").
-                    let mut redacted = s.clone();
-                    for &idx in &matched_indices {
-                        redacted = self.regexes[idx]
-                            .replace_all(&redacted, "[REDACTED:credential]")
-                            .into_owned();
-                    }
+                if let Some(redacted) = self.redact_text(s, Site::Value, findings) {
                     *s = redacted;
                 }
             }
@@ -153,11 +133,83 @@ impl Redactor {
                 for val in map.values_mut() {
                     self.scan_recursive(val, findings);
                 }
+                // Keys are backend-controlled text the client sees too (#2114).
+                if map.keys().any(|key| self.set.is_match(key)) {
+                    self.redact_keys(map, findings);
+                }
             }
             // Numbers, booleans, and nulls cannot contain credential patterns.
             _ => {}
         }
     }
+
+    /// Record one finding per matched pattern and return `text` with every
+    /// matched span replaced, or `None` when nothing matched. Surrounding text
+    /// is preserved ("token: <secret> rest" -> "token: [REDACTED:credential] rest").
+    fn redact_text(&self, text: &str, site: Site, findings: &mut Vec<Finding>) -> Option<String> {
+        let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
+        if matched.is_empty() {
+            return None;
+        }
+        let mut redacted = text.to_owned();
+        for &idx in &matched {
+            redacted = self.regexes[idx]
+                .replace_all(&redacted, "[REDACTED:credential]")
+                .into_owned();
+        }
+        // A key finding shows the redacted key: a bare 40-char token would
+        // otherwise survive the truncation whole into the audit log.
+        let (suffix, shown) = match site {
+            Site::Value => ("", text),
+            Site::Key => (" (object key)", redacted.as_str()),
+        };
+        for &idx in &matched {
+            findings.push(Finding {
+                scan_type: ScanType::Credentials,
+                severity: Severity::High,
+                description: format!("Credential detected: {}{suffix}", self.descriptions[idx]),
+                // Truncate so the actual secret is not propagated.
+                matched: truncate(shown, 40),
+                location: FindingLocation::ResponseContent,
+            });
+        }
+        Some(redacted)
+    }
+
+    /// Rename credential-bearing keys without losing an entry. Clean keys keep
+    /// their names; each redacted key takes its redacted text, or the first
+    /// free `<text>#n`, so two keys never collapse into one. A per-name counter
+    /// keeps n colliding keys linear rather than re-probing from `#2`.
+    fn redact_keys(&self, map: &mut Map<String, Value>, findings: &mut Vec<Finding>) {
+        let entries = std::mem::take(map);
+        let mut taken: HashSet<String> = entries
+            .keys()
+            .filter(|key| !self.set.is_match(key))
+            .cloned()
+            .collect();
+        let mut next: HashMap<String, usize> = HashMap::new();
+        for (key, value) in entries {
+            let Some(candidate) = self.redact_text(&key, Site::Key, findings) else {
+                map.insert(key, value);
+                continue;
+            };
+            let n = next.entry(candidate.clone()).or_insert(1);
+            let mut name = candidate.clone();
+            while taken.contains(&name) {
+                *n += 1;
+                name = format!("{candidate}#{n}");
+            }
+            taken.insert(name.clone());
+            map.insert(name, value);
+        }
+    }
+}
+
+/// Where a scanned string sits in the JSON tree.
+#[derive(Clone, Copy)]
+enum Site {
+    Value,
+    Key,
 }
 
 impl Default for Redactor {

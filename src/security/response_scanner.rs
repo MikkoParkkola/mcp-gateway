@@ -191,7 +191,8 @@ impl ResponseScanner {
 
     /// Scan a JSON value (recursively) for prompt injection patterns.
     ///
-    /// Searches all string values in the JSON tree. Returns matches with
+    /// Searches all string values and object keys in the JSON tree; a key hit's
+    /// description ends in ` (object key)`. Returns matches with
     /// the backend and tool context for logging.
     pub fn scan_response(&self, backend: &str, tool: &str, value: &Value) -> Vec<InjectionMatch> {
         let mut all_matches = Vec::new();
@@ -210,7 +211,7 @@ impl ResponseScanner {
         all_matches
     }
 
-    /// Recursively scan all string values in a JSON tree.
+    /// Recursively scan all string values and object keys in a JSON tree.
     fn scan_value_recursive(&self, value: &Value, matches: &mut Vec<InjectionMatch>) {
         match value {
             Value::String(s) => {
@@ -222,7 +223,12 @@ impl ResponseScanner {
                 }
             }
             Value::Object(map) => {
-                for val in map.values() {
+                for (key, val) in map {
+                    // Keys are backend-controlled text the client sees too (#2114).
+                    matches.extend(self.scan_text(key).into_iter().map(|mut hit| {
+                        hit.pattern_description.push_str(" (object key)");
+                        hit
+                    }));
                     self.scan_value_recursive(val, matches);
                 }
             }
