@@ -243,6 +243,53 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     session.shutdown().await;
 }
 
+/// MIK-1991 — a legacy stdio client whose `initialize` handshake does not
+/// declare `elicitation` is never sent an `elicitation/create`.
+///
+/// The positive row above proves the handshake's declaration reaches the
+/// bridge (replace `client.handshake_capabilities` with `Declared::NONE` and it
+/// goes red). This is its complement: the same wiring must also keep a
+/// capability out when the handshake omitted it, so the declaration is read
+/// from the handshake and is not a constant that always says yes.
+#[tokio::test]
+async fn mik_1991_a_handshake_without_elicitation_keeps_the_question_out() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    let mut handshake = initialize_request(1);
+    handshake["params"]["capabilities"] = json!({});
+    session.send(&handshake).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    session.send(&asking_call(2)).await;
+    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let frames = frames_lenient(&lines);
+
+    // Control: the backend was reached, so "no question" is the bridge's
+    // refusal and not an unreached fixture.
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached: {lines:?}"
+    );
+    assert!(
+        prompts_in(&frames).is_empty(),
+        "a client that declared no elicitation was sent one: {lines:?}"
+    );
+    let answer = frames
+        .iter()
+        .find(|frame| frame.get("id").and_then(Value::as_i64) == Some(2))
+        .unwrap_or_else(|| panic!("the undeclared call got no answer: {lines:?}"));
+    assert!(
+        !answer.to_string().contains("answered"),
+        "the call completed as if the question had been answered: {answer}"
+    );
+
+    session.shutdown().await;
+}
+
 /// Row 323 — a client asked before its `initialize` response has been written
 /// receives the bridged request only after initialization.
 ///
