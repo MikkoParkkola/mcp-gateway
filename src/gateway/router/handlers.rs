@@ -527,11 +527,7 @@ async fn meta_mcp_dispatch(
             log_agent_identity(&agent_identity, audit, None);
         }
         Err(reason) => {
-            log_agent_identity(
-                &agent_identity,
-                crate::security::IdentityAudit::Clean,
-                Some(&reason),
-            );
+            // mutant: refusal audit call removed
             return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
                 .into_response();
         }
