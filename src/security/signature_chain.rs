@@ -182,7 +182,7 @@ fn signing_input(link: &ChainLink) -> Vec<u8> {
 
 /// `HL(link)`: SHA-256 hex of RFC 8785 of the whole link, `sig` included.
 pub(crate) fn link_hash(link: &ChainLink) -> String {
-    sha256_hex(&canonical_link(link, true))
+    sha256_hex(&canonical_link(link, false))
 }
 
 /// `H(result)`: SHA-256 hex of RFC 8785 of the result minus top-level `_meta`
