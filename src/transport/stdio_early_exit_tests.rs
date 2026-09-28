@@ -162,6 +162,94 @@ async fn t3c_a_multi_line_secret_is_redacted_line_by_line() {
     assert!(!excerpt.contains("pem-line-two-4d7"), "{excerpt}");
 }
 
+/// T3d: a configured value that is a prefix of another cannot expose the
+/// longer one's tail.
+#[tokio::test]
+async fn t3d_overlapping_secrets_are_redacted_whole() {
+    let t = transport(
+        "echo \"$LONG\" >&2; exit 1",
+        &[("SHORT", "ovl-canary"), ("LONG", "ovl-canary-tail-6b3")],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("tail-6b3"), "{excerpt}");
+}
+
+/// T3e: a control character inside a secret does not hide it from redaction
+/// and then disappear from the log line.
+#[tokio::test]
+async fn t3e_a_control_character_cannot_split_a_secret() {
+    let t = transport(
+        "printf \"ctrl-\\001canary-81f\\n\" >&2; exit 1",
+        &[("TOKEN", "ctrl-canary-81f")],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("ctrl-canary-81f"), "{excerpt}");
+}
+
+/// T3f: a secret split inside a multi-byte character by the read limit is
+/// still masked.
+#[tokio::test]
+async fn t3f_a_secret_split_mid_character_is_masked() {
+    let secret = "é".repeat(3000);
+    let t = transport(
+        "printf \"x%s\\n\" \"$WIDE\" >&2; exit 1",
+        &[("WIDE", &secret)],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("éé"), "{excerpt}");
+}
+
+/// T3g: with no credential recogniser the line is withheld, never passed
+/// through; and this build picks the recogniser its features provide.
+#[test]
+fn t3g_without_a_recogniser_stderr_is_withheld() {
+    use super::{RECOGNISER, Recogniser, WITHHELD, recognise};
+    let token = format!(
+        "ghp_{}",
+        "a1B2c3D4e5".repeat(4).get(..36).unwrap_or_default()
+    );
+    assert_eq!(
+        recognise(format!("tok={token}"), Recogniser::Absent),
+        WITHHELD
+    );
+    let expected = if cfg!(feature = "firewall") {
+        Recogniser::Firewall
+    } else {
+        Recogniser::Absent
+    };
+    assert_eq!(RECOGNISER, expected);
+}
+
+/// T3h: an invalid byte earlier on a cut line does not stop the split
+/// character at the end being dropped before masking.
+#[tokio::test]
+async fn t3h_an_earlier_invalid_byte_does_not_hide_a_split_secret() {
+    let secret = "é".repeat(3000);
+    let t = transport(
+        "printf \"\\377%s\\n\" \"$WIDE\" >&2; exit 1",
+        &[("WIDE", &secret)],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("éé"), "{excerpt}");
+    assert!(excerpt.contains("[REDACTED]"), "{excerpt}");
+}
+
+/// T3i: a configured value carrying its own control character still matches.
+#[tokio::test]
+async fn t3i_a_secret_with_a_control_character_still_matches() {
+    let t = transport(
+        "printf \"%s\\n\" \"$TAB\" >&2; exit 1",
+        &[("TAB", "tab-\tcanary-2c9")],
+    );
+    let _ = start_err(&t).await;
+    let excerpt = t.start_failure_excerpt().expect("an excerpt is kept");
+    assert!(!excerpt.contains("canary-2c9"), "{excerpt}");
+}
+
 /// T2d: an overlong line is read in bounded chunks and the lines after it
 /// still arrive.
 #[tokio::test]

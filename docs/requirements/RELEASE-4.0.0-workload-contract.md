@@ -291,8 +291,12 @@ guarantee is enforced rather than merely intended.
 7. A second gateway listening during a rep.
 8. Gating cells A, B and C not running a byte-identical gateway config.
 9. k6 image unset, or resolved by tag rather than a `sha256:` digest.
+10. When `pins.json` declares `load_envelope.max_load1`: any measured rep whose `load1`
+    (1-minute load average) at start or end reaches that limit, or whose load record is missing
+    (`benchmarks/workload/eval_workload.py`).
 
-Machine load (`uptime`) is recorded, not a void condition.
+Without a declared `load_envelope`, machine load (`uptime`) is recorded, not a void
+condition.
 
 ## 9. Build
 
