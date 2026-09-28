@@ -1415,7 +1415,11 @@ CASES += [
     ("crates-publish-stops-waiting-for-release", "release.yml",
      "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
     ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
-     "--skip mik_7479_full_burst\n", "--skip mik_7479_full_burst --skip some_new_skip\n", CAUGHT),
+     "      # that job provisions, and the gate below `needs` that job.\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n",
+     "      # that job provisions, and the gate below `needs` that job.\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst --skip some_new_skip\n",
+     CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):
