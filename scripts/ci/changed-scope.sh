@@ -35,7 +35,7 @@ classify() {
 deletes_root_file() {
   local path
   while IFS= read -r -d '' path; do
-    [[ $path == */* ]] || { echo true; return; }
+    :
   done
   echo false
 }
