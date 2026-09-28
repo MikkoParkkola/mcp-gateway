@@ -116,7 +116,11 @@ async fn direct_route_401_uses_propagated_lease() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], -32003, "{body}");
     assert_eq!(fixture.custody.refreshes(), 1, "exactly one forced refresh");
-    assert_eq!(fixture.dispatches.count(), 1, "the 401 is not retried");
+    assert_eq!(
+        fixture.dispatches.calls().len(),
+        1,
+        "the 401 is not retried"
+    );
 }
 
 /// T7-direct-b: a rotation answers with the rejection carrier, so the caller
@@ -135,7 +139,7 @@ async fn direct_route_401_with_live_grant_says_retry() {
     assert_eq!(body["error"]["data"]["retry"], true, "{body}");
     assert_eq!(fixture.custody.refreshes(), 1);
     assert_eq!(
-        fixture.dispatches.count(),
+        fixture.dispatches.calls().len(),
         1,
         "the call itself is not retried"
     );

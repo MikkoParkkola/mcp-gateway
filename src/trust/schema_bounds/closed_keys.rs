@@ -554,5 +554,16 @@ pub(crate) fn count(kind: &'static str) {
     telemetry_metrics::counter!("mcp_input_schema_events_total", "kind" => kind).increment(1);
 }
 
+/// [`count`] with a fixed `reason` label beside the kind (F13's
+/// `input_schema_fill_refused{reason="circuit"|"rate"}`).
+pub(crate) fn count_reason(kind: &'static str, reason: &'static str) {
+    telemetry_metrics::counter!(
+        "mcp_input_schema_events_total",
+        "kind" => kind,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 #[cfg(test)]
 mod tests;

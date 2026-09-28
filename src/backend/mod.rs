@@ -26,6 +26,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 mod annotations;
 mod cached_metadata;
 mod era;
+mod fill_check;
 mod input_keys;
 mod lifecycle;
 mod metadata;
@@ -41,6 +42,7 @@ use pool::PoolKey;
 use pool::PooledEntry;
 
 pub(crate) use annotations::prepare_tool_metadata;
+pub(crate) use fill_check::text_absent;
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
@@ -252,6 +254,9 @@ pub(crate) struct CleanupState {
     pub(crate) handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+// The cells read counters from a local Prometheus render.
+#[cfg(all(test, feature = "metrics"))]
+mod f13_fill_tests;
 #[cfg(test)]
 mod list_paging_tests;
 #[cfg(test)]

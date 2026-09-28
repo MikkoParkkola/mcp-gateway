@@ -109,6 +109,9 @@ impl Backend {
     /// the shared one holds a catalogue this caller was never shown once a
     /// `stateless` backend lists per caller. Read non-blocking — a cold cache
     /// mirrors nothing rather than a `tools/list` under this request's permit.
+    /// Since F13 a `tools/call` rarely finds it cold: R2's check lists a cold
+    /// slot before dispatch, holding no backend permit, so the first call is
+    /// mirrored too.
     fn param_header_set(
         &self,
         method: &str,

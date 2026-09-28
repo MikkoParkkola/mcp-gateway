@@ -1663,7 +1663,7 @@ async fn backend_handler_direct_route_stamps_bypass_provenance() {
 
     let backend = Arc::new(Backend::new(
         "demo",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
