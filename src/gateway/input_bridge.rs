@@ -501,6 +501,22 @@ impl InputBridge<'_> {
             }
             last = Some(Box::new(result));
         }
+        // The last round is handed back to the caller rather than asked
+        // in-band, but it is still a question the backend composed after an
+        // answer, so it passes the same immutable gate every asked round did
+        // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+        if last.is_some()
+            && let Ok(prompts) = Self::plan(&interim, declared, slice)
+        {
+            self.gate
+                .admit(&Self::challenge(&prompts))
+                .map_err(|error| match error {
+                    BridgeError::ChallengeRefused { .. } => {
+                        BridgeError::ChallengeRefused { dispatched }
+                    }
+                    other => other,
+                })?;
+        }
         Err(BridgeError::RoundsExhausted { last })
     }
 
