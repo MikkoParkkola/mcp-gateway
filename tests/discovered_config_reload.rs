@@ -48,7 +48,12 @@ fn write_owner_only(path: &Path, text: &str) {
 /// change" a config edit makes so its reload logs completion.
 fn http_config(port: u16, env_file: &str, auth: bool, backend: bool) -> String {
     let auth = if auth {
-        format!("auth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n")
+        // Auth on needs a transparency log (UPGRADING item 43); its default
+        // path is under `~/.mcp-gateway`, and HOME is the tempdir.
+        format!(
+            "security:\n  transparency_log:\n    enabled: true\n\
+             auth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n"
+        )
     } else {
         "auth:\n  enabled: false\n".to_owned()
     };
