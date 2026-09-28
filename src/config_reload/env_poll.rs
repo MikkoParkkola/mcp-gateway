@@ -270,14 +270,15 @@ impl WarnLimiter {
         // or a config-file failure's, whichever came later. So an error that
         // changes and changes back warns each time, and only real warnings
         // are recorded, which keeps the 60 s reminder on the actual warning.
-        let latest = [self.last.get(path), self.primed.as_ref()]
+        let _ = path;
+        let latest = [self.last.get(Path::new("/")), self.primed.as_ref()]
             .into_iter()
             .flatten()
             .max_by_key(|(_, at)| *at);
         let warn = !latest.is_some_and(fresh);
         if warn {
             self.last
-                .insert(path.to_path_buf(), (error.to_owned(), now));
+                .insert(PathBuf::from("/"), (error.to_owned(), now));
         }
         warn
     }
