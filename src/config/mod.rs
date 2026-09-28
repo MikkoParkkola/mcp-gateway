@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
-use crate::security::verify_remote_server_provenance;
+use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 use config_file::ConfigFile;
 
@@ -586,6 +586,7 @@ impl Config {
         let secret_refs = match expansion {
             Expansion::Resolve => {
                 let (refs, files) = config.expand_env_vars(&overlay)?;
+                posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 overlay.record_secret_files(files);

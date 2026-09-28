@@ -214,6 +214,7 @@ pub async fn run_doctor_command(
 
     // ── 6. AI client configuration ─────────────────────────────────────────
     results.push(check_ai_client_config(&config).await);
+    results.push(posture::check_security_posture(&config));
 
     // ── 7. Passive ShadowRadar handoff ─────────────────────────────────────
     results.extend(check_shadow_radar(&config, config_path).await);

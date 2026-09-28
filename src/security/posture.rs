@@ -20,8 +20,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
-use crate::config::Config;
+use crate::config::{Config, ContextIntegrityPresetConfig as Preset};
+use crate::{Error, Result};
 
 /// Gateway security posture (`security.posture`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,8 +61,31 @@ impl FirewallBuild {
 ///
 /// Returns [`Error::ConfigValidation`] when `hardened` cannot be honoured.
 pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
-    let _ = (config, build);
+    if config.security.posture == SecurityPosture::Standard {
+        return Ok(());
+    }
+    if build == FirewallBuild::Absent {
+        return Err(Error::ConfigValidation(
+            "security.posture=hardened needs the `firewall` feature, and this binary was built \
+             without it; use a default build or set security.posture: standard"
+                .to_string(),
+        ));
+    }
+    let context_integrity = &mut config.security.context_integrity;
+    if matches!(
+        context_integrity.preset,
+        Preset::MonitorOnly | Preset::LocalDeveloper | Preset::AuditOnly
+    ) {
+        context_integrity.preset = Preset::TeamShared;
+    }
+    context_integrity.non_bypassable = true;
     Ok(())
+}
+
+/// The reload refusal when `candidate` changes the running posture.
+pub(crate) fn reload_refusal(running: &Config, candidate: &Config) -> Option<String> {
+    (running.security.posture != candidate.security.posture)
+        .then(|| "config reload refused: security.posture requires restart".to_string())
 }
 
 /// A multi-user deployment running the `standard` posture.
@@ -70,13 +93,31 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
 /// The single source of the startup warning and the `doctor` finding.
 #[must_use]
 pub fn unhardened_multi_user(config: &Config) -> bool {
-    let _ = config;
-    false
+    config.security.posture == SecurityPosture::Standard
+        && config
+            .auth
+            .implies_multi_user(!config.key_server.oidc.is_empty())
 }
 
 /// Log the posture once at startup.
+///
+/// `hardened`: one info line with the effective value of every control it
+/// enforces. A multi-user `standard` deployment: one warning.
 pub(crate) fn log_startup(config: &Config) {
-    let _ = config;
+    if config.security.posture == SecurityPosture::Hardened {
+        let context_integrity = &config.security.context_integrity;
+        let preset = serde_json::to_value(context_integrity.preset).unwrap_or_default();
+        tracing::info!(
+            "security.posture=hardened enforcing: context_integrity preset={} non_bypassable={}",
+            preset.as_str().unwrap_or_default(),
+            context_integrity.non_bypassable
+        );
+    } else if unhardened_multi_user(config) {
+        tracing::warn!(
+            "multi-user deployment running security.posture=standard; set security.posture: \
+             hardened (see `mcp-gateway doctor`, row security-posture)"
+        );
+    }
 }
 
 #[cfg(test)]

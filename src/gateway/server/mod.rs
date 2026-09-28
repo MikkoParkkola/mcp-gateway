@@ -593,6 +593,7 @@ impl Gateway {
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
         }
+        crate::security::posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
 

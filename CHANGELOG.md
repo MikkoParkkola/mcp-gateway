@@ -24,6 +24,13 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Added
 
+- `security.posture: standard | hardened` (default `standard`, which changes nothing). As of
+  this release `hardened` enforces only: the context-integrity preset is raised to at least
+  `team_shared` (`enterprise_strict` is kept) with `non_bypassable` on, and startup is refused
+  on a build without the `firewall` feature. Changing the posture needs a restart; a reload
+  that changes it is refused. A multi-user deployment running `standard` logs one startup
+  warning and gets a `doctor` `security-posture` finding (advisory; the exit code is unchanged).
+
 - `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
   launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
   and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a

@@ -8,8 +8,27 @@ use mcp_gateway::config::Config;
 use super::CheckResult;
 
 pub(super) fn check_security_posture(config: &Config) -> CheckResult {
-    let _ = config;
-    CheckResult::pass("security-posture", "")
+    let row = if mcp_gateway::security::posture::unhardened_multi_user(config) {
+        CheckResult::warn(
+            "security-posture",
+            "multi-user deployment running security.posture=standard",
+        )
+        .with_hint("set security.posture: hardened (restart required)")
+        .with_manual_fix("set security.posture: hardened in gateway.yaml, then restart")
+    } else {
+        CheckResult::pass(
+            "security-posture",
+            format!("security.posture={}", posture_name(config)),
+        )
+    };
+    row.with_category("security")
+}
+
+fn posture_name(config: &Config) -> String {
+    serde_json::to_value(config.security.posture)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
