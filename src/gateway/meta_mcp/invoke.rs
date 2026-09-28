@@ -150,6 +150,7 @@ mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
 use bridge_settle::arm;
+pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
@@ -2127,9 +2128,7 @@ impl MetaMcp {
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.
         // #1962: a drop during the dispatch settles the key as uncertain.
-        if let Some(reservation) = idem_reservation.as_mut() {
-            reservation.commit(&uncertain_side_effect());
-        }
+        arm_for_dispatch(idem_reservation.as_mut());
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,

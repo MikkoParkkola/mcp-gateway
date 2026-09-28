@@ -19,6 +19,16 @@ pub(super) fn arm(slot: &parking_lot::Mutex<Option<IdempotencyReservation>>, arm
     }
 }
 
+/// Arm `reservation` for a backend dispatch: dropped before the result is
+/// handled, it settles as "outcome uncertain" rather than freeing the key.
+pub(in crate::gateway::meta_mcp) fn arm_for_dispatch(
+    reservation: Option<&mut IdempotencyReservation>,
+) {
+    if let Some(reservation) = reservation {
+        reservation.commit(&uncertain_side_effect());
+    }
+}
+
 /// Decides whether a failed bridged dispatch releases the idempotency key.
 ///
 /// The error type already carries a tight, deliberate allowlist of failures that
