@@ -10,8 +10,6 @@ pub(crate) mod account_bindings;
 mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
-#[cfg(test)]
-mod remote_provenance_start_tests;
 mod cleartext;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
@@ -20,6 +18,8 @@ mod cost_restart_tests;
 mod gh475_budget_decides_tests;
 mod identity_grants;
 mod persistence;
+#[cfg(test)]
+mod remote_provenance_start_tests;
 #[cfg(test)]
 mod replica_state_tests;
 #[cfg(test)]
