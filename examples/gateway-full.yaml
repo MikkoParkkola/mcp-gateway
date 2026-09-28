@@ -65,6 +65,14 @@ auth:
 #     path: "~/.mcp-gateway/transparency/transparency.jsonl"
 #     key_id: "default"
 #     shared_secret: "${MCP_GATEWAY_TRANSPARENCY_SECRET}"   # optional HMAC per entry
+#     # One gateway process writes a log path; a second is refused at startup
+#     # after waiting up to 10 s for a restarting predecessor to exit.
+#     # The log rotates into sealed segments (UPGRADING-4.0 item 49).
+#     rotation:
+#       max_segment_bytes: 67108864   # 1 MiB..128 MiB
+#       max_segment_age_secs: 0       # 0 = rotate on size only
+#       retain_segments: 12           # sealed segments kept
+#       on_disk_full: expire_oldest   # or: refuse
 
 # --- Meta-MCP ---
 
