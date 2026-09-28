@@ -2265,7 +2265,7 @@ class WorkflowWiring(unittest.TestCase):
                     continue  # another repository (the Homebrew tap)
                 sites += 1
                 named += [f"{name}: ref {r}" for r in artifact_keys(block, ("ref",))]
-            if re.search(r"(?m)^    uses: \./\.github/workflows/", body):
+            if re.search(r"""(?m)^    uses:\s*["']?\./\.github/workflows/""", body):
                 sites += 1
                 named += [f"{name}: with ref {r}" for r in re.findall(r"(?m)^      (?:ref|tag):\s*(.+?)\s*$", body)]
         self.assertGreaterEqual(sites, 10, "the checkout and call inventory shrank")
@@ -2325,6 +2325,30 @@ class WorkflowWiring(unittest.TestCase):
             self.assertRegex(text, r'python3 "\$suite" \|\| \{ echo "::error::\$suite failed"; fail=1; \}')
             self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
             self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
+
+    def test_the_release_restores_no_cache(self):
+        # A cache restored into a release job is input nobody reviewed at the
+        # tag: whatever an earlier run saved under a matching key is built,
+        # signed and published with the release. Release jobs build cold.
+        # Covers release.yml and every workflow it calls, whose jobs run in
+        # the release's context. setup-node caches on its own when it finds a
+        # package manager, so it must say it will not.
+        release = WORKFLOWS / "release.yml"
+        called = re.findall(r"""(?m)^    uses:\s*["']?\./\.github/workflows/([^"'\s#]+)""", release.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(called), ["packaged-suite.yml", "task-sdk-recovery.yml"], "the called-workflow inventory changed")
+        found = []
+        for wf in ["release.yml", *called]:
+            for block in steps(wf):
+                uses = " ".join(l for l in block if re.match(r"""^\s*(?:-\s+)?["']?uses["']?\s*:""", l))
+                label = f"{wf}: {block[0].strip()}"
+                if re.search(r"actions/cache(?:/\w+)?@|Swatinem/rust-cache@", uses):
+                    found.append(f"{label} restores a cache")
+                if artifact_keys(block, ("cache",)):
+                    found.append(f"{label} sets cache:")
+                flags = [v.lower() for v in artifact_keys(block, ("package-manager-cache",))]
+                if "actions/setup-node@" in uses and (not flags or set(flags) != {"false"}):
+                    found.append(f"{label} leaves package-manager-cache on")
+        self.assertEqual(found, [], "a release job restores a cache")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
