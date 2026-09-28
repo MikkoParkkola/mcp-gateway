@@ -39,6 +39,7 @@ def evaluate(expr: str, ctx: dict) -> bool:
         return cur
 
     tokens = re.findall(r"startsWith|\(|\)|,|&&|\|\||==|!=|!|'[^']*'|[A-Za-z_][\w.\-]*", expr)
+    status = ctx.get("_status", {})
     pos = 0
 
     def peek():
@@ -64,6 +65,10 @@ def evaluate(expr: str, ctx: dict) -> bool:
             b = disj()
             assert take() == ")"
             return str(a or "").lower().startswith(str(b).lower())
+        if t in ("cancelled", "always", "success", "failure") and peek() == "(":
+            take()
+            assert take() == ")"
+            return {"always": True}.get(t, status.get(t, t == "success"))
         if t.startswith("'"):
             return t[1:-1]
         if t in ("true", "false"):

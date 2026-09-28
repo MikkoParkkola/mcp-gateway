@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 72, 73, 74, 77 and 84 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 83 and 84 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -95,7 +95,7 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
-| 68 | Reserved: lands with #1473 | None yet |
+| 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
 | 69 | Reserved: lands with a pending change | None yet |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Reserved: lands with a pending change | None yet |
@@ -105,12 +105,12 @@ upgrading a running deployment.
 | 75 | Reserved: lands with a pending change | None yet |
 | 76 | Reserved: lands with a pending change | None yet |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
-| 78 | Reserved: lands with a pending change | None yet |
+| 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Reserved: lands with a pending change | None yet |
 | 80 | Reserved: lands with a pending change | None yet |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
-| 83 | Reserved: lands with a pending change | None yet |
+| 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 
 
@@ -1768,6 +1768,30 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
 
+## 68. Windows runs the task and personal-account stores, owner-only
+
+Before 4.0 both stores refused to start on Windows: their custody lock and their privacy
+checks existed only for unix. In 4.0 they run on Windows with protection equivalent to the unix
+`0700` directories and `0600` files:
+
+- Every directory and file the stores create is owner-only from its first instant: owner is the
+  gateway's account, one grant to that account, and nothing inherited from the parent.
+- On every open, each store directory and file is checked on the open handle and refused when
+  another account is granted access, the owner is someone else, the DACL inherits or is NULL,
+  or the object is a symlink or junction. A store directory reached through a junction, on a
+  network drive, or on a volume with no ACLs (FAT32, exFAT) is refused.
+- The directories stay open for as long as the store runs, so they cannot be renamed or
+  swapped for a junction underneath it.
+- A 3.x OAuth token file offered for migration is refused when other accounts can read it
+  (the 3.x gateway wrote it with the directory's inherited ACL). The refusal names the rule it
+  broke and prints the `icacls` commands, for PowerShell, that make the file owner-only.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** keep the store directories on a local NTFS or ReFS path, not a
+mapped drive or a junction. If a 3.x token migration is refused, run the printed `icacls` lines
+in PowerShell (as an administrator when it says the file has another owner) and retry.
+
 ## 70. Secrets stay out of the request URI and its trace
 
 The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
@@ -1898,6 +1922,37 @@ capabilities:
 **Action:** if capability calls must leave through a proxy, set `capabilities.egress_proxy`.
 Imports that could only reach their spec through a proxy must be fetched another way, for
 example downloaded and imported from a file.
+
+## 78. A stdio gateway serves its local operator's personal accounts
+
+A `personal_managed` account served a stdio gateway's caller only when HTTP auth was on with
+`auth.single_user: true`, at most one API key, no OIDC issuer and no identity adapter. A stdio gateway
+with the default `auth.enabled: false` refused every account-bound call with "the request
+carries no verified end-user identity".
+
+In 4.0 a stdio gateway serves its managed accounts to its one caller, the local process that
+started it, whatever the `auth` block says. `auth` configures the HTTP listener only. An HTTP
+gateway is unchanged: it serves the sole-operator account only under the single-user settings
+above. This covers a REST capability bound with `auth.account`; an account bound to an MCP
+backend still needs a verified end-user identity on either transport (#1961).
+
+Anyone who can start the gateway as the same OS user already holds its data directory, where the
+account store lives, so this grants no one new access. Several stdio gateways sharing one data
+directory share its accounts.
+
+**Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
+
+## 83. `MigratedCredential` has a public `reachability` field
+
+`accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
+when the configuration asserts a single user, in each case through a REST capability bound to
+the account; an MCP backend bound to it still needs a verified end-user identity (#1961). For
+library users, the report type
+`MigratedCredential` gains a public `reachability: String` field and is marked
+`#[non_exhaustive]`.
+
+**Action:** library users only. Code that builds `MigratedCredential` with a struct literal, or
+destructures it without a trailing `..`, no longer compiles; read the fields of the value `migrate_legacy_credential_offline` returns instead.
 
 ## 84. Capability OAuth refresh sends tokens only where the capability may call
 
