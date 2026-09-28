@@ -394,3 +394,11 @@ fn executable_name_parses_a_quoted_program_path() {
     let command = crate::transport::join_command(&argv).expect("joinable");
     assert_eq!(executable_name(&command).as_deref(), Some("srv"), "{command}");
 }
+
+#[test]
+fn executable_name_keeps_raw_process_text_literal() {
+    assert_eq!(
+        executable_name("/usr/bin/it's-srv --port 1").as_deref(),
+        Some("it's-srv")
+    );
+}

@@ -356,7 +356,18 @@ pub(super) fn is_loopback_url(raw: &str) -> bool {
 }
 
 pub(super) fn executable_name(command: &str) -> Option<String> {
-    let first = command.split_whitespace().next()?;
+    // Discovery stores argv joined with platform quoting, which starts a
+    // quoted program with a quote; split that the same way. Anything else
+    // (an unquoted program, raw `ps` text) keeps the whitespace split, so a
+    // literal quote or backslash inside it is not reinterpreted.
+    let argv = command
+        .starts_with(['\'', '"'])
+        .then(|| crate::transport::split_command(command))
+        .flatten();
+    let first = match &argv {
+        Some(argv) => argv.first()?.as_str(),
+        None => command.split_whitespace().next()?,
+    };
     let name = Path::new(first)
         .file_name()
         .and_then(|value| value.to_str())
