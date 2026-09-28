@@ -194,6 +194,9 @@ pub(super) fn admit_fill(
             .check_circuit(backend)
             .inspect_err(|_| count_reason("input_schema_fill_refused", "circuit"))?;
     }
+    if gated {
+        entry.failsafe.take_token(backend)?;
+    }
     let cooling = if tools {
         entry
             .tools_fill_failed_at
