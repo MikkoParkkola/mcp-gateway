@@ -190,9 +190,11 @@ reload does not plan, and a startup skips the snapshot and serves no grants.
 A plan that cannot be persisted (step 6) refuses the change: a reload publishes nothing and reports
 "grant change refused: the audit plan could not be written", keeping the live set (the acceptance
 row's "refuse the change"); a startup serves no grants. A failed recovery in step 1 is the same. An
-append that fails after the publish never reverts it (AUDIT4.6). A failed
-commit write keeps the committed state in memory, so the running process does not repeat records, and the
-next reconcile retries the write. A persistently unreadable journal plans its `indeterminate` record once
+append that fails after the publish never reverts it (AUDIT4.6). A failed commit write leaves the plan
+durably pending, so it stays a barrier: in memory the plan is marked recorded (the process never appends
+its records again), but until a commit write succeeds, no new plan is made and no snapshot is written.
+Step 1 of the next reconcile retries the commit write first; while it keeps failing, a reload refuses
+the change and a startup serves no grants, exactly as for a failed recovery. A persistently unreadable journal plans its `indeterminate` record once
 per cause per process (cause kept in memory). While the journal is unreadable (missing is not
 unreadable: a missing journal is an empty one), steps 3-4 are skipped and the baseline is kept, so CLI
 changes are not misreported as `out_of_band`; they are recorded once the journal is readable again.
@@ -279,7 +281,8 @@ not the store's `FaultPoint`, which covers collection-file replacement only.
 | Auth on, grants on, store cannot open | refuse to start (HTTP and stdio) | 4.5 |
 | Auth off | no store, no auditor, tracing event only | 4.5 control |
 | Reload append fails | change stays in force; outcome says UNRECORDED; plan kept, `gap` persisted | 4.6, 4.7 |
-| Commit write fails after appends | committed in memory; outcome names it; next reconcile retries; after a crash, step 1 finds every record | 4.8 |
+| Commit write fails after appends | plan stays a durable barrier: no new plan, no snapshot, change refused until the commit write succeeds; records never repeated | 4.8 |
+| Commit write fails, then the next reload | step 1 retries the commit before planning; still failing means refused | 4.8 (T8b) |
 | `gap` set | one `indeterminate` gap record, mismatches as `indeterminate`; `gap` cleared only by a committed plan | 4.7 |
 | Snapshot append fails | this run serves no grants | 4.3 |
 | Reload parse refusal | prior grant set unchanged; journal stays pending | acceptance row positive control |
@@ -335,6 +338,7 @@ Each cell names the failure it goes red on. The test plan document expands these
 | T7a | 4.7 | reload append fails, then restart with a further direct edit | expects a gap record and `indeterminate`, not `out_of_band` |
 | T7b | 4.7 | reload append fails, restart with the file unchanged | expects the gap record even with no mismatch |
 | T8 | 4.8 | auditor fault at C4, C5 (k=1 of 3 and k=300 of 301), C6; restart | expects exactly one record per planned id, in order |
+| T8b | 4.8 | commit write fails; another reload with a new CLI change; then restart | expects the reload refused, no snapshot or new plan appended while pending, each record once after restart |
 | T9 | wiring | through `identity_grant_sink_for` and the real startup helpers | a sink built without the auditor passes every other cell |
 | T10 | race | CLI holds the journal lock between its file write and append; reload runs | expects busy or one `add` record, never `out_of_band` |
 | T11 | R1 | durable write and readback of every `grant_change` field through `FileControlPlaneStore` | `audit_fields` drops the field |
@@ -360,3 +364,18 @@ is set (T7a). M8 drop the `prev_digest` check (T4d). M9 content-only event ids (
 - An authenticated CLI actor (needs a CLI identity; decision 21).
 - Signing the journal. It has the grant file's trust level (section 4).
 - Rotation of the journal. It grows by one line per CLI change; a size note goes in the docs.
+
+## 13. Review dispositions
+
+Two independent reviews per round; three rounds.
+
+- Round 1 (both SHIP-WITH-FIXES): bounded crash window, dropped entries' effects, baseline on partial
+  failure, content-only ids, no-baseline blindness, direct edit absorbed by a later CLI change, gap
+  durability, gap cleared silently, journal replacement, unix-only lock, missing race and torn-line
+  cells. All fixed in rev 2 (write-ahead plan, `prev_digest`, `consumed` ids, `try_lease`, T4d-T4h, T10).
+- Round 2 (both SHIP-WITH-FIXES): snapshot burying a pending plan, recovered plan clearing the gap,
+  append without a durable plan, same-grant ids within one plan, no-baseline false positive, repeated
+  discontinuity records. All fixed in rev 3 (invariant in 5.2, gap kept on recovery, refuse unplannable
+  changes, ordinal ids, seeded pre-state, `missing_reported`, T3e, T4i, T4j, T6b, T7c).
+- Round 3: a failed commit write let a later snapshot bury the still-pending plan (HIGH). Fixed: a pending
+  plan whose commit failed is a barrier until its commit succeeds (5.2, section 8, T8b).
