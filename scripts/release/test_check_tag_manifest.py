@@ -754,7 +754,7 @@ COSIGN_FLOOR = (2, 6, 5)
 # one: YAML allows the key and the action reference bare, single- or
 # double-quoted, and a check that knows fewer forms than the others lets a
 # step escape it.
-COSIGN_INSTALLER = re.compile(r"""^\s*(?:- )?(["']?)uses\1:\s*["']?sigstore/cosign-installer@""")
+COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?sigstore/cosign-installer@""")
 
 
 def artifact_keys(block, keys):
