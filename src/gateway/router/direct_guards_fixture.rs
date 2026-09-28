@@ -49,8 +49,9 @@ pub(crate) enum Answer {
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
-/// and counting every `tools/call` (`tools/list` always answers empty so
-/// catalogue population never spends a call).
+/// and counting every `tools/call`. `tools/list` names the one tool the rows
+/// call, `read`, so the direct route's listing check (F13) admits it; a
+/// listing never counts as a call.
 struct CountingBackend {
     calls: Arc<AtomicUsize>,
     answer: Answer,
@@ -65,7 +66,10 @@ impl Transport for CountingBackend {
     ) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            return Ok(JsonRpcResponse::success(id, json!({"tools": []})));
+            return Ok(JsonRpcResponse::success(
+                id,
+                json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}),
+            ));
         }
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(self.answer, Answer::AskOnce) {
