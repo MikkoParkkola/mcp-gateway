@@ -1415,6 +1415,16 @@ CASES += [
     ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml",
      "        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
      "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n        with:\n          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    # The push-guard inventory must still see a quoted installer: a second,
+    # unnamed one with no tag guard is found only by what it uses.
+    ("cosign-installer-quoted-and-unguarded", "ci.yml",
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n",
+     "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n", CAUGHT),
+    # The installer's rehearsal exemption applies to it quoted as well.
+    ("cosign-installer-quoted-keeps-its-exemption", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n", TOLERATED),
     # Under env: the input never reaches the action, which installs its default.
     ("cosign-pin-moved-under-env", "ci.yml",
      "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",

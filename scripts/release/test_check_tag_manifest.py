@@ -750,6 +750,10 @@ HANDOFF_RETENTION_DAYS = 14
 # GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
 # certain conditions).
 COSIGN_FLOOR = (2, 6, 5)
+# One recogniser for an installer step, shared by every check that looks for
+# one: YAML allows the action reference bare, single- or double-quoted, and a
+# check that knows fewer forms than the others lets a step escape it.
+COSIGN_INSTALLER = re.compile(r"""^\s*(?:- )?uses:\s*["']?sigstore/cosign-installer@""")
 
 
 def artifact_keys(block, keys):
@@ -1846,7 +1850,7 @@ class WorkflowWiring(unittest.TestCase):
             re.compile(r"scripts/release/check_tag_manifest\.py"),
             re.compile(r"\$\{VERSION\}"),
             re.compile(r"\bmcp-publisher\b"),
-            re.compile(r"^\s*uses:\s*sigstore/cosign-installer@"),
+            COSIGN_INSTALLER,
             re.compile(r"^\s*uses:\s*anchore/sbom-action/"),
         )
         found = []
@@ -1895,7 +1899,7 @@ class WorkflowWiring(unittest.TestCase):
             # E2: the cosign installer may add the rehearsal, and only that.
             if condition == f"({' && '.join(TAG_CONJUNCTS)}) || ({REHEARSAL_CONDITION})":
                 self.assertTrue(
-                    any(re.match(r"^\s*(?:- )?uses:\s*sigstore/cosign-installer@", l) for l in block)
+                    any(COSIGN_INSTALLER.match(l) for l in block)
                     and not any(re.match(r"^\s*(?:- )?run:", l) for l in block),
                     f"ci.yml: {label} takes the installer's exemption without being it",
                 )
@@ -2215,7 +2219,7 @@ class WorkflowWiring(unittest.TestCase):
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
             wf = path.name
             for block in steps(wf):
-                if not any(re.search(r"""uses:\s*["']?sigstore/cosign-installer@""", line) for line in block):
+                if not any(COSIGN_INSTALLER.match(line) for line in block):
                     continue
                 pins = artifact_keys(block, ("cosign-release",))
                 self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
