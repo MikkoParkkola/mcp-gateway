@@ -429,3 +429,34 @@ async fn t3cd_failed_snapshot_append_serves_nothing() {
         );
     }
 }
+
+/// `fail_on_error: false` tolerates a missing grant file at startup: the run
+/// serves nothing but keeps its audited reload sink, so creating the file
+/// later is picked up by a reload.
+#[tokio::test]
+async fn a_tolerated_missing_grant_file_still_reloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path(), true);
+    config.security.identity_grants.fail_on_error = false;
+    let s = Started::run(config.clone()).await.unwrap();
+    let (live, _) = s.meta.identity_grant_sink();
+    assert!(live.read().values().next().is_none());
+    apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
+        .await
+        .unwrap();
+
+    let ctx = crate::config_reload::ReloadContext::new(
+        grants_path(dir.path()),
+        Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    )
+    .with_identity_grant_sink_opt(s.sink.clone());
+    let _ = ctx.reload_identity_grants().await;
+
+    assert!(
+        live.read().values().next().is_some(),
+        "a reload after a tolerated startup read error served nothing"
+    );
+}
