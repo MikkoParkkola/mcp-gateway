@@ -136,6 +136,16 @@ fn apply_backend_tool_call_security(
                 .map_or("Security firewall blocked this request", |f| {
                     f.description.as_str()
                 });
+            // OWASP ASI10: an anomaly block carries -32002 on every route, as
+            // on the meta route, so a caller can tell it from other refusals.
+            if verdict.is_anomaly_block() {
+                return Err(backend_security_error_with_status(
+                    id,
+                    -32002,
+                    &format!("Anomaly detection blocked: {desc}"),
+                    StatusCode::FORBIDDEN,
+                ));
+            }
             return Err(backend_security_error(
                 id,
                 &format!("Firewall blocked: {desc}"),

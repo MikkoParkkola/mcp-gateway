@@ -56,6 +56,65 @@ include = [
     "homebrew/mcp-gateway.rb",
     "npm/package.json",
     ".github/workflows/release.yml",
+    # Read by the tests, at compile or run time. The package-tests job
+    # builds the tests from the packaged crate and packaged-suite.yml runs
+    # them, so a file missing here fails there. Exact paths, no globs.
+    ".gitignore",
+    "benchmarks/ranking-baseline/corpus.json",
+    "benchmarks/ranking-baseline/results.json",
+    "deploy/helm/mcp-gateway/templates/configmap.yaml",
+    "deploy/helm/mcp-gateway/templates/deployment.yaml",
+    "deploy/helm/mcp-gateway/values.schema.json",
+    "deploy/helm/mcp-gateway/values.yaml",
+    "deploy/kubernetes/enterprise-alpha/base/configmap.yaml",
+    "deploy/kubernetes/enterprise-alpha/base/deployment.yaml",
+    "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+    "deploy/kubernetes/enterprise-alpha/base/networkpolicy.yaml",
+    "deploy/kubernetes/enterprise-alpha/base/rbac.yaml",
+    "deploy/kubernetes/enterprise-alpha/base/service.yaml",
+    "deploy/kubernetes/enterprise-alpha/crds/mcpgateway.io.yaml",
+    "deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh",
+    "deploy/kubernetes/enterprise-alpha/scripts/preflight.sh",
+    "deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh",
+    "deploy/kubernetes/enterprise-alpha/values.enterprise.example.yaml",
+    "deploy/single-node/docker-compose.yaml",
+    "Dockerfile",
+    "docs/CLIENTS.md",
+    "docs/DEPLOYMENT.md",
+    "docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
+    "docs/identity_grants.md",
+    "docs/MULTI_USER.md",
+    "docs/release/4.0.0-beta.2-notes.md",
+    "docs/release/v4.0.0-supported-matrix.md",
+    "docs/release/verify/2026-09-23-claude-code-2.1.280.md",
+    "docs/requirements/2026-09-09-nfr-sec3-key-rotation-test-plan.md",
+    "docs/requirements/nfr-sec1-control-inventory.md",
+    "docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
+    "docs/requirements/RELEASE-4.0.0-criteria-status.md",
+    "docs/requirements/RELEASE-4.0.0-operator-decisions.md",
+    "docs/requirements/RELEASE-4.0.0-performance-contract.md",
+    "docs/requirements/RELEASE-4.0.0-performance-releaseline-2026-09-15.md",
+    "docs/requirements/RELEASE-4.0.0-performance.md",
+    "docs/requirements/RELEASE-4.0.0-requirements.md",
+    "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md",
+    "docs/requirements/RELEASE-4.0.0-scope-status.json",
+    "docs/requirements/RELEASE-4.0.0-scope-tests.md",
+    "docs/requirements/RELEASE-4.0.0-scope-update.md",
+    "docs/requirements/RELEASE-4.0.0-test-plan.md",
+    "docs/requirements/RELEASE-4.0.0-workload-contract.md",
+    "docs/requirements/workload-pins-observed.md",
+    "docs/roadmap/mik-6550-trust-fabric-roadmap.md",
+    "docs/runbooks/backup-restore-and-keys.md",
+    "docs/runtime/descriptor_spec.md",
+    "docs/runtime/divergence_registry.md",
+    "docs/runtime/substrate_mapping.md",
+    "docs/SHADOW_SCAN.md",
+    "docs/TEAM_DEPLOYMENT.md",
+    "docs/trustcard.md",
+    "docs/UPGRADING-4.0.md",
+    "gateway.example.yaml",
+    "scripts/release/nfr_upgrade_1_rehearsal.sh",
+    "server.json",
 ]
 
 [workspace]
@@ -170,6 +229,18 @@ glob = "0.3"
 telemetry_metrics = { package = "metrics", version = "0.24" }
 metrics-exporter-prometheus = { version = "0.18", optional = true }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+
+# ADR-016: the Win32 security calls behind owner-only stores on Windows, used only
+# by `src/win_acl.rs`. Already in the lock file through mio, socket2 and others;
+# promoted to direct so the features below are requested explicitly.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 # `test-util` for `start_paused`: the list-drain budget cell (MIK 7570).

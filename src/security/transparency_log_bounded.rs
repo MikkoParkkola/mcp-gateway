@@ -167,15 +167,23 @@ impl TransparencyLogger {
 impl TransparencyLogger {
     /// Test seam for callers outside this module: bound every append at
     /// `limit`, and block the next write until the returned barrier is
-    /// released (a write stuck in the kernel), for at most 3 s.
+    /// released or dropped (a write stuck in the kernel).
     pub(crate) fn stall_next_write_for_test(
         &self,
         limit: Duration,
-    ) -> Arc<super::rotation::StallGate> {
+    ) -> super::rotation::StallRelease {
         *self.bound.limit.lock().expect("limit lock") = limit;
         let b = Arc::new(super::rotation::StallGate::default());
         *self.hooks.stall.lock().expect("stall lock") = Some(Arc::clone(&b));
-        b
+        super::rotation::StallRelease(b)
+    }
+
+    /// On a stalled log, bound every append past the stall gate's hang
+    /// guard. A call that queued on the permit would then outlast the held
+    /// write, which clears the stall; one refused at once leaves it stalled.
+    pub(crate) fn lift_append_bound_for_test(&self) {
+        assert!(self.is_stalled(), "lift the bound only while stalled");
+        *self.bound.limit.lock().expect("limit lock") = super::rotation::StallGate::DEADLINE * 2;
     }
 
     /// Whether a write's generation is still in the kernel.

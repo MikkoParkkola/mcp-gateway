@@ -562,6 +562,29 @@ pub(crate) fn validate_no_gateway_material_reuse(
 }
 
 #[cfg(test)]
+impl AdapterConfig {
+    /// A structurally valid adapter for tests outside this module, which
+    /// cannot name [`AdapterKind`] directly: `mod adapters` is private to
+    /// `personal_accounts::config`, so no path reaches the enum from a test
+    /// file elsewhere in the crate (e.g. `gateway::server::account_bindings`'s
+    /// `has_identity_adapter` cell). Same field values as this file's own
+    /// `adapter_secret_tests::adapter` fixture.
+    pub(crate) fn for_test(installation_id: &str) -> Self {
+        Self {
+            kind: AdapterKind::OpenwebuiSignedHeader,
+            installation_id: installation_id.to_string(),
+            header: "X-OpenWebUI-Assertion".to_string(),
+            issuer: "open-webui".to_string(),
+            hmac_secret_ref: "env:TEST_ADAPTER_SECRET".to_string(),
+            allowed_api_key_names: vec!["desktop".to_string()],
+            max_lifetime_seconds: 300,
+            clock_skew_seconds: 30,
+            session: None,
+        }
+    }
+}
+
+#[cfg(test)]
 #[path = "adapter_secret_tests.rs"]
 mod secret_tests;
 

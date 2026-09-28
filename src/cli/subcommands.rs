@@ -325,7 +325,7 @@ pub enum KubernetesCommand {
         #[arg(long, default_value_t = 1)]
         cycles: usize,
 
-        /// Keep reconciling until the process is stopped.
+        /// Keep reconciling until stopped; `--format json` prints one JSON line per cycle.
         #[arg(long)]
         watch: bool,
 
@@ -731,7 +731,7 @@ pub enum TlsCommand {
         #[arg(long)]
         cn: String,
 
-        /// Comma-separated SAN DNS names (e.g. "gateway.company.com,localhost")
+        /// Comma-separated SANs; an IP literal becomes an IP SAN (e.g. `gw.example,localhost,127.0.0.1,::1`)
         #[arg(long, default_value = "")]
         san_dns: String,
 

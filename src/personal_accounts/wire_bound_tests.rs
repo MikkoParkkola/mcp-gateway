@@ -18,7 +18,6 @@ use super::{
     AccountError, AccountKey, AccountLookup, GrantRecord, PersonalAccountStore, StoreConfig, config,
 };
 use std::io::Write as _;
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
 #[derive(serde::Deserialize)]
 struct Bounds {
@@ -61,15 +60,10 @@ fn install(variant: &Variant) -> (tempfile::TempDir, StoreConfig) {
     assert_ne!(settings.current_key_id, variant.key_id);
     settings.keys.insert(variant.key_id.clone(), key);
     for dir in [&settings.store_dir, &settings.authority_dir] {
-        std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        super::private_io::create_dir(dir);
     }
     let write = |path: std::path::PathBuf, bytes: &[u8]| {
-        std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(path)
-            .unwrap()
+        super::private_io::create_new(&path)
             .write_all(bytes)
             .unwrap();
     };

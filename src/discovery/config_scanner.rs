@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::TransportConfig;
 use crate::{Error, Result};
@@ -251,19 +251,19 @@ impl ConfigScanner {
                 // writes a credential into the log because discovery ran.
                 debug!("Found MCP server in environment: {name} (from {key})");
 
-                servers.push(DiscoveredServer {
-                    name: name.clone(),
-                    description: format!("MCP server from environment variable {key}"),
-                    source: DiscoverySource::Environment,
-                    transport: TransportConfig::for_url(&value),
-                    metadata: ServerMetadata {
+                servers.push(DiscoveredServer::new(
+                    name.clone(),
+                    format!("MCP server from environment variable {key}"),
+                    DiscoverySource::Environment,
+                    TransportConfig::for_url(&value),
+                    ServerMetadata {
                         config_path: None,
                         pid: None,
                         port: None,
                         command: None,
                         working_dir: None,
                     },
-                });
+                ));
             }
         }
 
@@ -308,13 +308,19 @@ impl ConfigScanner {
             .await
             .map_err(|e| Error::Config(format!("Failed to read config: {e}")))?;
 
-        let config: Value = serde_json::from_str(&content)
-            .map_err(|e| Error::Config(format!("Failed to parse JSON: {e}")))?;
+        // VS Code and Cursor write settings.json as JSONC.
+        let config: Value = super::jsonc::strip_jsonc(&content)
+            .ok_or_else(|| Error::Config("Unterminated comment or string in settings".into()))
+            .and_then(|text| {
+                serde_json::from_str(&text)
+                    .map_err(|e| Error::Config(format!("Failed to parse JSON: {e}")))
+            })?;
 
         let mut servers = Vec::new();
 
-        // VS Code might have MCP config under various keys
-        if let Some(mcp_config) = config.get("mcp").and_then(|v| v.as_object()) {
+        // VS Code user settings: { "mcp": { "servers": { "<name>": {...} } } }.
+        // Siblings such as `mcp.inputs` are not servers.
+        if let Some(mcp_config) = config.pointer("/mcp/servers").and_then(Value::as_object) {
             for (name, server_config) in mcp_config {
                 if let Some(server) = Self::parse_server_config(name, server_config, &source, path)
                 {
@@ -326,76 +332,15 @@ impl ConfigScanner {
         Ok(servers)
     }
 
-    /// Parse individual server config
+    /// Parse one client server entry (`command`/`args`/`env`/`cwd`, or
+    /// `url`/`headers`); see [`super::client_entry`].
     fn parse_server_config(
         name: &str,
         config: &Value,
         source: &DiscoverySource,
         config_path: &Path,
     ) -> Option<DiscoveredServer> {
-        // Extract command (stdio transport)
-        if let Some(command) = config.get("command").and_then(|v| v.as_str()) {
-            let args = config
-                .get("args")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-
-            let full_command = if args.is_empty() {
-                command.to_string()
-            } else {
-                format!("{} {}", command, args.join(" "))
-            };
-
-            let working_dir = config
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from);
-
-            return Some(DiscoveredServer {
-                name: name.to_string(),
-                description: format!("MCP server from {source:?}"),
-                source: source.clone(),
-                transport: TransportConfig::Stdio {
-                    command: full_command.clone(),
-                    cwd: working_dir
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    protocol_version: None,
-                },
-                metadata: ServerMetadata {
-                    config_path: Some(config_path.to_path_buf()),
-                    pid: None,
-                    port: None,
-                    command: Some(full_command),
-                    working_dir,
-                },
-            });
-        }
-
-        // Extract URL (HTTP transport)
-        if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
-            return Some(DiscoveredServer {
-                name: name.to_string(),
-                description: format!("MCP server from {source:?}"),
-                source: source.clone(),
-                transport: TransportConfig::for_url(url),
-                metadata: ServerMetadata {
-                    config_path: Some(config_path.to_path_buf()),
-                    pid: None,
-                    port: Self::extract_port_from_url(url),
-                    command: None,
-                    working_dir: None,
-                },
-            });
-        }
-
-        warn!("Unsupported server config format for {name}");
-        None
+        super::client_entry::parse(name, config, source, config_path)
     }
 
     // ── New AI client scanners ─────────────────────────────────────────────
@@ -436,9 +381,11 @@ impl ConfigScanner {
             .await
     }
 
-    /// Scan Zed editor configuration (`~/.config/zed/settings.json`).
+    /// Scan Zed editor configuration (Zed's config directory, see
+    /// [`Self::zed_config_path`]).
     ///
-    /// Format: `{ "context_servers": { "<name>": { "command": { "path": "...", "args": [...] } } } }`
+    /// Format: `{ "context_servers": { "<name>": { "command": "...", "args": [...] } } }`,
+    /// or `{ "url": "..." }` for an HTTP server.
     ///
     /// # Errors
     ///
@@ -496,8 +443,13 @@ impl ConfigScanner {
             .await
             .map_err(|e| Error::Config(format!("Failed to read Zed config: {e}")))?;
 
-        let config: Value = serde_json::from_str(&content)
-            .map_err(|e| Error::Config(format!("Failed to parse Zed config JSON: {e}")))?;
+        // Zed's settings are JSONC: comments and trailing commas are allowed.
+        let config: Value = super::jsonc::strip_jsonc(&content)
+            .ok_or_else(|| Error::Config("Unterminated comment or string in Zed config".into()))
+            .and_then(|text| {
+                serde_json::from_str(&text)
+                    .map_err(|e| Error::Config(format!("Failed to parse Zed config JSON: {e}")))
+            })?;
 
         let Some(context_servers) = config.get("context_servers").and_then(|v| v.as_object())
         else {
@@ -514,47 +466,23 @@ impl ConfigScanner {
     }
 
     /// Parse a single Zed context-server entry.
+    ///
+    /// Zed's entries are flat, the same shape as an `mcpServers` entry:
+    /// `{"command": "<path>", "args": [...]}` for stdio or `{"url": ...}` for
+    /// HTTP (zed-industries/zed @ 1a28cff4,
+    /// `crates/settings_content/src/project.rs:517-615`). An extension entry
+    /// has neither and is not imported.
     fn parse_zed_server(
         name: &str,
         config: &Value,
         config_path: &Path,
     ) -> Option<DiscoveredServer> {
-        // Zed wraps the command under `{ "command": { "path": "...", "args": [...] } }`
-        let cmd_obj = config.get("command")?;
-        let path_str = cmd_obj.get("path").and_then(|v| v.as_str())?;
-        let args: Vec<String> = cmd_obj
-            .get("args")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let full_command = if args.is_empty() {
-            path_str.to_string()
-        } else {
-            format!("{} {}", path_str, args.join(" "))
-        };
-
-        Some(DiscoveredServer {
-            name: name.to_string(),
-            description: format!("MCP server from {:?}", DiscoverySource::Zed),
-            source: DiscoverySource::Zed,
-            transport: TransportConfig::Stdio {
-                command: full_command.clone(),
-                cwd: None,
-                protocol_version: None,
-            },
-            metadata: ServerMetadata {
-                config_path: Some(config_path.to_path_buf()),
-                pid: None,
-                port: None,
-                command: Some(full_command),
-                working_dir: None,
-            },
-        })
+        let flat =
+            config.get("command").is_some_and(Value::is_string) || config.get("url").is_some();
+        if !flat {
+            return None;
+        }
+        Self::parse_server_config(name, config, &DiscoverySource::Zed, config_path)
     }
 
     // ── Continue.dev-specific parser ───────────────────────────────────────
@@ -617,16 +545,35 @@ impl ConfigScanner {
         Ok(home.join(".cursor/mcp.json"))
     }
 
-    /// Get Zed settings path (`~/.config/zed/settings.json`).
+    /// Get Zed settings path: `~/.config/zed/settings.json` on macOS, the OS
+    /// config directory joined with `zed` (Linux) or `Zed` elsewhere.
     fn zed_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+        let home = || {
+            dirs::home_dir()
+                .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))
+        };
 
+        // Zed's `config_dir()` (zed-industries/zed @ 1a28cff4,
+        // `crates/paths/src/paths.rs:133-152`): `~/.config/zed` on macOS, the
+        // OS config dir elsewhere. ponytail: Zed's Flatpak override
+        // (`FLATPAK_XDG_CONFIG_HOME`) is not followed; add it if a Flatpak user
+        // reports a miss.
+        // The home directory is needed only where the OS config dir is not
+        // known (and always on macOS).
         #[cfg(target_os = "macos")]
-        let path = home.join(".config/zed/settings.json");
-
-        #[cfg(not(target_os = "macos"))]
-        let path = home.join(".config/zed/settings.json");
+        let path = home()?.join(".config/zed/settings.json");
+        #[cfg(target_os = "linux")]
+        let path = match dirs::config_dir() {
+            Some(dir) => dir,
+            None => home()?.join(".config"),
+        }
+        .join("zed/settings.json");
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let path = match dirs::config_dir() {
+            Some(dir) => dir,
+            None => home()?.join(".config"),
+        }
+        .join("Zed/settings.json");
 
         Ok(path)
     }
@@ -643,11 +590,6 @@ impl ConfigScanner {
         let home = dirs::home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
         Ok(home.join(".codex/config.json"))
-    }
-
-    /// Extract port number from URL
-    fn extract_port_from_url(url: &str) -> Option<u16> {
-        url::Url::parse(url).ok().and_then(|u| u.port())
     }
 
     /// Get Claude Desktop config path
@@ -791,3 +733,15 @@ mod tests {
 #[cfg(test)]
 #[path = "config_scanner_ws_tests.rs"]
 mod ws_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_zed_tests.rs"]
+mod zed_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_vscode_tests.rs"]
+mod vscode_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_entry_tests.rs"]
+mod entry_tests;

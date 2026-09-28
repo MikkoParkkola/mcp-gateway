@@ -22,6 +22,7 @@ cannot exceed the review that guards it.
 """
 
 import os
+import re
 import pathlib
 import shutil
 import subprocess
@@ -266,8 +267,8 @@ CASES = [
     (
         "needs-verify-replaced-by-a-comment",
         "release.yml",
-        "    needs: [build, verify]",
-        "    needs: [build] # verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs: [build, packaged-suite] # verify",
         CAUGHT,
     ),
     (
@@ -560,8 +561,8 @@ CASES = [
     (
         "needs-in-block-form",
         "release.yml",
-        "    needs: [build, verify]",
-        "    needs:\n      - build\n      - verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs:\n      - build\n      - verify\n      - packaged-suite",
         TOLERATED,
     ),
     (
@@ -1016,14 +1017,16 @@ CASES = [
         # It no longer has a step-level `push:` to reopen -- the build pushes
         # by digest under no name -- so the way back in is the condition that
         # decides whether the manifest job runs at all. Anchored to the line
-        # above it: the job-level condition is a prefix of the step-level ones,
-        # so on its own it matches four times and mutates the wrong copy.
+        # above it: the job-level condition is identical to the step-level ones,
+        # so on its own it matches several times and mutates the wrong copy.
+        # The mutation re-admits tags beside the main-only pin.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
         "    needs: build\n"
-        "    if: github.event_name != 'pull_request'"
-        " && !startsWith(github.ref, 'refs/tags/v')",
-        "    needs: build\n    if: github.event_name != 'pull_request'",
+        "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+        "    needs: build\n"
+        "    if: github.event_name == 'push' && (github.ref == 'refs/heads/main'"
+        " || startsWith(github.ref, 'refs/tags/v'))",
         CAUGHT,
     ),
     (
@@ -1380,7 +1383,162 @@ CASES += [
      _RELEASE_CRITERIA_SPAN.replace(MUTATIONS_STEP, "", 1)
      + MUTATIONS_STEP, CAUGHT),
     ("docker-build-stops-waiting-for-unit-tests", "ci.yml",
-     "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
+     "release-criteria, release-script-tests, package-tests]", "release-criteria, package-tests]", CAUGHT),
+]
+
+# #1812: packaged tests build on every ref and run after a merge.
+CASES += [
+    ("package-tests-swallowed", "ci.yml",
+     "    name: Tests build from the packaged crate\n",
+     "    name: Tests build from the packaged crate\n    continue-on-error: true\n", CAUGHT),
+    ("package-tests-only-on-push", "ci.yml",
+     "    name: Tests build from the packaged crate\n",
+     "    name: Tests build from the packaged crate\n    if: github.event_name == 'push'\n", CAUGHT),
+    ("package-tests-build-step-dropped", "ci.yml",
+     "      - name: Build the tests from the packaged crate\n"
+     "        run: scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
+    ("docker-build-stops-waiting-for-package-tests", "ci.yml",
+     "release-script-tests, package-tests]", "release-script-tests]", CAUGHT),
+    ("packaged-suite-leaves-the-release-line", "packaged-suite.yml",
+     "    branches: [main, docs/ranking-1-release-line]\n", "    branches: [main]\n", CAUGHT),
+    ("packaged-suite-runs-on-every-pr", "packaged-suite.yml",
+     "  workflow_dispatch:\n", "  pull_request:\n  workflow_dispatch:\n", CAUGHT),
+    ("packaged-suite-builds-instead-of-running", "packaged-suite.yml",
+     "scripts/ci/packaged-tests.sh run\n", "scripts/ci/packaged-tests.sh build\n", CAUGHT),
+    ("packaged-rehearsal-on-every-pr", "ci.yml",
+     "    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_packaged_suite",
+     "    if: github.event_name == 'pull_request' || (inputs.rehearse_packaged_suite", CAUGHT),
+    ("release-stops-waiting-for-the-packaged-suite", "release.yml",
+     "    needs: [build, verify, packaged-suite]\n", "    needs: [build, verify]\n", CAUGHT),
+    ("packaged-suite-dropped-from-the-release", "release.yml",
+     "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/packaged-suite.yml\n",
+     "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
+    ("crates-publish-stops-waiting-for-release", "release.yml",
+     "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
+    ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
+     "      # that job provisions, and the gate below `needs` that job.\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n",
+     "      # that job provisions, and the gate below `needs` that job.\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst --skip some_new_skip\n",
+     CAUGHT),
+]
+
+# The release is the event commit: a case per checkout and called workflow
+# that names a ref, and per way the dispatch guard can stop guarding. Each
+# checkout anchor runs from the job header to its checkout line, so it names
+# one site.
+def _release_checkout_sites():
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    sites = []
+    for m in re.finditer(r"(?m)^  ([a-z0-9-]+):\n", text):
+        nxt = re.search(r"(?m)^  [a-z0-9-]+:\n", text[m.end():])
+        body = text[m.start():m.end() + nxt.start() if nxt else len(text)]
+        for c in re.finditer(r"(?m)^( +)(?:- )?uses: actions/checkout@\S+ # v\S+\n", body):
+            rest = body[c.end():]
+            if re.match(r" +with:\n( +(?!ref:)\S.*\n)*? +repository:", rest):
+                continue  # another repository (the Homebrew tap)
+            anchor = body[:c.end()]
+            indent = " " * (len(c.group(1)) + (2 if c.group(0).lstrip().startswith("- ") else 0))
+            added = anchor + f"{indent}with:\n{indent}  ref: ${{{{ inputs.tag }}}}\n"
+            if rest.startswith(f"{indent}with:\n"):
+                anchor += f"{indent}with:\n"  # the ref joins the existing inputs
+            sites.append((m.group(1), anchor, added))
+    return sites
+
+
+for _job, _anchor, _added in _release_checkout_sites():
+    CASES += [(f"{_job}-checks-out-the-tag-name", "release.yml", _anchor, _added, CAUGHT)]
+for _job in ("task-sdk-recovery", "packaged-suite"):
+    CASES += [
+        (f"{_job}-is-passed-the-tag-name", "release.yml",
+         f"  {_job}:\n    needs: resolve\n    uses: ./.github/workflows/{_job}.yml\n",
+         f"  {_job}:\n    needs: resolve\n    uses: ./.github/workflows/{_job}.yml\n    with:\n      ref: ${{{{ inputs.tag || github.ref }}}}\n", CAUGHT),
+    ]
+CASES += [
+    ("packaged-suite-stops-waiting-for-resolve", "release.yml",
+     "  packaged-suite:\n    needs: resolve\n", "  packaged-suite:\n", CAUGHT),
+    ("security-gate-stops-waiting-for-resolve", "release.yml",
+     "    name: Security gate (block release on known vulns)\n    needs: resolve\n",
+     "    name: Security gate (block release on known vulns)\n", CAUGHT),
+    # The guard itself: a dispatch from a branch or another tag, and a second
+    # lookup of the tag, must each turn the suite red.
+    ("resolve-accepts-a-branch-dispatch", "release.yml",
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n', "          if false; then\n", CAUGHT),
+    ("resolve-accepts-any-tag-dispatch", "release.yml",
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n',
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [[ "$GITHUB_REF" != refs/tags/* ]]; then\n', CAUGHT),
+    ("resolve-looks-the-tag-up-again", "release.yml",
+     '          echo "release commit: $GITHUB_SHA"\n',
+     '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "release commit: $GITHUB_SHA"\n', CAUGHT),
+]
+
+# Release jobs restore no cache: one case per way one comes back.
+CASES += [
+    ("release-verify-restores-the-rust-cache", "release.yml",
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("release-verify-restores-a-cache-quoted", "release.yml",
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - "uses": \'actions/cache/restore@v4\'\n        with:\n          path: target\n          key: release\n', CAUGHT),
+    ("called-recovery-restores-the-rust-cache", "task-sdk-recovery.yml",
+     '      # No build cache: the release calls this too, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("called-packaged-suite-restores-the-rust-cache", "packaged-suite.yml",
+     "      # No build cache: the release calls this, and a restored cache is input\n      # nobody reviewed at the tag.\n", "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n", CAUGHT),
+    ("release-setup-node-caches-again", "release.yml",
+     "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n", CAUGHT),
+    # Equivalent spellings are not a cache: a quoted callee is still scanned,
+    # and YAML's `False` is still off.
+    ("release-calls-the-recovery-workflow-quoted", "release.yml",
+     "    uses: ./.github/workflows/task-sdk-recovery.yml\n",
+     "    uses: './.github/workflows/task-sdk-recovery.yml' # quoted\n", TOLERATED),
+    ("release-setup-node-cache-off-capitalised", "release.yml",
+     "          package-manager-cache: false\n", "          package-manager-cache: False\n", TOLERATED),
+    ("release-setup-node-sets-a-cache", "release.yml",
+     "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n          cache: npm\n", CAUGHT),
+]
+
+# Throwaway runs carry the release tooling's Python suites. The hosted job is
+# named by its runner line, the trusted one by its env block, so each anchor
+# names one job although both run the same steps.
+_HOSTED_PY = (
+    "    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    "        with:\n          persist-credentials: false\n"
+)
+_TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
+_HOSTED_PY_STEP = _HOSTED_PY + (
+    "      # The release tooling's Python suites, which `release-script-tests` runs\n"
+    '      # but which that job skips here. Without this, a throwaway meant to show\n'
+    '      # a workflow-wiring or release-script test going red passes on cargo\n'
+    '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
+    '      - name: Release tooling Python suites\n'
+    '        run: |\n'
+    '          set -uo pipefail\n'
+    '          fail=0\n'
+    '          for suite in scripts/release/test_*.py; do\n'
+    '            echo "::group::$suite"\n'
+    '            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }\n'
+    '            echo "::endgroup::"\n'
+    '          done\n'
+    '          exit "$fail"\n'
+)
+CASES += [
+    ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
+    ("throwaway-python-failure-swallowed", "ci.yml",
+     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     "      # Restore only: saving from throwaway runs would evict the entries the\n"
+     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "        with:\n          save-if: false\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "  # Same run on the self-hosted arm64 runner.",
+     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     "      # Restore only: saving from throwaway runs would evict the entries the\n"
+     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "        with:\n          save-if: false\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "  # Same run on the self-hosted arm64 runner.", CAUGHT),
+    ("trusted-throwaway-swallows-failures", "ci.yml",
+     _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):

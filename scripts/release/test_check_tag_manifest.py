@@ -10,7 +10,9 @@ import itertools
 import os
 import pathlib
 import re
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -1620,9 +1622,19 @@ class WorkflowWiring(unittest.TestCase):
             conditions.extend(line.split(":", 1)[1].strip() for line in guard)
         conditions.append(job_if("docker.yml", "manifest"))
         for condition in conditions:
+            # Either spelling excludes a tag: the old `!startsWith(... 'refs/tags/v')`,
+            # or the current pin to main alone (a release-line push builds the
+            # image but must publish nothing, so the sites name main exactly).
             self.assertRegex(
                 condition,
-                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)"
+                r"|github\.ref\s*==\s*'refs/heads/main'",
+                f"docker.yml pushes on a tag again: {condition}",
+            )
+            # A main pin OR-ed with a tag test would still match the pin above.
+            self.assertNotRegex(
+                condition,
+                r"(?<!!)\bstartsWith\(\s*github\.ref\s*,\s*'refs/tags/",
                 f"docker.yml pushes on a tag again: {condition}",
             )
         self.assertEqual(
@@ -2156,6 +2168,55 @@ class WorkflowWiring(unittest.TestCase):
                 continue
             self.assertRegex(line, permitted, raw_line)
 
+    def test_the_packaged_crate_is_built_on_every_ref_and_run_after_merge(self):
+        # #1812: tests that read a repository file the package leaves out
+        # compile in a checkout and fail from the published crate. Every ref
+        # builds them from the package; the full run is post-merge, so a pull
+        # request does not pay for a second test run.
+        body = jobs("ci.yml").get("package-tests")
+        self.assertIsNotNone(body, "ci.yml has no package-tests job")
+        self.assertNotRegex(body, r"(?m)^ {4}(if|continue-on-error):", "package-tests must run and block on every ref")
+        built = [c for b in steps("ci.yml", "package-tests") for c in joined(b)]
+        self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+build\b", c) for c in built), built)
+        self.assertIn("package-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+        on = "\n".join(live_lines("packaged-suite.yml"))
+        self.assertRegex(on, r"(?m)^on:$", "packaged-suite.yml has no on: block")
+        self.assertRegex(on, r"(?m)^jobs:$", "packaged-suite.yml has no jobs: block")
+        trigger = on[on.index("\non:") : on.index("\njobs:")]
+        self.assertRegex(trigger, r"(?m)^  push:\n    branches: \[[^\]]*\bdocs/ranking-1-release-line\b")
+        self.assertNotRegex(trigger, r"(?m)^  pull_request", "a PR trigger would run the suite twice per PR")
+        self.assertRegex(trigger, r"(?m)^  workflow_call:")
+        ran = [c for b in steps("packaged-suite.yml", "packaged-suite") for c in joined(b)]
+        self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+run\b", c) for c in ran), ran)
+
+        # On a tag nothing publishes until the packaged suite has passed: a
+        # crates.io or npm version cannot be replaced, and the checkout-based
+        # tests cannot see a file the package leaves out.
+        release_jobs = jobs("release.yml")
+        self.assertIn("uses: ./.github/workflows/packaged-suite.yml", release_jobs.get("packaged-suite", ""))
+
+        self.assertIn("packaged-suite", needs_of(release_jobs["release"]) or "", "release must wait for the packaged suite")
+        for publisher in ("publish", "npm-publish", "homebrew-update"):
+            self.assertIn("release", needs_of(release_jobs[publisher]) or "", f"{publisher} must wait for release")
+        # The rehearsal reaches the post-merge path from a dispatch only.
+        self.assertEqual(
+            conjuncts(job_if("ci.yml", "packaged-suite-rehearsal"))[0],
+            "github.event_name == 'workflow_dispatch'",
+        )
+        self.assertIn("uses: ./.github/workflows/packaged-suite.yml", jobs("ci.yml")["packaged-suite-rehearsal"])
+
+        # The packaged run skips what ci.yml `test` skips, plus only the tests
+        # that read repository files deliberately kept out of the crate.
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
+        test_cmd = " ".join(c for b in steps("ci.yml", "test") for c in joined(b))
+        packaged_only = {"mik_5843_"}  # repo-only competitive notes
+        self.assertEqual(
+            set(re.findall(r"--skip\s+(\S+)", script)),
+            set(re.findall(r"--skip\s+(\S+)", test_cmd)) | packaged_only,
+            "the packaged run must skip ci.yml test's list plus only the repo-only reads",
+        )
+
     def test_release_tooling_unit_tests_block_on_every_ref(self):
         # release-criteria is report-only off a tag because its live-ledger
         # checks read documents edited mid-flight. The tooling's own unit tests
@@ -2184,6 +2245,110 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_the_release_builds_tests_and_publishes_the_event_commit(self):
+        # The release commit is GITHUB_SHA, which a re-run keeps, and it is what
+        # actions/checkout and both called workflows use when no ref is named.
+        # A named ref can only be worse: a tag name looked up again later may
+        # have moved. So no checkout of this repository and no called workflow
+        # names one, and every job waits, directly or through its needs, for
+        # the `resolve` guard that refuses a dispatch away from the tag.
+        release_jobs = jobs("release.yml")
+        self.assertIn("resolve", release_jobs, "release.yml has no resolve job")
+        self.assertIsNone(needs_of(release_jobs["resolve"]), "resolve must run first")
+        named, sites = [], 0
+        for name, body in release_jobs.items():
+            for block in steps("release.yml", name):
+                if not any(re.search(r"uses:\s*actions/checkout@", l) for l in block):
+                    continue
+                if artifact_keys(block, ("repository",)):
+                    continue  # another repository (the Homebrew tap)
+                sites += 1
+                named += [f"{name}: ref {r}" for r in artifact_keys(block, ("ref",))]
+            if re.search(r"""(?m)^    uses:\s*["']?\./\.github/workflows/""", body):
+                sites += 1
+                named += [f"{name}: with ref {r}" for r in re.findall(r"(?m)^      (?:ref|tag):\s*(.+?)\s*$", body)]
+        self.assertGreaterEqual(sites, 10, "the checkout and call inventory shrank")
+        self.assertEqual(named, [], "a checkout or called workflow names a ref instead of the event commit")
+
+        def reaches_resolve(name, seen=()):
+            needs = re.findall(r"[\w-]+", needs_of(release_jobs[name]) or "")
+            return "resolve" in needs or any(n not in seen and reaches_resolve(n, (*seen, name)) for n in needs)
+
+        stray = [name for name in release_jobs if name != "resolve" and not reaches_resolve(name)]
+        self.assertEqual(stray, [], "a job runs without waiting for the dispatch guard")
+
+    def test_the_release_commit_is_the_event_commit_and_a_branch_dispatch_is_refused(self):
+        # GITHUB_SHA is the commit the event names, an annotated tag peeled,
+        # and a re-run keeps it; it is what npm provenance attests. Looking
+        # the tag up again (ls-remote) can land on a commit the tag was moved
+        # to after the event. A dispatch runs at `--ref <tag>`, so a dispatch
+        # from anywhere else would build one commit and label it another.
+        self.assertNotIn("ls-remote", "\n".join(live_lines("release.yml")), "release.yml must not look a tag up again")
+        (block,) = steps("release.yml", "resolve")
+        start = next(i for i, l in enumerate(block) if re.match(r"^\s*run:\s*\|\s*$", l))
+        indent = len(block[start]) - len(block[start].lstrip())
+        body = textwrap.dedent("\n".join(
+            itertools.takewhile(lambda l: not l.strip() or len(l) - len(l.lstrip()) > indent, block[start + 1:])))
+        event = "a" * 40
+        for label, name, ref, tag, ok in [
+            ("tag push", "push", "refs/tags/v4.0.0", "", True),
+            ("dispatch at the tag", "workflow_dispatch", "refs/tags/v4.0.0", "v4.0.0", True),
+            ("dispatch from a branch", "workflow_dispatch", "refs/heads/main", "v4.0.0", False),
+            ("dispatch at another tag", "workflow_dispatch", "refs/tags/v3.5.1", "v4.0.0", False),
+            ("dispatch with no tag", "workflow_dispatch", "refs/tags/v4.0.0", "", False),
+        ]:
+            env = {"PATH": os.environ["PATH"], "GITHUB_EVENT_NAME": name, "GITHUB_REF": ref,
+                   "GITHUB_SHA": event, "TAG": tag}
+            run = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True)
+            if ok:
+                self.assertEqual((run.returncode, run.stdout), (0, f"release commit: {event}\n"), f"{label}: {run.stderr}")
+            else:
+                self.assertNotEqual(run.returncode, 0, f"{label} must be refused")
+                self.assertIn("::error::", run.stdout, f"{label}: refused without saying why")
+
+    def test_throwaway_runs_carry_the_release_tooling_python_suites(self):
+        # A throwaway pull request skips `release-script-tests`, so without its
+        # own run of the Python suites a workflow-wiring or release-script red
+        # cannot show on one: the throwaway passes on cargo alone.
+        throwaway = {
+            name: body for name, body in jobs("ci.yml").items()
+            if re.search(r"(?m)^    name: Tests \(throwaway\)$", body)
+        }
+        self.assertGreaterEqual(len(throwaway), 1, "ci.yml has no Tests (throwaway) job")
+        for name in throwaway:
+            text = "\n".join("\n".join(b) for b in steps("ci.yml", name))
+            self.assertRegex(
+                text, r"for suite in scripts/release/test_\*\.py; do",
+                f"{name}: must run every scripts/release/test_*.py suite",
+            )
+            self.assertRegex(text, r'python3 "\$suite" \|\| \{ echo "::error::\$suite failed"; fail=1; \}')
+            self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
+            self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
+
+    def test_the_release_restores_no_cache(self):
+        # A cache restored into a release job is input nobody reviewed at the
+        # tag: whatever an earlier run saved under a matching key is built,
+        # signed and published with the release. Release jobs build cold.
+        # Covers release.yml and every workflow it calls, whose jobs run in
+        # the release's context. setup-node caches on its own when it finds a
+        # package manager, so it must say it will not.
+        release = WORKFLOWS / "release.yml"
+        called = re.findall(r"""(?m)^    uses:\s*["']?\./\.github/workflows/([^"'\s#]+)""", release.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(called), ["packaged-suite.yml", "task-sdk-recovery.yml"], "the called-workflow inventory changed")
+        found = []
+        for wf in ["release.yml", *called]:
+            for block in steps(wf):
+                uses = " ".join(l for l in block if re.match(r"""^\s*(?:-\s+)?["']?uses["']?\s*:""", l))
+                label = f"{wf}: {block[0].strip()}"
+                if re.search(r"actions/cache(?:/\w+)?@|Swatinem/rust-cache@", uses):
+                    found.append(f"{label} restores a cache")
+                if artifact_keys(block, ("cache",)):
+                    found.append(f"{label} sets cache:")
+                flags = [v.lower() for v in artifact_keys(block, ("package-manager-cache",))]
+                if "actions/setup-node@" in uses and (not flags or set(flags) != {"false"}):
+                    found.append(f"{label} leaves package-manager-cache on")
+        self.assertEqual(found, [], "a release job restores a cache")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
