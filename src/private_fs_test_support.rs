@@ -66,8 +66,19 @@ fn powershell(script: &str) -> Result<String, String> {
     }
 }
 
+/// A PowerShell single-quoted literal: every character PowerShell reads as a
+/// single quote is doubled, so a hostile fixture path stays one literal.
 fn quoted(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "''"))
+    let text: String = path
+        .display()
+        .to_string()
+        .chars()
+        .flat_map(|c| {
+            let quote = matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}');
+            std::iter::once(c).chain(quote.then_some(c))
+        })
+        .collect();
+    format!("'{text}'")
 }
 
 /// Native plant/read through the Win32 SDDL functions, compiled by PowerShell

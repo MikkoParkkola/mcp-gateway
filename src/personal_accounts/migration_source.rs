@@ -243,7 +243,7 @@ fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) 
     let _ = writeln!(
         out,
         "$acl = New-Object System.Security.AccessControl.FileSecurity; \
-         $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;{me})'); \
+         $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;{me})', 'Access'); \
          (Get-Item -LiteralPath '{literal}').SetAccessControl($acl)"
     );
     out

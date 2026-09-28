@@ -702,9 +702,13 @@ fn wt10e_remediation_removes_an_unsupported_ace() {
 #[test]
 fn wt10f_unsafe_path_gets_instructions_only() {
     let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
-    let marker = root.path().join("injected");
+    // The repair lines run in a PowerShell started in this process's working
+    // directory, so a relative marker name lands there if code ever runs. The
+    // folder name must be one valid component: no separator, no colon.
+    let name = format!("wt10f-marker-{:x}", rand::random::<u64>());
+    let marker = std::env::current_dir().unwrap().join(&name);
     // A folder name that would end a naive single-quoted literal and run code.
-    let hostile = format!("oauth\u{2019}; New-Item '{}' ;\u{2018}", marker.display());
+    let hostile = format!("oauth\u{2019}; New-Item '{name}' ;\u{2018}");
     let parent = root.path().join(hostile);
     std::fs::create_dir(&parent).unwrap();
     let user = crate::private_fs::test_support::user_sid();
