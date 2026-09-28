@@ -85,12 +85,11 @@ async fn ac_mrtr_7a_the_returned_last_round_gates_its_request_keys() {
         4,
         "expected three asked rounds and the last one"
     );
-    // The production scanners read values, not object keys (#2114), so the
-    // key must reach the gate as a string value.
+    // The key reaches the gate where the caller will see it.
     let last: Value = serde_json::from_str(&seen[3]).expect("inspected batch is JSON");
-    assert_eq!(
-        last["keys"][0], tainted,
-        "expected the key as a string value"
+    assert!(
+        last["inputRequests"].get(tainted.as_str()).is_some(),
+        "expected the key in the gated round, got {last}"
     );
     assert_eq!(
         client.methods().len(),

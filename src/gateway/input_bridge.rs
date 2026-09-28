@@ -517,7 +517,7 @@ impl InputBridge<'_> {
         {
             Self::plan(&interim, declared, slice)?;
             self.gate
-                .admit(&Self::handed_back(body, &interim))
+                .admit(&Self::handed_back(body))
                 .map_err(|error| match error {
                     BridgeError::ChallengeRefused { .. } => {
                         BridgeError::ChallengeRefused { dispatched }
@@ -613,25 +613,16 @@ impl InputBridge<'_> {
     ///
     /// An asked round is rebuilt from its prompts because only that
     /// projection goes on the wire. A handed-back round is not rebuilt: the
-    /// caller gets the backend's result whole, every field of every request
-    /// entry included, with only `requestState` swapped for a sealed
-    /// continuation. So the gate sees that result without `requestState`, and
-    /// the request keys again as string values, because the caller echoes
-    /// each key and a scanner that walks object values would pass over it.
-    fn handed_back(body: &Value, interim: &crate::protocol::mrtr::InputRequired) -> Value {
+    /// caller gets the backend's result whole, every request key and every
+    /// field of every entry included, with only `requestState` swapped for a
+    /// sealed continuation. So the gate sees that result without
+    /// `requestState`; the scanners read object keys as well as values.
+    fn handed_back(body: &Value) -> Value {
         let mut shown = body.clone();
         if let Some(fields) = shown.as_object_mut() {
             fields.remove("requestState");
         }
-        // ponytail: keys are repeated as string values only because the
-        // response scanners walk object values and skip keys (#2114); drop
-        // `keys` once they read keys too.
-        let keys: Vec<&str> = interim
-            .requests
-            .iter()
-            .map(|(key, _)| key.as_str())
-            .collect();
-        serde_json::json!({ "result": shown, "keys": keys })
+        shown
     }
 
     /// Put one round's prompts to the client and collect what came back.
