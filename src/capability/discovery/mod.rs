@@ -148,7 +148,6 @@ impl DiscoveryEngine {
         // Never an environment proxy: it would reach destinations the SSRF
         // checks here never see (#1881).
         let client = reqwest::Client::builder()
-            .no_proxy()
             .timeout(options.timeout)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 let ssrf_blocked = validate_url_not_ssrf(attempt.url().as_str()).is_err();
