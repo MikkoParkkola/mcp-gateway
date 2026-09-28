@@ -1908,7 +1908,8 @@ calls together.
 - A call refused by the firewall is not learned, so retrying a blocked call cannot teach the
   detector to accept it.
 - A score at or above `anomaly_block_threshold` is refused, and a firewall rule can no longer
-  downgrade that refusal to allow or warn.
+  downgrade that refusal to allow or warn. The refusal carries JSON-RPC error `-32002` on every
+  route; the per-backend `/mcp/{name}` route used to answer `-32600`.
 - With `anomaly_detection: true`, the gateway refuses to start when `anomaly_threshold` is not
   above 0.5 and at most 1.0, when `anomaly_block_threshold` is not above `anomaly_threshold` and
   at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
