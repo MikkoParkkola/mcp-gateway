@@ -16,7 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::{Lister, Mode, backend, hair_trigger, half_open, metered};
+use super::{LIST_FILL_COOLDOWN, Lister, Mode, backend, hair_trigger, half_open, metered};
 use crate::config::{BackendConfig, FailsafeConfig, InputSchemaEnforcement};
 use crate::failsafe::CircuitState;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -93,15 +93,16 @@ async fn the_search_fill_on_an_open_breaker_sends_no_list() {
 async fn one_token_admits_one_cold_discovery_fill() {
     let lister = Lister::new(Mode::Serve);
     let backend = backend(InputSchemaEnforcement::Closed, &one_token(), &lister);
-    backend.get_tools_shared().await.expect("first fill");
-    backend.invalidate_tools_cache();
+    // A prompts fill spends the one token (its answer is unusable here, which
+    // counts as reachable and stamps no tools cooldown).
+    drop(backend.get_prompts_shared().await);
     let error = backend.get_tools_shared().await.expect_err("no token");
     assert!(matches!(error, crate::Error::RateLimited(_)), "got {error}");
-    assert_eq!(lister.lists(), 1, "a refused fill sent a list");
+    assert_eq!(lister.lists(), 0, "a refused fill sent a list");
     // The limiter reads the wall clock: this sleep is real.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     backend.get_tools_shared().await.expect("a token is back");
-    assert_eq!(lister.lists(), 2, "the refusal stamped a cooldown");
+    assert_eq!(lister.lists(), 1, "the refusal stamped a cooldown");
 }
 
 /// T3 (AC2): a discovery fill that cannot reach the backend opens a
@@ -262,14 +263,10 @@ fn an_unusable_list_records_reachability_and_is_counted() {
 async fn warm_up_spends_no_token() {
     let lister = Lister::new(Mode::Serve);
     let backend = backend(InputSchemaEnforcement::Closed, &one_token(), &lister);
-    backend
-        .get_tools_shared()
-        .await
-        .expect("spends the one token");
-    backend.invalidate_tools_cache();
+    drop(backend.get_prompts_shared().await); // spends the one token
     let tools = backend.warm_tools().await.expect("warm-up needs no token");
     assert_eq!(tools.len(), 1);
-    assert_eq!(lister.lists(), 2);
+    assert_eq!(lister.lists(), 1);
 }
 
 /// T10 (AC2): a warm-up that cannot reach the backend opens a hair-trigger
@@ -289,7 +286,7 @@ async fn a_failing_warm_up_opens_the_breaker() {
 /// T12: a warm-up success resets a breaker that only warm-up failures opened,
 /// so a slow start is not refused after its catalogue is cached. Red on base:
 /// the stub records nothing. Mutant M8 (no reset).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_warm_up_success_clears_a_breaker_its_own_failures_tripped() {
     let lister = Lister::new(Mode::Down);
     let backend = backend(
@@ -298,6 +295,8 @@ async fn a_warm_up_success_clears_a_breaker_its_own_failures_tripped() {
         &lister,
     );
     backend.warm_tools().await.expect_err("down");
+    // Past the F13 fill cooldown the failure stamped (a tokio clock).
+    tokio::time::advance(LIST_FILL_COOLDOWN + Duration::from_secs(1)).await;
     lister.set(Mode::Serve);
     backend.warm_tools().await.expect("up");
     assert_eq!(state(&backend), CircuitState::Closed);
@@ -325,5 +324,33 @@ async fn a_warm_up_success_does_not_clear_a_breaker_tripped_by_requests() {
     let before = lister.lists();
     backend.warm_tools().await.expect("warm-up lists");
     assert_eq!(lister.lists(), before + 1, "the warm-up did not list");
+    assert_eq!(state(&backend), CircuitState::Open);
+}
+
+/// T13, GUARD row: a request that fails the half-open probe reopens the
+/// breaker and marks it as request-tripped, so a later warm-up success still
+/// cannot clear it. Proven by mutant M10 (set the flag only from Closed).
+#[tokio::test(start_paused = true)]
+async fn a_request_failing_the_half_open_probe_keeps_warm_up_from_clearing_it() {
+    let lister = Lister::new(Mode::Down);
+    let backend = backend(
+        InputSchemaEnforcement::Closed,
+        &hair_trigger(Duration::from_millis(1)),
+        &lister,
+    );
+    backend.warm_tools().await.expect_err("warm-up trips it");
+    assert_eq!(state(&backend), CircuitState::Open);
+    // The breaker reads the wall clock and has no test clock seam, while the
+    // F13 cooldown below needs the paused tokio clock. A 1 ms reset needs only
+    // this short blocking wait to reach half-open.
+    std::thread::sleep(Duration::from_millis(5));
+    backend
+        .request("tools/list", None)
+        .await
+        .expect_err("the half-open probe fails");
+    assert_eq!(state(&backend), CircuitState::Open);
+    tokio::time::advance(LIST_FILL_COOLDOWN + Duration::from_secs(1)).await;
+    lister.set(Mode::Serve);
+    backend.warm_tools().await.expect("warm-up lists");
     assert_eq!(state(&backend), CircuitState::Open);
 }
