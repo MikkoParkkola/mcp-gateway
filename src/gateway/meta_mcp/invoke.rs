@@ -146,6 +146,7 @@ mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
 mod r2_check;
+mod withheld_evidence;
 use r2_check::miss_with_hint;
 
 use super::support::{
@@ -2923,7 +2924,7 @@ impl MetaMcp {
             "schema_version": &evaluation.schema_version,
             "content_sha256": &evaluation.content_sha256,
             "provenance": &evaluation.provenance,
-            "classification": &evaluation.classification,
+            "classification": withheld_evidence::delivered(evaluation),
             "policy": &evaluation.policy,
             "audit": &evaluation.audit,
         });
