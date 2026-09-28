@@ -1936,8 +1936,9 @@ carries no verified end-user identity".
 In 4.0 a stdio gateway serves its managed accounts to its one caller, the local process that
 started it, whatever the `auth` block says. `auth` configures the HTTP listener only. An HTTP
 gateway is unchanged: it serves the sole-operator account only under the single-user settings
-above. This covers a REST capability bound with `auth.account`; an account bound to an MCP
-backend still needs a verified end-user identity on either transport (#1961).
+above. This covers a REST capability bound with `auth.account` and an MCP backend bound to
+the account when it is called through `gateway_invoke`; the direct `/mcp/{name}` route still
+needs a verified end-user identity.
 
 Anyone who can start the gateway as the same OS user already holds its data directory, where the
 account store lives, so this grants no one new access. Several stdio gateways sharing one data
@@ -1983,8 +1984,9 @@ credentials the client config held. Library users replace struct literals with
 ## 83. `MigratedCredential` has a public `reachability` field
 
 `accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
-when the configuration asserts a single user, in each case through a REST capability bound to
-the account; an MCP backend bound to it still needs a verified end-user identity (#1961). For
+when the configuration asserts a single user, in each case through a REST capability or an MCP
+backend bound to the account; over HTTP the direct `/mcp/{name}` route still needs a verified
+end-user identity. For
 library users, the report type
 `MigratedCredential` gains a public `reachability: String` field and is marked
 `#[non_exhaustive]`.
