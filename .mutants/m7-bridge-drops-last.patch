@@ -1,0 +1,14 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 313e5f0bc..543661ac8 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -499,7 +499,8 @@ impl InputBridge<'_> {
+                 Some(next) => interim = next,
+                 None => return Ok(result),
+             }
+-            last = Some(Box::new(result));
++            drop(result);
++            last = None;
+         }
+         // The last round is handed back to the caller rather than asked
+         // in-band, but it is still a question the backend composed after an

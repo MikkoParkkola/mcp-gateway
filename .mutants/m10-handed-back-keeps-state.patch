@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 313e5f0bc..e17e9fab3 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -613,7 +613,7 @@ impl InputBridge<'_> {
+     fn handed_back(body: &Value, interim: &crate::protocol::mrtr::InputRequired) -> Value {
+         let mut shown = body.clone();
+         if let Some(fields) = shown.as_object_mut() {
+-            fields.remove("requestState");
++            let _ = fields.len();
+         }
+         let keys: Vec<&str> = interim
+             .requests

@@ -1,0 +1,14 @@
+head_sha	ae0e65ba1bebb3490ce319789db5d0314b10b012
+m1-nonempty-guard	linux	m1-nonempty-guard.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t1c_a_state_only_interim_is_minted_without_a_bridged_round
+m2-mrtr9-before-bridge	linux	m2-mrtr9-before-bridge.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t1a_an_undeclaring_legacy_caller_is_refused_before_the_bridge
+m3-nosession-fails	linux	m3-nosession-fails.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough
+m4-first-round-returned	linux	m4-first-round-returned.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t3_an_exhausted_exchange_resumes_from_its_last_round
+m5-last-round-ungated	linux	m5-last-round-ungated.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t3c_the_last_round_is_held_to_the_callers_declaration
+m6-exhausted-settles-key	linux	m6-exhausted-settles-key.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t3d_an_exhausted_exchange_that_cannot_be_sealed_releases_the_key
+m7-bridge-drops-last	linux	m7-bridge-drops-last.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t3_an_exhausted_exchange_resumes_from_its_last_round
+m8-last-round-ungated-by-firewall	linux	m8-last-round-ungated-by-firewall.patch	--test mik_7212_mrtr7_bridge_acs last_round::ac_mrtr_7a_the_returned_last_round_passes_the_gate
+m9-handed-back-drops-keys	linux	m9-handed-back-drops-keys.patch	--test mik_7212_mrtr7_bridge_acs last_round::ac_mrtr_7a_the_returned_last_round_gates_its_request_keys
+m10-handed-back-keeps-state	linux	m10-handed-back-keeps-state.patch	--test mik_7212_mrtr7_bridge_acs last_round::ac_mrtr_7a_the_returned_last_round_is_gated_without_its_state
+red-last-round	linux	red-last-round.patch	--test mik_7212_mrtr7_bridge_acs last_round::ac_mrtr_7a_the_returned_last_round_passes_the_gate
+red-keys	linux	red-keys.patch	--test mik_7212_mrtr7_bridge_acs last_round::ac_mrtr_7a_the_returned_last_round_gates_its_request_keys
+red-fields	linux	red-fields.patch	--test mik_7212_mrtr7_bridge_acs last_round::ac_mrtr_7a_the_returned_last_round_gates_every_entry_field

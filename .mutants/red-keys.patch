@@ -1,0 +1,48 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 313e5f0bc..7cf13b771 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -505,11 +505,11 @@ impl InputBridge<'_> {
+         // in-band, but it is still a question the backend composed after an
+         // answer, so it passes the same immutable gate every asked round did
+         // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+-        if let Some(body) = last.as_deref()
+-            && Self::plan(&interim, declared, slice).is_ok()
++        if last.is_some()
++            && let Ok(prompts) = Self::plan(&interim, declared, slice)
+         {
+             self.gate
+-                .admit(&Self::handed_back(body, &interim))
++                .admit(&Self::challenge(&prompts))
+                 .map_err(|error| match error {
+                     BridgeError::ChallengeRefused { .. } => {
+                         BridgeError::ChallengeRefused { dispatched }
+@@ -601,28 +601,6 @@ impl InputBridge<'_> {
+         )
+     }
+ 
+-    /// The last round as the caller receives it.
+-    ///
+-    /// An asked round is rebuilt from its prompts because only that
+-    /// projection goes on the wire. A handed-back round is not rebuilt: the
+-    /// caller gets the backend's result whole, every field of every request
+-    /// entry included, with only `requestState` swapped for a sealed
+-    /// continuation. So the gate sees that result without `requestState`, and
+-    /// the request keys again as string values, because the caller echoes
+-    /// each key and a scanner that walks object values would pass over it.
+-    fn handed_back(body: &Value, interim: &crate::protocol::mrtr::InputRequired) -> Value {
+-        let mut shown = body.clone();
+-        if let Some(fields) = shown.as_object_mut() {
+-            fields.remove("requestState");
+-        }
+-        let keys: Vec<&str> = interim
+-            .requests
+-            .iter()
+-            .map(|(key, _)| key.as_str())
+-            .collect();
+-        serde_json::json!({ "result": shown, "keys": keys })
+-    }
+-
+     /// Put one round's prompts to the client and collect what came back.
+     ///
+     /// A prompt that outlives its wait ends the call, and WHICH bound ended the
