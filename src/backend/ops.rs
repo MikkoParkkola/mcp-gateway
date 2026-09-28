@@ -271,7 +271,7 @@ impl Backend {
                 .as_ref()
                 .and_then(|p| p.get("name"))
                 .and_then(Value::as_str)
-                .and_then(|tool| self.blocked_tool_refusal(tool))
+                .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
         {
             return Err(crate::Error::Protocol(refusal));
         }

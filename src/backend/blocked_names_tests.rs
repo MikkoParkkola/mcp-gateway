@@ -276,3 +276,38 @@ async fn x7_a_name_withheld_for_many_callers_stays_blocked() {
         "one caller's clean listing cleared a name many callers withheld"
     );
 }
+
+/// X8: one poisoned name past the blocked-name cap is still refused by name
+/// (the backend is saturated and fails closed), while a tool the caller's
+/// validated listing holds still passes.
+#[tokio::test]
+async fn x8_past_the_cap_an_untracked_name_is_refused() {
+    let backend = per_user_backend();
+    let mut listing: Vec<Value> = (0..=4096)
+        .map(|n| {
+            json!({
+                "name": format!("p{n:04}"),
+                "description": PAYLOAD,
+                "inputSchema": { "type": "object" }
+            })
+        })
+        .collect();
+    listing.push(json!({
+        "name": "clean_tool",
+        "description": "Reads a file.",
+        "inputSchema": { "type": "object" }
+    }));
+    let _ = backend.remember_listed_tools(Some("a"), false, &listing);
+    assert!(
+        backend
+            .undeclared_key_refusal(Some("a"), "p4096", &json!({}))
+            .is_some(),
+        "the name past the cap is callable"
+    );
+    assert!(
+        backend
+            .undeclared_key_refusal(Some("a"), "clean_tool", &json!({}))
+            .is_none(),
+        "a validated tool was refused"
+    );
+}

@@ -150,6 +150,10 @@ pub(crate) struct DescriptorGate {
     /// Keyed (tool, digest, withheld?): one line per distinct descriptor per
     /// process, across slots and routes.
     logged: parking_lot::Mutex<HashSet<(String, String, bool)>>,
+    /// Set when the blocked-name map hit its cap: from then on a by-name call
+    /// is refused unless the caller's own validated catalogue holds the name,
+    /// so a backend cannot flood its way past the cap (fail closed).
+    saturated: std::sync::atomic::AtomicBool,
 }
 
 /// Record a log line; `true` when it was not recorded before.
@@ -184,6 +188,11 @@ impl Backend {
             }
             !sources.is_empty()
         });
+        if listing == Listing::Complete && verdicts.withheld.is_empty() {
+            self.descriptor_gate
+                .saturated
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
             if first_time(&mut logged, (name.clone(), digest.clone(), true)) {
@@ -198,8 +207,20 @@ impl Backend {
                 );
             }
             if !blocked.contains_key(&name) && blocked.len() >= BLOCKED_NAMES_CAP {
-                // Still withheld from this listing; not remembered for a later
-                // call by name. Logged once per descriptor like any withholding.
+                // Past the cap: fail closed for the whole backend rather than
+                // leave this name callable (maintainer decision, #1441).
+                let was = self
+                    .descriptor_gate
+                    .saturated
+                    .swap(true, std::sync::atomic::Ordering::SeqCst);
+                if !was {
+                    warn!(
+                        backend = %self.name,
+                        cap = BLOCKED_NAMES_CAP,
+                        "Blocked tool names reached the cap: only tools in a validated \
+                         listing may now be called on this backend"
+                    );
+                }
                 continue;
             }
             let sources = blocked.entry(name).or_default();
@@ -226,17 +247,27 @@ impl Backend {
     }
 
     /// Refusal text when `tool` is blocked on this backend.
-    pub(crate) fn blocked_tool_refusal(&self, tool: &str) -> Option<String> {
-        self.descriptor_gate
-            .blocked
-            .read()
-            .contains_key(tool)
-            .then(|| {
-                format!(
-                    "tool `{tool}` is withheld: its description failed the tool-poisoning \
+    pub(crate) fn blocked_tool_refusal(
+        &self,
+        identity_key: Option<&str>,
+        tool: &str,
+    ) -> Option<String> {
+        if self.descriptor_gate.blocked.read().contains_key(tool) {
+            return Some(format!(
+                "tool `{tool}` is withheld: its description failed the tool-poisoning \
                  check (AX-010); the gateway log names the finding"
-                )
-            })
+            ));
+        }
+        let saturated = self
+            .descriptor_gate
+            .saturated
+            .load(std::sync::atomic::Ordering::SeqCst);
+        (saturated && self.get_cached_tool_for(identity_key, tool).is_none()).then(|| {
+            format!(
+                "tool `{tool}` is refused: this backend withheld more tool descriptions \
+                 than the gateway tracks, so only tools in a validated listing may be called"
+            )
+        })
     }
 
     /// `tools` without the names this backend has blocked since they were

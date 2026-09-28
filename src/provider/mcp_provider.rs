@@ -82,7 +82,7 @@ impl Provider for McpProvider {
 
         // A tool withheld for its description is refused here as on the
         // gateway routes (#1441): listing and invocation must agree.
-        if let Some(refusal) = self.backend.blocked_tool_refusal(tool) {
+        if let Some(refusal) = self.backend.blocked_tool_refusal(None, tool) {
             return Err(crate::Error::Protocol(refusal));
         }
 
