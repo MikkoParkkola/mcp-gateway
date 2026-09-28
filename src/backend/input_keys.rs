@@ -137,9 +137,11 @@ impl Backend {
         };
         entry.tools_cache.replace(parsed, || {
             self.commit_verdicts(&source, listing, verdicts);
+            // A drain that met an unreadable page stored a partial catalogue.
+            let truncated = listing == super::descriptor_gate::Listing::Truncated;
             entry
                 .tools_truncated
-                .store(false, std::sync::atomic::Ordering::SeqCst);
+                .store(truncated, std::sync::atomic::Ordering::SeqCst);
         });
         withheld
     }

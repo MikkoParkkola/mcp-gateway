@@ -336,3 +336,24 @@ async fn x10_an_unreadable_drain_does_not_clear_a_block() {
         "an unreadable drain cleared a block"
     );
 }
+
+/// X10b: the shared slot records an unreadable drain's catalogue as truncated.
+#[tokio::test]
+async fn x10b_an_unreadable_drain_is_stored_as_truncated() {
+    let backend = Arc::new(Backend::new(
+        "evil",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let _ = backend.remember_listed_tools_as(
+        None,
+        false,
+        &catalogue_with("Reads a file."),
+        crate::backend::Listing::Truncated,
+    );
+    assert!(
+        backend.cached_tools_snapshot_and_truncated().1,
+        "a partial catalogue was stored as complete"
+    );
+}
