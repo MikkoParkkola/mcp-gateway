@@ -192,7 +192,7 @@ pub(crate) fn content_digest(result: &Value) -> std::result::Result<String, Chai
     let members = result.as_object().ok_or(ChainRefusal::Unhashable)?;
     let content: BTreeMap<&str, &Value> = members
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "_meta" | "_signature"))
+        .filter(|(key, _)| !matches!(key.as_str(), "_meta"))
         .map(|(key, value)| (key.as_str(), value))
         .collect();
     if !content
