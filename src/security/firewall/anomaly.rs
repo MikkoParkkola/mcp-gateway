@@ -280,6 +280,7 @@ impl AnomalyDetector {
 
     /// Refuse a call whose transition cannot be learned because the pair map
     /// is full (`security.posture: hardened`), instead of passing it unscored.
+    #[allow(dead_code)] // red stub: unwired until the implementation
     #[must_use]
     pub(crate) fn refusing_unlearnable(self) -> Self {
         self

@@ -317,6 +317,7 @@ impl Firewall {
 
     /// Apply the security posture: under `hardened`, a call whose transition
     /// the anomaly detector cannot learn (pair map full) is refused.
+    #[allow(dead_code)] // red stub: unwired until the implementation
     #[must_use]
     pub(crate) fn with_posture(self, posture: crate::security::posture::SecurityPosture) -> Self {
         let _ = posture;
