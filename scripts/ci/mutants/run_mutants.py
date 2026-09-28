@@ -272,7 +272,7 @@ def plan() -> list[Row]:
         raise Abort(f"the batch commit may only add {MUTANTS_DIR}/ (and the harness); it also changes {stray}")
     # The harness that runs must be the reviewed one, whichever commit brought
     # it: the batch commit, or the source head itself (which may have edited it).
-    git("fetch", "--quiet", "--depth=1", "origin", RELEASE_LINE)
+    fetch_release_line()
     for path in HARNESS:
         if git("rev-parse", f"HEAD:{path}") != git("rev-parse", f"FETCH_HEAD:{path}", check=False):
             raise Abort(f"{path} differs from the reviewed copy on {RELEASE_LINE}")
@@ -280,6 +280,75 @@ def plan() -> list[Row]:
         if not Path(MUTANTS_DIR, row.patch).is_file():
             raise Abort(f"row {row.id}: patch {row.patch} is missing")
     return rows
+
+
+def fetch_release_line() -> None:
+    """Fetches the release-line tip into FETCH_HEAD. `--depth=1` only in a
+    checkout that is already shallow (a CI checkout): in a full clone it would
+    make the object store shallow, and a local run shares that store with every
+    worktree of the repository, breaking their merge-bases."""
+    depth = ["--depth=1"] if git("rev-parse", "--is-shallow-repository") == "true" else []
+    git("fetch", "--quiet", *depth, "origin", RELEASE_LINE)
+
+
+FETCH_CASES = 2  # full clone, shallow clone
+
+
+def fetch_check() -> list[str]:
+    """Runs fetch_release_line in a full clone and in a shallow clone of a
+    throwaway origin: the full clone must stay full (a local run shares the
+    developer's object store), and both must resolve FETCH_HEAD."""
+    errors = []
+    with tempfile.TemporaryDirectory() as tmp:
+        origin, full, shallow = (Path(tmp, n) for n in ("origin", "full", "shallow"))
+        # Isolated from the caller's git setup: no inherited GIT_DIR, no global
+        # or system config (signing, hooks, url rewrites).
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+        def fixture_git(*args, cwd=None):
+            done = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
+            if done.returncode != 0:
+                raise Abort(f"fixture `git {' '.join(args)}` failed: {done.stderr.strip()}")
+
+        try:
+            fixture_git("init", "-q", "-b", RELEASE_LINE, str(origin))
+            for n in (1, 2):
+                fixture_git("commit", "-q", "--allow-empty", "-m", f"c{n}", cwd=origin)
+            url = origin.as_uri()
+            fixture_git("clone", "-q", url, str(full))
+            fixture_git("clone", "-q", "--depth=1", url, str(shallow))
+            # A new tip after cloning: a depth-1 fetch brings 1 commit of history,
+            # a plain fetch into the shallow clone would bring 2 (tip + old tip).
+            fixture_git("commit", "-q", "--allow-empty", "-m", "c3", cwd=origin)
+        except Abort as exc:
+            return [str(exc)]
+        # fetch_release_line runs through the module's git(), which reads the
+        # process environment: give it the same isolated one for the duration.
+        here, saved = os.getcwd(), dict(os.environ)
+        os.environ.clear()
+        os.environ.update(env)
+        try:
+            for clone, want, history in ((full, "false", "3"), (shallow, "true", "1")):
+                os.chdir(clone)
+                try:
+                    fetch_release_line()
+                    got = git("rev-parse", "--is-shallow-repository")
+                    if got != want:
+                        errors.append(f"{clone.name} clone: shallow={got!r} after the fetch, expected {want!r}")
+                    got = git("rev-list", "--count", "FETCH_HEAD")
+                    if got != history:
+                        errors.append(f"{clone.name} clone: FETCH_HEAD history {got} commit(s), expected {history}")
+                except Abort as exc:
+                    errors.append(f"{clone.name} clone: {exc}")
+                finally:
+                    os.chdir(here)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+    return errors
 
 
 def header(rows: list[Row]) -> dict:
@@ -430,9 +499,12 @@ def self_test() -> int:
         if bool(REF_RE.match(ref)) != (ref in refs_ok):
             print(f"self-test: ref {ref} misclassified", file=sys.stderr)
             rc = 1
+    for err in fetch_check():
+        print(f"self-test: release-line fetch: {err}", file=sys.stderr)
+        rc = 1
     if rc == 0:
-        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad)
-        print(f"self-test: {total} classifier, manifest and ref cases as expected")
+        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES
+        print(f"self-test: {total} classifier, manifest, ref and release-line fetch cases as expected")
     return rc
 
 
