@@ -85,4 +85,12 @@ impl MetaMcp {
             crate::protocol::mrtr::RetryFields::from_params(params).key_discriminator();
         crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
     }
+
+    /// #1962: arm a direct-route reservation for its backend dispatch, so a
+    /// caller that disconnects mid-call does not free the key.
+    pub(crate) fn arm_direct_dispatch(
+        reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    ) {
+        super::invoke::arm_for_dispatch(reservation);
+    }
 }

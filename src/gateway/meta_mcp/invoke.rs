@@ -147,6 +147,11 @@ mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
 mod r2_check;
+// #1962: settlement of a bridged round's key, kept out of this file's size baseline.
+mod bridge_settle;
+use bridge_settle::arm;
+pub(super) use bridge_settle::arm_for_dispatch;
+pub(super) use bridge_settle::classify_bridged_dispatch_error;
 mod withheld_evidence;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
@@ -911,6 +916,9 @@ struct BridgeDispatcher<'a> {
     /// the bridge sees today's `BackendFailed`, and the call site answers with
     /// this instead of the generic bridged-exchange refusal.
     account_refusal: &'a parking_lot::Mutex<Option<Error>>,
+    /// #1962: the call's idempotency reservation, held here for the exchange
+    /// so each round can arm it around its dispatch.
+    reservation: &'a parking_lot::Mutex<Option<IdempotencyReservation>>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -1007,6 +1015,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 .map(str::to_owned),
             input_responses: retry_params.get("inputResponses").cloned(),
         };
+        // #1962: armed for the dispatch, so a dropped exchange settles the key.
+        arm(self.reservation, true);
         let dispatched = self
             .meta
             .accounted_dispatch(
@@ -1032,11 +1042,23 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             )
             .await;
         let error = match dispatched {
-            Ok(value) => return Ok(value),
+            Ok(value) => {
+                // Asked again: the backend has not acted on this round.
+                if crate::protocol::mrtr::InputRequired::claims_input_required(&value) {
+                    arm(self.reservation, false);
+                }
+                return Ok(value);
+            }
             Err(error) => error,
         };
         // A11-c: a 401 on a managed credential forces at most one refresh.
         let classified = classify_bridged_dispatch_error(&error);
+        if matches!(
+            classified,
+            crate::gateway::input_bridge::BridgeError::NotAdmitted { .. }
+        ) {
+            arm(self.reservation, false);
+        }
         // Every error that reached the 401 site is parked, marked or not, so
         // the call site answers it as the first dispatch would.
         if let Some(managed) = self.managed
@@ -1045,30 +1067,6 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
         }
         Err(classified)
-    }
-}
-
-/// Decides whether a failed bridged dispatch releases the idempotency key.
-///
-/// The error type already carries a tight, deliberate allowlist of failures that
-/// provably happened above the backend. A bridged round that hit one of those ran
-/// nothing, so it releases the key on the same terms as a pre-dispatch refusal;
-/// everything else stays dispatched and settles, because a round the backend may
-/// have executed must not readmit a retry of a side effect (ADR-012 consequence 1).
-pub(super) fn classify_bridged_dispatch_error(
-    error: &crate::Error,
-) -> crate::gateway::input_bridge::BridgeError {
-    let message = error.to_string();
-    if error.is_pre_dispatch() {
-        crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
-    } else {
-        // Always `MayHaveActed`: `is_pre_dispatch()` already diverted every
-        // provably-unexecuted case to `NotAdmitted` above, so anything
-        // reaching here may have run.
-        crate::gateway::input_bridge::BridgeError::BackendFailed {
-            message,
-            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
-        }
     }
 }
 
@@ -2130,6 +2128,8 @@ impl MetaMcp {
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.
+        // #1962: a drop during the dispatch settles the key as uncertain.
+        arm_for_dispatch(idem_reservation.as_mut());
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,
@@ -2268,8 +2268,12 @@ impl MetaMcp {
         // state. Those are unusable, not finished, and settling one would write
         // "side effect executed" over a backend that stopped to ask. Keying on
         // the classification would exempt exactly the shapes it rejects.
-        if !stopped_to_ask && let Some(reservation) = idem_reservation.as_mut() {
-            reservation.commit(&withheld_side_effect());
+        if let Some(reservation) = idem_reservation.as_mut() {
+            if stopped_to_ask {
+                reservation.disarm();
+            } else {
+                reservation.commit(&withheld_side_effect());
+            }
         }
 
         // MRTR.9: a question the client never said it could answer is refused
@@ -2324,6 +2328,7 @@ impl MetaMcp {
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
             let account_refusal = parking_lot::Mutex::new(None);
+            let held = parking_lot::Mutex::new(idem_reservation.take());
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
                     meta: self,
@@ -2347,6 +2352,7 @@ impl MetaMcp {
                     scope: caller.scope(),
                     managed: caller_credential.managed.as_ref(),
                     account_refusal: &account_refusal,
+                    reservation: &held,
                 },
                 caller.channel,
                 session,
@@ -2358,6 +2364,7 @@ impl MetaMcp {
             // Taken once, here: a guard held into a match arm would be held
             // across that arm's awaits and make this future non-Send.
             let mut parked = account_refusal.into_inner();
+            idem_reservation = held.into_inner();
             match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
@@ -6048,6 +6055,9 @@ mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod f13_bridge_tests;
+
+#[cfg(test)]
+mod cancel_settles_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;
