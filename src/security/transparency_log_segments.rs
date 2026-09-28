@@ -128,7 +128,9 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
         } else {
             parent
         };
-        File::open(dir)?.sync_all()?;
+        File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(ctx("sync", dir))?;
     }
     #[cfg(not(unix))]
     let _ = path;
@@ -224,16 +226,16 @@ pub(crate) fn encode_hwm(hw: &HighWater, secret: &[u8], key_id: &str) -> io::Res
 /// Write `hw` over `<path>.hwm` at offset 0 (one write, fixed length).
 pub(crate) fn write_hwm(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()> {
     let hwm = sibling(path, "hwm");
-    let mut f = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
-        .open(hwm)?;
-    f.write_all(bytes)?;
-    if sync {
-        f.sync_all()?;
-    }
-    Ok(())
+        .open(&hwm)
+        .and_then(|mut f| {
+            f.write_all(bytes)?;
+            if sync { f.sync_all() } else { Ok(()) }
+        })
+        .map_err(ctx("write", &hwm))
 }
 
 /// Read `<path>.hwm`. `None` when it is missing, torn (wrong length),

@@ -157,3 +157,18 @@ fn listing_names_the_parent() {
     let e = verify_log(&path).expect_err("a file is not a directory");
     assert_names(&e, "list", &plain);
 }
+
+/// Writing the high-water mark at open (a log with records and no mark).
+#[test]
+fn hwm_write_names_the_mark_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    append(&TransparencyLogger::open(cfg(&path, 2, false)).unwrap(), 0);
+    let hwm = super::segments::sibling(&path, "hwm");
+    let _ = std::fs::remove_file(&hwm);
+    std::fs::create_dir(&hwm).unwrap();
+    let e = TransparencyLogger::open(cfg(&path, 2, false))
+        .err()
+        .expect("the mark cannot be written onto a directory");
+    assert_names(&e, "audit log: write ", &hwm);
+}
