@@ -2246,37 +2246,37 @@ class WorkflowWiring(unittest.TestCase):
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
 
-    def test_the_release_builds_tests_and_publishes_one_resolved_commit(self):
-        # A tag name is movable: a job, called workflow or re-run that resolves
-        # it again can build, test or publish a different commit than the rest
-        # of the release. `resolve` turns it into a SHA once; every checkout of
-        # this repository and every called workflow must use that SHA.
-        sha = "${{ needs.resolve.outputs.sha }}"
+    def test_the_release_builds_tests_and_publishes_the_event_commit(self):
+        # The release commit is GITHUB_SHA, which a re-run keeps, and it is what
+        # actions/checkout and both called workflows use when no ref is named.
+        # A named ref can only be worse: a tag name looked up again later may
+        # have moved. So no checkout of this repository and no called workflow
+        # names one, and every job waits, directly or through its needs, for
+        # the `resolve` guard that refuses a dispatch away from the tag.
         release_jobs = jobs("release.yml")
         self.assertIn("resolve", release_jobs, "release.yml has no resolve job")
         self.assertIsNone(needs_of(release_jobs["resolve"]), "resolve must run first")
-        checked = []
+        named, sites = [], 0
         for name, body in release_jobs.items():
-            if name == "resolve":
-                continue
-            refs = []
             for block in steps("release.yml", name):
                 if not any(re.search(r"uses:\s*actions/checkout@", l) for l in block):
                     continue
                 if artifact_keys(block, ("repository",)):
                     continue  # another repository (the Homebrew tap)
-                refs.append(artifact_keys(block, ("ref",)))
+                sites += 1
+                named += [f"{name}: ref {r}" for r in artifact_keys(block, ("ref",))]
             if re.search(r"(?m)^    uses: \./\.github/workflows/", body):
-                refs.append(re.findall(r"(?m)^      ref:\s*(.+?)\s*$", body))
-            for found in refs:
-                self.assertEqual(found, [sha], f"{name}: checks out or passes {found or 'the default ref'}, not the resolved commit")
-                checked.append(name)
-            if refs:
-                self.assertIn("resolve", needs_of(body) or "", f"{name}: uses the resolved commit, so it must need resolve")
-        self.assertGreaterEqual(len(set(checked)), 10, sorted(set(checked)))
-        for line in "\n".join(live_lines("release.yml")).splitlines():
-            if re.match(r"^\s+ref:", line):
-                self.assertNotRegex(line, r"github\.ref|inputs\.tag|github\.sha", f"a ref must be the resolved commit: {line.strip()}")
+                sites += 1
+                named += [f"{name}: with ref {r}" for r in re.findall(r"(?m)^      (?:ref|tag):\s*(.+?)\s*$", body)]
+        self.assertGreaterEqual(sites, 10, "the checkout and call inventory shrank")
+        self.assertEqual(named, [], "a checkout or called workflow names a ref instead of the event commit")
+
+        def reaches_resolve(name, seen=()):
+            needs = re.findall(r"[\w-]+", needs_of(release_jobs[name]) or "")
+            return "resolve" in needs or any(n not in seen and reaches_resolve(n, (*seen, name)) for n in needs)
+
+        stray = [name for name in release_jobs if name != "resolve" and not reaches_resolve(name)]
+        self.assertEqual(stray, [], "a job runs without waiting for the dispatch guard")
 
     def test_the_release_commit_is_the_event_commit_and_a_branch_dispatch_is_refused(self):
         # GITHUB_SHA is the commit the event names, an annotated tag peeled,
@@ -2298,18 +2298,14 @@ class WorkflowWiring(unittest.TestCase):
             ("dispatch at another tag", "workflow_dispatch", "refs/tags/v3.5.1", "v4.0.0", False),
             ("dispatch with no tag", "workflow_dispatch", "refs/tags/v4.0.0", "", False),
         ]:
-            with tempfile.TemporaryDirectory() as directory:
-                output = pathlib.Path(directory, "output")
-                output.touch()
-                env = {"PATH": os.environ["PATH"], "GITHUB_EVENT_NAME": name, "GITHUB_REF": ref,
-                       "GITHUB_SHA": event, "TAG": tag, "GITHUB_OUTPUT": str(output)}
-                run = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True)
-                written = output.read_text()
+            env = {"PATH": os.environ["PATH"], "GITHUB_EVENT_NAME": name, "GITHUB_REF": ref,
+                   "GITHUB_SHA": event, "TAG": tag}
+            run = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True)
             if ok:
-                self.assertEqual((run.returncode, written), (0, f"sha={event}\n"), f"{label}: {run.stderr}")
+                self.assertEqual((run.returncode, run.stdout), (0, f"release commit: {event}\n"), f"{label}: {run.stderr}")
             else:
                 self.assertNotEqual(run.returncode, 0, f"{label} must be refused")
-                self.assertEqual(written, "", f"{label}: wrote an output before refusing")
+                self.assertIn("::error::", run.stdout, f"{label}: refused without saying why")
 
     def test_throwaway_runs_carry_the_release_tooling_python_suites(self):
         # A throwaway pull request skips `release-script-tests`, so without its

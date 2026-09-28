@@ -267,8 +267,8 @@ CASES = [
     (
         "needs-verify-replaced-by-a-comment",
         "release.yml",
-        "    needs: [resolve, build, verify, packaged-suite]",
-        "    needs: [resolve, build, packaged-suite] # verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs: [build, packaged-suite] # verify",
         CAUGHT,
     ),
     (
@@ -561,8 +561,8 @@ CASES = [
     (
         "needs-in-block-form",
         "release.yml",
-        "    needs: [resolve, build, verify, packaged-suite]",
-        "    needs:\n      - resolve\n      - build\n      - verify\n      - packaged-suite",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs:\n      - build\n      - verify\n      - packaged-suite",
         TOLERATED,
     ),
     (
@@ -1409,12 +1409,12 @@ CASES += [
      "    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_packaged_suite",
      "    if: github.event_name == 'pull_request' || (inputs.rehearse_packaged_suite", CAUGHT),
     ("release-stops-waiting-for-the-packaged-suite", "release.yml",
-     "    needs: [resolve, build, verify, packaged-suite]\n", "    needs: [resolve, build, verify]\n", CAUGHT),
+     "    needs: [build, verify, packaged-suite]\n", "    needs: [build, verify]\n", CAUGHT),
     ("packaged-suite-dropped-from-the-release", "release.yml",
      "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/packaged-suite.yml\n",
      "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
     ("crates-publish-stops-waiting-for-release", "release.yml",
-     "  publish:\n    needs: [resolve, release, verify]\n", "  publish:\n    needs: [resolve, verify]\n", CAUGHT),
+     "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
     ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
      "      # that job provisions, and the gate below `needs` that job.\n"
      "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n",
@@ -1423,46 +1423,53 @@ CASES += [
      CAUGHT),
 ]
 
-# One resolved commit for the whole release: a case per call site. Each anchor
-# runs from the job header to that job's `ref:` line, so it names one site.
-def _release_ref_sites():
+# The release is the event commit: a case per checkout and called workflow
+# that names a ref, and per way the dispatch guard can stop guarding. Each
+# checkout anchor runs from the job header to its checkout line, so it names
+# one site.
+def _release_checkout_sites():
     text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
-    sha = "${{ needs.resolve.outputs.sha }}"
     sites = []
     for m in re.finditer(r"(?m)^  ([a-z0-9-]+):\n", text):
-        job = m.group(1)
         nxt = re.search(r"(?m)^  [a-z0-9-]+:\n", text[m.end():])
-        stop = m.end() + nxt.start() if nxt else len(text)
-        body = text[m.start():stop]
-        ref = body.find(f"ref: {sha}\n")
-        if ref < 0:
-            continue
-        anchor = body[: ref + len(f"ref: {sha}\n")]
-        sites.append((job, anchor))
+        body = text[m.start():m.end() + nxt.start() if nxt else len(text)]
+        for c in re.finditer(r"(?m)^( +)(?:- )?uses: actions/checkout@\S+ # v\S+\n", body):
+            rest = body[c.end():]
+            if re.match(r" +with:\n( +(?!ref:)\S.*\n)*? +repository:", rest):
+                continue  # another repository (the Homebrew tap)
+            anchor = body[:c.end()]
+            indent = " " * (len(c.group(1)) + (2 if c.group(0).lstrip().startswith("- ") else 0))
+            added = anchor + f"{indent}with:\n{indent}  ref: ${{{{ inputs.tag }}}}\n"
+            if rest.startswith(f"{indent}with:\n"):
+                anchor += f"{indent}with:\n"  # the ref joins the existing inputs
+            sites.append((m.group(1), anchor, added))
     return sites
 
 
-for _job, _anchor in _release_ref_sites():
+for _job, _anchor, _added in _release_checkout_sites():
+    CASES += [(f"{_job}-checks-out-the-tag-name", "release.yml", _anchor, _added, CAUGHT)]
+for _job in ("task-sdk-recovery", "packaged-suite"):
     CASES += [
-        (f"{_job}-uses-the-tag-name", "release.yml", _anchor,
-         _anchor.replace("${{ needs.resolve.outputs.sha }}", "${{ inputs.tag || github.ref }}"), CAUGHT),
+        (f"{_job}-is-passed-the-tag-name", "release.yml",
+         f"  {_job}:\n    needs: resolve\n    uses: ./.github/workflows/{_job}.yml\n",
+         f"  {_job}:\n    needs: resolve\n    uses: ./.github/workflows/{_job}.yml\n    with:\n      ref: ${{{{ inputs.tag || github.ref }}}}\n", CAUGHT),
     ]
 CASES += [
-    ("security-gate-checks-out-the-default-ref", "release.yml",
-     "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: ${{ needs.resolve.outputs.sha }}\n      - name: Scan Rust dependencies against OSV\n",
-     "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Scan Rust dependencies against OSV\n", CAUGHT),
     ("packaged-suite-stops-waiting-for-resolve", "release.yml",
      "  packaged-suite:\n    needs: resolve\n", "  packaged-suite:\n", CAUGHT),
-    # The resolver itself: a dispatch from a branch or another tag, and a
-    # second lookup of the tag, must each turn the suite red.
+    ("security-gate-stops-waiting-for-resolve", "release.yml",
+     "    name: Security gate (block release on known vulns)\n    needs: resolve\n",
+     "    name: Security gate (block release on known vulns)\n", CAUGHT),
+    # The guard itself: a dispatch from a branch or another tag, and a second
+    # lookup of the tag, must each turn the suite red.
     ("resolve-accepts-a-branch-dispatch", "release.yml",
      '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n', "          if false; then\n", CAUGHT),
     ("resolve-accepts-any-tag-dispatch", "release.yml",
      '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n',
      '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [[ "$GITHUB_REF" != refs/tags/* ]]; then\n', CAUGHT),
     ("resolve-looks-the-tag-up-again", "release.yml",
-     '          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"\n',
-     '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"\n', CAUGHT),
+     '          echo "release commit: $GITHUB_SHA"\n',
+     '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "release commit: $GITHUB_SHA"\n', CAUGHT),
 ]
 
 # Throwaway runs carry the release tooling's Python suites. The hosted job is

@@ -19,22 +19,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The one commit this release is built, tested and published from. A tag
-  # name is movable: resolved again by a later job (or on a re-run), a tag
-  # moved in between would build, test or publish a different commit. It is
-  # fixed once here and every checkout and called workflow below uses the
-  # SHA: GITHUB_SHA, the commit the event names (an annotated tag peeled),
-  # which a re-run keeps. A dispatch must run at the tag it names
-  # (`--ref <tag> -f tag=<tag>`); from any other ref it is refused, so the
-  # `tag` input can never name a commit other than the one checked out.
+  # The one commit this release is built, tested and published from is
+  # GITHUB_SHA: the commit the event names (an annotated tag peeled), which a
+  # re-run keeps. Every checkout of this repository and both called workflows
+  # use it by default (checkout's default for the triggering repository is the
+  # event's commit), so none names a ref: a tag name, looked up again later,
+  # could have moved. A dispatch must run at the tag it names
+  # (`--ref <tag> -f tag=<tag>`); from any other ref it is refused here, and
+  # every job waits for this, so the `tag` input can never name a commit other
+  # than the one checked out.
   resolve:
-    name: Resolve the release commit
+    name: Refuse a dispatch away from the tag
     runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.sha.outputs.sha }}
     steps:
-      - id: sha
-        env:
+      - env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -43,7 +41,6 @@ jobs:
             exit 1
           fi
           echo "release commit: $GITHUB_SHA"
-          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
   # Release backstop for the dependency-vulnerability gate. ci.yml runs
   # `cargo audit` on every PR/push (RustSec advisories); this re-scans the
@@ -60,8 +57,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
       - name: Scan Rust dependencies against OSV
         uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
@@ -93,8 +88,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
       - name: Test the leak-lint parser (fail on parser regression)
         run: python3 scripts/dev/test_cwe532_leak_lint.py
       - name: Run CWE-532 leak lint
@@ -116,7 +109,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
           # The cited-commit gate below walks ancestry and reads commit bodies,
           # so it needs real history. A shallow checkout would report every
           # citation as unreachable.
@@ -152,8 +144,6 @@ jobs:
   task-sdk-recovery:
     needs: resolve
     uses: ./.github/workflows/task-sdk-recovery.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
 
   # The tests run from the packaged crate, as anyone installing it would. A
   # file the tests read that `include` leaves out passes the checkout-based
@@ -163,11 +153,9 @@ jobs:
   packaged-suite:
     needs: resolve
     uses: ./.github/workflows/packaged-suite.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
 
   verify:
-    needs: [resolve, security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
+    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
     runs-on: ubuntu-latest
     # Every publishing job reads these to decide stable vs prerelease channel.
     # `needs` exposes only direct dependencies, so each consumer names `verify`
@@ -180,8 +168,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Check tag against manifest and classify the channel
         id: channel
@@ -229,7 +215,7 @@ jobs:
         run: cargo publish --locked --dry-run --registry crates-io
 
   build:
-    needs: [resolve, verify]
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -264,8 +250,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Install system packages
         if: matrix.packages != ''
@@ -302,15 +286,13 @@ jobs:
           retention-days: 14
 
   release:
-    needs: [resolve, build, verify, packaged-suite]
+    needs: [build, verify, packaged-suite]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -382,13 +364,11 @@ jobs:
           prerelease: ${{ needs.verify.outputs.is_prerelease == 'true' }}
 
   publish:
-    needs: [resolve, release, verify]
+    needs: [release, verify]
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -404,7 +384,7 @@ jobs:
           CARGO_REGISTRIES_CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   npm-publish:
-    needs: [resolve, release, verify]
+    needs: [release, verify]
     # Must stay GitHub-hosted. npm rejects a provenance bundle signed on a
     # self-hosted runner ("Unsupported GitHub Actions runner environment:
     # self-hosted"), so a third-party runner costs the build attestation.
@@ -417,8 +397,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
@@ -462,7 +440,7 @@ jobs:
         run: npm publish --access public --provenance --tag "${DIST_TAG}" --registry https://registry.npmjs.org
 
   homebrew-update:
-    needs: [resolve, release, verify]
+    needs: [release, verify]
     # Skipped on a prerelease. The tap carries one stable formula, so bumping it
     # to an rc pushes the candidate to every `brew upgrade` — the ungraded
     # exposure this channel exists to prevent. Nothing depends on this job, so a
