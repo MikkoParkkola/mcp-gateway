@@ -265,7 +265,7 @@ pub(super) fn spawn_rewatch_task(
                     // a stalled read then delays it by at most one poll wait.
                     // Not `biased`, which would let constant directory wakes
                     // starve the poll.
-                    if !matches!(
+                    if false && !matches!(
                         shutdown.try_recv(),
                         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
                     ) {
