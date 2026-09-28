@@ -143,9 +143,9 @@ pub(crate) fn pinned_client_builder() -> reqwest::ClientBuilder {
 ///
 /// Returns `Error::Protocol` if the URL is malformed or targets a blocked range.
 pub fn validate_url_not_ssrf(url_str: &str) -> Result<()> {
-    // Errors name the value an operator mistyped, never a credential in it:
-    // userinfo, query and fragment are cut first (#2113). Every caller shares
-    // this one redaction.
+    // Errors name the value an operator mistyped without its userinfo, query
+    // or fragment (#2113); the path stays visible by design. Every caller
+    // shares this one redaction.
     let shown = crate::security::sanitize::redact_url_keep_path(url_str);
     let parsed = url::Url::parse(url_str).map_err(|e| {
         // A relative URL (no scheme://host) is the common symptom of an

@@ -418,7 +418,7 @@ fn url_errors_name_the_value_without_its_credentials() {
             .expect_err("each shape is refused")
             .to_string();
         for secret in [
-            "SECRET1", "SECRET2", "SECRET3", "SECRET4", "SECRET5", "SECRET6",
+            "SECRET1", "SECRET2", "SECRET3", "SECRET4", "SECRET5", "SECRET6", "SECRET7",
         ] {
             assert!(!err.contains(secret), "{raw:?} leaked {secret}: {err}");
         }
