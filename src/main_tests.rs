@@ -8,17 +8,17 @@ use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 mod stack;
 
 fn make_discovered_server(name: &str) -> DiscoveredServer {
-    DiscoveredServer {
-        name: name.to_string(),
-        description: format!("{name} server"),
-        source: DiscoverySource::ClaudeDesktop,
-        transport: TransportConfig::Stdio {
+    DiscoveredServer::new(
+        name.to_string(),
+        format!("{name} server"),
+        DiscoverySource::ClaudeDesktop,
+        TransportConfig::Stdio {
             command: format!("npx -y {name}"),
             cwd: None,
             protocol_version: None,
         },
-        metadata: ServerMetadata::default(),
-    }
+        ServerMetadata::default(),
+    )
 }
 
 fn make_cli(port: Option<u16>, host: Option<String>, no_meta_mcp: bool) -> Cli {
