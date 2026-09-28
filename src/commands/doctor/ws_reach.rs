@@ -75,15 +75,36 @@ mod tests {
             up.detail
         );
         drop(listener);
+        // The closed port is the client end of a live loopback connection:
+        // it is owned but not listening until the check is done, so a connect
+        // is refused on every platform and no other process can bind the port
+        // and answer it, the way it could a freed port (#1754). The client is
+        // bound explicitly, without address reuse, so no later connect can be
+        // handed its port and reach itself.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_reuseaddr(false).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let client = socket
+            .connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let port = client.local_addr().unwrap().port();
         let down = check_ws_backend(
             "rt",
             &ws(&format!("ws://u:SECRET@127.0.0.1:{port}/mcp?t=SECRET")),
         )
         .await
         .expect("a ws_url backend is checked");
+        // Server end first: its port, not the explicitly bound one, takes
+        // the TIME_WAIT.
+        drop(server);
+        drop(client);
         assert!(
-            down.status == super::super::CheckStatus::Fail,
-            "{}",
+            down.status == super::super::CheckStatus::Fail
+                && down.detail == "connection failed: connection refused",
+            "a refused connect, not a timeout: {}",
             down.detail
         );
         let text = format!("{} {} {:?}", down.label, down.detail, down.hint);
