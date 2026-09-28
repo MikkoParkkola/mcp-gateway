@@ -1545,6 +1545,21 @@ impl Gateway {
         let identity_grant_sink =
             identity_grant_sink_for(&self.config.security.identity_grants, &meta_mcp);
         if let Some(path) = self.reload_path() {
+            // Ends this context's reload waits on shutdown (#1808): axum's
+            // graceful shutdown waits for every handler, and an admin or
+            // meta-tool reload waiting on a stalled NFS or FUSE read would
+            // otherwise never return. Subscribed before the task is spawned,
+            // so a signal sent in between is not missed.
+            let reload_stop = tokio_util::sync::CancellationToken::new();
+            let mut shutdown_rx = shutdown_tx.subscribe();
+            tokio::spawn({
+                let reload_stop = reload_stop.clone();
+                async move {
+                    // A closed channel means the gateway is ending too.
+                    drop(shutdown_rx.recv().await);
+                    reload_stop.cancel();
+                }
+            });
             let reload_ctx = Arc::new(
                 ReloadContext::new(
                     path.clone(),
@@ -1554,7 +1569,8 @@ impl Gateway {
                     self.config.meta_mcp.cache_ttl,
                 )
                 .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(identity_grant_sink.clone()),
+                .with_identity_grant_sink_opt(identity_grant_sink.clone())
+                .with_stop(reload_stop),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
