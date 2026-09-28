@@ -460,3 +460,93 @@ async fn a_tolerated_missing_grant_file_still_reloads() {
         "a reload after a tolerated startup read error served nothing"
     );
 }
+
+/// A reload with this run's grant sink, as the watcher and meta-tool run it.
+async fn reload_with(config: &Config, sink: Option<Arc<crate::config_reload::IdentityGrantSink>>) {
+    let ctx = crate::config_reload::ReloadContext::new(
+        PathBuf::from(&config.security.identity_grants.path),
+        Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    )
+    .with_identity_grant_sink_opt(sink);
+    let _ = ctx.reload_identity_grants().await;
+}
+
+/// The empty set served after a tolerated startup read error is the
+/// baseline: a grant file then written directly (not through the CLI) reads
+/// as `out_of_band` on the next reload.
+#[tokio::test]
+async fn a_direct_repair_after_a_tolerated_read_is_out_of_band() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path(), true);
+    config.security.identity_grants.fail_on_error = false;
+    let s = Box::pin(Started::run(config.clone())).await.unwrap();
+    write_identity_grants_file(
+        &grants_path(dir.path()),
+        &IdentityGrantFile::new(vec![row("g1", "r")]),
+    )
+    .await
+    .unwrap();
+
+    reload_with(&config, s.sink.clone()).await;
+
+    assert!(
+        s.records().contains(&(V::OutOfBand, "g1".into())),
+        "a direct repair was not recorded as out_of_band: {:?}",
+        s.records()
+    );
+}
+
+/// `fail_on_error: true` also governs the audited startup read: a grant file
+/// that breaks after the first load refuses the start.
+#[tokio::test]
+async fn fail_on_error_applies_to_the_audited_startup_read() {
+    let dir = tempfile::tempdir().unwrap();
+    apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
+        .await
+        .unwrap();
+    let mut config = config(dir.path(), true);
+    config.security.identity_grants.fail_on_error = true;
+    let base = control_plane_base(&config, None);
+    let gateway = Gateway::new(config.clone()).await.unwrap();
+    let meta = Box::pin(gateway.build_meta_mcp()).await.unwrap().meta_mcp;
+    std::fs::write(grants_path(dir.path()), "not: [valid").unwrap();
+    let store = build_control_plane_store(&config, &base).unwrap();
+
+    let started = start_identity_grant_audit(&config, &meta, store.as_ref(), &base.path).await;
+
+    assert!(started.is_err(), "the start was not refused");
+}
+
+/// A read never needs write access: a grant file in a directory the gateway
+/// cannot write (a read-only mount) still serves its grants at startup.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_grant_file_in_a_read_only_directory_serves_its_grants() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().is_root() {
+        return; // root ignores directory modes
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let ro = dir.path().join("ro");
+    std::fs::create_dir(&ro).unwrap();
+    let grants = ro.join("grants.yaml");
+    write_identity_grants_file(&grants, &IdentityGrantFile::new(vec![row("g1", "r")]))
+        .await
+        .unwrap();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let mut config = config(dir.path(), true);
+    config.security.identity_grants.path = grants.to_string_lossy().into_owned();
+
+    let s = Box::pin(Started::run(config)).await;
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let s = s.unwrap();
+    let (live, _) = s.meta.identity_grant_sink();
+    assert!(
+        live.read().values().any(|g| g.grant_id == "g1"),
+        "grants in a read-only directory were not served"
+    );
+}

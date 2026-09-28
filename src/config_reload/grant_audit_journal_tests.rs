@@ -317,3 +317,22 @@ fn a_later_state_version_is_refused() {
 
     assert!(loaded.is_err(), "a later-version pending plan was accepted");
 }
+
+/// The state file decides which journal entries are already recorded: one
+/// another account can write to is refused, not trusted.
+#[cfg(unix)]
+#[test]
+fn a_group_writable_state_file_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let grants = dir.path().join("grants.yaml");
+    let path = dir.path().join("state.json");
+    super::grant_audit_plan::State::fresh(&grants)
+        .save(&path)
+        .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+
+    let loaded = super::grant_audit_plan::State::load(&path, &grants);
+
+    assert!(loaded.is_err(), "a group-writable state file was trusted");
+}
