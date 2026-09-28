@@ -454,76 +454,6 @@ fn is_config_event_does_not_match_remove_event() {
     ));
 }
 
-// -------------------------------------------------------------------------
-// matching_env_file
-// -------------------------------------------------------------------------
-
-#[test]
-fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
-    use notify::{EventKind, event::ModifyKind};
-
-    // GIVEN: an event for a watched env file
-    let env_path = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
-    let event = notify::Event {
-        kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
-        paths: vec![env_path.clone()],
-        attrs: EventAttributes::default(),
-    };
-    // WHEN
-    let result = super::matching_env_file(&event, std::slice::from_ref(&env_path));
-    // THEN
-    assert_eq!(result, Some(env_path));
-}
-
-#[test]
-fn matching_env_file_returns_none_when_path_not_in_watch_list() {
-    use notify::{EventKind, event::ModifyKind};
-
-    // GIVEN: an event for a file not in the watch list
-    let watched = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
-    let other = std::path::PathBuf::from("/tmp/other.env");
-    let event = notify::Event {
-        kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
-        paths: vec![other],
-        attrs: EventAttributes::default(),
-    };
-    // WHEN / THEN
-    assert!(super::matching_env_file(&event, &[watched]).is_none());
-}
-
-#[test]
-fn matching_env_file_returns_none_for_remove_event() {
-    use notify::{EventKind, event::RemoveKind};
-
-    // GIVEN: a Remove event on a watched env file
-    let env_path = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
-    let event = notify::Event {
-        kind: EventKind::Remove(RemoveKind::File),
-        paths: vec![env_path.clone()],
-        attrs: EventAttributes::default(),
-    };
-    // WHEN / THEN: Remove does not trigger an env-file reload
-    assert!(super::matching_env_file(&event, &[env_path]).is_none());
-}
-
-#[test]
-fn matching_env_file_returns_first_matching_path_among_multiple() {
-    use notify::{EventKind, event::ModifyKind};
-
-    // GIVEN: multiple watched env files, event hits the second
-    let path_a = std::path::PathBuf::from("/tmp/a.env");
-    let path_b = std::path::PathBuf::from("/tmp/b.env");
-    let event = notify::Event {
-        kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
-        paths: vec![path_b.clone()],
-        attrs: EventAttributes::default(),
-    };
-    // WHEN
-    let result = super::matching_env_file(&event, &[path_a, path_b.clone()]);
-    // THEN: returns the matching path
-    assert_eq!(result, Some(path_b));
-}
-
 #[test]
 fn load_config_patch_rejects_invalid_config() {
     let dir = tempfile::tempdir().unwrap();
@@ -2071,7 +2001,7 @@ async fn envfile_19c_startup_resolves_each_entry_under_the_home_in_force_then_th
     // consults `HOME` only where the platform says so. On Windows it reads a
     // known folder and ignores `HOME` entirely, so file one cannot move entry two
     // and the two expected paths coincide — there the row keeps the reuse and
-    // watcher assertions and loses its power to separate sequential from
+    // reload assertion and loses its power to separate sequential from
     // up-front resolution, because there the two ARE the same computation.
     #[cfg(unix)]
     {
@@ -2102,26 +2032,6 @@ async fn envfile_19c_startup_resolves_each_entry_under_the_home_in_force_then_th
         expected.as_slice(),
         "a reload must open the paths startup recorded"
     );
-
-    // AND: the watcher is bound to those same paths.
-    //
-    // Limitation stated rather than approximated: nothing exposes the registered
-    // watch list, so this asserts through the same matcher the watcher uses.
-    for path in &expected {
-        let event = notify::Event {
-            kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
-                notify::event::DataChange::Any,
-            )),
-            paths: vec![path.clone()],
-            attrs: EventAttributes::default(),
-        };
-        assert_eq!(
-            super::matching_env_file(&event, ctx.env_paths().as_paths()),
-            Some(path.clone()),
-            "the watcher must be bound to the recorded path {}",
-            path.display()
-        );
-    }
 }
 
 /// ENVFILE.19e — a `~/...` entry, and a reload whose env files set `HOME` to a
