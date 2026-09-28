@@ -479,6 +479,43 @@ def test_open_rows_differs_from_the_blocking_count_it_is_mistaken_for():
     assert len(counter.open_rows(OPEN_LEDGER)) == 2
 
 
+BOARD_OK = "\n".join(
+    [
+        "| # | cluster | rows | design |",
+        "|---|---|---|---|",
+        "| A | envelope | 2 | yes |",
+    ]
+)
+
+
+def test_a_letter_retired_in_prose_cannot_head_a_new_open_cluster():
+    rollup = ROLLUP + "\n\nCluster A left the table on 2026-09-20.\n"
+    problems = counter.reused_cluster_letters(rollup, BOARD_OK)
+    assert any("cluster A was retired" in p for p in problems), problems
+
+
+def test_a_letter_cleared_in_a_list_cannot_head_a_new_open_cluster():
+    rollup = ROLLUP + "\n\nClusters A, C and N have cleared.\n"
+    problems = counter.reused_cluster_letters(rollup, BOARD_OK)
+    assert any("cluster A was retired" in p for p in problems), problems
+
+
+def test_a_letter_on_two_rows_of_one_table_is_flagged():
+    board = BOARD_OK + "\n| A | a different cluster | 0 | no |"
+    problems = counter.reused_cluster_letters(ROLLUP, board)
+    assert problems == ["readiness board names cluster A on more than one row"], problems
+
+
+def test_unique_letters_with_no_retirement_pass():
+    assert counter.reused_cluster_letters(ROLLUP, BOARD_OK) == []
+
+
+def test_a_retired_letter_kept_at_zero_rows_is_allowed():
+    rollup = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2 |", "`MRTR.1`, `MRTR.3` | 0 |")
+    rollup += "\nCluster A left the table.\n"
+    assert counter.reused_cluster_letters(rollup, BOARD_OK) == []
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted
