@@ -331,8 +331,12 @@ rule position bias out.
 The geometric-mean cancellation requires *complete* rotations. The pre-registered
 secondary window was meant to provide them, but it does not: excluded cycles 7 and
 15 fall inside it, so rotation phases appear 1 to 3 times each and the window is
-not slot-balanced (`analysis.txt` prints `UNEVEN … CONFOUNDED`). The cross-check
-therefore does not cancel a position term.
+not slot-balanced. The committed `analysis.txt` (lines 69, 87-88) and `analysis.json`
+(`kept_balanced`) still label this subset "balance-exact" and say geometric pooling
+cancels the position term; those labels are the analyzer's own and are wrong for this
+window, which the rotation-phase count above shows (the `UNEVEN … CONFOUNDED` line in
+`analysis.txt` belongs to the 15-cycle slot table). The cross-check therefore does not
+cancel a position term.
 
 Two methodological lessons, both recorded against this measurement rather than
 explained away:
@@ -730,7 +734,8 @@ Everything below was verified, not assumed:
 
 **18 cycles observed, 15 kept, 108 reps.** Raw data is committed alongside this
 report at `docs/internal/evidence/nfr-perf-1-ramp-2026-09-22/`:
-`reps.csv` (per-rep), `analysis.json`, `analysis.txt` (full analyzer output),
+`reps.csv` (per-rep), `analysis.json`, `analysis.txt` (full analyzer output, kept as
+generated; its "balance-exact" subset label is corrected in §1.3.3, not in the file),
 and `reps-v1-slotbug.csv` (the killed first attempt, retained as evidence for
 §1.3). Source paths on the measurement host: `<bench-dir>/results/ramp-v2/`
 and `<bench-dir>/results/ramp-v1-slotbug/`.
@@ -1172,7 +1177,14 @@ resolvable effect: **idx27→69, at +8.42pp, carrying 68% of the total +12.37pp*
 Read as paired per-cycle segment ratios (k = 4, coverage 96.5%), two segments exclude
 1.0: `P3/B` = 1.1096 [1.0700, 1.1224] and `P4/P3` = 1.0382 [1.0174, 1.0514]. `B/A` =
 1.0166 [0.9602, 1.0330] and `REL/P4` = 0.9927 [0.9603, 1.0281] include 1.0. The
-largest rise is idx27→69, and it is the only one this run supports: `P4/P3` = 1.0382 [1.0174, 1.0514] excludes 1.0, but this fixed-order rotated run carries an uncontrolled systematic position bias (§1.3.3; G1 cannot see it, §5.1, and the geometric-mean cross-check is withdrawn), and the interval covers sampling error only, so idx69→92 cannot be attributed to code.
+largest rise is idx27→69. The same systematic position bias applies to it, and neither
+the interval nor the 6.13% floor bounds that bias; the difference is the size and sign of
+the modelled term. idx27→69 is a difference of pooled `X/A` medians, the quantity the
+§1.3.3 model describes, and there the position-only term for `B`→`P3` is −3.32pp
+(`B` 1.0168, `P3` 0.9836): opposite in sign to the observed +8.42pp. Under the measured
+slot profile, position cannot produce this rise. That profile is itself a one-run
+estimate, so this is conditional on the model, not a bound, and a follow-up bisect
+should randomise order. It is the only segment this run supports: `P4/P3` = 1.0382 [1.0174, 1.0514] excludes 1.0, but this fixed-order rotated run carries an uncontrolled systematic position bias (§1.3.3; G1 cannot see it, §5.1, and the geometric-mean cross-check is withdrawn), and the interval covers sampling error only, so idx69→92 cannot be attributed to code.
 
 That window is 42 commits, is the heaviest in the run (107,746 `src` lines
 added, §1.2), and **straddles the 4.0.0 version boundary at index 39**. It is
