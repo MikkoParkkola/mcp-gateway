@@ -1435,6 +1435,9 @@ pub struct ReloadContext {
     load: LoadPatch,
     /// Starts `load` on a thread of its own.
     spawn: SpawnLoad,
+    /// Cancelled when the gateway starts shutting down.
+    #[allow(dead_code, reason = "red-first stub")]
+    stop: tokio_util::sync::CancellationToken,
 }
 
 /// The reload's file load; a field so a test can stall or fail it.
@@ -1483,7 +1486,16 @@ impl ReloadContext {
             identity_grants: None,
             load: load_config_patch,
             spawn: spawn_load_thread,
+            stop: tokio_util::sync::CancellationToken::new(),
         }
+    }
+
+    /// Stop this context's reload waits when `stop` is cancelled (#1808).
+    #[allow(dead_code, reason = "red-first stub")]
+    #[must_use]
+    pub(crate) fn with_stop(mut self, stop: tokio_util::sync::CancellationToken) -> Self {
+        self.stop = stop;
+        self
     }
 
     /// Replace the file load, so a test can stall, fail or observe it.

@@ -283,3 +283,162 @@ async fn s7_a_read_that_cannot_start_is_a_refusal() {
     );
     assert!(Arc::ptr_eq(&overlay, &ctx.env.get()), "overlay published");
 }
+
+// Shutdown (v3): axum's graceful shutdown waits for every in-flight handler,
+// so an admin reload waiting on a stalled read, on the reload lock or on the
+// read slot must give up when the gateway's stop token is cancelled.
+
+const STOPPING: &str = "shutting down";
+
+/// Poll `flag` until it is set, or fail after [`DEADLINE`].
+async fn wait_until(what: &str, flag: impl Fn() -> bool) {
+    tokio::time::timeout(DEADLINE, async {
+        while !flag() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{what}"));
+}
+
+/// Await a spawned reload that the stop token should end within [`DEADLINE`].
+async fn stopped(task: tokio::task::JoinHandle<std::result::Result<ReloadOutcome, String>>) {
+    let refused = tokio::time::timeout(DEADLINE, task)
+        .await
+        .expect("the reload ignored the stop token")
+        .expect("the reload task")
+        .expect_err("a stopped reload refuses");
+    assert!(refused.contains(STOPPING), "{refused}");
+}
+
+static S8_ENTERED: AtomicBool = AtomicBool::new(false);
+
+fn s8_load(
+    _: &std::path::Path,
+    _: &Arc<LiveConfig>,
+    _: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
+    S8_ENTERED.store(true, Ordering::SeqCst);
+    stall_forever()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s8_shutdown_stops_a_reload_waiting_on_a_stalled_read() {
+    let stop = tokio_util::sync::CancellationToken::new();
+    let ctx = Arc::new(context().with_load(s8_load).with_stop(stop.clone()));
+    let task = tokio::spawn(async move { ctx.reload_outcome().await });
+    wait_until("the load started", || S8_ENTERED.load(Ordering::SeqCst)).await;
+    stop.cancel();
+    stopped(task).await;
+}
+
+static S9_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+
+fn s9_load(
+    _: &std::path::Path,
+    _: &Arc<LiveConfig>,
+    _: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
+    S9_ENTRIES.fetch_add(1, Ordering::SeqCst);
+    Err("s9: the load ran".to_owned())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s9_shutdown_stops_a_reload_queued_on_the_lock() {
+    let stop = tokio_util::sync::CancellationToken::new();
+    let registry = Arc::new(BackendRegistry::new());
+    let ctx = Arc::new(
+        context_on(Arc::clone(&registry))
+            .with_load(s9_load)
+            .with_stop(stop.clone()),
+    );
+    // Held by the test until the end: only the stop token can free the reload.
+    let _held = registry.lock_reload().await;
+    let task = tokio::spawn(async move { ctx.reload_outcome().await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    stop.cancel();
+    stopped(task).await;
+    assert_eq!(S9_ENTRIES.load(Ordering::SeqCst), 0, "the load ran");
+}
+
+static S10_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+
+fn s10_load(
+    _: &std::path::Path,
+    _: &Arc<LiveConfig>,
+    _: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
+    S10_ENTRIES.fetch_add(1, Ordering::SeqCst);
+    Err("s10: the load ran".to_owned())
+}
+
+/// A reload that starts after the signal reads nothing: not the config, not
+/// the env files, and not the grants file, which a missing path would report.
+#[tokio::test]
+async fn s10_a_reload_after_shutdown_reads_nothing() {
+    let stop = tokio_util::sync::CancellationToken::new();
+    stop.cancel();
+    let grants = Arc::new(IdentityGrantSink::new(
+        Arc::new(parking_lot::RwLock::new(
+            crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+        )),
+        Arc::new(AtomicU64::new(0)),
+        std::env::temp_dir().join("mcpgw-1808-s10-no-such-grants-file.json"),
+    ));
+    let ctx = context()
+        .with_load(s10_load)
+        .with_identity_grant_sink(grants)
+        .with_stop(stop);
+    let refused = tokio::time::timeout(DEADLINE, ctx.reload_outcome())
+        .await
+        .expect("a reload after shutdown finished")
+        .expect_err("a reload after shutdown refuses");
+    assert!(refused.contains(STOPPING), "{refused}");
+    assert!(
+        !refused.contains("identity grants"),
+        "grants read: {refused}"
+    );
+    assert_eq!(S10_ENTRIES.load(Ordering::SeqCst), 0, "the load ran");
+}
+
+static S11_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+
+fn s11_load(
+    _: &std::path::Path,
+    _: &Arc<LiveConfig>,
+    _: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
+    S11_ENTRIES.fetch_add(1, Ordering::SeqCst);
+    stall_forever()
+}
+
+/// A retry queued on the read slot behind an abandoned stalled read, with the
+/// reload lock free, as after a client gave up on the first reload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s11_shutdown_stops_a_reload_waiting_on_the_read_slot() {
+    let registry = Arc::new(BackendRegistry::new());
+    let abandoned = Arc::new(context_on(Arc::clone(&registry)).with_load(s11_load));
+    let first = tokio::spawn(async move { abandoned.reload_outcome().await });
+    wait_until("the first load started", || {
+        S11_ENTRIES.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    first.abort();
+    drop(tokio::time::timeout(Duration::from_secs(1), first).await);
+
+    let stop = tokio_util::sync::CancellationToken::new();
+    let ctx = Arc::new(
+        context_on(registry)
+            .with_load(s11_load)
+            .with_stop(stop.clone()),
+    );
+    let task = tokio::spawn(async move { ctx.reload_outcome().await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    stop.cancel();
+    stopped(task).await;
+    assert_eq!(
+        S11_ENTRIES.load(Ordering::SeqCst),
+        1,
+        "a second read started"
+    );
+}
