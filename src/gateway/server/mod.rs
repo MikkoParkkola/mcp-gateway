@@ -1670,6 +1670,7 @@ impl Gateway {
             account_custody.as_ref(),
             &gateway_key_pair,
             &meta_mcp,
+            account_bindings::ServeMode::Http,
         )?;
 
         // ADR-008 INV-2 (MIK-6752): declare multi-user status so dispatch can
@@ -2288,6 +2289,7 @@ impl Gateway {
                 account_custody.as_ref(),
                 &gateway_key_pair,
                 &meta_mcp,
+                account_bindings::ServeMode::Stdio,
             )?;
         }
 
