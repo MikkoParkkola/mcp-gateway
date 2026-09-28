@@ -213,6 +213,10 @@ pub enum BridgeError {
     /// resume: its questions and its `requestState` belong together, and the
     /// first round's would replay prompts already answered (#569). `None` when
     /// no round ran, so there is nothing newer than the interim the caller holds.
+    ///
+    /// The round has passed the per-request slice and the challenge gate. It
+    /// has not been held to the session declaration: the caller must apply
+    /// MRTR.9 before showing it, as `invoke.rs` does.
     RoundsExhausted {
         /// The last interim result the backend returned, whole.
         last: Option<Box<Value>>,
@@ -463,6 +467,10 @@ impl InputBridge<'_> {
     ///
     /// Returns the reason the bridged call failed: a refused entry, a delivery
     /// that produced no answer, or a bound the call ran past.
+    ///
+    /// [`BridgeError::RoundsExhausted`] hands back a round that has passed the
+    /// slice and the challenge gate but not the session declaration: a caller
+    /// must apply MRTR.9 to it before showing it, as `invoke.rs` does.
     pub async fn run(
         &self,
         session_id: &str,
