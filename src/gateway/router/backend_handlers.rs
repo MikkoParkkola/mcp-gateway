@@ -117,7 +117,7 @@ fn apply_backend_tool_call_security(
                 tool_name,
                 arguments,
                 caller_name,
-                &session_id,
+                "",
             );
         if verdict.action == FirewallAction::Warn {
             warn!(
