@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::expand_home_path;
 use crate::{Error, Result};
@@ -53,42 +53,96 @@ pub(super) async fn load_configured_identity_grants(
     }
 }
 
+/// How long startup waits for a CLI change holding the grant journal lock.
+const STARTUP_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Startup grant audit (design section 6 steps 3-6): build the grant sink,
 /// attach an auditor when a governance store is open, reconcile the grant
-/// file and journal under the journal lock, publish what was read, and write
-/// the startup snapshot. Runs before any listener binds or stdio line is read.
+/// file and journal under the journal lock, write the startup snapshot, and
+/// serve exactly the rows it recorded. Runs before any listener binds or any
+/// stdio line is read.
+///
+/// Fail closed: if the reconciliation or the snapshot cannot be recorded
+/// (including a journal lock that stays busy), this run serves no grants.
 ///
 /// # Errors
 ///
-/// None yet: every audit failure serves an empty grant set instead.
-#[allow(dead_code, clippy::unused_async, reason = "red-first stub")]
+/// None today; the `Result` keeps the startup call sites uniform.
 pub(super) async fn start_identity_grant_audit(
     config: &crate::config::Config,
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
     store: Option<&Arc<dyn crate::control_plane::ControlPlaneStore>>,
     store_dir: &std::path::Path,
 ) -> Result<Option<Arc<crate::config_reload::IdentityGrantSink>>> {
-    let _ = (store, store_dir);
-    Ok(identity_grant_sink_for(
-        &config.security.identity_grants,
-        meta_mcp,
-    ))
+    let Some(sink) = identity_grant_sink_for(&config.security.identity_grants, meta_mcp) else {
+        return Ok(None);
+    };
+    let Some(store) = store else {
+        return Ok(Some(sink));
+    };
+    let path = expand_home_path(&config.security.identity_grants.path);
+    let auditor = Arc::new(crate::config_reload::grant_audit::GrantAuditor::new(
+        Arc::clone(store),
+        store_dir,
+        &path,
+    ));
+    let served = match audit_startup(&auditor, &path).await {
+        Ok(rows) => rows,
+        Err(reason) => {
+            error!(%reason, path = %path.display(), "identity grant changes could not be recorded at startup; serving no grants");
+            Vec::new()
+        }
+    };
+    let (live, epoch) = meta_mcp.identity_grant_sink();
+    crate::gateway::publish_identity_grants(
+        &live,
+        &epoch,
+        crate::identity_grants::LocalIdentityGrantStore::from_grants(served),
+    );
+    let sink = Arc::into_inner(sink)
+        .expect("the sink was just built")
+        .with_auditor(auditor);
+    Ok(Some(Arc::new(sink)))
+}
+
+/// Reconcile, record and snapshot under the journal lock; the rows returned
+/// are the rows recorded.
+async fn audit_startup(
+    auditor: &crate::config_reload::grant_audit::GrantAuditor,
+    path: &std::path::Path,
+) -> std::result::Result<Vec<crate::identity_grants::IdentityGrant>, String> {
+    use crate::config_reload::grant_audit::Recorded;
+    let read = crate::identity_grants::journal::read_locked(path, STARTUP_LOCK_WAIT)
+        .await
+        .ok_or_else(|| "the grant journal lock stayed busy".to_string())?;
+    let rows = read.grants?.grants;
+    let prepared = auditor.prepare(&rows, &read.journal).map_err(|r| r.0)?;
+    if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
+        return Err(reason);
+    }
+    auditor.snapshot(&rows, chrono::Utc::now())?;
+    drop(read.guard);
+    Ok(rows)
 }
 
 /// The stdio half: stdio opens no governance store for anything else, so it
-/// opens one here when grants are on, then runs the same startup audit.
+/// opens one here when grants are on, then runs the same startup audit. The
+/// returned sink holds the store (and its lease) for the process lifetime.
 ///
 /// # Errors
 ///
 /// The store refusal of [`super::build_control_plane_store`].
-#[allow(dead_code, reason = "red-first stub")]
 pub(super) async fn stdio_identity_grants(
     config: &crate::config::Config,
     config_path: Option<&std::path::Path>,
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
 ) -> Result<Option<Arc<crate::config_reload::IdentityGrantSink>>> {
+    if !config.security.identity_grants.enabled {
+        return Ok(None);
+    }
     let base = super::control_plane_base(config, config_path);
-    start_identity_grant_audit(config, meta_mcp, None, &base.path).await
+    let store = super::build_control_plane_store(config, &base)?;
+    start_identity_grant_audit(config, meta_mcp, store.as_ref(), &base.path).await
 }
 
 #[cfg(test)]

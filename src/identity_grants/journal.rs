@@ -333,13 +333,6 @@ pub(crate) struct ParsedJournal {
 
 /// Parse journal bytes. A final line with no newline is a CLI mid-append and
 /// is left for the next read; a bad line that later bytes follow is torn.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "the gateway reads the journal once ingestion lands"
-    )
-)]
 #[must_use]
 pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
     let mut parsed = ParsedJournal::default();
@@ -356,17 +349,18 @@ pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
 }
 
 /// The rows active at `now` by `IdentityGrant::is_active_at`: what a startup
-/// snapshot records as `loaded`.
-#[allow(dead_code, reason = "red-first stub")]
+/// snapshot records as `loaded`. The first row per grant id, as the CLI edits.
 #[must_use]
 pub(crate) fn active_rows(rows: &[IdentityGrant], now: DateTime<Utc>) -> Vec<&IdentityGrant> {
-    let _ = now;
-    rows.iter().collect()
+    let mut seen = std::collections::BTreeSet::new();
+    rows.iter()
+        .filter(|row| seen.insert(row.grant_id.as_str()))
+        .filter(|row| row.is_active_at(now))
+        .collect()
 }
 
 /// What a gateway reload reads under the journal lock: the grant file, parsed
 /// or refused, and the journal.
-#[allow(dead_code, reason = "red-first stub")]
 pub(crate) struct LockedRead {
     /// Held until dropped; the caller keeps it across publish and record.
     pub(crate) guard: crate::fs_lock::ExclusiveFileLock,
@@ -377,13 +371,51 @@ pub(crate) struct LockedRead {
 }
 
 /// Take the journal lock, polling [`crate::fs_lock::ExclusiveFileLock::try_lease`]
-/// for at most `wait`, then read the grant file and the journal under it.
+/// for at most `wait`, then read the grant file and the journal under it
+/// (design 5.4). The one gateway reader of the grant file on an audited path,
+/// so no read can happen without the lock.
 ///
 /// # Errors
 ///
-/// `None` when the lock stayed busy for `wait`.
-#[allow(dead_code, reason = "red-first stub")]
+/// `None` when the lock stayed busy for `wait`, or could not be taken.
 pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
-    let _ = (grants, wait);
-    None
+    use crate::config_reload::grant_audit::JournalRead;
+    let lock = lock_path(grants);
+    let deadline = tokio::time::Instant::now() + wait;
+    let guard = loop {
+        let path = lock.clone();
+        let attempt = tokio::task::spawn_blocking(move || {
+            crate::fs_lock::ExclusiveFileLock::try_lease(&path)
+        })
+        .await
+        .ok()?;
+        match attempt {
+            Ok(Some(guard)) => break guard,
+            Ok(None) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::error!(%error, path = %lock.display(), "grant journal lock unavailable");
+                return None;
+            }
+        }
+    };
+    let file = super::read_identity_grants_file(grants).await;
+    let journal = journal_path(grants);
+    let read = tokio::task::spawn_blocking(move || {
+        crate::config::read_checked_file(&journal, crate::config::CheckedFile::IdentityGrants)
+    })
+    .await;
+    let journal = match read {
+        Ok(Ok(text)) => JournalRead::Bytes(text.into_bytes()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => JournalRead::Missing,
+        Ok(Err(e)) => JournalRead::Unreadable(e.to_string()),
+        Err(e) => JournalRead::Unreadable(e.to_string()),
+    };
+    Some(LockedRead {
+        guard,
+        grants: file,
+        journal,
+    })
 }

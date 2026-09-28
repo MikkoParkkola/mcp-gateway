@@ -2088,6 +2088,7 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 }
 
 pub(crate) mod grant_audit;
+mod grant_audit_plan;
 mod grant_delta;
 mod grant_reload;
 pub use grant_reload::IdentityGrantSink;

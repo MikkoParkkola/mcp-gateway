@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 or 54 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51, 54 or 79 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -14,13 +14,13 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54 and 79 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
 load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70 and 74 print no notice: read them here
 before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51, 54 and 79 refuse the gateway's start (item 79 only with auth on, identity grants on and a governance store that cannot open; item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -102,6 +102,11 @@ upgrading a running deployment.
 | 72 | Reserved: lands with a pending change | None yet |
 | 73 | Reserved: lands with a pending change | None yet |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
+| 75 | Reserved: lands with a pending change | None yet |
+| 76 | Reserved: lands with a pending change | None yet |
+| 77 | Reserved: lands with a pending change | None yet |
+| 78 | Reserved: lands with a pending change | None yet |
+| 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1797,6 +1802,23 @@ holds whichever saved last.
 
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## 79. Identity grant changes are recorded in the governance log, and need it
+
+`identity grants` CLI changes, edits made directly to the grant file, and the grants each
+start serves are now governance audit records (actor `unknown`, action `mutate_grant`).
+
+- With auth on and identity grants on, the gateway refuses to start (HTTP and `serve --stdio`)
+  when the governance store cannot open, instead of starting without it: "identity grants need
+  the governance audit log when auth is on". Set `control_plane.store_dir` to a writable
+  directory. With auth off nothing changes.
+- The CLI writes a journal beside the grant file (`<grant file>.journal.jsonl`, mode 0600). Keep
+  it with the grant file; deleting it makes the next start record the history as indeterminate.
+- A grant change that is applied but cannot be recorded stays applied, and the reload outcome
+  says `UNRECORDED`. If the audit plan cannot be written first, the reload is refused and a start
+  serves no grants until it can.
+- `ControlPlaneAuditEvent` gains a `grant_change` field, so a struct literal of it in code that
+  builds against this crate needs `grant_change: None`. Serialised events without it are unchanged.
 
 ## Upgrading from 3.5.x: a walkthrough
 
