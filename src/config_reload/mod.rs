@@ -1431,6 +1431,36 @@ pub struct ReloadContext {
     /// that never wrote one — the reload step then reports nothing rather
     /// than inventing an empty store and revoking everything.
     identity_grants: Option<Arc<IdentityGrantSink>>,
+    /// The reload's file load: config parse plus env-file reads.
+    load: LoadPatch,
+    /// Starts `load` on a thread of its own.
+    spawn: SpawnLoad,
+    /// Cancelled when the gateway starts shutting down; every reload wait
+    /// ends on it. Never cancelled unless the server wires one in.
+    stop: tokio_util::sync::CancellationToken,
+}
+
+/// The refusal a reload returns when the gateway's shutdown ended its wait.
+const STOPPED: &str = "config reload stopped: the gateway is shutting down";
+
+/// The reload's file load; a field so a test can stall or fail it.
+type LoadPatch = fn(
+    &std::path::Path,
+    &Arc<LiveConfig>,
+    &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String>;
+
+/// How a reload starts its load off the async workers.
+type SpawnLoad = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// A detached thread, not `spawn_blocking`: dropping a Tokio runtime waits for
+/// its blocking tasks, so a read stalled on NFS or FUSE would hold shutdown
+/// for as long as the mount stalls (#1808).
+fn spawn_load_thread(load: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("config-reload".into())
+        .spawn(load)
+        .map(drop)
 }
 
 impl ReloadContext {
@@ -1457,7 +1487,33 @@ impl ReloadContext {
                 ResolvedEnvFiles::default(),
             )),
             identity_grants: None,
+            load: load_config_patch,
+            spawn: spawn_load_thread,
+            stop: tokio_util::sync::CancellationToken::new(),
         }
+    }
+
+    /// Stop this context's reload waits when `stop` is cancelled (#1808).
+    #[must_use]
+    pub(crate) fn with_stop(mut self, stop: tokio_util::sync::CancellationToken) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    /// Replace the file load, so a test can stall, fail or observe it.
+    #[cfg(test)]
+    #[must_use]
+    fn with_load(mut self, load: LoadPatch) -> Self {
+        self.load = load;
+        self
+    }
+
+    /// Replace how the load thread starts, so a test can refuse it.
+    #[cfg(test)]
+    #[must_use]
+    fn with_spawn(mut self, spawn: SpawnLoad) -> Self {
+        self.spawn = spawn;
+        self
     }
 
     /// Attach the grant sink a reload publishes into.
@@ -1529,14 +1585,27 @@ impl ReloadContext {
         // revocation must not queue behind `backend.stop()` for an unrelated
         // config edit. Its result is folded into `changes` below rather than
         // short-circuiting, so neither step's refusal refuses the other.
-        let grants = self.reload_identity_grants().await;
+        //
+        // Every wait below also ends on shutdown (#1808): axum's graceful
+        // shutdown waits for this handler, and a read stalled on NFS or FUSE
+        // never returns. `biased` puts the stop first, so a reload that starts
+        // after the signal reads nothing, not even the grants file.
+        let grants = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            grants = self.reload_identity_grants() => grants,
+        };
 
         // Serializes the whole reload transaction (#397) - read, diff, apply,
         // publish. All four concurrent entry points land here: the
         // `gateway_reload_config` meta-tool, the admin UI reload, every admin UI
         // backend edit, and the config-file watcher. See `apply_patch` for why
         // the lock cannot live one level down.
-        let _reload_guard = self.registry.lock_reload().await;
+        let _reload_guard = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            guard = self.registry.lock_reload() => guard,
+        };
         let mut outcome = match self.reload_outcome_locked().await {
             Ok(outcome) => outcome,
             // Both steps render on every path: a config refusal read alone
@@ -1686,10 +1755,55 @@ impl ReloadContext {
             .map_err(|_| ConfigWriteError::Busy)
     }
 
+    /// Run the file load on its own thread and wait for it without holding a
+    /// runtime worker (#1808).
+    ///
+    /// The load reads the config file and every env file; on a stalled NFS or
+    /// FUSE mount that read blocks for as long as the mount does. Awaiting it
+    /// here keeps the workers free and lets shutdown drop this future; nothing
+    /// the thread computes is published unless this future is still waiting.
+    /// Both failure arms refuse the reload, as a failed load always has. A
+    /// panicking load is a refusal only where panics unwind: the release
+    /// profile aborts on any panic, here as everywhere else.
+    async fn load_off_worker(&self) -> std::result::Result<EvaluatedReload, String> {
+        // The reload lock alone does not bound threads: a reload whose future
+        // is dropped (a client that disconnects, a caller's timeout) releases
+        // the lock while its read is still stalled. The permit travels into the
+        // thread and is released only when that read returns.
+        let slot = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            slot = self.registry.reload_read_slot().acquire_owned() => {
+                slot.map_err(|_| "config reload load slot closed".to_owned())?
+            }
+        };
+        let (done, result) = tokio::sync::oneshot::channel();
+        let (load, path, live, env) = (
+            self.load,
+            self.config_path.clone(),
+            Arc::clone(&self.live_config),
+            Arc::clone(&self.env),
+        );
+        (self.spawn)(Box::new(move || {
+            // Released when the read returns, not when the reload that asked
+            // for it gives up.
+            let _slot = slot;
+            drop(done.send(load(&path, &live, &env)));
+        }))
+        .map_err(|e| format!("config reload could not start its file read: {e}"))?;
+        tokio::select! {
+            biased;
+            () = self.stop.cancelled() => Err(STOPPED.to_owned()),
+            done = result => {
+                done.map_err(|_| "config reload file read ended without a result".to_owned())?
+            }
+        }
+    }
+
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        let evaluated = load_config_patch(&self.config_path, &self.live_config, &self.env)?;
+        let evaluated = self.load_off_worker().await?;
         if let Some(field) = self
             .live_config
             .running()
@@ -2109,6 +2223,8 @@ mod grant_audit_journal_tests;
 mod grant_audit_reload_tests;
 #[cfg(test)]
 pub(crate) mod grant_audit_tests;
+#[cfg(test)]
+mod reload_load_tests;
 
 #[cfg(test)]
 mod tests;
