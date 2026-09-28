@@ -1329,10 +1329,32 @@ beside the log so that record can still be written on a full disk. The reserve e
 log has rotated at least once. Set `rotation.on_disk_full: refuse` to keep every record and go
 unready instead (the item 43 behaviour).
 
-Do not rotate the log with an external tool (logrotate, `copytruncate`, a cron `mv`). Any
-external rotation breaks the hash chain, and verify then reports it as tampering.
+Do not rotate, rename or move the log's files with an external tool (logrotate,
+`copytruncate`, a cron `mv`). Only the gateway may touch them: any external rotation breaks the
+hash chain, and verify then reports it as tampering.
 
-On Windows, a writer recognises a file by its creation time, because there is no inode. So run a single gateway process per log path there; two processes sharing one path can miss each other's rotation.
+One gateway process writes a log path, on every platform. The log takes a writer lease on
+`<path>.lock` when it opens and holds it until the gateway exits. A second gateway on the same
+path is refused at startup, with an error naming the path, whatever the auth setting. This is
+enforced because the writer keeps the chain's counter and hash in memory, so two writers would
+fork the chain. `audit verify` and `audit show` only read and take no lease, so they work beside
+a running gateway.
+
+A restart where the supervisor starts the new process before the old one has exited waits for
+the lease for up to 10 seconds, then refuses; the wait is not configurable in 4.0. Stop the old
+gateway first when its shutdown can take longer. Replicas
+must not share a log path: use one replica per volume, or put the pod name in the path. The Helm
+chart deploys with the Recreate strategy when the audit log is on a persistent volume, so the
+old pod exits before the new one starts.
+
+The lease needs a filesystem with working byte-range locks. A local disk has them; some network
+shares (NFS without lockd, some SMB setups) do not, and there the lease cannot exclude a writer
+on another host.
+
+Before this version, a writer did not hold a lease. When upgrading, stop the old gateway before
+starting this one on the same log path: an older binary cannot see the lease, so a supervisor
+that overlaps the two could still let both write once. `mcp-gateway audit verify` reports any
+fork that results.
 
 Sizing: one tool call writes one or two records of about 1 KiB, so each MiB holds roughly
 500-1000 calls, and the default 832 MiB holds the last 400k-800k calls. For more, set

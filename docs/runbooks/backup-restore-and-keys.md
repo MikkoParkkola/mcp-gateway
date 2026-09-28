@@ -103,8 +103,10 @@ persistent storage, so point those settings at a volume you mount yourself.
 
 Restoring onto a different host is the same procedure. Only one gateway process may use an
 accounts store at a time: opening it takes a lock in each directory, and a second process is
-refused. The governance store has no lease (UPGRADING-4.0 item 22): its file locks serialize
-single writes, not two gateways, so run one gateway process per `control_plane.store_dir`.
+refused. The governance store's audit log (`<control_plane.store_dir>/audit.jsonl`) takes the
+same writer lease as the main audit log (UPGRADING-4.0 item 49): a second gateway on the same
+`control_plane.store_dir` is refused at startup after a 10-second wait, so stop the old gateway
+before starting its replacement.
 
 ## Rotating keys and secrets
 
