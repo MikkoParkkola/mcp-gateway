@@ -39,7 +39,7 @@ SKIP_LABEL = "no-changelog"
 # the platforms they are built for, the capability catalogue, and the registry
 # and npm package metadata.
 SOURCE = re.compile(
-    r"^(src/|crates/[^/]+/src/|Dockerfile|\.github/workflows/docker[^/]*\.ya?ml$"
+    r"^(src/|crates/[^/]+/src/|Dockerfile[^/]*$|\.github/workflows/docker[^/]*\.ya?ml$"
     r"|capabilities/|server\.json$|npm/)"
 )
 
@@ -68,8 +68,8 @@ def check(
     errors = fragment_name_errors(added)
     if SKIP_LABEL in labels:
         return errors
-    touches_src = any(SOURCE.match(path) for _, path in changes)
-    if touches_src and not any(FRAGMENT.match(n) for n in added):
+    touches_shipped = any(SOURCE.match(path) for _, path in changes)
+    if touches_shipped and not any(FRAGMENT.match(n) for n in added):
         errors.append(
             f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
             f"add one (see CONTRIBUTING.md) or apply the '{SKIP_LABEL}' label"

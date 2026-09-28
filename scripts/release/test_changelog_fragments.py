@@ -149,6 +149,9 @@ class Check(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(len(cf.check([("M", path)], set())), 1)
 
+    def test_a_path_under_a_dockerfile_named_directory_is_not_source(self):
+        self.assertEqual(cf.check([("M", "Dockerfile.d/notes.md")], set()), [])
+
     def test_other_workflows_need_no_fragment(self):
         self.assertEqual(cf.check([("M", ".github/workflows/ci.yml")], set()), [])
 
