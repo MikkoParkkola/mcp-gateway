@@ -456,3 +456,48 @@ async fn s11_shutdown_stops_a_reload_waiting_on_the_read_slot() {
         "a second read started"
     );
 }
+
+static S12_ENTERED: AtomicBool = AtomicBool::new(false);
+static S12_OPEN: AtomicBool = AtomicBool::new(false);
+
+fn s12_load(
+    _: &std::path::Path,
+    _: &Arc<LiveConfig>,
+    _: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
+    S12_ENTERED.store(true, Ordering::SeqCst);
+    while !S12_OPEN.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Err("s12 released".to_owned())
+}
+
+/// The reload lock spans the whole transaction, the off-worker read
+/// included (#397): the read slot serialises reads only, so without the lock
+/// a second reload could read the snapshot before the first one publishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s12_the_reload_lock_is_held_while_the_load_runs() {
+    let registry = Arc::new(BackendRegistry::new());
+    let ctx = Arc::new(context_on(Arc::clone(&registry)).with_load(s12_load));
+    let reload = tokio::spawn(async move { ctx.reload_outcome().await });
+    wait_until("the load started", || S12_ENTERED.load(Ordering::SeqCst)).await;
+    {
+        let mut lock = Box::pin(registry.lock_reload());
+        assert!(
+            futures::poll!(&mut lock).is_pending(),
+            "the reload lock was free while the load ran"
+        );
+    }
+    S12_OPEN.store(true, Ordering::SeqCst);
+    let refused = tokio::time::timeout(DEADLINE, reload)
+        .await
+        .expect("the reload finished")
+        .expect("the reload task")
+        .expect_err("the injected load refuses");
+    assert!(refused.contains("s12 released"), "{refused}");
+    drop(
+        tokio::time::timeout(DEADLINE, registry.lock_reload())
+            .await
+            .expect("the lock is free after the reload"),
+    );
+}
