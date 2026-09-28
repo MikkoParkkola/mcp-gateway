@@ -1472,6 +1472,29 @@ CASES += [
      '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "release commit: $GITHUB_SHA"\n', CAUGHT),
 ]
 
+# Release jobs restore no cache: one case per way one comes back.
+CASES += [
+    ("release-verify-restores-the-rust-cache", "release.yml",
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("release-verify-restores-a-cache-quoted", "release.yml",
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - "uses": \'actions/cache/restore@v4\'\n        with:\n          path: target\n          key: release\n', CAUGHT),
+    ("called-recovery-restores-the-rust-cache", "task-sdk-recovery.yml",
+     '      # No build cache: the release calls this too, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("called-packaged-suite-restores-the-rust-cache", "packaged-suite.yml",
+     "      # No build cache: the release calls this, and a restored cache is input\n      # nobody reviewed at the tag.\n", "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n", CAUGHT),
+    ("release-setup-node-caches-again", "release.yml",
+     "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n", CAUGHT),
+    # Equivalent spellings are not a cache: a quoted callee is still scanned,
+    # and YAML's `False` is still off.
+    ("release-calls-the-recovery-workflow-quoted", "release.yml",
+     "    uses: ./.github/workflows/task-sdk-recovery.yml\n",
+     "    uses: './.github/workflows/task-sdk-recovery.yml' # quoted\n", TOLERATED),
+    ("release-setup-node-cache-off-capitalised", "release.yml",
+     "          package-manager-cache: false\n", "          package-manager-cache: False\n", TOLERATED),
+    ("release-setup-node-sets-a-cache", "release.yml",
+     "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n          cache: npm\n", CAUGHT),
+]
+
 # Throwaway runs carry the release tooling's Python suites. The hosted job is
 # named by its runner line, the trusted one by its env block, so each anchor
 # names one job although both run the same steps.

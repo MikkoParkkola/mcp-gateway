@@ -3,11 +3,10 @@
 //! D6: more than one writer, trigger timing, and verify edge rows.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::rotation::{EV_EXPIRED, EV_OPENED};
 use super::rotation_tests::{
-    SECRET, append, cfg, event, lines, log_path, rewrite_line, rotate_n, verify,
+    SECRET, append, cfg, event, lines, log_path, rewrite_line, rotate_n, verify, with_progress,
 };
 use super::segments::{list_segments, sealed_path};
 use super::*;
@@ -62,9 +61,8 @@ fn a_reopened_writer_rotates_on_the_size_it_inherits() {
 fn synced_append_rotates_without_deadlock() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let (tx, rx) = std::sync::mpsc::channel();
     let p = path.clone();
-    std::thread::spawn(move || {
+    with_progress(move |step| {
         let l = TransparencyLogger::open(cfg(&p, 12, false)).unwrap();
         for i in 0.. {
             if list_segments(&p).unwrap().len() >= 3 {
@@ -73,11 +71,9 @@ fn synced_append_rotates_without_deadlock() {
             assert!(i < 1_000, "no rotation happened");
             l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
                 .unwrap();
+            step();
         }
-        let _ = tx.send(());
     });
-    rx.recv_timeout(Duration::from_secs(10))
-        .expect("synced rotation deadlocked on <path>.lock");
     assert!(verify(&path, false).ok);
 }
 
