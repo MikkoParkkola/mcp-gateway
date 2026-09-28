@@ -1957,6 +1957,10 @@ credentials, so everywhere else they are shown by key only: discover's JSON and 
 logs and `Debug` output print `<redacted>` for every value; the table and `--shadow` reports
 do not show them.
 
+A client's `${env:NAME}` is written as the gateway's `${NAME}`. A key whose value uses a variable
+only the client resolves (`${input:…}`, `${workspaceFolder}`, `${userHome}`) is left out, with a
+warning naming the client, server and key, so the written config always loads.
+
 A value that contains `${VAR}` is expanded by the gateway when the config loads, like any backend
 `env` or `headers` value; if `VAR` is not set, the load is refused and the error names the field
 (`backends.<name>.env.<KEY>`).

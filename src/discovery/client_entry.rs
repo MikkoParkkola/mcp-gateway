@@ -10,6 +10,9 @@
 //! written backend.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use serde_json::Value;
 use tracing::warn;
@@ -17,20 +20,27 @@ use tracing::warn;
 use super::{DiscoveredServer, DiscoverySource, SecretMap, ServerMetadata};
 use crate::config::TransportConfig;
 
-/// The string-valued members of `config[key]`; a non-string value is skipped
-/// with a warning that names the key, never the value.
-fn string_map(name: &str, config: &Value, key: &str) -> SecretMap {
+/// The string-valued members of `config[key]` in gateway syntax. A non-string
+/// value, or one only the client can resolve, is skipped with a warning that
+/// names the client, server and key, never the value.
+fn string_map(source: &DiscoverySource, name: &str, config: &Value, key: &str) -> SecretMap {
     let Some(object) = config.get(key).and_then(Value::as_object) else {
         return SecretMap::default();
     };
     object
         .iter()
         .filter_map(|(k, v)| {
-            let value = v.as_str();
-            if value.is_none() {
-                warn!("server {name}: {key}.{k} is not a string; skipped");
-            }
-            value.map(|value| (k.clone(), value.to_string()))
+            let Some(value) = v.as_str() else {
+                warn!("{source:?} server {name}: {key}.{k} is not a string; skipped");
+                return None;
+            };
+            let Some(value) = gateway_value(value) else {
+                warn!(
+                    "{source:?} server {name}: {key}.{k} uses a variable the gateway cannot resolve; skipped"
+                );
+                return None;
+            };
+            Some((k.clone(), value))
         })
         .collect()
 }
@@ -38,9 +48,11 @@ fn string_map(name: &str, config: &Value, key: &str) -> SecretMap {
 /// A client `env`/header value in gateway syntax: `${env:NAME}` becomes
 /// `${NAME}`; `None` when a client-only variable (`${input:…}`,
 /// `${workspaceFolder}`, …) is left that a gateway load would refuse.
-#[allow(dead_code, clippy::unnecessary_wraps, reason = "red-first stub")]
 pub(super) fn gateway_value(value: &str) -> Option<String> {
-    Some(value.to_string())
+    static CLIENT_ENV: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\$\{env:([^}]*)\}").expect("constant pattern"));
+    let value = CLIENT_ENV.replace_all(value, |c: &regex::Captures<'_>| format!("${{{}}}", &c[1]));
+    crate::config::is_template_syntax(&value).then(|| value.into_owned())
 }
 
 /// Parse one entry, or `None` for a shape that is neither stdio nor HTTP.
@@ -85,7 +97,7 @@ pub(super) fn parse(
                 working_dir,
             },
         );
-        server.env = string_map(name, config, "env");
+        server.env = string_map(source, name, config, "env");
         return Some(server);
     }
 
@@ -103,7 +115,7 @@ pub(super) fn parse(
                 working_dir: None,
             },
         );
-        server.headers = string_map(name, config, "headers");
+        server.headers = string_map(source, name, config, "headers");
         return Some(server);
     }
 
