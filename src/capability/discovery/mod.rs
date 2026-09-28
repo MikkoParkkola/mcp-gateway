@@ -303,7 +303,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A loopback listener that only counts the connections it accepts, on
-    /// 127.0.0.1 and (where the host has IPv6) on ::1 at the same port, since
+    /// `127.0.0.1` and (where the host has IPv6) on `::1` at the same port, since
     /// `localhost` may resolve to either.
     async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
         let v4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
