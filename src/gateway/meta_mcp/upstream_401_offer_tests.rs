@@ -164,5 +164,5 @@ async fn meta_route_revoked_grant_401_carries_the_reconnect_offer() {
     );
     assert_eq!(data["error"]["code"], "reconnect_required", "{data}");
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
-    assert_eq!(dispatches.count(), 1);
+    assert_eq!(dispatches.calls().len(), 1);
 }

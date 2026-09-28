@@ -14,6 +14,9 @@ use tracing::debug;
 use super::Backend;
 use super::annotations::prepare_tool_metadata;
 use super::cached_metadata::CachedMetadata;
+use super::fill_check::{
+    Completeness, FillBound, FillEnd, FillGuard, LIST_FILL_COOLDOWN, admit_fill, run_bounded,
+};
 use super::pool::PoolKey;
 use super::{CACHE_LIST_DRAIN_BUDGET, LIST_MAX_PAGES};
 use crate::Error;
@@ -34,6 +37,15 @@ impl Backend {
     /// reachable without any caller spelling a key.
     fn tools_slot(&self, binding: Option<&str>) -> Arc<super::pool::PooledEntry> {
         self.pooled_entry(&self.pool_key_for(binding))
+    }
+
+    /// Whether a stale hit's refresh on `binding`'s slot failed within the
+    /// cooldown (A4), so a stale hit is judged from the held schema at once.
+    pub(super) fn stale_refresh_cooling(&self, binding: Option<&str>) -> bool {
+        self.tools_slot(binding)
+            .tools_refresh_failed_at
+            .lock()
+            .is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
     }
 
     /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
@@ -153,6 +165,19 @@ impl Backend {
         self.get_cached_tool_for(None, name)
     }
 
+    /// The list `binding`'s slot holds now, fresh or not, with its
+    /// completeness, read under one cache guard; `None` when empty.
+    pub(super) fn held_tools_for(
+        &self,
+        binding: Option<&str>,
+    ) -> Option<(Arc<Vec<Tool>>, Completeness)> {
+        let slot = self.tools_slot(binding);
+        slot.tools_cache.with_cached(|held| {
+            let completeness = Completeness::held(slot.tools_truncated.load(Ordering::SeqCst));
+            held.map(|list| (Arc::clone(list), completeness))
+        })
+    }
+
     /// Snapshot of the tools cached on `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tools_snapshot_for(&self, binding: Option<&str>) -> Arc<Vec<Tool>> {
@@ -191,17 +216,21 @@ impl Backend {
     /// `claim_pooled_entry` via `begin_internal_activity_for`, never the
     /// unclaimed `pooled_entry`: the reaper is otherwise free to remove the slot
     /// and close the transport mid-fetch (R3).
+    ///
+    /// `bound` is `DrainBudget` for every caller but R2's check (F13), which
+    /// passes `CallTimeout`: see [`super::fill_check`] for what that adds.
     async fn get_cached_list_for<T, S, F>(
         &self,
         binding: Option<&str>,
         select: S,
         family: ListFamily,
         extra_headers: &[(String, String)],
+        bound: FillBound,
         parse: F,
     ) -> Result<Arc<Vec<T>>>
     where
         S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
-        F: Fn(Value, &super::pool::PooledEntry) -> Result<Vec<T>>,
+        F: Fn(Value) -> Result<(Vec<T>, Option<HashSet<String>>)>,
     {
         let key = self.pool_key_for(binding);
         let identity_key = match &key {
@@ -234,19 +263,53 @@ impl Backend {
             .get_or_fetch_shared_then(
                 self.cache_ttl,
                 || async {
-                    let transport = self.ensure_entry_started(&key).await?;
-                    let (merged, truncated) = drain_list_pages(
-                        transport.as_ref(),
-                        &self.name,
-                        &family,
-                        fetch_headers,
-                        identity_key,
-                    )
-                    .await?;
-                    let items = match merged {
-                        Some(result) => parse(result, &entry)?,
-                        None => Vec::new(),
+                    // F13: breaker, cooldown, token, in that order, before the
+                    // guard is armed, so a refusal here never stamps.
+                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
+                    if family.stale_hit
+                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+                    {
+                        return Err(Error::BackendUnavailable(format!(
+                            "{}: a stale tools refresh failed within the last {}s",
+                            self.name,
+                            LIST_FILL_COOLDOWN.as_secs()
+                        )));
+                    }
+                    admit_fill(&entry, &self.name, bound, family.cooldown)?;
+                    let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
+                    let drained = run_bounded(&entry, &self.name, bound, async {
+                        let transport = self.ensure_entry_started(&key).await?;
+                        let (merged, truncated) = drain_list_pages(
+                            transport.as_ref(),
+                            &self.name,
+                            &family,
+                            fetch_headers,
+                            identity_key,
+                        )
+                        .await?;
+                        let (items, resend) = match merged {
+                            Some(result) => parse(result)?,
+                            None => (Vec::new(), None),
+                        };
+                        Ok((items, truncated, resend))
+                    })
+                    .await;
+                    let end = match &drained {
+                        Ok(_) => FillEnd::Drained,
+                        Err(e) => match super::fill_check::Replay::of(e) {
+                            None if super::fill_check::is_transport_failure(e) => {
+                                FillEnd::Unreplayable
+                            }
+                            transport => FillEnd::Failed { transport },
+                        },
                     };
+                    if family.stale_hit && drained.is_err() {
+                        *refresh_failed() = Some(tokio::time::Instant::now());
+                    }
+                    if let Some(guard) = guard.as_mut() {
+                        guard.end(end);
+                    }
+                    let (items, truncated, resend) = drained?;
 
                     debug!(
                         backend = %self.name,
@@ -256,13 +319,22 @@ impl Backend {
                         "Backend metadata cached"
                     );
 
-                    Ok((items, truncated))
+                    Ok((items, (truncated, guard, resend)))
                 },
-                |truncated| {
+                |(truncated, guard, resend)| {
                     // Written only once the store is accepted, and on every
                     // accepted store, so a complete fill clears it (design D).
                     if let Some(flag) = family.truncated_flag {
                         flag(&entry).store(truncated, Ordering::SeqCst);
+                    }
+                    // Only this accepted store's own set (F13).
+                    if let Some(permitted) = resend {
+                        *entry.resend_permitted.write() = permitted;
+                    }
+                    // The only place a guard reaches `Stored`: a voided store
+                    // drops it unrun, still `Drained`, and so stamps (F13).
+                    if let Some(mut guard) = guard {
+                        guard.end(FillEnd::Stored);
                     }
                 },
             )
@@ -298,6 +370,19 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
+        self.tools_fill(binding, extra_headers, FillBound::DrainBudget, false)
+            .await
+    }
+
+    /// [`Self::get_tools_for_binding`] under an explicit bound; R2's check
+    /// passes `CallTimeout` through [`Self::tools_for_check`].
+    async fn tools_fill(
+        &self,
+        binding: Option<&str>,
+        extra_headers: &[(String, String)],
+        bound: FillBound,
+        stale_hit: bool,
+    ) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_for(
             binding,
             |entry| &entry.tools_cache,
@@ -306,9 +391,12 @@ impl Backend {
                 kind: "tools",
                 list_key: "tools",
                 truncated_flag: Some(tools_truncated_flag),
+                cooldown: true,
+                stale_hit,
             },
             extra_headers,
-            |result, entry| {
+            bound,
+            |result| {
                 let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
                 // Discovery is where the explicit annotations are still readable,
                 // and it always precedes a `tools/call` (ADR-012 A1). Written
@@ -318,12 +406,41 @@ impl Backend {
                 // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
                 // it, and keeps the set on the slot whose catalogue derived it — a
                 // backend-wide one would let one identity's fill decide another
-                // identity's retry policy.
-                *entry.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
-                Ok(tools)
+                // identity's retry policy. Only this fill's accepted store
+                // publishes it, so a voided fill cannot restore a revoked resend.
+                let resend = prepare_tool_metadata(&self.name, &mut tools);
+                Ok((tools, Some(resend)))
             },
         )
         .await
+    }
+
+    /// The caller's tool list for R2's check, and whether it is the slot's
+    /// whole catalogue (design §2 step 2).
+    ///
+    /// A leading caller's fill is bounded by `timeout`, a waiter's by
+    /// `timeout` plus `LIST_FILL_WAIT_GRACE`. Only a list the slot still holds
+    /// (`Arc::ptr_eq`, read under its guard) is `Complete` or `Truncated`, so
+    /// a voided store is `Unknown`. Beside `tools_slot` so neither widens.
+    pub(crate) async fn tools_for_check(
+        &self,
+        binding: Option<&str>,
+        headers: &[(String, String)],
+        stale_hit: bool,
+    ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
+        let limit = self.config.timeout;
+        let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
+        let tools = tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
+            .await
+            .unwrap_or_else(|_| Err(super::fill_check::list_timeout(&self.name, limit)))?;
+        let slot = self.tools_slot(binding);
+        let completeness = slot.tools_cache.with_cached(|current| match current {
+            Some(held) if Arc::ptr_eq(held, &tools) => {
+                Completeness::held(slot.tools_truncated.load(Ordering::SeqCst))
+            }
+            _ => Completeness::Unknown,
+        });
+        Ok((tools, completeness))
     }
 
     /// Record the tools whose backend-declared annotations grant resend
@@ -409,9 +526,17 @@ impl Backend {
                 kind: "resources",
                 list_key: "resources",
                 truncated_flag: None,
+                cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
-            |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+            FillBound::DrainBudget,
+            |result| {
+                Ok((
+                    serde_json::from_value::<ResourcesListResult>(result)?.resources,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -454,13 +579,14 @@ impl Backend {
                 kind: "resource_templates",
                 list_key: "resourceTemplates",
                 truncated_flag: None,
+                cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
-            |result, _| {
-                Ok(
-                    serde_json::from_value::<ResourcesTemplatesListResult>(result)?
-                        .resource_templates,
-                )
+            FillBound::DrainBudget,
+            |result| {
+                let templates = serde_json::from_value::<ResourcesTemplatesListResult>(result)?;
+                Ok((templates.resource_templates, None))
             },
         )
         .await
@@ -504,9 +630,17 @@ impl Backend {
                 kind: "prompts",
                 list_key: "prompts",
                 truncated_flag: None,
+                cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
-            |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
+            FillBound::DrainBudget,
+            |result| {
+                Ok((
+                    serde_json::from_value::<PromptsListResult>(result)?.prompts,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -532,6 +666,13 @@ struct ListFamily {
     list_key: &'static str,
     /// Only the tools family records truncation (MIK 7570 PAGING.1 design D).
     truncated_flag: Option<fn(&super::pool::PooledEntry) -> &AtomicBool>,
+    /// Only the tools family keeps a failure cooldown (F13): a resources or
+    /// prompts failure must never make a tools fill fail fast.
+    cooldown: bool,
+    /// A stale hit's refresh (A4): it honours `tools_refresh_failed_at` at
+    /// admission, so a caller waiting inside the fill does not retry a
+    /// failure the cooldown already covers, and it stamps that on failure.
+    stale_hit: bool,
 }
 
 /// Drain every `nextCursor` page into one result, then let the caller parse
@@ -576,16 +717,23 @@ async fn drain_list_pages(
         if let Some(error) = response.error {
             return Err(Error::json_rpc(error.code, error.message));
         }
-        let Some(mut result) = response.result else {
-            if page == 0 {
-                break;
-            }
-            // Neither `result` nor `error` mid-drain says nothing about the
-            // list's shape: a transient page failure, so keep the last
-            // complete catalogue (design E).
+        // Readable: a string cursor or none; the list an array, or absent
+        // beside a cursor. A mistyped cursor would read as the last page.
+        let readable = |r: &Value| {
+            let cursor = r.get("nextCursor").filter(|c| !c.is_null());
+            cursor.is_none_or(Value::is_string)
+                && match r.get(family.list_key) {
+                    Some(list) => list.is_array(),
+                    None => r.is_object() && cursor.is_some(),
+                }
+        };
+        let Some(mut result) = response.result.filter(readable) else {
+            // A missing or malformed page is a transient page failure (F13:
+            // as zero items it would make a present tool absent); keep the
+            // last complete catalogue (design E).
             return Err(Error::json_rpc(
                 -32603,
-                format!("{} page {} returned no result", family.method, page + 1),
+                format!("{} page {} is not a readable list", family.method, page + 1),
             ));
         };
         let next = result

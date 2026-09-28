@@ -63,6 +63,11 @@ impl crate::transport::Transport for TaskBackend {
     ) -> crate::Result<JsonRpcResponse> {
         self.seen.lock().push(method.to_string());
         let result = match method.to_ascii_lowercase().as_str() {
+            // Lists the tool the rows call: under the default `closed`, R2
+            // lists a cold slot first (F13) and refuses a tool it lacks.
+            "tools/list" => {
+                json!({ "tools": [{ "name": "slow", "inputSchema": { "type": "object" } }] })
+            }
             "tools/call" => json!({
                 "task": { "taskId": TASK_A, "status": "working" }
             }),

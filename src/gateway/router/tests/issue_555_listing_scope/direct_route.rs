@@ -153,6 +153,44 @@ async fn direct_route_tools_list_follows_direct_call_predicate() {
     );
 }
 
+/// Review fold (F13): a direct list is cached only when every page is
+/// readable. Control: two readable pages are cached. An unreadable first page
+/// before a readable last one is answered but not cached. Mutant M41 (only
+/// the last page counts) reddens it.
+#[tokio::test]
+async fn an_unreadable_page_keeps_a_direct_list_out_of_the_cache() {
+    let poisoned = vec![
+        json!({"tools": null, "nextCursor": "alpha_read-1"}),
+        json!({"tools": [super::tool_json("alpha_read")]}),
+    ];
+    for (pages, cached) in [(two_pages(), true), (poisoned, false)] {
+        let f = with_pager(Pager {
+            pages,
+            endless: false,
+        })
+        .await;
+        let (_, body) = post(
+            &f.router,
+            "/mcp/pager",
+            Some("read-key"),
+            "tools/list",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            body["result"]["tools"].as_array().map(Vec::len),
+            Some(1),
+            "{body}"
+        );
+        let backend = f.state.backends.get("pager").expect("pager");
+        assert_eq!(
+            backend.has_cached_tools(),
+            cached,
+            "cached={cached}: {body}"
+        );
+    }
+}
+
 /// T13 (b): a catalogue longer than the page cap is an error, never a
 /// partial list, and it is counted.
 #[test]

@@ -33,6 +33,7 @@ the items below, then stamps the new version. The notice is printed rather than 
 - Item 49
 - Item 55
 - Item 58
+- Item 59
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -164,7 +165,7 @@ without it.**
 | 56 | Reserved: lands with a pending change | None yet |
 | 57 | Never assigned | None |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
-| 59 | Reserved: lands with #1364 | None yet |
+| 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
 | 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
@@ -821,8 +822,9 @@ backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
 
 - **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
   `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
-  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
-  unchecked and counted as `input_schema_unknown`.
+  `tools/list` returned. The first time a caller uses a tool the gateway has not yet listed for
+  it, the gateway lists that backend's tools once, as that caller, before judging the call; §59
+  describes what happens when that list cannot be read.
 - **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
   now honoured, which relaxes 3.x behaviour.
 - An object schema that lists `properties` (at least one) or `patternProperties` without stating
@@ -1690,6 +1692,68 @@ the caller has no credential, so the gateway now treats it as a secret.
   `ProxyManager::first_session_id` are removed, `get_or_create_session_for` is
   no longer public, and `get_or_create_session(Some(id))` returns `id` only when
   that session is already live.
+
+## 59. A tool call on a cold catalogue lists the backend first
+
+The first time a caller uses a tool the gateway has not yet listed for it, the gateway lists that
+backend's tools once, as that caller, before judging the call (§31). Before this release such a
+call was forwarded unchecked. A call on a catalogue older than the backend's `cache_ttl` refreshes it the
+same way; if that refresh fails, the call is judged against the last list.
+
+- **If the backend cannot be reached** (connection refused, no answer within its `timeout`, or
+  a transport error), the call gets the same error a failed tool call to that backend gets, and
+  under `closed` it counts toward the error budget as a failed call does. Nothing changes for a
+  dead backend except that the first call now fails at the list rather than at the call.
+- **If the backend answers but its tool list cannot be read** (it returns an error or a list the
+  gateway cannot parse), `closed` refuses the call with "the gateway could not read this tool's
+  input schema for you; list the backend's tools and retry". Such a refusal is not counted as a
+  backend failure. `standard` forwards the call in both cases and counts `input_schema_unknown`,
+  so the call itself then succeeds or fails. `off` never lists.
+- **A tool name the backend's fresh, complete list does not contain is now refused under
+  `closed`**, where it used to be forwarded. A backend that serves tools it does not list can no
+  longer have those tools called under `closed`; set that backend's `input_schema_enforcement:
+  standard` to keep serving them (counted as `input_schema_absent_forward`).
+- **When the gateway cannot read a backend's whole tool list** (the list is longer than the
+  32-page cap, repeats a page cursor, or takes longer than the list time budget), a tool outside
+  the part read cannot be checked: `closed` refuses it; set that backend's
+  `input_schema_enforcement: standard` to forward such calls (counted as
+  `input_schema_truncated_forward`). `mcp_backend_list_truncated_total`'s `reason` label says
+  which stop fired.
+- **Shared catalogues.** On a backend whose catalogue is shared (no per-user propagation), a call
+  that carries the caller's own credential never triggers this list, because the shared list runs
+  under the gateway's login and would judge the caller against a catalogue it was never shown.
+  Such a call stays on the "could not read" refusal under `closed` until discovery,
+  `gateway_search` or a credential-free list warms the catalogue.
+- **Latency.** The list is bounded by the backend's `timeout` and the call itself by another, so
+  the first cold call to a slow backend can take up to about twice `timeout` under `standard`,
+  once per backend slot per cooldown window.
+- **Cooldown.** After a failed or timed-out tool list, or one whose result could not be kept
+  because the cache was invalidated meanwhile, the gateway does not ask that backend again for
+  10 s. Inside that window cold tool calls, discovery and `gateway_search` on that backend fail
+  fast instead of each waiting out a fresh list, and each gets the error the failed list got. A
+  list that failed with an HTTP error status or an I/O or TLS error starts no window, so the next
+  call lists again and gets the backend's own error; the circuit breaker bounds those retries. A
+  caller that disconnects mid-list does not start this window.
+- **Circuit breaker and rate limit.** The list obeys the caller's slot failsafe. An open breaker
+  refuses the call with the same circuit-open error a dispatch gets, and a failed or successful
+  list counts toward the breaker as a dispatch does. A cold call spends a token for its metadata
+  fetch, at most once per slot per `cache_ttl` (and at most once per cooldown window after a
+  failed fetch), so a limit of 1 can refuse a cold call as rate-limited. A refusal from the
+  breaker or the limiter is counted as `input_schema_fill_refused` with `reason="circuit"` or
+  `reason="rate"`.
+- **`Mcp-Param-*` headers.** The first call may now carry them, which earlier 4.0 builds sent only
+  after a list.
+- **New `mcp_input_schema_events_total` kinds.** `input_schema_fetched`,
+  `input_schema_fetch_failed`, `input_schema_fill_cancelled`, `input_schema_fill_cooldown`,
+  `input_schema_fill_refused` (with `reason`), `input_schema_refused_unavailable`,
+  `input_schema_refused_truncated`, `input_schema_refused_absent`,
+  `input_schema_truncated_forward`, `input_schema_absent_forward` and
+  `input_schema_fetch_skipped_a3`, beside the existing `input_schema_unknown`. See
+  [DEPLOYMENT.md](DEPLOYMENT.md#prometheus-metrics).
+- No new config key.
+
+The 32 pages and the 10 s above are the values of `LIST_MAX_PAGES` and `LIST_FILL_COOLDOWN` at
+release; a test fails the build if either constant changes without this text.
 
 ## 60. Capability pins read CRLF line endings as LF
 
