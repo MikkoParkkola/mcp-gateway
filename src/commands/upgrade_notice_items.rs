@@ -111,8 +111,9 @@ refused with -32602 instead of being forwarded to the backend as a fresh call.",
 serve is now refused with HTTP 400 and -32022; 3.x ignored the header. A request without it, or \
 with a served revision, is unchanged.",
     "With agent identity on, only a PROVEN principal (the mTLS subject or a validated agent token) \
-satisfies `require_id` and `known_agents`. A self-declared `X-Agent-ID`, `agent_id` or unsigned JWT \
-claim no longer does; `allow_unverified_agent_identity: true` restores it.",
+satisfies `require_id` and `known_agents`. A self-declared `X-Agent-ID` header or `agent_id` \
+query label no longer does; `allow_unverified_agent_identity: true` restores that label. An \
+unsigned JWT claim is not read at all.",
     "Six meta-tools leave the default `tools/list` (17 to 11 over HTTP) until the feature behind \
 each is configured; every name still answers when called. `meta_mcp.expose_stats_tool: true` \
 lists `gateway_get_stats`.",

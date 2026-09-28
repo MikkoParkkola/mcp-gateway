@@ -2188,7 +2188,7 @@ by URL already do:
 
 ## 88. A request header naming an unserved protocol version is refused
 
-3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered whatever it named.
+3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
 4.0.0 reads it. A header that names a revision the gateway does not serve gets HTTP 400 with
 JSON-RPC error `-32022` ("unsupported protocol version"), and `data.supportedVersions` lists the
 stateless revisions it does serve; the list is empty when `server.modern_protocol` is off.
@@ -2225,7 +2225,8 @@ configured routing profile, and for statistics `meta_mcp.expose_stats_tool: true
 HTTP list drops from 17 tools to 11, stdio from 16 to 10.
 
 All seventeen names still dispatch by name. A caller that invokes one it was not shown gets the
-tool's own answer, for a gated one a refusal naming the configuration to add, never "no such tool".
+tool's own answer: some succeed, others return that tool's own error, and none answers "no such
+tool".
 
 **Action:** a client that calls only what `tools/list` shows reaches these six once the feature
 behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gateway_get_stats`.
@@ -2237,8 +2238,11 @@ matching policy rule got an empty scope list, and an empty list means "all": the
 every backend and tool. The exchange now answers 403 and issues no token. A request that leaves
 `backends` or `tools` empty is still granted the rule's full scope, as before.
 
-**Action:** a client that requests scopes must request ones its rule allows; a 403 on the token
-exchange names a request outside the policy.
+A rule whose own `backends` list is empty is a different case, covered in item 32.
+
+**Action:** a client that requests scopes must request only ones its matching rule allows. A
+requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
+gets 403 `access_denied`, whose message reads as though no policy matched.
 
 ## Upgrading from 3.5.x: a walkthrough
 
