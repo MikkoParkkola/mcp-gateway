@@ -2202,6 +2202,9 @@ key on who the caller is, on the meta route and the per-backend `/mcp/{name}` ro
 - A legacy session no longer gets a fresh budget or tenant count: an authenticated caller is
   keyed on its identity, not its session. A caller with no identity at all (authentication off)
   is keyed on its session, or on the backend on `/mcp/{name}`, as before.
+- The three controls share that one key, so anomaly detection also follows the caller rather than
+  the session: a caller with two sessions open at once feeds one sequence history, and each call is
+  scored against the caller's previous call on either session.
 - The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
   one session at a time, so that is that session's budget and tenant count.
 - An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
