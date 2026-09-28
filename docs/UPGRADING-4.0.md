@@ -78,6 +78,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 86
 - Item 87
 - Item 88
+- Item 95
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -206,6 +207,8 @@ without it.**
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
+| 94 | Reserved: lands with #2209 | None yet |
+| 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2354,6 +2357,29 @@ A rule whose own `backends` list is empty is a different case, covered in item 3
 **Action:** a client that requests scopes must request only ones its matching rule allows. A
 requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
 gets 403 `access_denied`, whose message reads as though no policy matched.
+
+## 95. List fills count toward the breaker and the rate limiter
+
+In 3.x, a list fill (the `tools/list`, `resources/list`, `resources/templates/list` or
+`prompts/list` a cold cache sends for discovery, `gateway_search`, `gateway_list_tools`,
+resources or prompts) went straight to the backend. It ignored an open circuit breaker,
+spent no `failsafe.rate_limit` token, and its outcome never reached the breaker.
+
+In 4.0 every list fill a request starts, including the background refresh a discovery request
+starts, is gated like a tool call:
+
+- An open breaker refuses it with the circuit-open error, and sends nothing.
+- It spends one `failsafe.rate_limit` token from the same budget as tool calls. A cold-cache
+  burst over N list keys spends N tokens.
+- A list that cannot be reached counts as a failure toward the breaker. A throttled answer counts
+  as neither. An answer that arrives but cannot be used counts as reachable, is logged as a
+  warning and is counted in `mcp_backend_requests_total{status="list_unusable"}`.
+
+Startup warm-up fills are never refused and spend no token, but their outcome is recorded, so a
+backend that is down at startup opens its breaker before traffic arrives.
+
+**Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
+caches warm (`meta_mcp.warm_start`).
 
 ## Upgrading from 3.5.x: a walkthrough
 
