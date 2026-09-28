@@ -253,6 +253,9 @@ pub(crate) struct CleanupState {
 }
 
 #[cfg(test)]
+#[path = "blocked_names_tests.rs"]
+mod blocked_names_tests;
+#[cfg(test)]
 #[path = "descriptor_withholding_tests.rs"]
 mod descriptor_withholding_tests;
 #[cfg(test)]
