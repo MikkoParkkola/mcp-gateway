@@ -332,3 +332,29 @@ fn rearm_replaces_an_unused_value() {
     assert!(b.consume(&new), "the new value redeems");
     assert!(!b.consume(&new), "once");
 }
+
+/// A session opened by a capped link ends at the cap, even inside its idle
+/// and absolute limits.
+#[test]
+fn a_capped_session_ends_at_its_cap() {
+    use super::{Now, SessionCheck, SessionLimits, Touch};
+    use std::time::Duration;
+    let store = DashboardBootstrap::new();
+    let now = Now::read();
+    let limits = SessionLimits::default();
+    let value = store.rearm_until(Some(now.wall + Duration::from_secs(600)));
+    let not_after = store.consume_capped(&value).expect("the value redeems");
+    let handle = store.issue_session_until(now, &limits, not_after);
+    let at = |secs| Now {
+        mono: now.mono + Duration::from_secs(secs),
+        wall: now.wall + Duration::from_secs(secs),
+    };
+    assert_eq!(
+        store.check_session(&handle, at(599), &limits, Touch::No),
+        SessionCheck::Valid
+    );
+    assert_eq!(
+        store.check_session(&handle, at(601), &limits, Touch::No),
+        SessionCheck::Expired
+    );
+}
