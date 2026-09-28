@@ -2214,6 +2214,29 @@ class WorkflowWiring(unittest.TestCase):
             self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
             self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
 
+    def test_the_release_restores_no_cache(self):
+        # A cache restored into a release job is input nobody reviewed at the
+        # tag: whatever an earlier run saved under a matching key is built,
+        # signed and published with the release. Release jobs build cold.
+        # Covers release.yml and every workflow it calls, whose jobs run in
+        # the release's context. setup-node caches on its own when it finds a
+        # package manager, so it must say it will not.
+        release = WORKFLOWS / "release.yml"
+        called = re.findall(r"(?m)^    uses: \./\.github/workflows/(\S+)$", release.read_text(encoding="utf-8"))
+        self.assertIn("task-sdk-recovery.yml", called, "the called-workflow inventory shrank")
+        found = []
+        for wf in ["release.yml", *called]:
+            for block in steps(wf):
+                uses = " ".join(l for l in block if re.match(r"""^\s*(?:-\s+)?["']?uses["']?\s*:""", l))
+                label = f"{wf}: {block[0].strip()}"
+                if re.search(r"actions/cache(?:/\w+)?@|Swatinem/rust-cache@", uses):
+                    found.append(f"{label} restores a cache")
+                if artifact_keys(block, ("cache",)):
+                    found.append(f"{label} sets cache:")
+                if "actions/setup-node@" in uses and artifact_keys(block, ("package-manager-cache",)) != ["false"]:
+                    found.append(f"{label} leaves package-manager-cache on")
+        self.assertEqual(found, [], "a release job restores a cache")
+
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
         # input. Once it expires, re-running that job publishes nothing
