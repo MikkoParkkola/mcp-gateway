@@ -755,12 +755,18 @@ fn firewall_response_credential_in_object_key() {
 #[test]
 fn firewall_response_injection_finding_masks_a_credential() {
     let straddle = format!("{INJECTION} {} {CANARY}", "x".repeat(160));
-    for mut response in [
-        json!({ "content": { format!("{INJECTION} {CANARY}"): 1 } }),
-        json!({ "content": straddle }),
+    for (mut response, credential_redaction) in [
+        (
+            json!({ "content": { format!("{INJECTION} {CANARY}"): 1 } }),
+            true,
+        ),
+        (json!({ "content": straddle.clone() }), true),
+        // Redaction off: the client gets raw text, the audit log still must not.
+        (json!({ "content": straddle }), false),
     ] {
         let (firewall, _dir, path) = response_fixture(FirewallConfig {
             rules: vec![response_rule("inspect_me", FirewallAction::Allow)],
+            credential_redaction,
             ..FirewallConfig::default()
         });
         firewall

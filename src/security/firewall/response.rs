@@ -87,10 +87,21 @@ impl Firewall {
             self.response_observer
                 .prompt_scans
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // With redaction off the client still sees the raw text, but the
+            // audit log must not: quote from a redacted copy instead.
+            let masked;
+            let scanned: &Value = if self.config.credential_redaction {
+                response
+            } else {
+                let mut copy = response.clone();
+                self.redactor.scan_and_redact(&mut copy);
+                masked = copy;
+                &masked
+            };
             let matches = self.response_scanner.scan_response(
                 correlation.external_server,
                 correlation.external_tool,
-                response,
+                scanned,
             );
             findings.extend(matches.into_iter().map(|matched| Finding {
                 scan_type: ScanType::PromptInjection,
