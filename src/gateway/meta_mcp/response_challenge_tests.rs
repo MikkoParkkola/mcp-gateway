@@ -221,6 +221,48 @@ fn firewall_challenge_required_redaction_is_native_refusal() {
     }
 }
 
+/// #2114: a question whose dangerous text sits only in an object key (a
+/// `requestedSchema` property name, which no code path copies into a value).
+fn challenge_with_key(key: &str) -> Value {
+    json!([{
+        "method":"elicitation/create",
+        "params":{
+            "mode":"form", "message":"Choose a color",
+            "requestedSchema":{"type":"object", "properties":{ key: {"type":"string"} }}
+        }
+    }])
+}
+
+/// #2114: an injection marker only in a key refuses the question.
+#[test]
+fn firewall_challenge_refuses_injection_in_object_key() {
+    let (meta, firewall, directory) = fixture(FirewallAction::Block, true, true);
+    let original = challenge_with_key(INJECTION);
+    let input = original.clone();
+    let error = meta
+        .enforce_firewall_challenge(&input, &targets(), &correlation())
+        .expect_err("a marker in a key must refuse like a marker in a value");
+    assert_projected_refusal(&error);
+    assert_eq!(input, original);
+    assert_event(&firewall, &directory, "block", Some("prompt_injection"));
+}
+
+/// #2114: a credential only in a key refuses rather than rewrites the question.
+#[test]
+fn firewall_challenge_refuses_credential_in_object_key() {
+    for action in [FirewallAction::Warn, FirewallAction::Allow] {
+        let (meta, firewall, directory) = fixture(action, true, true);
+        let original = challenge_with_key(CANARY);
+        let input = original.clone();
+        let error = meta
+            .enforce_firewall_challenge(&input, &targets(), &correlation())
+            .expect_err("redacting a key changes the shape the client must echo");
+        assert_projected_refusal(&error);
+        assert_eq!(input, original);
+        assert_event(&firewall, &directory, "block", Some("credentials"));
+    }
+}
+
 /// MIK-7407.RESPONSE.4; FWR-09/20 absence and disabled modes stay no-ops.
 #[test]
 fn firewall_challenge_disabled_and_absent_controls() {
