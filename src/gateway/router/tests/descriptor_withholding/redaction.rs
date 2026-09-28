@@ -131,7 +131,10 @@ async fn an_error_frame_never_carries_an_unjudged_tool_list() {
         .error_frame
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let (_, listed) = post(&e.router, "/mcp/evil", None, "tools/list", json!({})).await;
-    assert!(listed.get("error").is_some(), "premise: an error frame: {listed}");
+    assert!(
+        listed.get("error").is_some(),
+        "premise: an error frame: {listed}"
+    );
     assert!(
         listed.get("result").is_none(),
         "an error frame carried an unjudged tool list: {listed}"
