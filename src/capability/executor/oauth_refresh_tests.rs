@@ -81,7 +81,7 @@ async fn a_private_literal_token_endpoint_never_receives_the_refresh_token() {
             &CapabilityExecutionContext::default(),
         )
         .await;
-    assert!(result.is_err(), "the refresh must fail: {result:?}");
+    assert!(result.is_err(), "the refresh must fail");
     assert_eq!(seen.load(Ordering::SeqCst), 0, "the refresh token was sent");
 }
 
@@ -118,7 +118,7 @@ async fn the_metadata_address_is_refused_even_with_loopback_egress_and_a_proxy()
             &CapabilityExecutionContext::default().with_isolated_loopback_egress(),
         )
         .await;
-    assert!(result.is_err(), "the refresh must fail: {result:?}");
+    assert!(result.is_err(), "the refresh must fail");
     assert_eq!(
         seen.load(Ordering::SeqCst),
         0,
@@ -175,7 +175,7 @@ async fn a_private_literal_token_endpoint_is_refused_even_through_the_proxy() {
             &CapabilityExecutionContext::default(),
         )
         .await;
-    assert!(result.is_err(), "the refresh must fail: {result:?}");
+    assert!(result.is_err(), "the refresh must fail");
     assert_eq!(
         seen.load(Ordering::SeqCst),
         0,
