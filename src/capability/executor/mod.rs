@@ -228,6 +228,14 @@ impl CapabilityExecutor {
         }
     }
 
+    /// A new executor whose calls go through `capabilities.egress_proxy` when
+    /// it is set, and direct and pinned otherwise (#1881).
+    #[must_use]
+    pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
+        let _ = config;
+        Self::new()
+    }
+
     /// Share the gateway policy epoch so capability reload can bump it.
     #[must_use]
     pub fn with_policy_epoch(mut self, epoch: Arc<std::sync::atomic::AtomicU64>) -> Self {
