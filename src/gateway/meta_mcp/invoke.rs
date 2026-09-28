@@ -143,6 +143,7 @@ use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 mod side_effect_markers;
+mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
 
@@ -151,6 +152,7 @@ use super::support::{
     idempotency_key_for, response_cache_key_for, strip_backend_provenance,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
+use undeclared_gate::refuse_undeclared;
 
 async fn call_capability_tool_with_identity(
     cap: &crate::capability::CapabilityBackend,
@@ -818,30 +820,6 @@ pub(super) const UNSUPPORTED_ELICITATION_MODE_DATA_KEY: &str = "unsupportedElici
 /// declared), and neither an unrecognised method nor an unrecognised mode names
 /// anything at all — there is nothing a client could add to its declaration to
 /// make either acceptable, and naming something would invite exactly that.
-/// MRTR.9, applied wherever a backend's interim first reaches the client: at
-/// the dispatch, and again at a bridged exchange's last round (#569). One
-/// helper so the two applications of one policy cannot drift.
-fn refuse_undeclared(
-    interim: Option<&crate::protocol::mrtr::InputRequired>,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    server: &str,
-    tool: &str,
-    trace_id: &str,
-) -> Result<()> {
-    let Some(refused) = interim.and_then(|i| i.undeclared(caller.input_capabilities)) else {
-        return Ok(());
-    };
-    warn!(
-        server,
-        tool,
-        trace_id,
-        request_key = refused.key,
-        method = refused.method,
-        "Backend asked for input of a type the client did not declare"
-    );
-    Err(undeclared_input_request(server, tool, &refused))
-}
-
 fn undeclared_input_request(
     server: &str,
     tool: &str,
@@ -2374,14 +2352,10 @@ impl MetaMcp {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
                 }) => {}
-                // Out of rounds, not out of options: the backend is parked on
-                // its last question, so the caller is handed that round to
-                // resume, sealed like any other (#569). The LAST round's body,
-                // questions and state together; the first round's questions
-                // under the last round's state would be answered to the wrong
-                // round. It reaches the client for the first time here, so it
-                // passes MRTR.9 here. The key keeps its release-on-drop
-                // default: a backend that stopped to ask has not acted.
+                // Out of rounds: hand back the LAST round, questions and state
+                // together, sealed like any other (#569). It reaches the client
+                // for the first time here, so MRTR.9 runs here; the key keeps
+                // its release default, since a backend that asked has not acted.
                 Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
                     if let Some(last) = last {
                         result = *last;

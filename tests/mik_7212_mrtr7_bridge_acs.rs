@@ -1045,10 +1045,7 @@ async fn ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries() {
         "a backend that never stops asking must be cut off by the retry bound"
     );
     let calls = backend.calls().len();
-    assert_eq!(
-        calls, 3,
-        "expected three retries (the first ask came from outside `backend`)"
-    );
+    assert_eq!(calls, 3, "expected three retries");
 
     // The neighbour: three asks in total, answered on the fourth invocation.
     let client = FakeClient::new(accepts(3, &content));
