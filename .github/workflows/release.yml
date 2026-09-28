@@ -190,6 +190,20 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: python3 scripts/release/check_tag_manifest.py --tag "$INPUT_TAG"
 
+      # A dispatch must run at the tag it releases. Otherwise it builds the
+      # dispatch branch's code under the tag's name, and the binaries are
+      # signed as `release.yml@<branch>`, which the documented verify command
+      # (identity `release.yml@refs/tags/<tag>`) rejects.
+      - name: A dispatch runs at the tag it releases
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.channel.outputs.tag }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::dispatch at $GITHUB_REF; run it at the tag: gh workflow run release.yml --ref $TAG -f tag=$TAG"
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
@@ -260,8 +274,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # cargo auditable embeds the exact crate list of each binary in the
+      # binary itself; the release job turns it into that binary's SBOM.
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --locked --version 0.7.6
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo auditable build --release --target ${{ matrix.target }}
 
       - name: Rename binary
         shell: bash
@@ -288,8 +307,23 @@ jobs:
   release:
     needs: [build, verify, packaged-suite]
     runs-on: ubuntu-latest
+    # One release job per tag at a time, and never cancelled mid-publish: two
+    # runs racing on one draft could each verify a set the other replaced.
+    concurrency:
+      group: release-${{ needs.verify.outputs.tag }}
+      cancel-in-progress: false
     permissions:
       contents: write
+      # Keyless signing: the OIDC token names this workflow at this ref, and
+      # that name is the identity every signature is verified against.
+      id-token: write
+    env:
+      IDENTITY: https://github.com/${{ github.workflow_ref }}
+      ISSUER: https://token.actions.githubusercontent.com
+      BINARIES: >-
+        mcp-gateway-darwin-arm64 mcp-gateway-darwin-x86_64
+        mcp-gateway-linux-aarch64 mcp-gateway-linux-x86_64
+        mcp-gateway-windows-x86_64.exe
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -308,11 +342,33 @@ jobs:
           cp LICENSE LICENSE-MIT LICENSE-NONCOMMERCIAL LICENSES.md NOTICE.md COMMERCIAL.md release/
           ls -la release/
 
-      - name: Create checksums
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.6.5
+
+      - name: Install syft (SBOM)
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+
+      # SBOM per binary, SHA256SUMS.txt over binaries and SBOMs, a signature
+      # bundle for each, all verified before any release exists.
+      - name: Sign the binaries and write their SBOMs
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
         run: |
-          cd release
-          sha256sum -- * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          set -euo pipefail
+          # shellcheck disable=SC2086 # BINARIES is a word list by design
+          scripts/release/sign-release-assets.sh release "$VERSION" $BINARIES
+
+      # Draft first: nothing is public until what the release actually serves
+      # has been verified below. The release action keeps an existing
+      # release's draft state, so an upload onto an already-published release
+      # would go public unverified; refuse that instead.
+      - name: Refuse to upload onto a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: scripts/release/refuse-published-release.sh "$GITHUB_REPOSITORY" "$TAG"
 
       - name: Create Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -342,6 +398,17 @@ jobs:
             sha256sum -c SHA256SUMS.txt
             ```
 
+            ## Verify signatures
+            Every binary, its SBOM (`<binary>.spdx.json`) and `SHA256SUMS.txt` carry a
+            keyless cosign bundle (`<file>.sigstore.json`). Use cosign 2.6.5 or later:
+            ```bash
+            cosign verify-blob \
+              --bundle mcp-gateway-linux-x86_64.sigstore.json \
+              --certificate-identity "${{ env.IDENTITY }}" \
+              --certificate-oidc-issuer ${{ env.ISSUER }} \
+              mcp-gateway-linux-x86_64
+            ```
+
             ## Quick Start
             ```bash
             # Create config file
@@ -360,8 +427,27 @@ jobs:
             See [README](https://github.com/MikkoParkkola/mcp-gateway#readme) for full documentation.
           files: |
             release/*
-          draft: false
+          draft: true
           prerelease: ${{ needs.verify.outputs.is_prerelease == 'true' }}
+
+      # What the draft serves, not what was uploaded: a dropped or renamed
+      # asset fails here while the release is still invisible.
+      - name: Verify the draft release's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published
+          # shellcheck disable=SC2086 # BINARIES is a word list by design
+          scripts/release/verify-release-assets.sh published "$VERSION" $BINARIES
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
   publish:
     needs: [release, verify]

@@ -12,4 +12,33 @@
 # asset checker must pass. Run on the freshly signed files and again on what
 # the draft release serves, before the release is published.
 set -euo pipefail
-exit 0
+
+if [ "$#" -lt 3 ]; then
+  echo "usage: IDENTITY=... ISSUER=... $0 DIR VERSION NAME..." >&2
+  exit 2
+fi
+: "${IDENTITY:?IDENTITY must name the signing workflow}"
+: "${ISSUER:?ISSUER must name the OIDC issuer}"
+
+dir="$1"
+version="$2"
+shift 2
+here="$(cd "$(dirname "$0")" && pwd)"
+cd "$dir"
+
+signed=(SHA256SUMS.txt)
+for name in "$@"; do
+  signed+=("$name" "$name.spdx.json")
+done
+
+for file in "${signed[@]}"; do
+  cosign verify-blob \
+    --bundle "$file.sigstore.json" \
+    --certificate-identity "$IDENTITY" \
+    --certificate-oidc-issuer "$ISSUER" \
+    "$file" > /dev/null
+done
+
+sha256sum -c --strict --quiet SHA256SUMS.txt
+
+python3 "$here/check_release_assets.py" . --version "$version" "$@"
