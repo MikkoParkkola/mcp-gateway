@@ -2076,9 +2076,7 @@ impl Gateway {
             });
 
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
-        let std_listener = listener
-            .into_std()
-            .map_err(|e| Error::Tls(format!("could not hand the listener over: {e}")))?;
+        let std_listener = listener.into_std()?;
         listener::serve(
             app,
             std_listener,

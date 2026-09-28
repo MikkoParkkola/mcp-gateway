@@ -7,8 +7,8 @@ use std::net::SocketAddr;
 
 use axum::Router;
 
+use crate::Result;
 use crate::config::Config;
-use crate::{Error, Result};
 
 /// Serve `app` on the already bound `listener` until `shutdown` resolves.
 ///
@@ -37,12 +37,12 @@ pub(super) async fn serve(
     // Unlike `axum::serve`, this does not enable HTTP/2 extended CONNECT
     // (RFC 8441). Nothing here serves WebSockets; a WebSocket route would need
     // `http_builder().http2().enable_connect_protocol()`.
-    axum_server::from_tcp(listener)
-        .map_err(|e| Error::Tls(format!("listener setup failed: {e}")))?
+    // Plain HTTP has no TLS: its listener errors are I/O errors.
+    axum_server::from_tcp(listener)?
         .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .map_err(|e| Error::Tls(e.to_string()))
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
