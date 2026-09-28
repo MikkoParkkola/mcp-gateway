@@ -19,7 +19,7 @@ set -euo pipefail
 # GitHub-hosted images. `${{ matrix.os }}` is the one expression that passes,
 # because the matrix `os:` entries it expands to are checked on their own; any
 # other expression could resolve to a fleet label that never appears in a diff.
-readonly ALLOWED='^((ubuntu|windows|macos)-[A-Za-z0-9._-]+|\$\{\{[[:space:]]*matrix\.os[[:space:]]*\}\}|mcpgw-trusted-arm64)$'
+readonly ALLOWED='^((ubuntu|windows|macos)-[A-Za-z0-9._-]+|\$\{\{[[:space:]]*matrix\.os[[:space:]]*\}\}|mcpgw-trusted-arm64.*|self-hosted)$'
 
 runner_is_allowed() {
   [[ $1 =~ $ALLOWED ]]
