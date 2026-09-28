@@ -1435,10 +1435,13 @@ pub struct ReloadContext {
     load: LoadPatch,
     /// Starts `load` on a thread of its own.
     spawn: SpawnLoad,
-    /// Cancelled when the gateway starts shutting down.
-    #[allow(dead_code, reason = "red-first stub")]
+    /// Cancelled when the gateway starts shutting down; every reload wait
+    /// ends on it. Never cancelled unless the server wires one in.
     stop: tokio_util::sync::CancellationToken,
 }
+
+/// The refusal a reload returns when the gateway's shutdown ended its wait.
+const STOPPED: &str = "config reload stopped: the gateway is shutting down";
 
 /// The reload's file load; a field so a test can stall or fail it.
 type LoadPatch = fn(
@@ -1491,7 +1494,6 @@ impl ReloadContext {
     }
 
     /// Stop this context's reload waits when `stop` is cancelled (#1808).
-    #[allow(dead_code, reason = "red-first stub")]
     #[must_use]
     pub(crate) fn with_stop(mut self, stop: tokio_util::sync::CancellationToken) -> Self {
         self.stop = stop;
@@ -1583,14 +1585,27 @@ impl ReloadContext {
         // revocation must not queue behind `backend.stop()` for an unrelated
         // config edit. Its result is folded into `changes` below rather than
         // short-circuiting, so neither step's refusal refuses the other.
-        let grants = self.reload_identity_grants().await;
+        //
+        // Every wait below also ends on shutdown (#1808): axum's graceful
+        // shutdown waits for this handler, and a read stalled on NFS or FUSE
+        // never returns. `biased` puts the stop first, so a reload that starts
+        // after the signal reads nothing, not even the grants file.
+        let grants = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            grants = self.reload_identity_grants() => grants,
+        };
 
         // Serializes the whole reload transaction (#397) - read, diff, apply,
         // publish. All four concurrent entry points land here: the
         // `gateway_reload_config` meta-tool, the admin UI reload, every admin UI
         // backend edit, and the config-file watcher. See `apply_patch` for why
         // the lock cannot live one level down.
-        let _reload_guard = self.registry.lock_reload().await;
+        let _reload_guard = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            guard = self.registry.lock_reload() => guard,
+        };
         let mut outcome = match self.reload_outcome_locked().await {
             Ok(outcome) => outcome,
             // Both steps render on every path: a config refusal read alone
@@ -1755,12 +1770,13 @@ impl ReloadContext {
         // is dropped (a client that disconnects, a caller's timeout) releases
         // the lock while its read is still stalled. The permit travels into the
         // thread and is released only when that read returns.
-        let slot = self
-            .registry
-            .reload_read_slot()
-            .acquire_owned()
-            .await
-            .map_err(|_| "config reload load slot closed".to_owned())?;
+        let slot = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            slot = self.registry.reload_read_slot().acquire_owned() => {
+                slot.map_err(|_| "config reload load slot closed".to_owned())?
+            }
+        };
         let (done, result) = tokio::sync::oneshot::channel();
         let (load, path, live, env) = (
             self.load,
@@ -1775,9 +1791,13 @@ impl ReloadContext {
             drop(done.send(load(&path, &live, &env)));
         }))
         .map_err(|e| format!("config reload could not start its file read: {e}"))?;
-        result
-            .await
-            .map_err(|_| "config reload file read ended without a result".to_owned())?
+        tokio::select! {
+            biased;
+            () = self.stop.cancelled() => Err(STOPPED.to_owned()),
+            done = result => {
+                done.map_err(|_| "config reload file read ended without a result".to_owned())?
+            }
+        }
     }
 
     /// The reload transaction itself. The caller must already hold the reload
