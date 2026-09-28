@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Regression tests for the tag/manifest publish gate and its channel predicate."""
 
+import collections.abc
 import contextlib
 import fnmatch
 import importlib.util
@@ -777,6 +778,8 @@ class _StrictLoader(yaml.SafeLoader):
             if key_node.tag == "tag:yaml.org,2002:merge":
                 raise yaml.constructor.ConstructorError(None, None, "a `<<` merge key", key_node.start_mark)
             key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, collections.abc.Hashable):
+                raise yaml.constructor.ConstructorError(None, None, "an unhashable key", key_node.start_mark)
             if key in seen:
                 raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
             seen.add(key)
@@ -789,10 +792,10 @@ def installer_steps(path):
     # not an error): its installers cannot be read, so none can be trusted.
     try:
         doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
-    except yaml.YAMLError as error:
+    except (yaml.YAMLError, UnicodeDecodeError) as error:
         raise AssertionError(f"{path.name} does not parse as a workflow: {error}") from None
     jobs_ = doc.get("jobs") if isinstance(doc, dict) else None
-    for job, body in (jobs_ or {}).items():
+    for job, body in (jobs_ if isinstance(jobs_, dict) else {}).items():
         for index, step in enumerate((body.get("steps") if isinstance(body, dict) else None) or []):
             if isinstance(step, dict) and str(step.get("uses", "")).lower().startswith("sigstore/cosign-installer@"):
                 yield job, index, step
