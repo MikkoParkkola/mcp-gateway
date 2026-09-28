@@ -1075,7 +1075,9 @@ async fn backend_handler_inner(
     // so it can be filtered per caller and answered without a cursor (A3).
     let forward = if method == "tools/list" {
         let (headers, key) = (&propagated_headers, identity_key.as_deref());
-        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
+        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name)
+            .await
+            .inspect(|_| record_client_success(&state, client.as_ref()))
     } else {
         let warnings = if method == "tools/call" {
             match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
