@@ -1,0 +1,12 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 2cd6044d6..a6b2580de 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -613,7 +613,6 @@ impl InputBridge<'_> {
+                 .iter()
+                 .map(|prompt| {
+                     serde_json::json!({
+-                        "key": prompt.key,
+                         "method": prompt.kind.method(),
+                         "params": prompt.params,
+                     })

@@ -1,0 +1,55 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 2cd6044d6..a0632f45b 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -501,22 +501,6 @@ impl InputBridge<'_> {
+             }
+             last = Some(Box::new(result));
+         }
+-        // The last round is handed back to the caller rather than asked
+-        // in-band, but it is still a question the backend composed after an
+-        // answer, so it passes the same immutable gate every asked round did
+-        // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+-        if last.is_some()
+-            && let Ok(prompts) = Self::plan(&interim, declared, slice)
+-        {
+-            self.gate
+-                .admit(&Self::handed_back(&prompts))
+-                .map_err(|error| match error {
+-                    BridgeError::ChallengeRefused { .. } => {
+-                        BridgeError::ChallengeRefused { dispatched }
+-                    }
+-                    other => other,
+-                })?;
+-        }
+         Err(BridgeError::RoundsExhausted { last })
+     }
+ 
+@@ -601,27 +585,6 @@ impl InputBridge<'_> {
+         )
+     }
+ 
+-    /// The last round as the caller receives it.
+-    ///
+-    /// [`Self::challenge`] holds `Prompt::key` back because an asked round
+-    /// never shows it to the client. A handed-back round does: the caller gets
+-    /// the backend's `inputRequests` as composed and echoes each key with its
+-    /// answer, so here the key is client-visible and is inspected too.
+-    fn handed_back(prompts: &[Prompt]) -> Value {
+-        Value::Array(
+-            prompts
+-                .iter()
+-                .map(|prompt| {
+-                    serde_json::json!({
+-                        "key": prompt.key,
+-                        "method": prompt.kind.method(),
+-                        "params": prompt.params,
+-                    })
+-                })
+-                .collect(),
+-        )
+-    }
+-
+     /// Put one round's prompts to the client and collect what came back.
+     ///
+     /// A prompt that outlives its wait ends the call, and WHICH bound ended the

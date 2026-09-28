@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 78deca83d..c6b233fa9 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2351,7 +2351,7 @@ impl MetaMcp {
+                 Err(crate::gateway::input_bridge::BridgeError::Delivery {
+                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
+                     ..
+-                }) => {}
++                }) => return Err(Error::json_rpc(-32003, "no session")),
+                 // Out of rounds: hand back the LAST round, questions and state
+                 // together, sealed like any other (#569). It reaches the client
+                 // for the first time here, so MRTR.9 runs here; the key keeps

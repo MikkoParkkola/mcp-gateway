@@ -1,0 +1,41 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 2cd6044d6..7cf13b771 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -509,7 +509,7 @@ impl InputBridge<'_> {
+             && let Ok(prompts) = Self::plan(&interim, declared, slice)
+         {
+             self.gate
+-                .admit(&Self::handed_back(&prompts))
++                .admit(&Self::challenge(&prompts))
+                 .map_err(|error| match error {
+                     BridgeError::ChallengeRefused { .. } => {
+                         BridgeError::ChallengeRefused { dispatched }
+@@ -601,27 +601,6 @@ impl InputBridge<'_> {
+         )
+     }
+ 
+-    /// The last round as the caller receives it.
+-    ///
+-    /// [`Self::challenge`] holds `Prompt::key` back because an asked round
+-    /// never shows it to the client. A handed-back round does: the caller gets
+-    /// the backend's `inputRequests` as composed and echoes each key with its
+-    /// answer, so here the key is client-visible and is inspected too.
+-    fn handed_back(prompts: &[Prompt]) -> Value {
+-        Value::Array(
+-            prompts
+-                .iter()
+-                .map(|prompt| {
+-                    serde_json::json!({
+-                        "key": prompt.key,
+-                        "method": prompt.kind.method(),
+-                        "params": prompt.params,
+-                    })
+-                })
+-                .collect(),
+-        )
+-    }
+-
+     /// Put one round's prompts to the client and collect what came back.
+     ///
+     /// A prompt that outlives its wait ends the call, and WHICH bound ended the
