@@ -606,9 +606,7 @@ impl ConfigScanner {
         #[cfg(target_os = "macos")]
         let path = home.join(".config/zed/settings.json");
         #[cfg(target_os = "linux")]
-        let path = dirs::config_dir()
-            .unwrap_or(home.join(".config"))
-            .join("zed/settings.json");
+        let path = home.join(".config/zed/settings.json");
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let path = dirs::config_dir().unwrap_or(home).join("Zed/settings.json");
 
