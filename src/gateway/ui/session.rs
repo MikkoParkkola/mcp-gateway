@@ -86,16 +86,31 @@ pub(super) async fn dashboard_link(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
 ) -> Response {
-    let may_mint = client.is_some_and(|Extension(c)| {
+    let Some(Extension(client)) = client.filter(|Extension(c)| {
         c.admin
             && matches!(
                 c.credential_kind,
                 CredentialKind::StaticBearer | CredentialKind::ApiKey
             )
-    });
-    if !may_mint {
+    }) else {
         return admin_auth_required().into_response();
-    }
+    };
+    // A session opened by this link ends no later than the key that minted
+    // it: otherwise a key used minutes before its expiry would buy a full
+    // absolute limit of access after it.
+    let not_after = (client.credential_kind == CredentialKind::ApiKey)
+        .then(|| {
+            state
+                .live_config
+                .get()
+                .auth
+                .api_keys
+                .iter()
+                .find(|k| k.name == client.name)
+                .and_then(|k| k.expires_at)
+        })
+        .flatten()
+        .map(std::time::SystemTime::from);
     if cookies_are_secure(&state.live_config) && !state.live_config.running().mtls.enabled {
         // The session cookie would be `Secure` over a plain-HTTP loopback
         // listener, and a browser discards it: the link would be spent for
@@ -121,13 +136,18 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
-    let value = state.dashboard_bootstrap.rearm();
+    let value = state.dashboard_bootstrap.rearm_until(not_after);
     let scheme = if running.mtls.enabled {
         "https"
     } else {
         "http"
     };
-    let authority = loopback_authority(host, running.server.port);
+    // `server.port: 0` binds an OS-chosen port; the link names that one.
+    let port = state
+        .dashboard_bootstrap
+        .bound_port()
+        .unwrap_or(running.server.port);
+    let authority = loopback_authority(host, port);
     Json(json!({ "link": format!("{scheme}://{authority}/dashboard?bootstrap={value}") }))
         .into_response()
 }

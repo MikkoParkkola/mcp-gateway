@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 /// A one-time value that exchanges for a dashboard session.
@@ -14,7 +15,12 @@ use std::time::{Duration, Instant, SystemTime};
 /// This value is single-use and dies with the process.
 #[derive(Debug)]
 pub struct DashboardBootstrap {
-    value: Mutex<Option<String>>,
+    /// The unused value, and the wall-clock time a session it opens must end
+    /// by: the expiry of the credential that minted it, when that has one.
+    value: Mutex<Option<(String, Option<SystemTime>)>>,
+    /// The port the listener bound, 0 until known: `server.port: 0` asks the
+    /// OS for one, and a link must name the real one.
+    bound_port: AtomicU16,
     /// Opaque handles issued to browsers, valid for this process only, with
     /// when each was issued and last used. `ponytail:` one mutex over the map;
     /// a dashboard has a handful of sessions, not thousands.
@@ -26,12 +32,16 @@ pub struct DashboardBootstrap {
 struct SessionTimes {
     issued: Now,
     last_seen: Now,
+    /// Ends here even inside the limits: the minting credential's expiry.
+    not_after: Option<SystemTime>,
 }
 
 impl SessionTimes {
-    /// Past the idle or the absolute limit, by either clock.
+    /// Past the idle or the absolute limit by either clock, or past the cap.
     fn expired(&self, now: Now, limits: &SessionLimits) -> bool {
-        exceeds(self.last_seen, now, limits.idle) || exceeds(self.issued, now, limits.absolute)
+        exceeds(self.last_seen, now, limits.idle)
+            || exceeds(self.issued, now, limits.absolute)
+            || self.not_after.is_some_and(|cap| now.wall >= cap)
     }
 }
 
@@ -56,7 +66,18 @@ impl DashboardBootstrap {
     /// opaque handle is meaningless anywhere but this process and expires with
     /// it. Kept in memory: a dashboard session is not worth persisting, and
     /// nothing on disk means nothing to steal from disk.
+    #[cfg(test)]
     pub(crate) fn issue_session_at(&self, now: Now, limits: &SessionLimits) -> String {
+        self.issue_session_until(now, limits, None)
+    }
+
+    /// A session that also ends at `not_after`, when a cap is given.
+    pub(crate) fn issue_session_until(
+        &self,
+        now: Now,
+        limits: &SessionLimits,
+        not_after: Option<SystemTime>,
+    ) -> String {
         let handle = random_value();
         if let Ok(mut sessions) = self.sessions.lock() {
             // Sweep on issue: the only way the map grows, so it is the one
@@ -67,6 +88,7 @@ impl DashboardBootstrap {
                 SessionTimes {
                     issued: now,
                     last_seen: now,
+                    not_after,
                 },
             );
         }
@@ -92,7 +114,8 @@ impl DashboardBootstrap {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            value: Mutex::new(Some(random_value())),
+            value: Mutex::new(Some((random_value(), None))),
+            bound_port: AtomicU16::new(0),
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -100,22 +123,25 @@ impl DashboardBootstrap {
     /// The value to print, while it remains unused.
     #[must_use]
     pub fn peek(&self) -> Option<String> {
-        self.value.lock().ok().and_then(|v| v.clone())
+        self.value
+            .lock()
+            .ok()
+            .and_then(|v| v.as_ref().map(|(value, _)| value.clone()))
     }
 
     /// Consume the value if it matches. Single use: a second attempt fails even
     /// with the right value, so a link left in a shell history is spent.
     #[must_use]
     pub fn consume(&self, candidate: &str) -> bool {
-        let Ok(mut guard) = self.value.lock() else {
-            return false;
-        };
-        match guard.as_deref() {
-            Some(expected) if expected == candidate => {
-                *guard = None;
-                true
-            }
-            _ => false,
+        self.consume_capped(candidate).is_some()
+    }
+
+    /// Consume the value if it matches, returning the cap it was minted with.
+    pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Option<SystemTime>> {
+        let mut guard = self.value.lock().ok()?;
+        match guard.as_ref() {
+            Some((expected, _)) if expected == candidate => guard.take().map(|(_, cap)| cap),
+            _ => None,
         }
     }
 
@@ -162,47 +188,32 @@ impl DashboardBootstrap {
     ///
     /// The old value dies here, so a link printed earlier and leaked since
     /// (scrollback, a shipped log) stops working the moment a new one exists.
-    #[cfg(any(test, feature = "webui"))]
+    #[cfg(test)]
     pub(crate) fn rearm(&self) -> String {
-        let fresh = random_value();
-        if let Ok(mut value) = self.value.lock() {
-            *value = Some(fresh.clone());
-        }
-        fresh
-    }
-
-    /// A session that also ends at `not_after`, when a cap is given.
-    #[allow(dead_code, reason = "red-first stub")]
-    pub(crate) fn issue_session_until(
-        &self,
-        now: Now,
-        limits: &SessionLimits,
-        _not_after: Option<SystemTime>,
-    ) -> String {
-        self.issue_session_at(now, limits)
+        self.rearm_until(None)
     }
 
     /// Like [`Self::rearm`], with a wall-clock cap for the session it opens.
     #[cfg(any(test, feature = "webui"))]
-    #[allow(dead_code, reason = "red-first stub")]
-    pub(crate) fn rearm_until(&self, _not_after: Option<SystemTime>) -> String {
-        self.rearm()
-    }
-
-    /// Consume the value if it matches, returning the cap it was minted with.
-    #[allow(dead_code, reason = "red-first stub")]
-    pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Option<SystemTime>> {
-        self.consume(candidate).then_some(None)
+    pub(crate) fn rearm_until(&self, not_after: Option<SystemTime>) -> String {
+        let fresh = random_value();
+        if let Ok(mut value) = self.value.lock() {
+            *value = Some((fresh.clone(), not_after));
+        }
+        fresh
     }
 
     /// Record the port the listener actually bound.
-    #[allow(dead_code, reason = "red-first stub")]
-    pub(crate) fn set_bound_port(&self, _port: u16) {}
+    pub(crate) fn set_bound_port(&self, port: u16) {
+        self.bound_port.store(port, Ordering::Relaxed);
+    }
 
     /// The port the listener actually bound, once known.
-    #[allow(dead_code, reason = "red-first stub")]
     pub(crate) fn bound_port(&self) -> Option<u16> {
-        None
+        match self.bound_port.load(Ordering::Relaxed) {
+            0 => None,
+            port => Some(port),
+        }
     }
 
     /// Test seam: move both clocks of `handle` back by `by`, the same as `by`

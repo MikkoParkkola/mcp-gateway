@@ -713,9 +713,17 @@ pub async fn auth_middleware(
 
     // An opaque dashboard session, validated against this process's store
     // rather than treated as a credential.
+    //
+    // A presented `Authorization` header decides the request alone: a live
+    // cookie beside it neither overrides it (an admin key must not be read
+    // as the weaker session) nor stands in for it when it is wrong (no
+    // fallback). The cookie is still checked, so a dead one is cleared.
+    let has_authorization = request
+        .headers()
+        .contains_key(axum::http::header::AUTHORIZATION);
     let mut dead_session = false;
     if let Some(handle) = session_cookie_value(request.headers()) {
-        let touch = if is_poll(&request) {
+        let touch = if has_authorization || is_poll(&request) {
             Touch::No
         } else {
             Touch::Yes
@@ -725,10 +733,11 @@ pub async fn auth_middleware(
             .dashboard_bootstrap
             .check_session(&handle, Now::read(), &limits, touch)
         {
-            SessionCheck::Valid => {
+            SessionCheck::Valid if !has_authorization => {
                 request.extensions_mut().insert(dashboard_client());
                 return next.run(request).await;
             }
+            SessionCheck::Valid => {}
             // D4 (MIK-7570.METRICS.2) counts `session_expired` here; an
             // unknown handle is not an expiry and is not counted.
             SessionCheck::Expired | SessionCheck::Unknown => dead_session = true,

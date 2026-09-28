@@ -102,6 +102,7 @@ async fn run() -> ExitCode {
             );
             commands::run_stats_command(&effective_url).await
         }
+        #[cfg(feature = "webui")]
         Some(Command::DashboardLink { url }) => {
             let base = commands::dashboard_link_base(
                 url,

@@ -124,23 +124,28 @@ pub(super) fn try_dashboard_bootstrap(
                  Enable mtls or remove public_url.",
             )));
         }
-        if !state.dashboard_bootstrap.consume(&candidate) {
+        let Some(not_after) = state.dashboard_bootstrap.consume_capped(&candidate) else {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
                 "Bootstrap link is invalid or already used. Run `mcp-gateway \
                  dashboard-link` for a fresh one.",
             ));
-        }
+        };
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
         let limits = session_limits(state);
+        let now = Now::read();
         let handle = state
             .dashboard_bootstrap
-            .issue_session_at(Now::read(), &limits);
+            .issue_session_until(now, &limits, not_after);
         // The cookie lives exactly as long as the server will honour it, so a
-        // browser never keeps presenting a handle the server already dropped.
-        let max_age = limits.absolute.as_secs();
+        // browser never keeps presenting a handle the server already dropped:
+        // the absolute limit, or less when the minting credential expires first.
+        let max_age = not_after
+            .map(|cap| cap.duration_since(now.wall).unwrap_or_default())
+            .map_or(limits.absolute, |left| left.min(limits.absolute))
+            .as_secs();
         Some(axum::response::IntoResponse::into_response((
             axum::http::StatusCode::SEE_OTHER,
             [

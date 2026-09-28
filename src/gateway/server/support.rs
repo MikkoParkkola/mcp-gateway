@@ -43,7 +43,11 @@ pub(super) fn log_startup_banner(
     info!("============================================================");
     info!("MCP GATEWAY v{}", env!("CARGO_PKG_VERSION"));
     info!("============================================================");
-    info!(host = %config.server.host, port = %config.server.port, "Listening");
+    // `server.port: 0` binds an OS-chosen port; print the one actually bound.
+    let port = bootstrap
+        .and_then(DashboardBootstrap::bound_port)
+        .unwrap_or(config.server.port);
+    info!(host = %config.server.host, port = %port, "Listening");
     info!(backends = backends.all().len(), "Backends registered");
 
     if config.auth.enabled {
@@ -64,7 +68,7 @@ pub(super) fn log_startup_banner(
                     "DASHBOARD (opens once, then remembered in this browser): \
                      {}://{}/dashboard?bootstrap={}",
                     if config.mtls.enabled { "https" } else { "http" },
-                    url_authority(&config.server.host, config.server.port),
+                    url_authority(&config.server.host, port),
                     value
                 );
             }

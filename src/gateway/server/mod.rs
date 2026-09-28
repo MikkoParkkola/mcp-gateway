@@ -2022,6 +2022,11 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
+        // `server.port: 0` asks the OS for a port; a minted dashboard link
+        // must name the one actually bound, not the configured 0.
+        if let Ok(bound) = listener.local_addr() {
+            dashboard_bootstrap.set_bound_port(bound.port());
+        }
 
         log_startup_banner(
             &self.config,
