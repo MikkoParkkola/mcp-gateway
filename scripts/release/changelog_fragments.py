@@ -39,7 +39,7 @@ SKIP_LABEL = "no-changelog"
 # the platforms they are built for, the capability catalogue, and the registry
 # and npm package metadata.
 SOURCE = re.compile(
-    r"^(src/|crates/[^/]+/src/|Dockerfile|\.github/workflows/docker[^/]*\.yml$"
+    r"^(src/|crates/[^/]+/src/|Dockerfile|\.github/workflows/docker[^/]*\.ya?ml$"
     r"|capabilities/|server\.json$|npm/)"
 )
 

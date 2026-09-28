@@ -141,6 +141,7 @@ class Check(unittest.TestCase):
             "Dockerfile",
             "Dockerfile.full",
             ".github/workflows/docker.yml",
+            ".github/workflows/docker-full.yaml",
             "capabilities/search/brave.yaml",
             "server.json",
             "npm/package.json",
