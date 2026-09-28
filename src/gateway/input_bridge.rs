@@ -186,7 +186,9 @@ pub enum DeliveryError {
 }
 
 /// Why the whole bridged call failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq` without `Eq`: [`BridgeError::RoundsExhausted`] carries a JSON body.
+#[derive(Debug, Clone, PartialEq)]
 pub enum BridgeError {
     /// An entry could not be put to this client at all, and nothing was sent.
     Refused {
@@ -203,7 +205,15 @@ pub enum BridgeError {
         error: DeliveryError,
     },
     /// The backend kept asking past the retry bound.
-    RoundsExhausted,
+    ///
+    /// Carries the backend's last interim body, the round the caller can still
+    /// resume: its questions and its `requestState` belong together, and the
+    /// first round's would replay prompts already answered (#569). `None` when
+    /// no round ran, so there is nothing newer than the interim the caller holds.
+    RoundsExhausted {
+        /// The last interim result the backend returned, whole.
+        last: Option<Box<Value>>,
+    },
     /// The backend asked for more requests in total than the bound allows.
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
@@ -461,6 +471,7 @@ impl InputBridge<'_> {
         let mut interim = first.clone();
         let mut spent = 0_u32;
         let mut dispatched = false;
+        let mut last = None;
         for _ in 0..self.bounds.rounds {
             if started.elapsed() >= self.bounds.aggregate {
                 return Err(BridgeError::Deadline);
@@ -490,8 +501,9 @@ impl InputBridge<'_> {
                 Some(next) => interim = next,
                 None => return Ok(result),
             }
+            last = Some(Box::new(result));
         }
-        Err(BridgeError::RoundsExhausted)
+        Err(BridgeError::RoundsExhausted { last })
     }
 
     /// Gate one interim result, whole, before a single frame leaves.
