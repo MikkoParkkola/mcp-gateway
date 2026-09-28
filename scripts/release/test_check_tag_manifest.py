@@ -745,6 +745,12 @@ def gate_steps(workflow, job):
 # reports `days: 14`. upload-artifact clamps `retention-days` to that value.
 HANDOFF_RETENTION_DAYS = 14
 
+# The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
+# (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
+# GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
+# certain conditions).
+COSIGN_FLOOR = (2, 6, 5)
+
 
 def artifact_keys(block, keys):
     """The values of `keys` under a step's `with:`, in order.
@@ -2194,6 +2200,30 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_every_installed_cosign_is_past_the_verification_advisory(self):
+        # Every cosign the workflows install signs or verifies the images and
+        # charts users trust, and a verify step on a vulnerable pin can pass
+        # on what it should refuse (see COSIGN_FLOOR).
+        # Read per installer step, so a step that sets no version (and gets
+        # the installer's default) or quotes it is not skipped.
+        found = []
+        for wf in ("release.yml", "ci.yml", "docker.yml"):
+            for block in steps(wf):
+                if not any(re.search(r"uses:\s*sigstore/cosign-installer@", line) for line in block):
+                    continue
+                pin = [
+                    m for line in block
+                    if (m := re.match(r"^\s+cosign-release:\s*['\"]?v(\d+)\.(\d+)\.(\d+)['\"]?\s*$", line))
+                ]
+                self.assertEqual(len(pin), 1, f"{wf}: {block[0].strip()} must pin cosign-release to one vX.Y.Z")
+                found.append((wf, tuple(int(x) for x in pin[0].groups())))
+        self.assertTrue(found, "no cosign-release pin found")
+        # The floor is for the v2 line the workflows use. A v3 pin needs its
+        # own floor added here first, or any v3.0.x would compare above it.
+        self.assertEqual({v[0] for _, v in found}, {COSIGN_FLOOR[0]}, "cosign pin outside the v2 line")
+        below = [f"{wf}: cosign v{'.'.join(map(str, v))}" for wf, v in found if v < COSIGN_FLOOR]
+        self.assertEqual(below, [], f"cosign pins below the patched floor v{'.'.join(map(str, COSIGN_FLOOR))}")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
