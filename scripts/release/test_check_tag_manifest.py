@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Regression tests for the tag/manifest publish gate and its channel predicate."""
 
+import collections.abc
 import contextlib
 import fnmatch
 import importlib.util
@@ -15,6 +16,8 @@ import tempfile
 import textwrap
 import unittest
 from unittest import mock
+
+import yaml
 
 spec = importlib.util.spec_from_file_location(
     "check_tag_manifest", pathlib.Path(__file__).with_name("check_tag_manifest.py")
@@ -747,6 +750,56 @@ def gate_steps(workflow, job):
 # reports `days: 14`. upload-artifact clamps `retention-days` to that value.
 HANDOFF_RETENTION_DAYS = 14
 
+# The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
+# (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
+# GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
+# certain conditions).
+COSIGN_FLOOR = (2, 6, 5)
+# One recogniser for an installer step, shared by the checks that must know a
+# step is the installer (push-guard inventory, rehearsal exemption): YAML
+# allows the key and the action reference bare, single- or double-quoted,
+# GitHub matches the owner and repository in any case, and a check that knows
+# fewer forms than the others lets a step escape it. The parser decides which
+# steps are installers; test_the_text_recogniser_finds_every_parsed_installer
+# holds this recogniser to the same steps.
+COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?(?i:sigstore/cosign-installer)@""")
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses what Actions may resolve differently.
+
+    PyYAML keeps the last of two equal keys and flattens `<<` merge keys; a
+    floor that read either could pass a pin the runner never applies.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(None, None, "a `<<` merge key", key_node.start_mark)
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, collections.abc.Hashable):
+                raise yaml.constructor.ConstructorError(None, None, "an unhashable key", key_node.start_mark)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def installer_steps(path):
+    """(job, index, step) for every cosign-installer step of a parsed workflow."""
+    # A workflow the parser refuses fails the check that asked (a failure,
+    # not an error): its installers cannot be read, so none can be trusted.
+    try:
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+    except (yaml.YAMLError, UnicodeDecodeError) as error:
+        raise AssertionError(f"{path.name} does not parse as a workflow: {error}") from None
+    jobs_ = doc.get("jobs") if isinstance(doc, dict) else None
+    for job, body in (jobs_ if isinstance(jobs_, dict) else {}).items():
+        for index, step in enumerate((body.get("steps") if isinstance(body, dict) else None) or []):
+            if isinstance(step, dict) and str(step.get("uses", "")).lower().startswith("sigstore/cosign-installer@"):
+                yield job, index, step
+
 
 def artifact_keys(block, keys):
     """The values of `keys` under a step's `with:`, in order.
@@ -779,11 +832,12 @@ class WorkflowWiring(unittest.TestCase):
     catch the rewiring mistakes that are silent at author time and only visible
     once a release has already gone to the wrong channel.
 
-    Textual, deliberately: the gate runs on stdlib alone in three workflows, so
-    a YAML parser is a dependency it does not get to have. The cost is that
-    equivalence is handled case by case — comments stripped, optional quotes,
-    folded conditions, continuations joined, step blocks scoped — rather than
-    decided by a parser. Every case here is pinned by
+    Mostly textual: equivalence is handled case by case — comments stripped,
+    optional quotes, folded conditions, continuations joined, step blocks
+    scoped. The cosign floor is the exception: it reads a strict YAML parse
+    (PyYAML 6.0.2, which every job running this suite installs first),
+    because a text scan kept missing spellings of one installer step, and the
+    text recogniser is held to the parser's steps. Every case here is pinned by
     `test_workflow_wiring_mutations.py`, which is what keeps the list honest:
     a spelling nobody thought of fails loudly instead of passing silently.
     """
@@ -1842,7 +1896,7 @@ class WorkflowWiring(unittest.TestCase):
             re.compile(r"scripts/release/check_tag_manifest\.py"),
             re.compile(r"\$\{VERSION\}"),
             re.compile(r"\bmcp-publisher\b"),
-            re.compile(r"^\s*uses:\s*sigstore/cosign-installer@"),
+            COSIGN_INSTALLER,
             re.compile(r"^\s*uses:\s*anchore/sbom-action/"),
         )
         found = []
@@ -1891,7 +1945,7 @@ class WorkflowWiring(unittest.TestCase):
             # E2: the cosign installer may add the rehearsal, and only that.
             if condition == f"({' && '.join(TAG_CONJUNCTS)}) || ({REHEARSAL_CONDITION})":
                 self.assertTrue(
-                    any(re.match(r"^\s*(?:- )?uses:\s*sigstore/cosign-installer@", l) for l in block)
+                    any(COSIGN_INSTALLER.match(l) for l in block)
                     and not any(re.match(r"^\s*(?:- )?run:", l) for l in block),
                     f"ci.yml: {label} takes the installer's exemption without being it",
                 )
@@ -2255,6 +2309,63 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_every_installed_cosign_is_past_the_verification_advisory(self):
+        # Every cosign the workflows install signs or verifies the images and
+        # charts users trust, and a verify step on a vulnerable pin can pass
+        # on what it should refuse (see COSIGN_FLOOR). Read from the parsed
+        # workflow, not its text: YAML spells one step many ways (quoting and
+        # escapes in keys and values, flow style, anchors, continuations), and
+        # a text scan misses whichever spelling it was not written for.
+        found = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            for job, index, step in installer_steps(path):
+                where = f"{path.name}: job {job} step {index + 1}"
+                inputs = step.get("with")
+                pin = inputs.get("cosign-release") if isinstance(inputs, dict) else None
+                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pin) if isinstance(pin, str) else None
+                self.assertIsNotNone(m, f"{where}: cosign-release must be a vX.Y.Z string under with:, got {pin!r}")
+                found.append((where, tuple(int(x) for x in m.groups())))
+        self.assertTrue(found, "no cosign installer found")
+        # The floor is for the v2 line the workflows use. A v3 pin needs its
+        # own floor added here first, or any v3.0.x would compare above it.
+        self.assertEqual({v[0] for _, v in found}, {COSIGN_FLOOR[0]}, "cosign pin outside the v2 line")
+        below = [f"{w}: cosign v{'.'.join(map(str, v))}" for w, v in found if v < COSIGN_FLOOR]
+        self.assertEqual(below, [], f"cosign pins below the patched floor v{'.'.join(map(str, COSIGN_FLOOR))}")
+
+    def test_every_job_running_the_floor_installs_its_parser_first(self):
+        # The floor imports yaml; a job that runs these suites without the
+        # pinned PyYAML fails at import on a runner that lacks it, or parses
+        # with whatever version the image ships.
+        missing = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            for job in jobs(path.name):
+                installed = False
+                for block in steps(path.name, job):
+                    text = "\n".join(block)
+                    if "yaml.__version__ != \"6.0.2\"" in text and "pyyaml==6.0.2" in text:
+                        installed = True
+                    elif not installed and any(
+                        suite in text for suite in ("test_check_tag_manifest.py", "test_workflow_wiring_mutations.py", "scripts/release/test_*.py")
+                    ):
+                        missing.append(f"{path.name}: {job}")
+                        break
+        self.assertEqual(missing, [], "a job runs the release suites before installing PyYAML 6.0.2")
+
+    def test_the_text_recogniser_finds_every_parsed_installer(self):
+        # The push-guard inventory and the rehearsal exemption read step text
+        # through COSIGN_INSTALLER. The parser is the authority on which steps
+        # install cosign, so the two must name the same steps (job and
+        # position), not merely the same number of them.
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            parsed = {(job, index) for job, index, _ in installer_steps(path)}
+            text = {
+                (job, index)
+                for job in {j for j, _ in parsed} | set(jobs(path.name))
+                for index, block in enumerate(steps(path.name, job))
+                if any(COSIGN_INSTALLER.match(line) for line in block)
+            }
+            self.assertEqual(text, parsed, f"{path.name}: the text recogniser and the parser disagree on the installer steps")
 
     def test_the_release_builds_tests_and_publishes_the_event_commit(self):
         # The release commit is GITHUB_SHA, which a re-run keeps, and it is what
