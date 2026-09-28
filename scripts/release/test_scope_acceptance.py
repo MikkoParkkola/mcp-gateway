@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Regression tests for release acceptance, independent of live completion state."""
+"""Regression tests for release acceptance, independent of live completion state.
+
+One test reads the live ledger on purpose: it pins APPROVED_WAIVERS to exactly
+the ledger's waived criteria, which the gate itself can only check for rows it
+still sees (test_the_approved_set_is_exactly_the_live_ledgers_waivers).
+"""
 
 import copy
 import contextlib
@@ -518,6 +523,33 @@ class AcceptanceTests(unittest.TestCase):
             "GH462.CONFIG.1: approved as a waiver but no longer waived; remove it"
             " from APPROVED_WAIVERS in this change",
             self.inspect()[0],
+        )
+
+    def test_a_waived_criterion_cannot_still_be_blocked(self):
+        # A waiver is a final ruling, like met. Left blocked, the row ships as
+        # waived while the burnup still lists it as held by someone.
+        self.approve_waiver()
+        for held in ("operator", "external"):
+            with self.subTest(blocked_on=held):
+                self.waive(blocked_on=held)
+                self.assertEqual(self.cli("--release"), 2)
+                self.assertIn(
+                    "GH462.CONFIG.1: a waived criterion cannot still be blocked",
+                    self.inspect()[0],
+                )
+
+    def test_the_approved_set_is_exactly_the_live_ledgers_waivers(self):
+        # The gate's own ratchet only sees criteria the ledger still carries,
+        # because fixtures run it against ledgers of their own. A waived
+        # criterion dropped from both the document and the ledger would leave
+        # its approval behind, ready to re-authorise the ID if it came back.
+        # The real ledger is pinned here instead.
+        live = json.loads((gate.ROOT / gate.STATUS).read_text())
+        waived = {row["id"] for row in live["criteria"] if row.get("status") == "waived"}
+        self.assertEqual(
+            set(gate.APPROVED_WAIVERS),
+            waived,
+            "APPROVED_WAIVERS must list exactly the ledger's waived criteria",
         )
 
     def test_only_an_approved_criterion_may_be_waived(self):
