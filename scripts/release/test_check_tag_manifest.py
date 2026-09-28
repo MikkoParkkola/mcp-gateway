@@ -752,10 +752,11 @@ HANDOFF_RETENTION_DAYS = 14
 COSIGN_FLOOR = (2, 6, 5)
 # One recogniser for an installer step, shared by the checks that must know a
 # step is the installer (push-guard inventory, rehearsal exemption): YAML
-# allows the key and the action reference bare, single- or double-quoted, and
-# a check that knows fewer forms than the others lets a step escape it. The
-# pin floor is broader still and fails closed on any mention.
-COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?sigstore/cosign-installer@""")
+# allows the key and the action reference bare, single- or double-quoted,
+# GitHub matches the owner and repository in any case, and a check that knows
+# fewer forms than the others lets a step escape it. The pin floor is broader
+# still and fails closed on any mention.
+COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?(?i:sigstore/cosign-installer)@""")
 
 
 def artifact_keys(block, keys):
@@ -2225,9 +2226,18 @@ class WorkflowWiring(unittest.TestCase):
                 # form: a flow-style or anchored step the recogniser does not
                 # parse still installs cosign, and its pin then cannot be read,
                 # so it fails here rather than escaping the floor.
-                if not any("sigstore/cosign-installer@" in line.split("#", 1)[0] for line in block):
+                if not any("sigstore/cosign-installer@" in line.split("#", 1)[0].lower() for line in block):
                     continue
                 pins = artifact_keys(block, ("cosign-release",))
+                # Only a direct input of `with:` reaches the action; a
+                # `cosign-release:` line inside another input's block scalar
+                # is text, and the installer then uses its default.
+                width = next((len(l) - len(l.lstrip()) + (2 if l.lstrip().startswith("- ") else 0)
+                              for l in block if re.match(r"^\s*(- )?with:\s*$", l)), None)
+                direct = [l for l in block
+                          if width is not None and re.match(r"^\s*cosign-release:", l)
+                          and len(l) - len(l.lstrip()) == width + 2]
+                self.assertEqual(len(direct), len(pins), f"{wf}: {block[0].strip()} pins cosign-release inside another input")
                 self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
                 m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pins[0])
                 self.assertIsNotNone(m, f"{wf}: cosign-release {pins[0]!r} is not vX.Y.Z")
@@ -2245,12 +2255,13 @@ class WorkflowWiring(unittest.TestCase):
         # no check sees. An alias needs an anchor in the same file, so no
         # anchor anywhere means no alias can resolve. None is used today.
         # Any anchor name YAML allows (digits too); `&&` is a shell operator.
-        anchor = re.compile(r"(?:^|[\s:\[{,])&(?!&)[^\s,\[\]{}]+")
+        # Comments are dropped first; `&>` is a shell redirection.
+        anchor = re.compile(r"(?:^|[\s:\[{,])&(?![&>])[^\s,\[\]{}]+")
         found = [
             f"{path.name}:{number}: {line.strip()}"
             for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-            if anchor.search(line)
+            if anchor.search(line.split(" #", 1)[0] if not line.lstrip().startswith("#") else "")
         ]
         self.assertEqual(found, [], "a YAML anchor lets an alias hide what a step installs from these checks")
 

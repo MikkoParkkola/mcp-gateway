@@ -1452,6 +1452,25 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: &1 sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
      "      - uses: *1\n        with:\n          cosign-release: v2.5.2\n", CAUGHT),
+    # GitHub matches an action's owner and repository in any case.
+    ("cosign-installed-below-the-floor-in-another-case", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    ("cosign-installer-in-another-case-and-unguarded", "ci.yml",
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n",
+     "      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n", CAUGHT),
+    ("cosign-installer-in-another-case-keeps-its-exemption", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n", TOLERATED),
+    # A pin inside another input's block scalar is text the action never reads.
+    ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          ignored-input: |\n            cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    # A shell redirection or a comment is not a YAML anchor.
+    ("shell-redirection-and-a-comment-are-not-anchors", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      # see &notes\n      - run: true &>/dev/null\n      - name: Run the full-burst ledger\n", TOLERATED),
     # The installer's rehearsal exemption applies to it quoted as well.
     ("cosign-installer-quoted-keeps-its-exemption", "ci.yml",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
