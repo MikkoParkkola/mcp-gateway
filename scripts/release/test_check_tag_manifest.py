@@ -2206,7 +2206,8 @@ class WorkflowWiring(unittest.TestCase):
         # charts users trust, and a verify step on a vulnerable pin can pass
         # on what it should refuse (see COSIGN_FLOOR).
         # Read per installer step, so a step that sets no version (and gets
-        # the installer's default) or quotes it is not skipped.
+        # the installer's default) or quotes it, or quotes the action
+        # reference, is not skipped.
         # Every workflow file, not a named list: an installer added to another
         # workflow must meet the same floor. Only the action's own `with:`
         # input counts; a `cosign-release` under `env:` never reaches it.
@@ -2214,7 +2215,7 @@ class WorkflowWiring(unittest.TestCase):
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
             wf = path.name
             for block in steps(wf):
-                if not any(re.search(r"uses:\s*sigstore/cosign-installer@", line) for line in block):
+                if not any(re.search(r"""uses:\s*["']?sigstore/cosign-installer@""", line) for line in block):
                     continue
                 pins = artifact_keys(block, ("cosign-release",))
                 self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
