@@ -33,6 +33,40 @@ pub fn sealed_path(path: &Path, seq: u64) -> PathBuf {
     sibling(path, &format!("{seq:0SEQ_DIGITS$}"))
 }
 
+/// An I/O error from the log, named: the operation, the path, the cause.
+#[derive(Debug)]
+struct Named {
+    text: String,
+    source: io::Error,
+}
+
+impl std::fmt::Display for Named {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for Named {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// Name `op` and `path` in an I/O error the log returns, keeping its kind
+/// (callers and the degraded-cause mapping read the kind). Already-named
+/// errors pass through unchanged.
+pub(crate) fn ctx<'a>(op: &'a str, path: &'a Path) -> impl FnOnce(io::Error) -> io::Error + 'a {
+    move |e| {
+        if e.get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Named>)
+        {
+            return e;
+        }
+        let text = format!("audit log: {op} {}: {e}", path.display());
+        io::Error::new(e.kind(), Named { text, source: e })
+    }
+}
+
 /// `<path>.<suffix>`.
 pub(crate) fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
@@ -60,11 +94,11 @@ pub fn list_segments(path: &Path) -> io::Result<Vec<Segment>> {
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e),
+        Err(e) => return Err(ctx("list", &dir)(e)),
     };
     let mut out = Vec::new();
     for entry in entries {
-        let entry = entry?;
+        let entry = entry.map_err(ctx("list", &dir))?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         let Some(rest) = name.strip_prefix(base).and_then(|r| r.strip_prefix('.')) else {
@@ -94,7 +128,9 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
         } else {
             parent
         };
-        File::open(dir)?.sync_all()?;
+        File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(ctx("sync", dir))?;
     }
     #[cfg(not(unix))]
     let _ = path;
@@ -103,6 +139,10 @@ pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
 
 /// The first non-empty line of `path`, read through a 4 MiB window.
 pub(crate) fn read_first_line(path: &Path) -> io::Result<Option<String>> {
+    read_first_line_raw(path).map_err(ctx("read", path))
+}
+
+fn read_first_line_raw(path: &Path) -> io::Result<Option<String>> {
     let file = File::open(path)?;
     let mut buf = Vec::new();
     file.take(MAX_TAIL_SCAN_BYTES).read_to_end(&mut buf)?;
@@ -186,16 +226,16 @@ pub(crate) fn encode_hwm(hw: &HighWater, secret: &[u8], key_id: &str) -> io::Res
 /// Write `hw` over `<path>.hwm` at offset 0 (one write, fixed length).
 pub(crate) fn write_hwm(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()> {
     let hwm = sibling(path, "hwm");
-    let mut f = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
-        .open(hwm)?;
-    f.write_all(bytes)?;
-    if sync {
-        f.sync_all()?;
-    }
-    Ok(())
+        .open(&hwm)
+        .and_then(|mut f| {
+            f.write_all(bytes)?;
+            if sync { f.sync_all() } else { Ok(()) }
+        })
+        .map_err(ctx("write", &hwm))
 }
 
 /// Read `<path>.hwm`. `None` when it is missing, torn (wrong length),

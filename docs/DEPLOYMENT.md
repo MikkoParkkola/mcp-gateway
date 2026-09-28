@@ -200,7 +200,7 @@ never refused.
 | Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
-| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown, reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
+| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown (for stdio, when the client closes stdin), reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
 
 While any of the three is on, the modern protocol included, the chart renders the
 Deployment with `strategy: Recreate`, because a rolling update runs the old and new
@@ -837,6 +837,12 @@ security:
     enabled: true
     path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 ```
+
+One gateway process writes an audit log path. A second one on the same path is refused at
+startup, after waiting up to 10 seconds for a
+restarting predecessor to exit. Replicas must not share a log path: give each replica its own
+volume, or put the pod name in the path. Keep the log on a local filesystem or one with working
+file locks (UPGRADING-4.0 item 49).
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
 
