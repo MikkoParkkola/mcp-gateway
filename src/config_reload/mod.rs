@@ -1435,14 +1435,6 @@ pub struct ReloadContext {
     load: LoadPatch,
     /// Starts `load` on a thread of its own.
     spawn: SpawnLoad,
-    /// One load thread at a time, held until that thread exits.
-    ///
-    /// The reload lock alone does not bound threads: a reload whose future is
-    /// dropped (a client that disconnects, a caller's timeout) releases the
-    /// lock while its read is still stalled, and the next reload would start
-    /// another. The permit travels into the thread and is released only when
-    /// that read returns.
-    load_slot: Arc<tokio::sync::Semaphore>,
 }
 
 /// The reload's file load; a field so a test can stall or fail it.
@@ -1491,7 +1483,6 @@ impl ReloadContext {
             identity_grants: None,
             load: load_config_patch,
             spawn: spawn_load_thread,
-            load_slot: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -1744,9 +1735,17 @@ impl ReloadContext {
     /// FUSE mount that read blocks for as long as the mount does. Awaiting it
     /// here keeps the workers free and lets shutdown drop this future; nothing
     /// the thread computes is published unless this future is still waiting.
-    /// Both failure arms refuse the reload, as a failed load always has.
+    /// Both failure arms refuse the reload, as a failed load always has. A
+    /// panicking load is a refusal only where panics unwind: the release
+    /// profile aborts on any panic, here as everywhere else.
     async fn load_off_worker(&self) -> std::result::Result<EvaluatedReload, String> {
-        let slot = Arc::clone(&self.load_slot)
+        // The reload lock alone does not bound threads: a reload whose future
+        // is dropped (a client that disconnects, a caller's timeout) releases
+        // the lock while its read is still stalled. The permit travels into the
+        // thread and is released only when that read returns.
+        let slot = self
+            .registry
+            .reload_read_slot()
             .acquire_owned()
             .await
             .map_err(|_| "config reload load slot closed".to_owned())?;
@@ -1759,7 +1758,7 @@ impl ReloadContext {
         );
         (self.spawn)(Box::new(move || {
             // Released when the read returns, not when the reload that asked
-            // for it gives up (see `load_slot`).
+            // for it gives up.
             let _slot = slot;
             drop(done.send(load(&path, &live, &env)));
         }))

@@ -22,10 +22,16 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 /// A context with no backends, no env files and no grants file.
 fn context() -> ReloadContext {
+    context_on(Arc::new(BackendRegistry::new()))
+}
+
+/// As [`context`], on a registry another context may share, as the watcher,
+/// the admin API and the meta-tool share the gateway's.
+fn context_on(registry: Arc<BackendRegistry>) -> ReloadContext {
     ReloadContext::new(
         PathBuf::from("unused-the-load-is-injected.yaml"),
         Arc::new(LiveConfig::new(Config::default())),
-        Arc::new(BackendRegistry::new()),
+        registry,
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     )
@@ -185,14 +191,15 @@ fn s5_load(
 
 /// A cancelled reload whose read is still stalled must not let the next
 /// reload start a second read thread: a client retrying a reload during an
-/// NFS stall would otherwise add one stuck thread per attempt.
+/// NFS stall would otherwise add one stuck thread per attempt. The two
+/// reloads use different contexts on one registry, as the watcher and the
+/// admin API do.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s5_a_cancelled_stalled_reload_starts_no_second_read() {
-    let ctx = Arc::new(context().with_load(s5_load));
-    let first = tokio::spawn({
-        let ctx = Arc::clone(&ctx);
-        async move { ctx.reload_outcome().await }
-    });
+    let registry = Arc::new(BackendRegistry::new());
+    let first_ctx = Arc::new(context_on(Arc::clone(&registry)).with_load(s5_load));
+    let ctx = Arc::new(context_on(registry).with_load(s5_load));
+    let first = tokio::spawn(async move { first_ctx.reload_outcome().await });
     tokio::time::timeout(DEADLINE, async {
         while S5_ENTRIES.load(Ordering::SeqCst) == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
