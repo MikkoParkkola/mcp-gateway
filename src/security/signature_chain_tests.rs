@@ -381,6 +381,9 @@ fn oversized_chain_refused_before_verify() {
         }
         let total = serde_json::to_vec(&chain).expect("json").len();
         if total > 16 * 1024 {
+            // A broken signature proves the cap runs before verification.
+            let mut chain = chain;
+            chain[1]["sig"] = json!(STANDARD.encode([0_u8; 64]));
             assert_eq!(verify_with(&chain, 100), Err(ChainRefusal::Size), "n={n}");
             refused = true;
             break;

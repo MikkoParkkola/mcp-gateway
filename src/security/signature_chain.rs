@@ -205,8 +205,29 @@ pub(crate) fn content_digest(result: &Value) -> std::result::Result<String, Chai
     Ok(sha256_hex(&bytes))
 }
 
-fn json_len(value: &Value) -> usize {
-    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+/// Counts serialized bytes and stops at the cap, so an oversized chain is
+/// never copied into a second buffer just to be measured.
+struct CappedSink {
+    len: usize,
+    cap: usize,
+}
+
+impl std::io::Write for CappedSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.len += bytes.len();
+        if self.len > self.cap {
+            return Err(std::io::ErrorKind::FileTooLarge.into());
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn exceeds(value: &Value, cap: usize) -> bool {
+    serde_json::to_writer(&mut CappedSink { len: 0, cap }, value).is_err()
 }
 
 fn is_digest(value: Option<&String>) -> bool {
@@ -254,14 +275,14 @@ pub(crate) fn verify_chain(
     now: u64,
 ) -> std::result::Result<Vec<ChainLink>, ChainRefusal> {
     // 1. Size caps before anything is parsed or verified, then schema.
-    if json_len(chain) > MAX_CHAIN_BYTES {
+    if exceeds(chain, MAX_CHAIN_BYTES) {
         return Err(ChainRefusal::Size);
     }
     let items = chain.as_array().ok_or(ChainRefusal::Schema)?;
     if items.len() >= policy.max_links {
         return Err(ChainRefusal::Size);
     }
-    if items.iter().any(|item| json_len(item) > MAX_LINK_BYTES) {
+    if items.iter().any(|item| exceeds(item, MAX_LINK_BYTES)) {
         return Err(ChainRefusal::Size);
     }
     let links = items
