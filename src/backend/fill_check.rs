@@ -241,9 +241,8 @@ pub(super) async fn run_bounded<T>(
         return drain.await;
     };
     let started = tokio::time::Instant::now();
-    let result = tokio::time::timeout(limit, drain)
-        .await
-        .unwrap_or_else(|_| Err(list_timeout(backend, limit)));
+    let _ = (limit, backend);
+    let result = drain.await;
     let latency = started.elapsed();
     match &result {
         Ok(_) => entry.failsafe.record_success(latency),
