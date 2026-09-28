@@ -2265,7 +2265,7 @@ class WorkflowWiring(unittest.TestCase):
                     continue  # another repository (the Homebrew tap)
                 sites += 1
                 named += [f"{name}: ref {r}" for r in artifact_keys(block, ("ref",))]
-            if re.search(r"(?m)^    uses: \./\.github/workflows/", body):
+            if re.search(r"""(?m)^    uses:\s*["']?\./\.github/workflows/""", body):
                 sites += 1
                 named += [f"{name}: with ref {r}" for r in re.findall(r"(?m)^      (?:ref|tag):\s*(.+?)\s*$", body)]
         self.assertGreaterEqual(sites, 10, "the checkout and call inventory shrank")
@@ -2335,7 +2335,7 @@ class WorkflowWiring(unittest.TestCase):
         # package manager, so it must say it will not.
         release = WORKFLOWS / "release.yml"
         called = re.findall(r"""(?m)^    uses:\s*["']?\./\.github/workflows/([^"'\s#]+)""", release.read_text(encoding="utf-8"))
-        self.assertIn("task-sdk-recovery.yml", called, "the called-workflow inventory shrank")
+        self.assertEqual(sorted(called), ["packaged-suite.yml", "task-sdk-recovery.yml"], "the called-workflow inventory changed")
         found = []
         for wf in ["release.yml", *called]:
             for block in steps(wf):

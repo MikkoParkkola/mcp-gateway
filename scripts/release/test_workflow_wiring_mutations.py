@@ -1480,6 +1480,8 @@ CASES += [
      '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - "uses": \'actions/cache/restore@v4\'\n        with:\n          path: target\n          key: release\n', CAUGHT),
     ("called-recovery-restores-the-rust-cache", "task-sdk-recovery.yml",
      '      # No build cache: the release calls this too, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("called-packaged-suite-restores-the-rust-cache", "packaged-suite.yml",
+     "      # No build cache: the release calls this, and a restored cache is input\n      # nobody reviewed at the tag.\n", "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n", CAUGHT),
     ("release-setup-node-caches-again", "release.yml",
      "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n", CAUGHT),
     # Equivalent spellings are not a cache: a quoted callee is still scanned,
