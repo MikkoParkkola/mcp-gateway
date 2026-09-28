@@ -204,6 +204,13 @@ pub enum BridgeError {
     },
     /// The backend kept asking past the retry bound.
     RoundsExhausted,
+    /// A retry round claimed `input_required` in a shape the gateway cannot carry.
+    ///
+    /// Not a completed call: the backend said it stopped to ask, so nothing
+    /// here proves it acted, and settling the key as completed would serve the
+    /// broken body to every retry. It leaves the key on its release default,
+    /// like the other refusals that end an unanswered question.
+    MalformedInterim,
     /// The backend asked for more requests in total than the bound allows.
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
@@ -488,6 +495,9 @@ impl InputBridge<'_> {
             dispatched = true;
             match crate::protocol::mrtr::InputRequired::from_result(&result) {
                 Some(next) => interim = next,
+                None if crate::protocol::mrtr::InputRequired::claims_input_required(&result) => {
+                    return Err(BridgeError::MalformedInterim);
+                }
                 None => return Ok(result),
             }
         }
