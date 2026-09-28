@@ -53,7 +53,6 @@ trap cleanup EXIT
   cd "$work"
   HOME="$home" "$bin" init --profile local --output gateway.yaml >/dev/null
 )
-"$repo_root/scripts/dev/smoke-fixture-capability.sh" "$work"
 
 # The fixture listens only on this private network; it is not published.
 docker network create "$network" >/dev/null
@@ -73,10 +72,11 @@ if [[ -z "$fixture_up" ]]; then
   docker logs "$fixture" >&2 || true
   exit 1
 fi
-# An address, not the container name: the gateway would resolve a name through
-# its SSRF-pinning resolver, which refuses the private address it maps to.
+# The fixture's address on the private network, named as the gateway's
+# capability proxy below.
 fixture_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$fixture")"
 [[ -n "$fixture_ip" ]] || { echo "smoke fixture container has no address" >&2; exit 1; }
+"$repo_root/scripts/dev/smoke-fixture-capability.sh" "$work" "http://$fixture_ip:8080"
 
 # Mirrors deploy/single-node/docker-compose.yaml, including the reason. A
 # container must bind 0.0.0.0 to receive anything, and the init config keeps
@@ -96,8 +96,6 @@ docker run -d \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \
   -p "127.0.0.1:$port:39400" \
-  -e HTTP_PROXY="http://$fixture_ip:8080" \
-  -e NO_PROXY= \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
   -v "$work/gateway.yaml:/config.yaml:ro" \
