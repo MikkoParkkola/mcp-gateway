@@ -246,28 +246,75 @@ fn notice_entries_in_source() -> usize {
         .count()
 }
 
-/// The intro's lists: the two refuses-start lists agree, every listed number
-/// is a real section, the notice list is as long as the notice the binary
-/// prints, and every section is either in the notice list or explained in
-/// the no-notice paragraph.
+/// The line that introduces each intro list, blank line included.
+const NOTICE_LEAD: &str = "`RUST_LOG` filters cannot swallow it.\n\n";
+const NO_NOTICE_LEAD: &str =
+    "The items below print no notice: read them here before upgrading.\n\n";
+const REFUSES_LEAD: &str = "deployment.**\n\n";
+
+/// The item numbers of the intro list after `lead`: one `- Item N` bullet per
+/// line, optionally `- Item N, <condition>`, up to the next blank line.
+///
+/// One line per item, in ascending order, is what lets two changes that each
+/// add an item merge without a conflict. The lists used to be inline
+/// sentences, so every merge to the release line conflicted with every open
+/// change that added an item. Ascending order fixes where a new item goes.
+fn intro_bullets(lead: &str) -> BTreeSet<u32> {
+    let mut items = BTreeSet::new();
+    let mut previous = 0;
+    for line in intro_span(lead, "\n\n").lines() {
+        let rest = line
+            .strip_prefix("- Item ")
+            .unwrap_or_else(|| panic!("not a `- Item N` bullet: {line:?}"));
+        let (number, condition) = rest.split_once(", ").unwrap_or((rest, ""));
+        let n: u32 = number
+            .parse()
+            .unwrap_or_else(|_| panic!("not a `- Item N` bullet: {line:?}"));
+        assert!(
+            rest.len() == number.len() || !condition.is_empty(),
+            "a bullet's condition follows `, `: {line:?}"
+        );
+        assert!(n > previous, "item {n} is out of order after {previous}");
+        previous = n;
+        items.insert(n);
+    }
+    assert!(!items.is_empty(), "the list after {lead:?} is empty");
+    items
+}
+
+/// Each intro list is one `- Item N` bullet per line, in ascending order.
+#[test]
+fn intro_lists_are_one_item_per_line() {
+    for lead in [NOTICE_LEAD, NO_NOTICE_LEAD, REFUSES_LEAD] {
+        intro_bullets(lead);
+    }
+}
+
+/// The intro's lists: every listed number is a real section, the notice list
+/// is as long as the notice the binary prints, and every section is either in
+/// the notice list or explained in the no-notice paragraph.
 #[test]
 fn intro_lists_cover_every_item() {
     let sections = sections(DOC);
-    let refuses = numbers_in(intro_span("unless one of items ", " refuses it"));
-    let bold = numbers_in(intro_span("**Items ", " refuse the gateway's start"));
-    assert_eq!(refuses, bold, "the two refuses-start lists differ");
+    let refuses = intro_bullets(REFUSES_LEAD);
     assert!(
         refuses.len() >= 21,
         "the refuses-start list shrank to {refuses:?}"
     );
-    let notice = numbers_in(intro_span("notice to stderr listing\nitems ", " below"));
+    let notice = intro_bullets(NOTICE_LEAD);
     assert_eq!(
         notice.len(),
         notice_entries_in_source(),
         "the intro's notice list and NOTICE_4_0_0_ITEMS differ in length"
     );
-    let explained = intro_span("The rest of the list has no startup notice.", "**Items ");
-    let no_notice = numbers_after_item(explained);
+    let explained = intro_span(
+        "The rest of the list has no startup notice.",
+        "**These items refuse",
+    );
+    // The reasons are prose ("Items 5 and 9 are ..."), the rest are bullets;
+    // `numbers_after_item` reads both, and `intro_bullets` pins the bullets.
+    let mut no_notice = numbers_after_item(explained);
+    no_notice.extend(intro_bullets(NO_NOTICE_LEAD));
     let both: Vec<_> = notice.intersection(&no_notice).collect();
     assert!(
         both.is_empty(),

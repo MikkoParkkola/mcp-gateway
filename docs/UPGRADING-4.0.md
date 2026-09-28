@@ -1,12 +1,38 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 or 54 refuses it
-(listed in bold below).
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of the
+items listed under the bold heading below refuses it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 55 and 58 below, then stamps the new version. The notice is printed rather than logged, so
+the items below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
+
+- Item 1
+- Item 2
+- Item 3
+- Item 4
+- Item 6
+- Item 11
+- Item 23
+- Item 24
+- Item 25
+- Item 26
+- Item 27
+- Item 30
+- Item 31
+- Item 32
+- Item 33
+- Item 34
+- Item 37
+- Item 39
+- Item 43
+- Item 45
+- Item 47
+- Item 48
+- Item 49
+- Item 55
+- Item 58
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -17,12 +43,60 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 83, 84 and 85 print no notice: read them here
-before upgrading.
+that names it. The items below print no notice: read them here before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
-with one warning, and the gateway starts without it.** Read those first if you are
-upgrading a running deployment.
+- Item 14
+- Item 15
+- Item 22
+- Item 28
+- Item 36
+- Item 42
+- Item 50
+- Item 52
+- Item 53
+- Item 61
+- Item 63
+- Item 65
+- Item 66
+- Item 67
+- Item 68
+- Item 70
+- Item 72
+- Item 73
+- Item 74
+- Item 77
+- Item 78
+- Item 83
+- Item 84
+- Item 85
+
+**These items refuse the gateway's start. Read them first if you are upgrading a running
+deployment.**
+
+- Item 2
+- Item 8
+- Item 12
+- Item 13
+- Item 16, only while `trust_caller_identity_headers` is still set
+- Item 17, only for a `key_server` rule without a configured issuer or with a blank matcher
+- Item 27, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
+- Item 29
+- Item 30, only for a bad `GATEWAY_ATTESTATION_MODE`
+- Item 34
+- Item 35
+- Item 37, only above one declared replica
+- Item 38, only for a credential over plain HTTP on a network bind without mTLS
+- Item 39, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+- Item 40, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
+- Item 41, only for an API key configured as plaintext `key`
+- Item 43, only with auth on and no working audit log
+- Item 44, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
+- Item 46, only for `enforce` without a signing key
+- Item 51, only for a `role: admin` rule whose only condition is `domain`
+- Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
+
+**Item 7 permanently fails the backend it names, with one warning, and the gateway starts
+without it.**
 
 ## What changed
 
