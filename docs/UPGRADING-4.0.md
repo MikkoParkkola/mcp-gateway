@@ -34,6 +34,10 @@ the items below, then stamps the new version. The notice is printed rather than 
 - Item 55
 - Item 58
 - Item 59
+- Item 90
+- Item 91
+- Item 92
+- Item 93
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -194,6 +198,12 @@ without it.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
+| 88 | Reserved: lands with #2183 | None yet |
+| 89 | Reserved: lands with #2195 | None yet |
+| 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
+| 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -230,9 +240,10 @@ the supported set as the gateway's own statement of what it speaks, so an invent
 that list was a false claim. Negotiation itself was never affected: `negotiate_version` matches
 exactly, and no conforming client can request a revision that does not exist.
 
-Nothing is rejected. A client naming `2024-10-07` in `initialize` gets `2025-11-25` back —
+Nothing is rejected at `initialize`. A client naming `2024-10-07` there gets `2025-11-25` back —
 the same fallback any unrecognized version string gets, before and after this release
-(`tests/integration.rs:37`). There is no error and no refused session.
+(`tests/integration.rs:37`). There is no error and no refused session. A request that names
+`2024-10-07` in its `MCP-Protocol-Version` header is refused; see item 90.
 
 `2024-11-05` and every later revision negotiate exactly as before. The startup notice advises
 upgrading a client that speaks only `2024-10-07`; in practice such a client would have been
@@ -2240,6 +2251,64 @@ by URL already do:
 
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
+
+## 90. A request header naming an unserved protocol version is refused
+
+3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
+4.0.0 reads it. A header that names a revision the gateway does not serve gets HTTP 400 with
+JSON-RPC error `-32022` ("unsupported protocol version"), and `data.supportedVersions` lists the
+stateless revisions it does serve; the list is empty when `server.modern_protocol` is off.
+`2024-10-07` counts as unserved. A request without the header, or with a served revision, is
+answered as before.
+
+**Action:** a client that sends this header must send a revision the gateway serves, or omit it.
+
+## 91. Agent identity rests on proof, not on a label the caller sends
+
+In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
+query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
+any client could name itself onto the allowlist. Only a proven principal satisfies them now: the
+mTLS client-certificate subject (first SAN URI, else CN) or the `sub` of an agent token the
+gateway validated. The unsigned JWT claim is no longer read; the header and query label are kept
+for telemetry and cost attribution.
+
+A label that differs from the proven principal is refused unless
+`security.agent_identity.principal_labels` lists it for that principal. With mTLS, where subjects
+cannot be compared with short labels, `security.agent_identity.incomparable_proof_sources`
+(for example `[mtls]`) accepts and audits the mismatch for that source only.
+
+**Action:** move callers that relied on a label to mTLS or validated agent tokens. To let a label
+satisfy `require_id` and `known_agents` again, set
+`security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
+their source (item 27). Nothing changes with agent identity disabled.
+
+## 92. Six meta-tools leave the default tool list
+
+`gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
+`gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list` unconditionally.
+Each is now listed only when it can answer: a cost registry, a non-empty playbook engine, a
+configured routing profile, and for statistics `meta_mcp.expose_stats_tool: true`. The default
+HTTP list drops from 17 tools to 11, stdio from 16 to 10.
+
+Every meta-tool name still dispatches by name, over HTTP and stdio alike. A caller that invokes one
+it was not shown gets the tool's own answer: some succeed, others return that tool's own error, and
+none answers "no such tool".
+
+**Action:** a client that calls only what `tools/list` shows reaches these six once the feature
+behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gateway_get_stats`.
+
+## 93. The key server refuses a token request that misses the policy
+
+In 3.x, a token request to the key server whose requested backends or tools did not overlap the
+matching policy rule got an empty scope list, and an empty list means "all": the token reached
+every backend and tool. The exchange now answers 403 and issues no token. A request that leaves
+`backends` or `tools` empty is still granted the rule's full scope, as before.
+
+A rule whose own `backends` list is empty is a different case, covered in item 32.
+
+**Action:** a client that requests scopes must request only ones its matching rule allows. A
+requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
+gets 403 `access_denied`, whose message reads as though no policy matched.
 
 ## Upgrading from 3.5.x: a walkthrough
 
