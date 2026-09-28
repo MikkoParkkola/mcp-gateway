@@ -58,6 +58,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **One gateway writes an audit log path.** The transparency log takes a writer lease on
+  `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
+  error naming the path, whatever the auth setting. A restart overlap waits up to
+  10 seconds (not configurable). Appends no longer take a file lock.
+  `audit show` and the SIEM exporter rescan once when the log rotates under them, and I/O errors
+  from the log name the operation and the path. See UPGRADING item 49.
 - A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
   refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
   idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
@@ -113,11 +119,19 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Fixed
 
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
 - **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
   binaries and image digests handed between jobs expired after a day, so a later re-run
   published a release with no binaries or failed to find the digests. They now last the
   repository's 14-day artifact retention, and a CI check keeps every such handoff there.
-
+- **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
+  row let a release pass while the burnup still listed it as held. A test also pins the
+  approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
+  cannot leave its approval behind.
 - **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
   It used to wait out the request timeout and report a timeout, with the child's stderr already
   discarded. The error now names the exit status and points at the gateway log, where one record
