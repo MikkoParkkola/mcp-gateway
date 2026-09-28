@@ -438,7 +438,7 @@ async fn a_tolerated_missing_grant_file_still_reloads() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = config(dir.path(), true);
     config.security.identity_grants.fail_on_error = false;
-    let s = Started::run(config.clone()).await.unwrap();
+    let s = Box::pin(Started::run(config.clone())).await.unwrap();
     let (live, _) = s.meta.identity_grant_sink();
     assert!(live.read().values().next().is_none());
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
