@@ -270,7 +270,7 @@ command. The OS account is an unauthenticated hint, not an identity. A refused
 change appends nothing. If the grant file is written but the journal append
 fails, the command exits non-zero and says the change may have no
 journal entry. A journal that other users can write to (group or world
-write bit) is not appended to: check its entries against the grant file or
+write bit) refuses the change before the grant file is written: check its entries against the grant file or
 restore a trusted copy, then `chmod go-w` it. A grant file that repeats a grant id is refused until the duplicate is
 removed by hand. The CLI holds a lock file
 beside the grant file across the write and the append, so two CLI runs cannot
