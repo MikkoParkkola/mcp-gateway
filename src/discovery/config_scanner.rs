@@ -308,8 +308,13 @@ impl ConfigScanner {
             .await
             .map_err(|e| Error::Config(format!("Failed to read config: {e}")))?;
 
-        let config: Value = serde_json::from_str(&content)
-            .map_err(|e| Error::Config(format!("Failed to parse JSON: {e}")))?;
+        // VS Code and Cursor write settings.json as JSONC.
+        let config: Value = super::jsonc::strip_jsonc(&content)
+            .ok_or_else(|| Error::Config("Unterminated comment or string in settings".into()))
+            .and_then(|text| {
+                serde_json::from_str(&text)
+                    .map_err(|e| Error::Config(format!("Failed to parse JSON: {e}")))
+            })?;
 
         let mut servers = Vec::new();
 
