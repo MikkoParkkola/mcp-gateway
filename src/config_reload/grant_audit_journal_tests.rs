@@ -243,3 +243,24 @@ async fn unreadable_cause_survives_a_failed_plan_write() {
         "{got:?}"
     );
 }
+
+/// A restart that spells the same grant file differently (here a symlink)
+/// keeps the consumed journal ids, so no entry is recorded a second time.
+#[cfg(unix)]
+#[test]
+fn a_path_alias_keeps_the_consumed_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("grants.yaml");
+    std::fs::write(&real, "x").unwrap();
+    let alias = dir.path().join("alias.yaml");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let mut state = super::grant_audit_plan::State::fresh(&real);
+    state.consumed.insert("e1".to_string());
+
+    let state = state.for_path(&alias);
+
+    assert!(
+        state.consumed.contains("e1"),
+        "consumed ids were dropped for another spelling of the same file"
+    );
+}
