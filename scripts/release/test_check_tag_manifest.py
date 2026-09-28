@@ -2244,7 +2244,8 @@ class WorkflowWiring(unittest.TestCase):
         # `uses: *installer`, flow-style or not, installs cosign under a name
         # no check sees. An alias needs an anchor in the same file, so no
         # anchor anywhere means no alias can resolve. None is used today.
-        anchor = re.compile(r"(?:^|[\s:\[{,])&[A-Za-z_][\w-]*(?=\s|$|[,\]}])")
+        # Any anchor name YAML allows (digits too); `&&` is a shell operator.
+        anchor = re.compile(r"(?:^|[\s:\[{,])&(?!&)[^\s,\[\]{}]+")
         found = [
             f"{path.name}:{number}: {line.strip()}"
             for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])

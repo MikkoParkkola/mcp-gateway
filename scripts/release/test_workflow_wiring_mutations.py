@@ -1448,6 +1448,10 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: &cosign_installer sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
      "      - { uses: *cosign_installer, with: { cosign-release: v2.5.2 } }\n", CAUGHT),
+    ("cosign-installer-reused-through-a-numeric-alias", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: &1 sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - uses: *1\n        with:\n          cosign-release: v2.5.2\n", CAUGHT),
     # The installer's rehearsal exemption applies to it quoted as well.
     ("cosign-installer-quoted-keeps-its-exemption", "ci.yml",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
