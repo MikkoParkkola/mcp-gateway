@@ -41,3 +41,47 @@ async fn audit_log_open_failure_with_auth_off_still_starts() {
     let gateway = gateway(false, &dir).await;
     assert!(gateway.build_meta_mcp().await.is_ok());
 }
+
+/// R3: another gateway already writes the log. The start is refused whatever
+/// the auth setting, with the lease refusal named (not the generic
+/// "audit log must open" error), because two writers fork the chain.
+async fn refused_while_leased(auth: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.jsonl");
+    let held = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let _holder =
+        crate::security::transparency_log::TransparencyLogger::open(std::sync::Arc::new(held))
+            .expect("the first writer opens");
+    let mut config = Config::default();
+    config.auth.enabled = auth;
+    config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
+    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.path = path.to_string_lossy().into_owned();
+    let gateway = Gateway::new(config).await.expect("the config is valid");
+    let err = match gateway.build_meta_mcp().await {
+        Ok(_) => panic!("auth={auth}: started beside another writer of the log"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("another gateway process") && err.contains(&path.display().to_string()),
+        "auth={auth}: {err}"
+    );
+    assert!(
+        !err.contains("auth is enabled, so the audit log"),
+        "auth={auth}: reported as a generic open failure: {err}"
+    );
+}
+
+#[tokio::test]
+async fn a_leased_log_refuses_start_with_auth_on() {
+    refused_while_leased(true).await;
+}
+
+#[tokio::test]
+async fn a_leased_log_refuses_start_with_auth_off() {
+    refused_while_leased(false).await;
+}

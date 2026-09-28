@@ -70,12 +70,11 @@ pub(super) async fn start_stdio_backend(
             .with_category("backend_stdio"),
         );
     }
-    let timeout = backend.timeout.min(START_CAP);
     let transport = StdioTransport::new(
         command,
         isolated_package_manager_env(name, command, backend.env.clone()),
         cwd.clone(),
-        timeout,
+        backend.timeout,
         protocol_version.clone(),
     );
     // The transport logs an early exit's redacted stderr tail as the `stderr`
@@ -83,7 +82,9 @@ pub(super) async fn start_stdio_backend(
     // second API (#526).
     let capture = ExcerptCapture::default();
     let log = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
-    let started = tokio::time::timeout(timeout, transport.start().with_subscriber(log)).await;
+    // The backend's own timeout bounds each request inside `start`; the cap
+    // bounds the whole start, spawn and handshake included.
+    let started = tokio::time::timeout(START_CAP, transport.start().with_subscriber(log)).await;
     let _ = transport.close().await;
     Some(match started {
         Ok(Ok(())) => {
@@ -98,10 +99,7 @@ pub(super) async fn start_stdio_backend(
         }
         Err(_) => CheckResult::fail(
             &label,
-            format!(
-                "no answer to initialize within {}s (capped at 15s)",
-                timeout.as_secs()
-            ),
+            format!("start did not finish within {}s", START_CAP.as_secs()),
         )
         .with_category("backend_stdio"),
     })
@@ -168,6 +166,31 @@ mod tests {
         assert!(
             located.is_none_or(|r| !r.detail.contains("exit status")),
             "the locate probe ran the command"
+        );
+    }
+
+    /// T7f: a start that never finishes is cut at the cap, whatever the
+    /// backend's own (per-request) timeout.
+    #[tokio::test(start_paused = true)]
+    async fn t7f_a_hung_start_ends_at_the_cap() {
+        let mut backend = stdio("sh -c 'exec sleep 7200'", &[]);
+        backend.timeout = Duration::from_secs(3600);
+        // The clock is paused, so this is virtual time: the message names the
+        // cap whichever bound fired, and only the elapsed time tells them apart.
+        let began = tokio::time::Instant::now();
+        let result = start_stdio_backend("b", &backend)
+            .await
+            .expect("a stdio row");
+        let elapsed = began.elapsed();
+        assert!(
+            (START_CAP..START_CAP * 4).contains(&elapsed),
+            "the cap, not the backend timeout, ended the start: {elapsed:?}"
+        );
+        assert_eq!(result.status, CheckStatus::Fail, "{}", result.detail);
+        assert!(
+            result.detail.contains("did not finish within 15s"),
+            "{}",
+            result.detail
         );
     }
 
