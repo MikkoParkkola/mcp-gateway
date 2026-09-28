@@ -398,4 +398,76 @@ mod tests {
         assert_eq!(f.severity, Severity::High);
         assert_eq!(f.location, FindingLocation::ResponseContent);
     }
+
+    // ── Object keys (#2114) ───────────────────────────────────────────────────
+
+    /// Plainly synthetic 40-char GitHub-shaped tokens, built at runtime like
+    /// the fixture above so no token-shaped literal sits in the source.
+    fn token_a() -> String {
+        format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz1234567890")
+    }
+
+    fn token_b() -> String {
+        format!("{}{}0", "ghp_", "EXAMPLE".repeat(5))
+    }
+
+    #[test]
+    fn redacts_credential_in_object_key() {
+        let mut v = json!({ token_a(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 1, "one finding for the key: {findings:?}");
+        assert!(findings[0].description.contains("(object key)"));
+        assert_eq!(v, json!({ "[REDACTED:credential]": 1 }));
+    }
+
+    /// Synthetic 0x + 64-hex key. It sorts BEFORE `[`, so it is visited ahead
+    /// of the clean `[REDACTED:credential]` key: a rebuild that does not
+    /// reserve clean names first would let that clean key overwrite it.
+    fn hex_key() -> String {
+        format!("0x{}", "ab".repeat(32))
+    }
+
+    #[test]
+    fn redacted_keys_stay_unique() {
+        let mut v = json!({ hex_key(): 1, token_b(): 2, "[REDACTED:credential]": 3 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 2);
+        // Clean keys keep their names; redacted keys take suffixes in map order.
+        assert_eq!(
+            v,
+            json!({
+                "[REDACTED:credential]": 3,
+                "[REDACTED:credential]#2": 1,
+                "[REDACTED:credential]#3": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn redacts_nested_key_and_keeps_surrounding_text() {
+        let mut v = json!({ "outer": { format!("x-{} y", token_a()): "v" } });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(v, json!({ "outer": { "x-[REDACTED:credential] y": "v" } }));
+    }
+
+    #[test]
+    fn clean_keys_are_untouched() {
+        let mut v = json!({ "plain": "text", "nested": { "also_plain": 1 } });
+        let original = v.clone();
+        assert!(redactor().scan_and_redact(&mut v).is_empty());
+        assert_eq!(v, original);
+    }
+
+    #[test]
+    fn key_finding_does_not_carry_the_secret() {
+        let mut v = json!({ token_a(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            !findings[0].matched.contains("ghp_"),
+            "a 40-char token survives truncation whole: {:?}",
+            findings[0].matched
+        );
+    }
 }

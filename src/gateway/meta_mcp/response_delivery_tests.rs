@@ -547,6 +547,7 @@ fn firewall_delivery_native_input_required_preserves_questions_and_state() {
     for protected in [
         "requestState",
         "inputRequests",
+        "inputRequests_key",
         "unprotected_metadata",
         "clean",
     ] {
@@ -560,6 +561,10 @@ fn firewall_delivery_native_input_required_preserves_questions_and_state() {
         match protected {
             "requestState" => result["requestState"] = json!(CANARY),
             "inputRequests" => result["inputRequests"]["q1"]["params"]["unknown"] = json!(CANARY),
+            // #2114: the credential sits only in the map key the client echoes.
+            "inputRequests_key" => {
+                result["inputRequests"][CANARY] = json!({"method":"elicitation/create"});
+            }
             "unprotected_metadata" => result["_meta"]["note"] = json!(CANARY),
             "clean" => {}
             _ => unreachable!(),
@@ -574,7 +579,10 @@ fn firewall_delivery_native_input_required_preserves_questions_and_state() {
             &targets(),
             ResponseMutationPolicy::PreserveInputRequired,
         );
-        if matches!(protected, "requestState" | "inputRequests") {
+        if matches!(
+            protected,
+            "requestState" | "inputRequests" | "inputRequests_key"
+        ) {
             assert!(response.delivery_refusal, "protected field {protected}");
             assert_eq!(
                 serde_json::to_value(&response).unwrap(),
