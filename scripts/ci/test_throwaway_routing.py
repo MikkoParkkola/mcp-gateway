@@ -165,6 +165,8 @@ def only_throwaway_tests(rc: list) -> None:
         base = event("throwaway", var)
         base["inputs"] = {}
         result: dict[str, str] = {}
+        # failure() is true when any ancestor failed, not only a direct need.
+        failed_upstream: dict[str, bool] = {}
 
         def resolve(name, stack=()):
             if name in result:
@@ -179,7 +181,7 @@ def only_throwaway_tests(rc: list) -> None:
             # Only declared dependencies exist in `needs`, as on GitHub.
             ctx = dict(base, needs=declared,
                        _status={"cancelled": False, "success": ok,
-                                "failure": any(result[n] == "failure" for n in needs)})
+                                "failure": any(result[n] == "failure" or failed_upstream[n] for n in needs)})
             cond = str(job.get("if", ""))
             if not cond:
                 runs = ok
@@ -188,6 +190,7 @@ def only_throwaway_tests(rc: list) -> None:
             else:
                 runs = evaluate(cond, ctx)
             result[name] = outcome if runs else "skipped"
+            failed_upstream[name] = any(result[n] == "failure" or failed_upstream[n] for n in needs)
             return result[name]
 
         for name in jobs:
