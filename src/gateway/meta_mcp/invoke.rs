@@ -25,7 +25,8 @@ use crate::gateway::authz::{Authorize as _, Emit};
 use crate::gateway::input_bridge::BridgeError;
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::GrantSubject;
-use crate::identity_propagation::{CallerProof, CallerProvenance};
+use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
+use crate::personal_accounts::identity::Principal;
 use crate::playbook::PlaybookEngine;
 use crate::protocol::LoggingLevel;
 use crate::protocol::mrtr::{InputRequired, Refusal};
@@ -148,6 +149,8 @@ mod audit;
 mod r2_check;
 mod withheld_evidence;
 use r2_check::miss_with_hint;
+// #1961: the account-bound MCP mint, kept out of this file's size baseline.
+mod account_mint;
 
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
@@ -1732,7 +1735,7 @@ impl MetaMcp {
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            let resolved = self.resolve_caller_credential(server, &idp_cfg, verified_identity);
+            let resolved = self.resolve_caller_credential_as(server, &idp_cfg, caller_proof);
             self.with_connect_offer(resolved.await, verified_identity)
                 .await?
         } else {
@@ -3039,6 +3042,18 @@ impl MetaMcp {
         idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<CallerCredential> {
+        let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
+        self.resolve_caller_credential_as(server, idp_cfg, caller)
+            .await
+    }
+
+    /// With the caller's provenance, so the sole operator can be served (#1961).
+    async fn resolve_caller_credential_as(
+        &self,
+        server: &str,
+        idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
+        caller: CallerProof<'_>,
+    ) -> Result<CallerCredential> {
         use crate::identity_propagation::BackendDescriptor;
 
         // Audit context (MIK-6740, IDP4): every mint and every fail-closed
@@ -3046,7 +3061,19 @@ impl MetaMcp {
         // route. Only subject/backend/audience/reason reach the log — never the
         // minted credential bytes.
         let audit_logger = self.transparency_logger.as_ref();
-        let subject_id = crate::identity_propagation::audit_subject(verified_identity);
+        // #1961: the vault's own sole-operator predicate (as REST); else verified only.
+        let descriptor_id = self
+            .backends
+            .get(server)
+            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        let managed_vault = self
+            .account_strategies
+            .managed_vault(descriptor_id.as_deref());
+        let principal = match &managed_vault {
+            Some(vault) => vault.principal(caller),
+            None => caller.verified().map(Principal::Verified),
+        };
+        let subject_id = principal.map_or_else(|| audit_subject(None), Principal::stable_actor_id);
         let audience = idp_cfg.audience.as_str();
 
         let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
@@ -3069,10 +3096,7 @@ impl MetaMcp {
 
         // Vault is installed only for a compiled account-bound backend. A raw
         // declaration cannot borrow a global strategy, even when optional.
-        let account_bound = self
-            .backends
-            .get(server)
-            .is_some_and(|backend| backend.account_descriptor_id().is_some());
+        let account_bound = descriptor_id.is_some();
         if vault && !account_bound {
             let msg = "raw Vault identity propagation requires an account descriptor";
             return refuse(msg.to_string()).await;
@@ -3099,7 +3123,7 @@ impl MetaMcp {
             return refuse(msg).await;
         }
 
-        let Some(identity) = verified_identity else {
+        let Some(principal) = principal else {
             return refuse("the request carries no verified end-user identity".to_string()).await;
         };
         // An explicit account reference requires its own installed strategy.
@@ -3125,8 +3149,7 @@ impl MetaMcp {
         // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
         // whose `propagate` is `prepare` minus the lease. Keeping the lease is
         // the only difference: headers, binding, refusals and audit are unchanged.
-        match self
-            .mint_held(server, &strategy, identity, &descriptor)
+        match account_mint::mint_held(managed_vault.as_ref(), &strategy, principal, &descriptor)
             .await
         {
             Ok((cred, managed)) => {
@@ -3166,44 +3189,6 @@ impl MetaMcp {
                     let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
                     crate::personal_accounts::refusal::mark(refused, &e, account_id)
                 }),
-        }
-    }
-
-    /// Mint for `server`, keeping the managed lease when the backend's account
-    /// descriptor is installed with vault custody (A11-e′). The typed vault is
-    /// the SAME instance as `strategy` (`InstalledAccount`), and its `propagate`
-    /// is `prepare` minus the lease, so keeping the lease is the only difference.
-    async fn mint_held(
-        &self,
-        server: &str,
-        strategy: &Arc<dyn crate::identity_propagation::IdentityPropagation>,
-        identity: &crate::key_server::oidc::VerifiedIdentity,
-        descriptor: &crate::identity_propagation::BackendDescriptor,
-    ) -> std::result::Result<
-        (
-            crate::identity_propagation::PropagatedCredential,
-            Option<crate::personal_accounts::ManagedLease>,
-        ),
-        crate::identity_propagation::PropagationError,
-    > {
-        let managed_vault = self
-            .backends
-            .get(server)
-            .and_then(|backend| backend.account_descriptor_id().map(str::to_owned))
-            .and_then(|id| self.account_strategies.installed(&id))
-            .and_then(|installed| installed.managed.clone());
-        match managed_vault {
-            Some(vault) => vault
-                .prepare_held(
-                    crate::personal_accounts::identity::Principal::Verified(identity),
-                    descriptor,
-                )
-                .await
-                .map(|(cred, managed)| (cred, Some(managed))),
-            None => strategy
-                .propagate(identity, descriptor)
-                .await
-                .map(|cred| (cred, None)),
         }
     }
 

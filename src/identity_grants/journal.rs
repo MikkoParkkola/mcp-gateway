@@ -389,13 +389,6 @@ pub(crate) struct ParsedJournal {
 
 /// Parse journal bytes. A final line with no newline is a CLI mid-append and
 /// is left for the next read; a bad line that later bytes follow is torn.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "the gateway reads the journal once ingestion lands"
-    )
-)]
 #[must_use]
 pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
     let mut parsed = ParsedJournal::default();
@@ -404,9 +397,128 @@ pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
     lines.pop();
     for line in lines.into_iter().filter(|line| !line.is_empty()) {
         match serde_json::from_slice::<JournalEntry>(line) {
-            Ok(entry) => parsed.entries.push(entry),
-            Err(_) => parsed.torn.push(sha256_tag(line)),
+            // A later format may change what a line means: refuse it like a
+            // damaged line (reported, never consumed) rather than guess.
+            Ok(entry) if entry.v == JOURNAL_VERSION => parsed.entries.push(entry),
+            Ok(_) | Err(_) => parsed.torn.push(sha256_tag(line)),
         }
     }
     parsed
+}
+
+/// The rows the gateway serves: the last row per grant id, as
+/// `LocalIdentityGrantStore::from_grants` keeps it, in grant-id order.
+#[must_use]
+pub(crate) fn served_rows(
+    rows: &[IdentityGrant],
+) -> std::collections::BTreeMap<&str, &IdentityGrant> {
+    rows.iter()
+        .map(|row| (row.grant_id.as_str(), row))
+        .collect()
+}
+
+/// The served rows active at `now` by `IdentityGrant::is_active_at`: what a
+/// startup snapshot records as `loaded`.
+#[must_use]
+pub(crate) fn active_rows(rows: &[IdentityGrant], now: DateTime<Utc>) -> Vec<&IdentityGrant> {
+    served_rows(rows)
+        .into_values()
+        .filter(|row| row.is_active_at(now))
+        .collect()
+}
+
+/// What a gateway reload reads under the journal lock: the grant file, parsed
+/// or refused, and the journal.
+pub(crate) struct LockedRead {
+    /// Held until dropped; the caller keeps it across publish and record.
+    /// `None` on a read-only filesystem, where the lock file cannot exist
+    /// and nothing can write (see [`read_locked`]).
+    pub(crate) guard: Option<crate::fs_lock::ExclusiveFileLock>,
+    /// The grant file, or the reason it was refused.
+    pub(crate) grants: Result<IdentityGrantFile, String>,
+    /// The journal beside it.
+    pub(crate) journal: crate::config_reload::grant_audit::JournalRead,
+}
+
+/// Take the journal lock, polling [`crate::fs_lock::ExclusiveFileLock::try_lease`]
+/// for at most `wait`, then read the grant file and the journal under it
+/// (design 5.4). The one gateway reader of the grant file on an audited path,
+/// so no read happens without the lock, except on a read-only filesystem,
+/// where nothing can write. When the lock file cannot be created because its
+/// directory is missing or not writable, the grant file is reported as
+/// unreadable (`grants: Err`) and is not read.
+///
+/// # Errors
+///
+/// `None` when the lock stayed busy for `wait`, or failed in any other way.
+pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
+    use crate::config_reload::grant_audit::JournalRead;
+    let lock = lock_path(grants);
+    let deadline = tokio::time::Instant::now() + wait;
+    let guard = loop {
+        let path = lock.clone();
+        let attempt = tokio::task::spawn_blocking(move || {
+            crate::fs_lock::ExclusiveFileLock::try_lease(&path)
+        })
+        .await
+        .ok()?;
+        match attempt {
+            Ok(Some(guard)) => break Some(guard),
+            Ok(None) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Ok(None) => return None,
+            // A read-only filesystem (a Kubernetes Secret or ConfigMap mount)
+            // has no writer at all, and such mounts update by an atomic
+            // symlink swap: read without the lock. A directory that is only
+            // unwritable for this process is not that case, since root or
+            // the file's owner can still run the CLI there.
+            Err(error) if error.kind() == std::io::ErrorKind::ReadOnlyFilesystem => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    tracing::warn!(%error, path = %lock.display(), "grant journal lock cannot be created; reading the grant file without it");
+                });
+                break None;
+            }
+            // No lock means no read. A missing or unwritable directory
+            // reads as an unreadable grant file, so `fail_on_error` decides
+            // at startup and a reload refuses.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                return Some(LockedRead {
+                    guard: None,
+                    grants: Err(format!(
+                        "grant journal lock {} cannot be taken: {error}",
+                        lock.display()
+                    )),
+                    journal: JournalRead::Missing,
+                });
+            }
+            Err(error) => {
+                tracing::error!(%error, path = %lock.display(), "grant journal lock unavailable");
+                return None;
+            }
+        }
+    };
+    let file = super::read_identity_grants_file(grants).await;
+    let journal = journal_path(grants);
+    let read = tokio::task::spawn_blocking(move || {
+        crate::config::read_checked_bytes(&journal, crate::config::CheckedFile::IdentityGrants)
+    })
+    .await;
+    let journal = match read {
+        Ok(Ok(bytes)) => JournalRead::Bytes(bytes),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => JournalRead::Missing,
+        Ok(Err(e)) => JournalRead::Unreadable(e.to_string()),
+        Err(e) => JournalRead::Unreadable(e.to_string()),
+    };
+    Some(LockedRead {
+        guard,
+        grants: file,
+        journal,
+    })
 }
