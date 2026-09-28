@@ -101,7 +101,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Validate first-use smoke scripts
-        run: bash -n scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh
+        # One file per `bash -n`: it checks only its first argument.
+        run: for f in scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh scripts/dev/smoke-fixture-capability.sh; do bash -n "$f"; done
       - name: Validate noninteractive setup and routed first call
         run: scripts/dev/usability-smoke.sh
 

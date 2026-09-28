@@ -20,6 +20,11 @@ def fail(message: str) -> NoReturn:
 
 def main() -> None:
     payload = json.load(open(sys.argv[1], encoding="utf-8"))
+    # --expect-temperature pins the reading a fixture upstream serves, which
+    # proves the call reached that fixture and not some other upstream.
+    expected = None
+    if sys.argv[2:4] and sys.argv[2] == "--expect-temperature":
+        expected = float(sys.argv[3])
     if "error" in payload:
         fail(f"JSON-RPC error: {payload['error']}")
 
@@ -47,6 +52,8 @@ def main() -> None:
     reading = observed.get("current", {}).get("temperature_2m")
     if not isinstance(reading, (int, float)):
         fail(f"no upstream temperature reading in payload: {sorted(observed)}")
+    if expected is not None and reading != expected:
+        fail(f"temperature_2m={reading}, not the fixture's pinned {expected}")
 
     print(f"routed capability call verified: temperature_2m={reading}")
 

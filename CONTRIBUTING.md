@@ -176,7 +176,7 @@ Allowed clippy exceptions (in `Cargo.toml`): `module_name_repetitions`, `must_us
 
 1. **Branch** from `main`: `git checkout -b feature/your-feature`
 2. **Verify:** `cargo fmt --all -- --check && cargo clippy --all-features -- -D warnings && cargo test --all-features && python3 benchmarks/token_savings.py --scenario readme --json`
-3. **Document:** Update README.md for user-facing features. Add CHANGELOG.md entry.
+3. **Document:** Update README.md for user-facing features. Add a changelog fragment (below).
 4. **Open PR** with a clear description of what changed and why.
 5. **CI must pass.** Formatting, clippy pedantic, and the full test suite.
 
@@ -262,7 +262,14 @@ We want your PR to merge fast. Here is what helps.
 
 ### Strongly encouraged
 
-- [ ] **CHANGELOG entry** under `[Unreleased]` if the change is user-visible.
+- [ ] **Changelog fragment** if the change is user-visible: add `changelog.d/<number>.<type>.md`,
+  where `<number>` is the PR (or issue) number and `<type>` is one of `added`, `changed`,
+  `removed`, `fixed`, `security`. It holds your bullet(s) exactly as they should read in
+  CHANGELOG.md, for example `- doctor: report why a stdio backend died (#526)`. Do not edit
+  CHANGELOG.md itself: a shared section makes every open PR conflict whenever one merges.
+  A PR that changes `src/` (or a `crates/*/src/`) without a fragment, or edits CHANGELOG.md
+  by hand, fails the *Changelog fragment* check; a maintainer can apply the `no-changelog`
+  label when no entry is warranted.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
 - [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.
