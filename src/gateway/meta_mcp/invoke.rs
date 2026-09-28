@@ -2281,7 +2281,7 @@ impl MetaMcp {
         // the correct behaviour for that shape.
         if caller.era == crate::protocol::meta::Era::Legacy
             && let Some(pending) = interim.clone()
-            && !pending.requests.is_empty()
+            && pending.requests.len() < usize::MAX
             && let Some(session) = session_id
         {
             // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
