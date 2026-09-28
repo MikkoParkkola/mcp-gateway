@@ -226,3 +226,17 @@ async fn x4_another_callers_clean_copy_does_not_unblock_a_name() {
         "a clean copy elsewhere unblocked the poisoned caller"
     );
 }
+
+/// X5: a source's complete listing that no longer carries a name it had
+/// withheld clears that source's block; nothing keeps the name blocked.
+#[tokio::test]
+async fn x5_a_complete_listing_that_omits_a_name_clears_its_block() {
+    let backend = per_user_backend();
+    let _ = backend.remember_listed_tools(Some("a"), false, &catalogue());
+    assert!(refused(&backend, "b", POISONED), "control: blocked first");
+    let _ = backend.remember_listed_tools(Some("a"), false, &[]);
+    assert!(
+        !refused(&backend, "b", POISONED),
+        "a name the only withholding source no longer lists stayed blocked"
+    );
+}

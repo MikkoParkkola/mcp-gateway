@@ -96,7 +96,11 @@ impl Backend {
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
             // Not stored, but observed: a blocked name is per backend. Keyed
             // by the caller, whose own catalogue this page is.
-            self.commit_verdicts(identity_key.unwrap_or("credentialed"), verdicts);
+            self.commit_verdicts(
+                identity_key.unwrap_or("credentialed"),
+                super::descriptor_gate::Listing::Complete,
+                verdicts,
+            );
             return withheld;
         }
         let lease = self.begin_internal_activity_for(&key);
@@ -108,7 +112,7 @@ impl Backend {
             PoolKey::Shared => String::new(),
         };
         entry.tools_cache.replace(parsed, || {
-            self.commit_verdicts(&source, verdicts);
+            self.commit_verdicts(&source, super::descriptor_gate::Listing::Complete, verdicts);
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);

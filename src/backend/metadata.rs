@@ -280,7 +280,12 @@ impl Backend {
                         flag(&entry).store(truncated, Ordering::SeqCst);
                     }
                     if let Some(verdicts) = verdicts {
-                        self.commit_verdicts(identity_key.unwrap_or(""), verdicts);
+                        let listing = if truncated {
+                            super::descriptor_gate::Listing::Truncated
+                        } else {
+                            super::descriptor_gate::Listing::Complete
+                        };
+                        self.commit_verdicts(identity_key.unwrap_or(""), listing, verdicts);
                     }
                 },
             )

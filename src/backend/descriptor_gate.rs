@@ -101,6 +101,15 @@ pub(crate) fn judge(tools: &mut Vec<Tool>, allow: &BTreeMap<String, String>) -> 
     verdicts
 }
 
+/// Whether a committed listing is the source's whole catalogue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Listing {
+    /// Every page was fetched: a name it omits is gone from the source.
+    Complete,
+    /// The drain stopped early: an omitted name may be on an unread page.
+    Truncated,
+}
+
 /// Whether [`super::prepare_tool_metadata`] judges the descriptors it is given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Judging {
@@ -142,16 +151,20 @@ impl Backend {
     /// Apply an accepted listing from `source` (the slot it was listed on):
     /// block what it withheld, clear `source`'s own block on what it served,
     /// and log each distinct descriptor once.
-    pub(crate) fn commit_verdicts(&self, source: &str, verdicts: Verdicts) {
+    pub(crate) fn commit_verdicts(&self, source: &str, listing: Listing, verdicts: Verdicts) {
         let mut blocked = self.descriptor_gate.blocked.write();
-        for name in &verdicts.served {
-            if let Some(sources) = blocked.get_mut(name) {
+        // What `source` no longer withholds loses `source`'s block: a name it
+        // served, and, when the listing is complete, a name it no longer
+        // lists at all. A truncated listing clears only what it served, since
+        // a name missing from it may sit on a page it never fetched.
+        blocked.retain(|name, sources| {
+            let cleared = verdicts.served.contains(name)
+                || (listing == Listing::Complete && !verdicts.withheld.contains_key(name));
+            if cleared {
                 sources.remove(source);
-                if sources.is_empty() {
-                    blocked.remove(name);
-                }
             }
-        }
+            !sources.is_empty()
+        });
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
             if first_time(&mut logged, (name.clone(), digest.clone(), true)) {
