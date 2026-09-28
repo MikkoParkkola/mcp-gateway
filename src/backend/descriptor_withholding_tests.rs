@@ -236,16 +236,29 @@ async fn t5_an_allow_is_pinned_to_the_descriptor_digest() {
 /// T8: a pin that is not 64 lower-case hex characters is refused at load.
 #[test]
 fn t8_a_malformed_digest_pin_is_refused_at_load() {
-    for bad in ["nothex".to_string(), "A".repeat(64), "0".repeat(63)] {
+    let with_pin = |pin: String| {
         let mut config = Config::default();
         config.backends.insert(
             "evil".to_string(),
             BackendConfig {
-                allow_flagged_tools: [(POISONED.to_string(), bad.clone())].into(),
+                transport: crate::config::TransportConfig::Http {
+                    http_url: "http://localhost:3000/mcp".to_string(),
+                    streamable_http: false,
+                    protocol_version: None,
+                },
+                allow_flagged_tools: [(POISONED.to_string(), pin)].into(),
                 ..BackendConfig::default()
             },
         );
-        assert!(config.validate().is_err(), "pin {bad:?} must be refused");
+        config
+    };
+    // Control: a well-formed pin validates, so a refusal below is the pin's.
+    with_pin("0".repeat(64))
+        .validate()
+        .expect("a well-formed pin must validate");
+    for bad in ["nothex".to_string(), "A".repeat(64), "0".repeat(63)] {
+        let refused = with_pin(bad.clone()).validate().is_err();
+        assert!(refused, "pin {bad:?} must be refused");
     }
 }
 
