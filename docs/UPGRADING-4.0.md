@@ -12,7 +12,8 @@ Each item's section begins with its startup behaviour, in one line:
 - **Startup:** no notice: nothing is printed at startup; read the item before upgrading. A reason
   may follow, such as a change that is decided per backend or per capability file.
 - **Startup:** refuses to start: the gateway refuses to start, with its own error naming the
-  setting or file, until the setting is changed. A condition may follow.
+  setting or file, until the setting is changed. A condition may follow. Such an item needs no
+  separate notice: the error would only be repeated.
 - **Startup:** fails a backend: the gateway starts, but permanently fails the backend it names.
 - **Startup:** fails a capability file: the gateway starts, but refuses an affected capability
   file at load with an error that names it.
@@ -219,6 +220,9 @@ session. Either restores caching; neither requires a configuration change.
 
 **Startup:** no notice, decided per backend; fails a backend, with one warning, and the gateway starts without it
 
+This is decided per backend, so there is no single moment at startup at which the binary could
+know whether a given deployment is affected, and no startup notice names it.
+
 The bearer token an OAuth backend's transport attaches is a replayable credential, so it no longer
 goes on the wire in cleartext. `https://` is always accepted; `http://` only when the host is
 loopback (`localhost`, `127.0.0.0/8` or `::1`). Anything else fails the backend with
@@ -231,6 +235,9 @@ without OAuth may still use plain `http://`.
 ## 8. A credential-bearing backend on plain `http://` is refused at load
 
 **Startup:** no notice, decided per backend; refuses to start, with an error that names the backend
+
+This is decided per backend, so there is no single moment at startup at which the binary could
+know whether a given deployment is affected, and no startup notice names it.
 
 An enabled backend whose `http_url` or `a2a_url` is `http://` to a host off this machine, and
 whose configuration carries a credential, fails the load. Credential-bearing means an `oauth`
