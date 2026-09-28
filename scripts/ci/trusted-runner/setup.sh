@@ -37,7 +37,8 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 [[ $(id -u) -eq 0 ]] || { echo "run as root" >&2; exit 1; }
 [[ $(uname -m) == aarch64 ]] || { echo "expects an aarch64 host" >&2; exit 1; }
 : "${RUNNER_TOKEN:?set RUNNER_TOKEN to a fresh registration token}"
-for tool in /usr/bin/python3 /usr/bin/git curl sha256sum mkfs.ext4 systemd-escape; do
+for tool in /usr/bin/python3 /usr/bin/git curl sha256sum mkfs.ext4 systemd-escape fallocate tar \
+    mountpoint mount install useradd systemctl sudo grep; do
   command -v "$tool" >/dev/null || { echo "missing $tool; install it first" >&2; exit 1; }
 done
 
@@ -103,7 +104,8 @@ Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$HOOK_DIR/job-completed.sh
 Environment=TMPDIR=$HOME_DIR/tmp
 Restart=on-failure
 RestartSec=30s
-KillMode=process
+# The whole cgroup, so no worker or test process outlives a stop or restart.
+KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=5min
 CPUQuota=800%

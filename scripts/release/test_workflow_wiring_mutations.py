@@ -1013,14 +1013,16 @@ CASES = [
         # It no longer has a step-level `push:` to reopen -- the build pushes
         # by digest under no name -- so the way back in is the condition that
         # decides whether the manifest job runs at all. Anchored to the line
-        # above it: the job-level condition is a prefix of the step-level ones,
-        # so on its own it matches four times and mutates the wrong copy.
+        # above it: the job-level condition is identical to the step-level ones,
+        # so on its own it matches several times and mutates the wrong copy.
+        # The mutation re-admits tags beside the main-only pin.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
         "    needs: build\n"
-        "    if: github.event_name != 'pull_request'"
-        " && !startsWith(github.ref, 'refs/tags/v')",
-        "    needs: build\n    if: github.event_name != 'pull_request'",
+        "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+        "    needs: build\n"
+        "    if: github.event_name == 'push' && (github.ref == 'refs/heads/main'"
+        " || startsWith(github.ref, 'refs/tags/v'))",
         CAUGHT,
     ),
     (

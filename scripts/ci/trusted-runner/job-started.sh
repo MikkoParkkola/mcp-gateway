@@ -94,10 +94,10 @@ self_test() {
   trap 'rm -rf -- "$dir"' RETURN
   mk() { printf '{"pull_request":{"head":{"repo":{"full_name":"%s"},"ref":"%s"},"base":{"ref":"%s"}}}' "$1" "$2" "$3" >"$dir/e.json"; }
   check() {
-    local want=$1 repository=$2 event=$3 ref=${5:-}
+    local want=$1 repository=$2 event=$3 desc=$4 ref=${5:-}
     got=$(decide "$repository" "$event" "$dir/e.json" "$ref")
     if [[ $got != "$want"* ]]; then
-      echo "self-test: expected '$want', got '$got' ($4)" >&2; rc=1
+      echo "self-test: expected '$want', got '$got' ($desc)" >&2; rc=1
     fi
   }
   mk "$REPO" throwaway/x "$BASE";   check admit  "$REPO" pull_request "same-repo throwaway into release line"

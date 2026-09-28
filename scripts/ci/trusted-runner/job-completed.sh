@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-# Job-completed hook for the project's self-hosted runner: every job starts
-# from an empty workspace and an empty target directory. The toolchain and
-# the cargo registry (content-addressed) stay under the runner user's home.
+# Job-completed hook for the project's self-hosted runner. Every job must
+# start from nothing a previous job could have written: not the workspace,
+# and not the user's home either (a job could replace the cargo or rustup
+# proxies, edit cargo or git configuration, or alter cached action code, and
+# so run its code inside a later job or forge its results). So everything the
+# runner user can write is emptied after each job; the toolchain and actions
+# are downloaded again by the next one.
+#
+# Kept: the runner's diagnostics directory and its in-use `_work/_temp`,
+# which the runner itself empties.
 set -euo pipefail
 
-readonly WORK_ROOT=${MCPGW_RUNNER_WORK_ROOT:-$HOME/_work}
+readonly HOME_DIR=${HOME:?}
+readonly WORK_ROOT=${MCPGW_RUNNER_WORK_ROOT:-$HOME_DIR/_work}
 
-# GITHUB_WORKSPACE is <work root>/<repo>/<repo>; delete <work root>/<repo>,
-# and only when it really sits under the work root.
-repo_dir=$(dirname -- "${GITHUB_WORKSPACE:?}")
-case $repo_dir in
-  "$WORK_ROOT"/?*) ;;
-  *) echo "refusing to clean $repo_dir: not under $WORK_ROOT" >&2; exit 1 ;;
+# Refuse anything but the dedicated runner home: this deletes its contents.
+case $HOME_DIR in
+  /home/ghr-mcpgw) ;;
+  *) [[ ${MCPGW_RUNNER_HOOK_TEST:-} == 1 ]] || { echo "refusing to clean home $HOME_DIR" >&2; exit 1; } ;;
 esac
-case $repo_dir in
-  */..|*/../*) echo "refusing to clean $repo_dir: contains .." >&2; exit 1 ;;
-  "$WORK_ROOT"/_*) echo "refusing to clean runner-internal $repo_dir" >&2; exit 1 ;;
-esac
-rm -rf -- "$repo_dir"
-echo "trusted runner workspace cleaned: $repo_dir"
+
+# Top-level entries of the home, minus the kept directories. `tmp` is the
+# source of the unit's /tmp bind mount, so it is emptied, never removed.
+find "$HOME_DIR" -mindepth 1 -maxdepth 1 ! -name _diag ! -name _work ! -name tmp -exec rm -rf -- {} +
+find "$HOME_DIR/tmp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+# The work root, minus the runner's in-use temp directory.
+if [[ -d $WORK_ROOT ]]; then
+  find "$WORK_ROOT" -mindepth 1 -maxdepth 1 ! -name _temp -exec rm -rf -- {} +
+fi
+echo "trusted runner state cleaned: $HOME_DIR"

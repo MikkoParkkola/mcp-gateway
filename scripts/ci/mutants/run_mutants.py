@@ -14,7 +14,8 @@ Every mutant is classified from what cargo printed, never from an exit code alon
   SURVIVED  exit 0 and at least one test executed (passed + failed; ignored excluded)
   VOID      could not be judged: apply, compile, compile-timeout, timeout, no-tests,
             or a baseline that was red, timed out or ran nothing
-  ERROR     anything else (for example a crash with no harness summary); the job fails
+  ERROR     anything else (a crash with no harness summary, or exit 0 beside a FAILED
+            summary); the job fails
 
 Modes: `plan` (integrity checks, writes has_linux/has_windows to $GITHUB_OUTPUT),
 `run --platform linux|windows`, `--self-test` (classifier on canned outputs).
@@ -166,6 +167,9 @@ def classify_test(run: Outcome) -> Verdict:
         if doctest_compile_failure(run.output):
             return Verdict("VOID", "doctest-compile", executed)
         return Verdict("RED", "named test failed", executed, evidence(run.output))
+    if run.exit == 0 and failed:
+        # The harness and the exit code disagree; neither verdict can be trusted.
+        return Verdict("ERROR", "exit 0 with a FAILED test summary", executed)
     if run.exit == 0 and executed >= 1:
         return Verdict("SURVIVED", "tests passed on the mutant", executed)
     if run.exit == 0:
@@ -375,7 +379,7 @@ def self_test() -> int:
         ("timeout after failure output, exit 124", classify_test(Outcome(124, red, True)), "VOID"),
         ("timeout, SIGKILL exit 137", classify_test(Outcome(137, ok, True)), "VOID"),
         ("timeout, killed by signal", classify_test(Outcome(-9, "", True)), "VOID"),
-        ("FAILED summary but exit 0", classify_test(Outcome(0, red, False)), "SURVIVED"),
+        ("FAILED summary but exit 0", classify_test(Outcome(0, red, False)), "ERROR"),
         ("doctest does not compile", classify_test(Outcome(101, doc_compile, False)), "VOID"),
         ("doctest assertion fails", classify_test(Outcome(101, doc_red, False)), "RED"),
         ("doctest compile error with an error code", classify_test(Outcome(101, doc_compile.replace(

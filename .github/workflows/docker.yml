@@ -47,6 +47,7 @@ jobs:
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
@@ -61,7 +62,11 @@ jobs:
           # changes too, which only errs toward building. Any git failure falls
           # back to building rather than skipping.
           git init -q probe
-          if ! files=$(git -C probe fetch -q --depth=1 "$REPO_URL" "$BASE_SHA" "$HEAD_SHA" 2>&1 \
+          # The head through refs/pull/<n>/head, which the base repository
+          # holds for fork pull requests too.
+          if ! files=$(git -C probe fetch -q --depth=1 "$REPO_URL" "$BASE_SHA" \
+                "+refs/pull/$PR_NUMBER/head:refs/probe/head" 2>&1 \
+              && [ "$(git -C probe rev-parse refs/probe/head)" = "$HEAD_SHA" ] \
               && git -C probe diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
             decide true "could not list changed files: $files"; exit 0
           fi
