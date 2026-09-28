@@ -308,13 +308,19 @@ impl ConfigScanner {
             .await
             .map_err(|e| Error::Config(format!("Failed to read config: {e}")))?;
 
-        let config: Value = serde_json::from_str(&content)
-            .map_err(|e| Error::Config(format!("Failed to parse JSON: {e}")))?;
+        // VS Code and Cursor write settings.json as JSONC.
+        let config: Value = super::jsonc::strip_jsonc(&content)
+            .ok_or_else(|| Error::Config("Unterminated comment or string in settings".into()))
+            .and_then(|text| {
+                serde_json::from_str(&text)
+                    .map_err(|e| Error::Config(format!("Failed to parse JSON: {e}")))
+            })?;
 
         let mut servers = Vec::new();
 
-        // VS Code might have MCP config under various keys
-        if let Some(mcp_config) = config.get("mcp").and_then(|v| v.as_object()) {
+        // VS Code user settings: { "mcp": { "servers": { "<name>": {...} } } }.
+        // Siblings such as `mcp.inputs` are not servers.
+        if let Some(mcp_config) = config.pointer("/mcp/servers").and_then(Value::as_object) {
             for (name, server_config) in mcp_config {
                 if let Some(server) = Self::parse_server_config(name, server_config, &source, path)
                 {
@@ -731,6 +737,10 @@ mod ws_tests;
 #[cfg(test)]
 #[path = "config_scanner_zed_tests.rs"]
 mod zed_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_vscode_tests.rs"]
+mod vscode_tests;
 
 #[cfg(test)]
 #[path = "config_scanner_entry_tests.rs"]
