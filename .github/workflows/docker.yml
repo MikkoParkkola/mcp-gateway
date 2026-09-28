@@ -30,7 +30,8 @@ jobs:
   # (a push to main or the release line) and on every tag, not on every push to
   # a pull request into the release line: each build holds two scarce runners.
   # A PR into the release line still builds when it touches a file the image or
-  # its checks read. A PR into main always builds, since main requires `build`.
+  # its checks read. A PR into main builds unless it is docs-only (main requires
+  # `build`; the gate reports success for a docs-only PR without building).
   # A same-repo `throwaway/` PR into the release line never builds: it carries
   # red-first and mutation runs that need only Tests. A fork chooses its own
   # branch name, so the throwaway clause also requires the head to be this repo.
@@ -45,6 +46,9 @@ jobs:
     outputs:
       run_build: ${{ steps.decide.outputs.run_build }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Decide
         id: decide
         env:
@@ -59,8 +63,19 @@ jobs:
         run: |
           set -euo pipefail
           decide() { echo "run_build=$1" >> "$GITHUB_OUTPUT"; echo "run_build=$1 ($2)"; }
-          if [ "$EVENT" != pull_request ] || [ "$BASE_REF" != docs/ranking-1-release-line ]; then
-            decide true "not a pull request into the release line"; exit 0
+          if [ "$EVENT" != pull_request ]; then
+            decide true "not a pull request"; exit 0
+          fi
+          if [ "$BASE_REF" != docs/ranking-1-release-line ]; then
+            # Into main (required `build`): every PR builds except a docs-only
+            # one, whose `build` gate then reports success without a build.
+            # The classifier falls back to docs_only=false on any error.
+            if [ "$(bash scripts/ci/changed-scope.sh "$BASE_SHA" "$PR_NUMBER" "$HEAD_SHA")" = docs_only=true ]; then
+              decide false "docs-only pull request"
+            else
+              decide true "pull request into $BASE_REF"
+            fi
+            exit 0
           fi
           if [ "$SAME_REPO" = true ] && [[ $HEAD_REF == throwaway/* ]]; then
             decide false "same-repo throwaway branch"; exit 0

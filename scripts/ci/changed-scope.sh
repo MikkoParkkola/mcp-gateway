@@ -16,7 +16,17 @@ set -euo pipefail
 
 # Reads NUL-separated paths on stdin; prints true/false.
 classify() {
-  echo false
+  local path any=0
+  while IFS= read -r -d '' path; do
+    any=1
+    case $path in
+      docs/?*) ;;
+      */*) echo false; return ;;
+      *.md | *.txt) ;;
+      *) echo false; return ;;
+    esac
+  done
+  if [[ $any -eq 1 ]]; then echo true; else echo false; fi
 }
 
 from_git() {

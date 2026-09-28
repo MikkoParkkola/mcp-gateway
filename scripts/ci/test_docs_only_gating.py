@@ -24,13 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_throwaway_routing import REPO, RELEASE_LINE, ROOT, evaluate  # noqa: E402
 
 SKIPPED = {
-    "check", "feature-combos", "windows-check", "kani", "fmt", "audit",
+    "check", "feature-combos", "kani", "fmt", "audit",
     "helm-chart-smoke", "helm-oci-roundtrip", "helm-supply-chain", "helm-airgap",
     "k8s-kind-rollback", "upgrade-rehearsal", "service-template-smoke",
-    "usability-smoke", "task-sdk-recovery", "orphan-test-modules",
+    "usability-smoke", "orphan-test-modules",
 }
+# Every job that runs tests stays on docs-only PRs: tests read docs files
+# (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
-    "scope", "public-repo-hygiene", "test", "public-claims", "release-script-tests",
+    "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "public-claims", "release-script-tests",
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes",
 }
@@ -77,6 +79,9 @@ def main() -> int:
         "scope gave no output": ctx("pull_request", "success", None),
         "push": ctx("push", "success", "false"),
     }
+    for must in ("test", "windows-check"):
+        if must in SKIPPED:
+            errors.append(f"test job {must} is in the skipped set")
     for name, c in cases.items():
         ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS and runs(j, c)}
         want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
