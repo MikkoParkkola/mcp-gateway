@@ -3,6 +3,7 @@
 //! #1955: a server leaf issued for an IP literal verifies when dialled at that
 //! address, through the listener `serve` builds, with a client certificate.
 
+use std::io::Write as _;
 use std::sync::Arc;
 
 use rustls::client::danger::ServerCertVerifier as _;
@@ -44,8 +45,17 @@ fn client_config(ca: &str, client: &super::GeneratedCert) -> rustls::ClientConfi
         .expect("client auth")
 }
 
-#[tokio::test]
-async fn a_server_leaf_for_loopback_verifies_at_the_address() {
+/// A CA, a server leaf for `127.0.0.1,::1`, a client leaf, and the listener
+/// config `serve` builds from them with a client certificate required.
+struct Pki {
+    _dir: tempfile::TempDir,
+    ca: super::GeneratedCert,
+    server: super::GeneratedCert,
+    client: super::GeneratedCert,
+    tls: Arc<rustls::ServerConfig>,
+}
+
+fn pki() -> Pki {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let dir = tempfile::tempdir().expect("tempdir");
     let ca = CertGenerator::init_ca(&CaParams {
@@ -68,49 +78,86 @@ async fn a_server_leaf_for_loopback_verifies_at_the_address() {
         ..Default::default()
     })
     .expect("the listener serve builds");
+    Pki {
+        _dir: dir,
+        ca,
+        server,
+        client,
+        tls: Arc::new(tls),
+    }
+}
 
-    // A real handshake at 127.0.0.1, the address a loopback bind is dialled at.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+/// A full handshake, client certificate included, with a listener on
+/// `listener`, the client verifying the server as the address `ip`.
+async fn handshake(pki: &Pki, listener: tokio::net::TcpListener, ip: &str) {
     let addr = listener.local_addr().expect("addr");
-    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(&pki.tls));
     let accepted = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.expect("accept");
         acceptor.accept(socket).await.map(|_| ())
     });
     let connector =
-        tokio_rustls::TlsConnector::from(Arc::new(client_config(&ca.cert_pem, &client)));
+        tokio_rustls::TlsConnector::from(Arc::new(client_config(&pki.ca.cert_pem, &pki.client)));
     let socket = tokio::net::TcpStream::connect(addr).await.expect("connect");
-    let name = ServerName::try_from("127.0.0.1").expect("IP server name");
+    let name = ServerName::try_from(ip.to_string()).expect("IP server name");
     let dialled = connector.connect(name, socket).await;
-    assert!(
-        dialled.is_ok(),
-        "handshake at 127.0.0.1: {:?}",
-        dialled.err()
-    );
-    assert!(accepted.await.expect("server task").is_ok());
+    assert!(dialled.is_ok(), "handshake at {ip}: {:?}", dialled.err());
+    let served = accepted.await.expect("server task");
+    assert!(served.is_ok(), "server side at {ip}: {:?}", served.err());
+}
 
-    // The same certificate against ::1 (no IPv6 socket needed) and against an
-    // address it does not name, through the verifier the client uses.
+#[tokio::test]
+async fn a_server_leaf_for_loopback_verifies_at_the_address() {
+    let pki = pki();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    handshake(&pki, listener, "127.0.0.1").await;
+
+    // An address the leaf does not name is refused by the verifier the client uses.
     let mut roots = rustls::RootCertStore::empty();
-    roots.add(der(&ca.cert_pem)).expect("CA");
+    roots.add(der(&pki.ca.cert_pem)).expect("CA");
     let verifier = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
         .build()
         .expect("verifier");
-    let end_entity = der(&server.cert_pem);
-    let verify = |host: &str| {
-        verifier.verify_server_cert(
-            &end_entity,
-            &[],
-            &ServerName::try_from(host.to_string()).expect("name"),
-            &[],
-            UnixTime::now(),
-        )
-    };
-    assert!(verify("::1").is_ok(), "::1: {:?}", verify("::1").err());
-    assert!(
-        verify("10.9.9.9").is_err(),
-        "an address the leaf does not name"
+    let refused = verifier.verify_server_cert(
+        &der(&pki.server.cert_pem),
+        &[],
+        &ServerName::try_from("10.9.9.9").expect("name"),
+        &[],
+        UnixTime::now(),
     );
+    assert!(refused.is_err(), "an address the leaf does not name");
+}
+
+/// The same handshake at `[::1]`. A host with no IPv6 loopback cannot run it;
+/// it says so in the output rather than passing silently.
+#[tokio::test]
+async fn a_server_leaf_for_ipv6_loopback_verifies_at_the_address() {
+    let pki = pki();
+    let listener = match tokio::net::TcpListener::bind("[::1]:0").await {
+        Ok(listener) => listener,
+        Err(e) if no_ipv6_loopback(&e) => {
+            // Straight to the stream, not `eprintln!`: the test harness
+            // captures the print macros of a passing test, and this line must
+            // reach the CI log so a skipped run can be told from a real one.
+            let _ = writeln!(
+                std::io::stderr(),
+                "a_server_leaf_for_ipv6_loopback_verifies_at_the_address SKIPPED: no IPv6 loopback ({e})"
+            );
+            return;
+        }
+        Err(e) => panic!("bind [::1]: {e}"),
+    };
+    handshake(&pki, listener, "::1").await;
+}
+
+/// `true` for the bind errors of a host without IPv6 loopback: the address is
+/// not configured, or the address family is not supported (EAFNOSUPPORT on
+/// Linux, macOS and Windows).
+fn no_ipv6_loopback(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::Unsupported
+    ) || matches!(e.raw_os_error(), Some(97 | 47 | 10047))
 }
