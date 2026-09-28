@@ -111,6 +111,9 @@ pub(crate) enum Judging {
     AlreadyJudged,
 }
 
+/// Distinct (tool, digest, outcome) log lines remembered per backend.
+const LOGGED_CAP: usize = 1024;
+
 /// A backend's withheld tools and the log lines already written for them.
 #[derive(Debug, Default)]
 pub(crate) struct DescriptorGate {
@@ -138,6 +141,12 @@ impl Backend {
             }
         }
         let mut logged = self.descriptor_gate.logged.lock();
+        // ponytail: a backend that keeps sending fresh descriptions cannot
+        // grow this without bound; past the cap it restarts, at the cost of
+        // logging a descriptor again.
+        if logged.len() >= LOGGED_CAP {
+            logged.clear();
+        }
         for (name, (digest, issues)) in verdicts.withheld {
             if logged.insert((name.clone(), digest.clone(), true)) {
                 warn!(
