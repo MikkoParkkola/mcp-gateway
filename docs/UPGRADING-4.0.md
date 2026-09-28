@@ -1957,6 +1957,11 @@ start serves are now governance audit records (actor `unknown`, action `mutate_g
 - A grant change that is applied but cannot be recorded stays applied, and the reload outcome
   says `UNRECORDED`. If the audit plan cannot be written first, the reload is refused and a start
   serves no grants until it can.
+- The gateway reads the grant file under a lock file beside it. On a read-only filesystem (for
+  example a Kubernetes Secret or ConfigMap mount) it reads without the lock. When it cannot
+  create the lock because the directory is missing or it may not write there, the grant file
+  counts as unreadable: with `fail_on_error` the start is refused, otherwise no grants are
+  served until a reload can read them.
 - `ControlPlaneAuditEvent` gains a `grant_change` field, so a struct literal of it in code that
   builds against this crate needs `grant_change: None`. Serialised events without it are unchanged.
 

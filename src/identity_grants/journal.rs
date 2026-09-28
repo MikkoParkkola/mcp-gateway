@@ -431,8 +431,8 @@ pub(crate) fn active_rows(rows: &[IdentityGrant], now: DateTime<Utc>) -> Vec<&Id
 /// or refused, and the journal.
 pub(crate) struct LockedRead {
     /// Held until dropped; the caller keeps it across publish and record.
-    /// `None` when the grant file's directory is not writable, so the lock
-    /// file cannot exist there (see [`read_locked`]).
+    /// `None` on a read-only filesystem, where the lock file cannot exist
+    /// and nothing can write (see [`read_locked`]).
     pub(crate) guard: Option<crate::fs_lock::ExclusiveFileLock>,
     /// The grant file, or the reason it was refused.
     pub(crate) grants: Result<IdentityGrantFile, String>,
@@ -440,34 +440,17 @@ pub(crate) struct LockedRead {
     pub(crate) journal: crate::config_reload::grant_audit::JournalRead,
 }
 
-/// Whether `error`, from creating the lock file, means the directory itself
-/// cannot be written: the only case where reading without the lock is safe.
-/// A lock file another account made unreadable is not that case.
-fn lock_dir_is_unwritable(lock: &Path, error: &std::io::Error) -> bool {
-    #[cfg(not(unix))]
-    let _ = lock;
-    match error.kind() {
-        std::io::ErrorKind::ReadOnlyFilesystem => true,
-        #[cfg(unix)]
-        std::io::ErrorKind::PermissionDenied => {
-            let dir = lock
-                .parent()
-                .filter(|d| !d.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            !lock.exists() && rustix::fs::access(dir, rustix::fs::Access::WRITE_OK).is_err()
-        }
-        _ => false,
-    }
-}
-
 /// Take the journal lock, polling [`crate::fs_lock::ExclusiveFileLock::try_lease`]
 /// for at most `wait`, then read the grant file and the journal under it
 /// (design 5.4). The one gateway reader of the grant file on an audited path,
-/// so no read can happen without the lock.
+/// so no read happens without the lock, except on a read-only filesystem,
+/// where nothing can write. When the lock file cannot be created because its
+/// directory is missing or not writable, the grant file is reported as
+/// unreadable (`grants: Err`) and is not read.
 ///
 /// # Errors
 ///
-/// `None` when the lock stayed busy for `wait`, or could not be taken.
+/// `None` when the lock stayed busy for `wait`, or failed in any other way.
 pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
     use crate::config_reload::grant_audit::JournalRead;
     let lock = lock_path(grants);
@@ -485,16 +468,35 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
             Ok(None) => return None,
-            // A read never needs write access. A directory this process
-            // cannot write (a read-only mount, a Kubernetes Secret or
-            // ConfigMap) has no writer this gateway runs, and such mounts
-            // update by an atomic symlink swap: read without the lock.
-            Err(error) if lock_dir_is_unwritable(&lock, &error) => {
+            // A read-only filesystem (a Kubernetes Secret or ConfigMap mount)
+            // has no writer at all, and such mounts update by an atomic
+            // symlink swap: read without the lock. A directory that is only
+            // unwritable for this process is not that case, since root or
+            // the file's owner can still run the CLI there.
+            Err(error) if error.kind() == std::io::ErrorKind::ReadOnlyFilesystem => {
                 static WARNED: std::sync::Once = std::sync::Once::new();
                 WARNED.call_once(|| {
                     tracing::warn!(%error, path = %lock.display(), "grant journal lock cannot be created; reading the grant file without it");
                 });
                 break None;
+            }
+            // No lock means no read. A missing or unwritable directory
+            // reads as an unreadable grant file, so `fail_on_error` decides
+            // at startup and a reload refuses.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                return Some(LockedRead {
+                    guard: None,
+                    grants: Err(format!(
+                        "grant journal lock {} cannot be taken: {error}",
+                        lock.display()
+                    )),
+                    journal: JournalRead::Missing,
+                });
             }
             Err(error) => {
                 tracing::error!(%error, path = %lock.display(), "grant journal lock unavailable");

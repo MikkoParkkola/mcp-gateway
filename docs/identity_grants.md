@@ -302,6 +302,13 @@ publishing, the reload is refused and the live grants stay; a start that
 cannot record serves no grants. With auth on and grants on, a governance store
 that cannot open refuses the start (UPGRADING-4.0 item 79).
 
+The gateway reads the grant file under the same lock file the CLI uses. On a
+read-only filesystem (a Kubernetes Secret or ConfigMap mount) it reads without
+the lock, since nothing can write there. If it cannot create the lock because
+the directory is missing or this process may not write there, the grant file
+counts as unreadable: with `fail_on_error` the start is refused,
+otherwise no grants are served until a reload can read them.
+
 ## Recommendations
 
 `LocalIdentityGrantStore::recommend` is a recommendation-only layer for

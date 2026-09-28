@@ -268,6 +268,22 @@ pub(super) fn plan(
             if reported.insert(cause.clone()) {
                 out.push(indeterminate("journal-unreadable", cause));
             }
+            if state.grants.is_none() {
+                // No baseline yet: take the rows served now, so a later
+                // direct edit is still seen. Journal entries not yet read may
+                // be in them, so the gap stays set and the first readable
+                // reconciliation reports mismatches as `indeterminate`.
+                next.grants = Some(
+                    served_rows(rows)
+                        .iter()
+                        .map(|(id, row)| ((*id).to_string(), grant_digest(row)))
+                        .collect(),
+                );
+                next.gap = true;
+            } else if state.gap {
+                // The gap record is only cleared by a readable reconciliation.
+                next.gap = true;
+            }
             return (finish(out, generation), next, reported);
         }
     };
