@@ -120,6 +120,8 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 ### Fixed
 
+- **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
+
 - The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
   command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
 - **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at

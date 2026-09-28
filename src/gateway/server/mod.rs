@@ -16,6 +16,7 @@ mod control_plane_store;
 mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
+mod identity_grants;
 mod persistence;
 #[cfg(test)]
 mod replica_state_tests;
@@ -71,6 +72,7 @@ use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 use control_plane_store::{build_control_plane_store, control_plane_base};
+use identity_grants::{identity_grant_sink_for, load_configured_identity_grants};
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
 use support::{log_startup_banner, serve_tls, shutdown_signal};
@@ -167,48 +169,6 @@ fn expand_home_path(path: &str) -> PathBuf {
             .join(rest);
     }
     PathBuf::from(path)
-}
-
-/// The grant sink a reload publishes into, or `None` when grants are off.
-///
-/// Rebuilt from config at the `ReloadContext` sites rather than threaded out
-/// of `build_meta_mcp`: the path is `config.security.identity_grants.path`
-/// either way, and `expand_home_path` is the same resolution startup used.
-fn identity_grant_sink_for(
-    config: &crate::config::IdentityGrantsConfig,
-    meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
-) -> Option<Arc<crate::config_reload::IdentityGrantSink>> {
-    if !config.enabled {
-        return None;
-    }
-    let (store, epoch) = meta_mcp.identity_grant_sink();
-    Some(Arc::new(crate::config_reload::IdentityGrantSink::new(
-        store,
-        epoch,
-        expand_home_path(&config.path),
-    )))
-}
-
-async fn load_configured_identity_grants(
-    config: &crate::config::IdentityGrantsConfig,
-) -> Result<Option<(PathBuf, crate::identity_grants::LocalIdentityGrantStore)>> {
-    if !config.enabled {
-        return Ok(None);
-    }
-
-    let path = expand_home_path(&config.path);
-    match crate::identity_grants::load_identity_grants_file(&path).await {
-        Ok(grants) => Ok(Some((path, grants))),
-        Err(e) if config.fail_on_error => Err(Error::Config(e)),
-        Err(e) => {
-            warn!(
-                error = %e,
-                path = %path.display(),
-                "Failed to load local identity grants; personal capabilities without matching grants will fail closed"
-            );
-            Ok(None)
-        }
-    }
 }
 
 /// Spawn the SIEM evidence-export background task (MIK-6703).
