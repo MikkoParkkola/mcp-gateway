@@ -161,7 +161,30 @@ pub(in super::super) fn gateway(
     custody: &Arc<dyn AccountCustody>,
     identity_slots: &[String],
 ) -> (MetaMcp, Arc<Dispatches>) {
-    let config = fixture_config(binds, descriptors.compiled);
+    gateway_in(
+        binds,
+        descriptors,
+        custody,
+        identity_slots,
+        ServeMode::Http,
+        crate::config::AuthConfig::default(),
+    )
+}
+
+/// [`gateway`] installed for a given serve mode and `auth` block, which is
+/// what decides the deployment's sole-operator assertion (#1961).
+pub(in super::super) fn gateway_in(
+    binds: &[(&str, Bind<'_>)],
+    descriptors: &Descriptors<'_>,
+    custody: &Arc<dyn AccountCustody>,
+    identity_slots: &[String],
+    mode: ServeMode,
+    auth: crate::config::AuthConfig,
+) -> (MetaMcp, Arc<Dispatches>) {
+    let config = Config {
+        auth,
+        ..fixture_config(binds, descriptors.compiled)
+    };
     // The production compilation, refusals included: an invalid fixture
     // configuration fails HERE rather than reaching a dispatch assertion.
     let bound = compile(&config).expect("fixture configuration must compile");
@@ -227,7 +250,7 @@ pub(in super::super) fn gateway(
         Some(custody),
         &gateway_key,
         &meta,
-        ServeMode::Http,
+        mode,
     )
     .expect("the shared installer must accept the fixture configuration");
     (meta, dispatches)
@@ -237,11 +260,20 @@ pub(in super::super) fn gateway(
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
 fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<'_> {
+    caller_as(verified_identity, None)
+}
+
+/// [`caller`] that also presented a credential the gateway accepted, named by
+/// its principal (`STDIO_CREDENTIAL_PRINCIPAL` for the stdio transport).
+fn caller_as<'a>(
+    verified_identity: Option<&'a VerifiedIdentity>,
+    credential_principal: Option<&'a str>,
+) -> MetaMcpCallerContext<'a> {
     MetaMcpCallerContext {
         task: None,
         signing: None,
         execution: None,
-        credential_principal: None,
+        credential_principal,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
@@ -278,6 +310,19 @@ pub(in super::super) async fn execute(
         .await
 }
 
+/// [`execute`] for a caller with no verified identity that presented the
+/// credential named `credential_principal` (#1961).
+pub(in super::super) async fn execute_as(
+    meta: &MetaMcp,
+    server: &str,
+    credential_principal: Option<&str>,
+) -> crate::Result<Value> {
+    let context = caller_as(None, credential_principal);
+    let args = json!({ "tool": format!("{server}:read"), "arguments": { "folder": "inbox" } });
+    meta.code_mode_execute(&args, Some("fixture-session"), &context)
+        .await
+}
+
 /// A client that accepts every question it is asked (A11 bridged cells).
 struct AcceptingChannel;
 
@@ -302,7 +347,22 @@ pub(in super::super) async fn execute_bridged(
     server: &str,
     caller_identity: Option<&VerifiedIdentity>,
 ) -> crate::Result<Value> {
+    execute_bridged_keyed(meta, server, caller_identity, None).await
+}
+
+/// [`execute_bridged`] under a client idempotency key (F13 key-release cell).
+pub(in super::super) async fn execute_bridged_keyed(
+    meta: &MetaMcp,
+    server: &str,
+    caller_identity: Option<&VerifiedIdentity>,
+    key: Option<&str>,
+) -> crate::Result<Value> {
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: key.map(str::to_string),
+        ..Default::default()
+    };
     let mut context = caller(caller_identity);
+    context.retry = &retry;
     context.channel = &AcceptingChannel;
     context.input_capabilities = crate::protocol::meta::classify_request(
         Some(&json!({
@@ -423,7 +483,8 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
         "the backend result must be returned to the caller: {result}"
     );
 
-    assert_eq!(dispatches.count(), 1, "exactly one backend call");
+    // One `tools/call`; F13's cold-slot `tools/list` precedes it on the wire.
+    assert_eq!(dispatches.calls().len(), 1, "exactly one backend call");
     let call = dispatches.only();
     assert!(
         call.identity_key.is_none(),

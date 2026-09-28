@@ -29,9 +29,17 @@ struct Counting(Arc<AtomicUsize>);
 impl Transport for Counting {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
+        // F13: a cold `tools/call` lists the backend first. The list names the
+        // tool the rows call, and it is not a call, so the counter skips it.
+        if method == "tools/list" {
+            return Ok(JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}),
+            ));
+        }
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(JsonRpcResponse::success_serialized(
             RequestId::Number(1),
