@@ -120,8 +120,10 @@ async fn windows_child_environment_scenario() {
     let child: BTreeMap<String, String> = stdout
         .lines()
         .find_map(|line| line.strip_prefix(DUMP_PREFIX))
-        .map(|json| serde_json::from_str(json).expect("environment dump is JSON"))
-        .unwrap_or_else(|| panic!("the backend printed no environment; stdout={stdout:?}"));
+        .map_or_else(
+            || panic!("the backend printed no environment; stdout={stdout:?}"),
+            |json| serde_json::from_str(json).expect("environment dump is JSON"),
+        );
     assert!(
         output.status.success(),
         "the backend stand-in failed; stdout={stdout:?}"

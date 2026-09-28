@@ -32,10 +32,26 @@ pub(super) fn files(path: &Path) -> BTreeMap<String, Vec<u8>> {
             let entry = entry.unwrap();
             (
                 entry.file_name().to_str().unwrap().to_owned(),
-                fs::read(entry.path()).unwrap(),
+                read_bytes(&entry.path()).expect("no held scratch record"),
             )
         })
         .collect()
+}
+
+/// An empty file's bytes are known without a read. On Windows the empty lease
+/// file sits under a whole-file byte-range lock while the store is open, and
+/// that lock refuses even a read of an empty file (`ERROR_LOCK_VIOLATION`).
+/// `None` only on Windows, for a scratch record the store still holds with no
+/// sharing (`ERROR_SHARING_VIOLATION`): its bytes are unobservable by design.
+fn read_bytes(path: &Path) -> Option<Vec<u8>> {
+    if fs::metadata(path).unwrap().len() == 0 {
+        return Some(Vec::new());
+    }
+    match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(32) => None,
+        Err(error) => panic!("read {}: {error}", path.display()),
+    }
 }
 
 pub(super) async fn open(path: &Path) -> TaskStore {
@@ -79,7 +95,7 @@ pub(super) fn manifest(root: &Path) -> Manifest {
                 },
                 mode,
                 inode,
-                bytes: kind.is_file().then(|| fs::read(path).unwrap()),
+                bytes: kind.is_file().then(|| read_bytes(path)).flatten(),
                 target: kind.is_symlink().then(|| fs::read_link(path).unwrap()),
             },
         );
@@ -148,7 +164,15 @@ pub(super) fn assert_stage_layout(
         assert_ne!(name, &final_name);
         assert!(!image.contains_key(&final_name));
     }
-    let bytes = entry.bytes.as_ref().unwrap();
+    let Some(bytes) = entry.bytes.as_ref() else {
+        // Windows holds the scratch record share-0 until it closes it before
+        // the rename; name, count and layout above are still checked.
+        assert!(
+            cfg!(windows) && matches!(stage, CommitStage::Flush | CommitStage::FileSync),
+            "candidate bytes unreadable at {stage:?}"
+        );
+        return;
+    };
     if stage == CommitStage::Write {
         assert!(
             bytes.is_empty(),
