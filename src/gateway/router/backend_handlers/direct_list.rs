@@ -32,7 +32,8 @@ pub(super) const DIRECT_LIST_MAX_PAGES: usize = crate::backend::LIST_MAX_PAGES;
 
 /// Drain the upstream catalogue into one `{tools}` result.
 ///
-/// An upstream error on any page is returned as it came; the cap overflow is
+/// An upstream error on any page is returned as an error only, any `result`
+/// beside it dropped; the cap overflow is
 /// JSON-RPC `-32005` (unused elsewhere in `src`, so a client can tell it from
 /// `-32603`), answered with HTTP 200 like the route's other application errors.
 pub(super) async fn drain(
@@ -57,7 +58,7 @@ pub(super) async fn drain(
                 map.insert("cursor".to_string(), cursor);
             }
         }
-        let page = dispatch_in_scope(
+        let mut page = dispatch_in_scope(
             backend,
             "tools/list",
             id,
@@ -67,6 +68,9 @@ pub(super) async fn drain(
         )
         .await?;
         if page.error.is_some() {
+            // An error frame is forwarded as an error only: a `result` beside
+            // it was never judged, so it must not reach the client (#1441).
+            page.result = None;
             return Ok(page);
         }
         let result = page.result.unwrap_or(Value::Null);

@@ -233,6 +233,8 @@ fn normalize_tools_list_response(
 ) {
     let backend_name = backend.name.as_str();
     if response.error.is_some() {
+        // Never forward an unjudged list beside an error (#1441).
+        response.result = None;
         return;
     }
 
