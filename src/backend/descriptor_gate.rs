@@ -126,6 +126,18 @@ pub(crate) struct DescriptorGate {
     logged: parking_lot::Mutex<HashSet<(String, String, bool)>>,
 }
 
+/// Record a log line; `true` when it was not recorded before.
+///
+/// ponytail: a backend that keeps sending fresh descriptions cannot grow the
+/// set past the cap; at the cap it restarts, at the cost of logging a
+/// descriptor again.
+fn first_time(logged: &mut HashSet<(String, String, bool)>, line: (String, String, bool)) -> bool {
+    if logged.len() >= LOGGED_CAP && !logged.contains(&line) {
+        logged.clear();
+    }
+    logged.insert(line)
+}
+
 impl Backend {
     /// Apply an accepted listing from `source` (the slot it was listed on):
     /// block what it withheld, clear `source`'s own block on what it served,
@@ -141,14 +153,8 @@ impl Backend {
             }
         }
         let mut logged = self.descriptor_gate.logged.lock();
-        // ponytail: a backend that keeps sending fresh descriptions cannot
-        // grow this without bound; past the cap it restarts, at the cost of
-        // logging a descriptor again.
-        if logged.len() >= LOGGED_CAP {
-            logged.clear();
-        }
         for (name, (digest, issues)) in verdicts.withheld {
-            if logged.insert((name.clone(), digest.clone(), true)) {
+            if first_time(&mut logged, (name.clone(), digest.clone(), true)) {
                 warn!(
                     backend = %self.name,
                     tool = %name,
@@ -162,7 +168,7 @@ impl Backend {
             blocked.entry(name).or_default().insert(source.to_string());
         }
         for (name, digest) in verdicts.allowed {
-            if logged.insert((name.clone(), digest.clone(), false)) {
+            if first_time(&mut logged, (name.clone(), digest.clone(), false)) {
                 info!(
                     backend = %self.name,
                     tool = %name,
