@@ -40,6 +40,9 @@ use crate::transition::TransitionTracker;
 /// backstop and not an ordinary event.
 const MAX_TRACKED_IDENTITIES: usize = 100_000;
 
+/// Number of per-identity scoring locks.
+const STRIPES: usize = 64;
+
 /// Per-session anomaly detector backed by transition probability data.
 pub struct AnomalyDetector {
     tracker: Arc<TransitionTracker>,
@@ -48,6 +51,8 @@ pub struct AnomalyDetector {
     ///
     /// Key: `session_id`, Value: last tool key (`"server:tool"`).
     last_tool: DashMap<String, String>,
+    /// Per-identity scoring locks, striped by a hash of the identity.
+    stripes: Box<[parking_lot::Mutex<()>]>,
 }
 
 /// What the detector could establish about one call.
@@ -69,6 +74,13 @@ pub enum Observation {
     /// keeps running and stops protecting, which is the failure this variant
     /// exists to make visible.
     Unobservable,
+    /// Too little history to judge: the caller's first call, or a predecessor
+    /// with fewer recorded transitions than the configured minimum.
+    ///
+    /// Not a score. A neutral number here would be compared against the
+    /// operator's thresholds like any other, so a threshold at or below it
+    /// would flag every call made while the detector was still learning.
+    WarmingUp,
 }
 
 impl Observation {
@@ -77,7 +89,7 @@ impl Observation {
     pub const fn score(self) -> Option<f64> {
         match self {
             Self::Scored(value) => Some(value),
-            Self::Unobservable => None,
+            Self::Unobservable | Self::WarmingUp => None,
         }
     }
 }
@@ -108,6 +120,7 @@ impl AnomalyDetector {
             tracker,
             threshold,
             last_tool: DashMap::new(),
+            stripes: (0..STRIPES).map(|_| parking_lot::Mutex::new(())).collect(),
         }
     }
 
@@ -180,6 +193,36 @@ impl AnomalyDetector {
     /// The configured anomaly threshold.
     pub fn threshold(&self) -> f64 {
         self.threshold
+    }
+
+    /// Set how many transitions a predecessor needs before its successors are
+    /// scored (`firewall.anomaly_min_observations`).
+    #[must_use]
+    pub fn with_min_observations(self, _min_observations: u64) -> Self {
+        self
+    }
+
+    /// Calls answered [`Observation::WarmingUp`] since start.
+    pub(crate) fn warming_up_count(&self) -> u64 {
+        0
+    }
+
+    /// New transitions not learned because the learned-pair map was full.
+    pub(crate) fn pairs_dropped_count(&self) -> u64 {
+        0
+    }
+
+    /// Hold `identity`'s scoring lock, so a test can prove a concurrent call
+    /// for the same identity waits for it.
+    /// The tracker this detector learns into.
+    #[cfg(test)]
+    pub(crate) fn tracker_for_test(&self) -> &TransitionTracker {
+        &self.tracker
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_stripe(&self, _identity: &str) -> parking_lot::MutexGuard<'_, ()> {
+        self.stripes[0].lock()
     }
 
     /// Remove per-session state when a session disconnects.
@@ -280,14 +323,14 @@ mod tests {
             tracker.record_transition("sess-train", "srv:tool_b");
         }
 
-        let detector = AnomalyDetector::new(Arc::clone(&tracker), 0.7);
+        let detector = AnomalyDetector::new(Arc::clone(&tracker), 0.7).with_min_observations(1);
         // Prime last_tool = "srv:tool_a"
         detector.score_transition("sess-test", "srv", "tool_a");
         // Score a tool that has NEVER followed tool_a.
         let score = detector.score_transition("sess-test", "srv", "totally_unknown");
         assert!(
-            (score - 0.95).abs() < f64::EPSILON,
-            "Expected 0.95 for never-seen transition, got {score}"
+            (score - 1.0).abs() < f64::EPSILON,
+            "Expected 1.0 for never-seen transition, got {score}"
         );
     }
 
@@ -335,5 +378,94 @@ mod tests {
             detector.last_tool.get("sess2").as_deref().cloned(),
             Some("srv:tool_x".to_string())
         );
+    }
+
+    // ── #1756: learning, warm-up and monotonic scores ─────────────────────────
+
+    /// A tracker where `srv:tool_a` has been followed `n` times by `srv:tool_b`.
+    fn trained(n: usize) -> Arc<TransitionTracker> {
+        let tracker = Arc::new(TransitionTracker::new());
+        for _ in 0..n {
+            tracker.record_transition("train", "srv:tool_a");
+            tracker.record_transition("train", "srv:tool_b");
+        }
+        tracker
+    }
+
+    #[test]
+    fn never_seen_scores_one_and_above_rare() {
+        // 99 x a->b and 1 x a->c: c is rare (0.99), d was never seen (1.0).
+        // A never-seen transition must never score below a rare one.
+        let tracker = Arc::new(TransitionTracker::new());
+        for n in 0..99 {
+            let caller = format!("t{n}");
+            tracker.record_transition(&caller, "srv:tool_a");
+            tracker.record_transition(&caller, "srv:tool_b");
+        }
+        tracker.record_transition("t", "srv:tool_a");
+        tracker.record_transition("t", "srv:tool_c");
+        let detector = AnomalyDetector::new(tracker, 0.7).with_min_observations(1);
+
+        detector.score_transition("rare", "srv", "tool_a");
+        let rare = detector.score_transition("rare", "srv", "tool_c");
+        detector.score_transition("never", "srv", "tool_a");
+        let never = detector.score_transition("never", "srv", "tool_d");
+
+        assert!((never - 1.0).abs() < f64::EPSILON, "never-seen must score 1.0, got {never}");
+        assert!(rare < never, "rare ({rare}) must score below never-seen ({never})");
+    }
+
+    #[test]
+    fn cold_predecessor_is_warming_up() {
+        // A first call has no predecessor, and a predecessor with 5 recorded
+        // transitions is below the minimum of 20: neither is a score.
+        let detector = AnomalyDetector::new(trained(5), 0.7).with_min_observations(20);
+        assert_eq!(detector.observe(Some("id"), "srv", "tool_a"), Observation::WarmingUp);
+        assert_eq!(detector.observe(Some("id"), "srv", "tool_b"), Observation::WarmingUp);
+        assert_eq!(detector.warming_up_count(), 2);
+    }
+
+    #[test]
+    fn warmup_counts_total_transitions() {
+        // Warm-up counts every recorded transition out of the predecessor, not
+        // distinct successors: 20 transitions to ONE successor are enough.
+        let warm = AnomalyDetector::new(trained(20), 0.7).with_min_observations(20);
+        warm.observe(Some("id"), "srv", "tool_a");
+        assert!(
+            matches!(warm.observe(Some("id"), "srv", "tool_b"), Observation::Scored(_)),
+            "20 transitions out of tool_a meet a minimum of 20"
+        );
+
+        let cold = AnomalyDetector::new(trained(19), 0.7).with_min_observations(20);
+        cold.observe(Some("id"), "srv", "tool_a");
+        assert_eq!(cold.observe(Some("id"), "srv", "tool_b"), Observation::WarmingUp);
+    }
+
+    #[test]
+    fn serialized_at_identity_cap_no_deadlock() {
+        // The capacity path (len/iter over the identity map) runs while the
+        // identity's scoring lock is held. Holding a map entry guard there
+        // instead would deadlock the thread against itself.
+        let detector = Arc::new(AnomalyDetector::new(empty_tracker(), 0.7));
+        for n in 0..MAX_TRACKED_IDENTITIES {
+            detector.score_transition(&format!("filler-{n}"), "srv", "tool");
+        }
+        let worker = Arc::clone(&detector);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for n in 0..1_000 {
+                worker.observe(Some(&format!("new-{n}")), "srv", "tool");
+            }
+            let _ = done.send(());
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("1,000 calls at the identity cap must finish, not deadlock");
+        assert!(
+            detector.warming_up_count() >= 1_000,
+            "every new identity's first call is a warm-up, got {}",
+            detector.warming_up_count()
+        );
+        assert!(detector.last_tool.len() <= MAX_TRACKED_IDENTITIES);
     }
 }

@@ -28,6 +28,8 @@ use crate::security::ResponseScanner;
 use crate::transition::TransitionTracker;
 
 pub mod anomaly;
+mod anomaly_config;
+use anomaly_config::{default_anomaly_min_observations, default_anomaly_threshold};
 pub mod audit;
 pub mod budget_guard;
 pub mod input_scanner;
@@ -41,6 +43,8 @@ pub mod tenant_guard;
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
+#[cfg(test)]
+mod anomaly_learning_tests;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -107,6 +111,9 @@ pub struct FirewallConfig {
     /// ```
     #[serde(default)]
     pub anomaly_block_threshold: Option<f64>,
+    /// Transitions a predecessor needs before its successors are scored (default 20).
+    #[serde(default = "default_anomaly_min_observations")]
+    pub anomaly_min_observations: u64,
     /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1).
     ///
     /// Keys on the authenticated principal — never a session — and refuses a
@@ -122,9 +129,6 @@ pub struct FirewallConfig {
     pub budget: budget_guard::BudgetGuardConfig,
 }
 
-fn default_anomaly_threshold() -> f64 {
-    0.7
-}
 
 impl Default for FirewallConfig {
     fn default() -> Self {
@@ -140,6 +144,7 @@ impl Default for FirewallConfig {
             rules: Vec::new(),
             anomaly_threshold: default_anomaly_threshold(),
             anomaly_block_threshold: None, // opt-in: None = log-only (backward compat)
+            anomaly_min_observations: default_anomaly_min_observations(),
             tenant_guard: tenant_guard::TenantGuardConfig::default(), // opt-in: enabled=false
             budget: budget_guard::BudgetGuardConfig::default(),
         }
@@ -323,7 +328,10 @@ impl Firewall {
         let memory_scanner = memory_scanner::MemoryScanner::new(config.memory_poisoning.clone());
         let redactor = redactor::Redactor::new();
         let anomaly = if config.anomaly_detection {
-            transition_tracker.map(|tt| anomaly::AnomalyDetector::new(tt, config.anomaly_threshold))
+            transition_tracker.map(|tt| {
+                anomaly::AnomalyDetector::new(tt, config.anomaly_threshold)
+                    .with_min_observations(config.anomaly_min_observations)
+            })
         } else {
             None
         };
@@ -415,6 +423,7 @@ impl Firewall {
         let anomaly_score = self.anomaly.as_ref().and_then(|a| {
             match a.observe(anomaly_identity, server, tool) {
                 crate::security::firewall::anomaly::Observation::Scored(score) => Some(score),
+                crate::security::firewall::anomaly::Observation::WarmingUp => None,
                 crate::security::firewall::anomaly::Observation::Unobservable => {
                     // A detector with nothing to key on cannot protect. Allowing
                     // the call anyway is the shape of failure that reads as
@@ -1159,6 +1168,7 @@ mod tests {
             anomaly_detection: true,
             anomaly_threshold: log_threshold,
             anomaly_block_threshold: block_threshold,
+            anomaly_min_observations: 1,
             ..FirewallConfig::default()
         };
         Firewall::from_config(cfg, Some(tracker))

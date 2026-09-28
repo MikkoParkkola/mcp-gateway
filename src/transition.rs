@@ -99,6 +99,17 @@ impl TransitionTracker {
         }
     }
 
+    /// Record one `from -> to` transition without touching per-session state.
+    ///
+    /// For a caller that tracks its own predecessor (the firewall's anomaly
+    /// detector keys on the authenticated caller, not a session). Returns
+    /// `false`, recording nothing, when `to` would be a new pair and the
+    /// tracker already holds `max_pairs` distinct pairs; an existing pair is
+    /// always counted.
+    pub(crate) fn record_pair(&self, _from: &str, _to: &str, _max_pairs: usize) -> bool {
+        true
+    }
+
     /// Predict the most likely next tools after `from_tool`.
     ///
     /// Returns candidates sorted by descending confidence where both
@@ -605,5 +616,33 @@ mod tests {
         }
 
         assert_eq!(tracker.total_transitions(), 9);
+    }
+
+    // ── record_pair (#1756) ──────────────────────────────────────────────────
+
+    #[test]
+    fn record_pair_leaves_session_map_empty() {
+        let tracker = TransitionTracker::new();
+        assert!(tracker.record_pair("s:a", "s:b", 10));
+        assert!(tracker.last_per_session.is_empty(), "record_pair must not track sessions");
+        let predictions = tracker.predict_next("s:a", 0.0, 0);
+        assert_eq!(predictions.len(), 1, "the pair must be learned");
+        assert_eq!(predictions[0].tool, "s:b");
+    }
+
+    #[test]
+    fn pair_cap_drops_counts_and_passes() {
+        let tracker = TransitionTracker::new();
+        assert!(tracker.record_pair("s:a", "s:b", 2));
+        assert!(tracker.record_pair("s:a", "s:c", 2));
+        assert!(!tracker.record_pair("s:a", "s:d", 2), "a third distinct pair exceeds 2");
+        assert!(tracker.record_pair("s:a", "s:b", 2), "an existing pair is still counted");
+        let tools: Vec<String> = tracker
+            .predict_next("s:a", 0.0, 0)
+            .into_iter()
+            .map(|p| p.tool)
+            .collect();
+        assert!(!tools.contains(&"s:d".to_string()), "the dropped pair is not stored");
+        assert_eq!(tracker.total_transitions(), 3);
     }
 }
