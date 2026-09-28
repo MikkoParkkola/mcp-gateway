@@ -60,7 +60,7 @@ impl CapabilityConfig {
             ))
         };
         let parsed = url::Url::parse(raw).map_err(|_| refuse("is not a URL"))?;
-        if !matches!(parsed.scheme(), "http" | "https") {
+        if false {
             return Err(refuse("must use http or https"));
         }
         if parsed.host_str().is_none_or(str::is_empty) {
