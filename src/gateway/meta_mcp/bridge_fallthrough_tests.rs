@@ -197,7 +197,11 @@ async fn t1a_an_undeclaring_legacy_caller_is_refused_before_the_bridge() {
         .await
         .expect_err("an undeclared question is refused");
     assert!(err.to_string().contains("did not declare"), "{err}");
-    assert_eq!(*channel.attempts.lock(), 0, "expected the bridge not to be entered");
+    assert_eq!(
+        *channel.attempts.lock(),
+        0,
+        "expected the bridge not to be entered"
+    );
     assert_eq!(
         calls.lock().len(),
         1,
@@ -216,7 +220,11 @@ async fn t1b_a_declared_caller_with_no_reachable_session_gets_a_continuation() {
         .invoke_tool(&args(), Some("session-1"), &caller)
         .await
         .expect("NoSession falls through, it does not fail the call");
-    assert_eq!(*channel.attempts.lock(), 1, "expected the bridge to be entered once");
+    assert_eq!(
+        *channel.attempts.lock(),
+        1,
+        "expected the bridge to be entered once"
+    );
     let _ = envelope(&result);
     assert_eq!(
         calls.lock().len(),
