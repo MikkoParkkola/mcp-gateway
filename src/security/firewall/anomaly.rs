@@ -254,17 +254,7 @@ impl AnomalyDetector {
         // One snapshot for the warm-up check and the score: concurrent
         // commits by other callers cannot push a confidence above 1.0.
         let (total, seen) = self.tracker.successor_counts(prev, current);
-        if total < self.min_observations {
-            return Observation::WarmingUp;
-        }
-        if seen == 0 {
-            // Never seen: the most unusual a transition can be, so never
-            // below a rare one (`1 - confidence` approaches 1.0 from below).
-            return Observation::Scored(1.0);
-        }
-        #[allow(clippy::cast_precision_loss)] // counts far below 2^52
-        let confidence = seen as f64 / total as f64;
-        Observation::Scored(1.0 - confidence)
+        score_from_counts(total, seen, self.min_observations)
     }
 
     fn stripe(&self, identity: &str) -> &parking_lot::Mutex<()> {
@@ -316,6 +306,26 @@ impl AnomalyDetector {
         let _lock = self.stripe(session_id).lock();
         self.last_tool.remove(session_id);
     }
+}
+
+/// The score for a transition seen `seen` times out of `total` transitions
+/// from its predecessor.
+///
+/// A score is never negative: the confidence is capped at 1.0, so even a
+/// snapshot in which `seen` exceeds `total` (counters read at different
+/// moments) cannot turn an unusual call into a better-than-certain one.
+fn score_from_counts(total: u64, seen: u64, min_observations: u64) -> Observation {
+    if total < min_observations {
+        return Observation::WarmingUp;
+    }
+    if seen == 0 {
+        // Never seen: the most unusual a transition can be, so never below a
+        // rare one (`1 - confidence` approaches 1.0 from below).
+        return Observation::Scored(1.0);
+    }
+    #[allow(clippy::cast_precision_loss)] // counts far below 2^52
+    let confidence = (seen as f64 / total as f64).min(1.0);
+    Observation::Scored(1.0 - confidence)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -570,5 +580,17 @@ mod tests {
             detector.warming_up_count()
         );
         assert!(detector.last_tool.len() <= MAX_TRACKED_IDENTITIES);
+    }
+
+    #[test]
+    fn a_score_is_never_negative_even_from_an_inconsistent_snapshot() {
+        // The race the single-pass read closes: a successor counted after the
+        // total was summed, so `seen` exceeds `total`. Without the cap the
+        // confidence is 12/10 and the score -0.2, below every threshold.
+        assert_eq!(score_from_counts(10, 12, 1), Observation::Scored(0.0));
+        // Ordinary snapshots are unaffected.
+        assert_eq!(score_from_counts(10, 0, 1), Observation::Scored(1.0));
+        assert_eq!(score_from_counts(10, 5, 1), Observation::Scored(0.5));
+        assert_eq!(score_from_counts(10, 5, 20), Observation::WarmingUp);
     }
 }
