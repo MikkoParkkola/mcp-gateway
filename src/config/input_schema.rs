@@ -25,6 +25,20 @@ pub enum InputSchemaEnforcement {
 }
 
 #[cfg(test)]
+impl super::BackendConfig {
+    /// A default config with R2 `off`, for a test fixture whose transport
+    /// serves no `tools/list` and whose subject is not R2: under the default
+    /// `closed`, a cold call would list first (F13) and be refused as
+    /// unreadable, so `off` keeps the fixture's call forwarded as before.
+    pub(crate) fn r2_off() -> Self {
+        Self {
+            input_schema_enforcement: InputSchemaEnforcement::Off,
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::InputSchemaEnforcement;
     use serde_json::json;

@@ -76,9 +76,21 @@ struct LeakyBackendTransport;
 impl Transport for LeakyBackendTransport {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
+        // F13: a cold `tools/call` lists the backend before R2 judges it, so
+        // the catalogue holds every tool the rows call, with free-map schemas.
+        if method == "tools/list" {
+            let tools: Vec<Value> = ["leaky_echo", "alpha_echo", "zeta_echo"]
+                .iter()
+                .map(|name| json!({"name": name, "inputSchema": {"type": "object"}}))
+                .collect();
+            return Ok(JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({ "tools": tools }),
+            ));
+        }
         Ok(JsonRpcResponse::success_serialized(
             RequestId::Number(1),
             json!({

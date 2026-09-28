@@ -22,6 +22,7 @@ use crate::context_integrity::{
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::gateway::authz::{Authorize as _, Emit};
+use crate::gateway::input_bridge::BridgeError;
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::GrantSubject;
 use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
@@ -136,8 +137,7 @@ use guarded::GuardedValue;
 
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
-    did_you_mean, extract_bool_or, extract_optional_str, extract_required_str,
-    parse_tool_arguments,
+    extract_bool_or, extract_optional_str, extract_required_str, parse_tool_arguments,
 };
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
@@ -146,6 +146,10 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
+mod r2_check;
+use r2_check::miss_with_hint;
+// #1961: the account-bound MCP mint, kept out of this file's size baseline.
+mod account_mint;
 
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
@@ -966,12 +970,28 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // the first one. A round that skipped the accounting would let a
         // backend that keeps asking spend an unmetered budget.
         // The same key rule as the first round, against the slot as it is now.
-        if let Some(refusal) = self.meta.undeclared_key_refusal(
+        let checked_at = std::time::Instant::now();
+        let refusal = self.meta.undeclared_key_refusal(
             self.server,
             self.tool,
             self.arguments,
             self.cache_binding,
-        ) {
+            self.headers,
+            (self.scope, self.session_id),
+        );
+        let refusal = match refusal.await {
+            Ok(refusal) => refusal,
+            Err(e) => {
+                // NotAdmitted: no `tools/call` left, so the key stays retryable.
+                let (at, parked) = ((self.server, self.tool), self.account_refusal);
+                let fill = self
+                    .meta
+                    .bridged_refused_fill(at, e, self.managed, checked_at, parked);
+                let message = fill.await;
+                return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
+            }
+        };
+        if let Some(refusal) = refusal {
             return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: refusal["content"][0]["text"]
                     .as_str()
@@ -1924,9 +1944,36 @@ impl MetaMcp {
         // rule refuses, and before `mark_dispatched`, so a refusal is never
         // dispatched, charged or counted as an invocation. Nothing ran, so the
         // idempotency key is released for an honest retry.
-        if let Some(refusal) =
-            self.undeclared_key_refusal(server, tool, &arguments, dispatch_binding.as_deref())
-        {
+        // F13: a cold slot is listed first, as this caller; the slot's
+        // failsafe refusing that list answers as a refused dispatch does.
+        let checked_at = std::time::Instant::now();
+        let refusal = self.undeclared_key_refusal(
+            server,
+            tool,
+            &arguments,
+            dispatch_binding.as_deref(),
+            &caller_credential.headers,
+            (caller.scope(), session_id),
+        );
+        let refusal = match refusal.await {
+            Ok(refusal) => refusal,
+            Err(e) => {
+                let managed = caller_credential.managed.as_ref();
+                match self
+                    .answer_refused_fill((server, tool), e, managed, checked_at)
+                    .await
+                {
+                    Ok((value, _)) => Some(value),
+                    Err(e) => {
+                        if let Some(reservation) = idem_reservation.as_mut() {
+                            reservation.release();
+                        }
+                        return self.with_connect_offer(Err(e), verified_identity).await;
+                    }
+                }
+            }
+        };
+        if let Some(refusal) = refusal {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.release();
             }
@@ -2181,9 +2228,8 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // Still record the error budget failure (already done above via
-                // `record_error_budget`).  The idempotency reservation is left
-                // for the commit below unless the refusal was pre-dispatch.
+                // The idempotency reservation is left for the commit below
+                // unless the refusal was pre-dispatch.
                 dispatch_error_result(&e, tool, server)
             }
         };
@@ -2396,11 +2442,15 @@ impl MetaMcp {
                 }
                 // A11-c: a round's 401 on a managed account answers with the
                 // reconnect refusal or the rejection, not the generic refusal.
-                // Settled like any round that reached the backend.
-                Err(_) if parked.is_some() => {
+                // Settled like any round that reached the backend; one refused
+                // at its cold-slot list (NotAdmitted, F13) is released.
+                Err(round) if parked.is_some() => {
                     let refused = parked.take().expect("the arm's guard checked it");
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&uncertain_side_effect());
+                    let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
+                    match idem_reservation.as_mut() {
+                        Some(reservation) if not_admitted => reservation.release(),
+                        Some(reservation) => reservation.commit(&uncertain_side_effect()),
+                        None => {}
                     }
                     if crate::personal_accounts::refusal::marked(&refused).is_some() {
                         return self
@@ -3098,7 +3148,9 @@ impl MetaMcp {
         // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
         // whose `propagate` is `prepare` minus the lease. Keeping the lease is
         // the only difference: headers, binding, refusals and audit are unchanged.
-        match Self::mint_held(managed_vault.as_ref(), &strategy, principal, &descriptor).await {
+        match account_mint::mint_held(managed_vault.as_ref(), &strategy, principal, &descriptor)
+            .await
+        {
             Ok((cred, managed)) => {
                 // Validate every header parses BEFORE dispatch, so an invalid
                 // minted credential fails closed rather than silently letting the
@@ -3136,38 +3188,6 @@ impl MetaMcp {
                     let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
                     crate::personal_accounts::refusal::mark(refused, &e, account_id)
                 }),
-        }
-    }
-
-    /// Mint for `server`, keeping the managed lease when the backend's account
-    /// descriptor is installed with vault custody (A11-e′). The typed vault is
-    /// the SAME instance as `strategy` (`InstalledAccount`), and its `propagate`
-    /// is `prepare` minus the lease, so keeping the lease is the only difference.
-    async fn mint_held(
-        managed_vault: Option<&Arc<crate::personal_accounts::VaultStrategy>>,
-        strategy: &Arc<dyn crate::identity_propagation::IdentityPropagation>,
-        principal: Principal<'_>,
-        descriptor: &crate::identity_propagation::BackendDescriptor,
-    ) -> std::result::Result<
-        (
-            crate::identity_propagation::PropagatedCredential,
-            Option<crate::personal_accounts::ManagedLease>,
-        ),
-        crate::identity_propagation::PropagationError,
-    > {
-        match (managed_vault, principal.verified()) {
-            (Some(vault), _) => vault
-                .prepare_held(principal, descriptor)
-                .await
-                .map(|(cred, managed)| (cred, Some(managed))),
-            (None, Some(identity)) => strategy
-                .propagate(identity, descriptor)
-                .await
-                .map(|cred| (cred, None)),
-            // Only a managed vault serves a non-verified principal.
-            (None, None) => Err(crate::identity_propagation::PropagationError::Refuse(
-                "only a managed account mints for a caller without a verified identity".into(),
-            )),
         }
     }
 
@@ -3300,32 +3320,6 @@ impl MetaMcp {
             ));
         }
         Ok(result.warnings)
-    }
-
-    /// MIK-7570.SCHEMA.1 (R2): the `isError` result refusing a call to an MCP
-    /// backend whose arguments carry keys the tool's schema does not declare.
-    ///
-    /// Runs on the arguments as the caller sent them, before secret injection,
-    /// so a gateway-injected credential is never mistaken for an invented key.
-    /// Capabilities are skipped: their executor validates after injection.
-    fn undeclared_key_refusal(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: &Value,
-        identity_key: Option<&str>,
-    ) -> Option<Value> {
-        if self
-            .get_capabilities()
-            .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
-        {
-            return None;
-        }
-        let text =
-            self.backends
-                .get(server)?
-                .undeclared_key_refusal(identity_key, tool, arguments)?;
-        Some(json!({ "content": [{ "type": "text", "text": text }], "isError": true }))
     }
 
     /// Dispatch one round to the backend and meter it.
@@ -3684,19 +3678,8 @@ impl MetaMcp {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
             let message = if !cached_names.is_empty() && !tool_is_cached {
-                // Drawn only from names this caller could invoke (A3).
-                let candidates: Vec<&str> = cached_names
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
-                    .collect();
-                match did_you_mean(tool, &candidates, 3, 3) {
-                    Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
-                    None => format!(
-                        "Tool '{tool}' not found on server '{server}'. {}",
-                        error.message
-                    ),
-                }
+                let candidates = self.miss_hint_pool(&cached_names, server, (scope, session_id));
+                miss_with_hint(server, tool, &candidates, &error.message)
             } else {
                 error.message
             };
@@ -5129,7 +5112,7 @@ mod identity_propagation_enforcement_tests {
                 protocol_version: None,
             },
             identity_propagation: Some(idp_cfg(true)),
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "mem",
@@ -5270,7 +5253,7 @@ mod identity_propagation_enforcement_tests {
                 streamable_http: true,
                 protocol_version: None,
             },
-            ..BackendConfig::default()
+            ..BackendConfig::r2_off()
         };
         let backend = Arc::new(Backend::new(
             "asks",
@@ -6061,6 +6044,12 @@ mod error_budget_tests;
 mod circuit_open_hint_tests;
 #[cfg(test)]
 mod suggestion_authz_tests;
+
+#[cfg(test)]
+mod f13_bridge_tests;
+
+#[cfg(test)]
+mod f13_hint_scope_tests;
 
 #[cfg(test)]
 mod session_fp_tests;
