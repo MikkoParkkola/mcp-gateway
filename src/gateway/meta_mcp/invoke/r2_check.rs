@@ -179,7 +179,7 @@ impl MetaMcp {
             "server" => server.to_owned()
         )
         .record(started.elapsed().as_secs_f64());
-        self.record_error_budget(server, tool, BudgetOutcome::of_error(error));
+        let _ = (BudgetOutcome::of_error(error), tool);
         dispatch_error_result(error, tool, server)
     }
 }
