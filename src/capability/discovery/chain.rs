@@ -16,6 +16,8 @@ use crate::security::ssrf::validate_url_not_ssrf;
 pub struct DiscoveryChain<'a> {
     client: &'a Client,
     auth: Option<&'a str>,
+    /// The first pinning-resolver refusal seen by any probe (#2027).
+    ssrf_refusal: std::sync::Mutex<Option<String>>,
 }
 
 /// A single probe strategy.
@@ -44,7 +46,11 @@ impl<'a> DiscoveryChain<'a> {
     /// Create a new chain with the given HTTP client and optional auth header.
     #[must_use]
     pub fn new(client: &'a Client, auth: Option<&'a str>) -> Self {
-        Self { client, auth }
+        Self {
+            client,
+            auth,
+            ssrf_refusal: std::sync::Mutex::new(None),
+        }
     }
 
     /// Probe all well-known paths in parallel, return first successful result
@@ -125,7 +131,37 @@ impl<'a> DiscoveryChain<'a> {
                     _ => None,
                 }
             }
-            _ => None,
+            Ok(_) => None,
+            Err(error) => {
+                self.record_ssrf_refusal(&error);
+                None
+            }
+        }
+    }
+
+    /// Why the probes found nothing, when the cause was an address the
+    /// pinning resolver refused rather than a missing spec.
+    pub(crate) fn ssrf_refusal(&self) -> Option<String> {
+        self.ssrf_refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Keep the first "SSRF blocked" message found in a request error's
+    /// source chain (the resolver reports it as an I/O error message).
+    fn record_ssrf_refusal(&self, error: &reqwest::Error) {
+        let mut source: Option<&dyn std::error::Error> = Some(error);
+        while let Some(inner) = source {
+            let text = inner.to_string();
+            if text.starts_with("SSRF blocked") {
+                self.ssrf_refusal
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get_or_insert(text);
+                return;
+            }
+            source = inner.source();
         }
     }
 

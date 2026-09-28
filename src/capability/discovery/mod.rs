@@ -134,6 +134,8 @@ impl DiscoveryEngine {
     /// Create a new `DiscoveryEngine` with a configured reqwest client.
     ///
     /// The client enforces:
+    /// - every name resolved once and pinned: a name resolving to a private,
+    ///   loopback or reserved address is refused at connect (#2027)
     /// - no proxy from `HTTP(S)_PROXY` in the environment (#1881)
     /// - SSRF validation on every redirect hop
     /// - Max 5 redirects
@@ -145,10 +147,10 @@ impl DiscoveryEngine {
     /// default client is no fallback: it would follow environment proxies.
     #[must_use]
     pub fn new(options: DiscoveryOptions) -> Self {
-        // Never an environment proxy: it would reach destinations the SSRF
-        // checks here never see (#1881).
-        let client = reqwest::Client::builder()
-            .no_proxy()
+        // The pinned builder never uses an environment proxy (#1881) and pins
+        // every name this client connects to, probes and redirect targets
+        // alike; the base-URL check sees IP literals only (#2027).
+        let client = crate::security::ssrf::pinned_client_builder()
             .timeout(options.timeout)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 let ssrf_blocked = validate_url_not_ssrf(attempt.url().as_str()).is_err();
@@ -190,6 +192,12 @@ impl DiscoveryEngine {
         // 2. Parallel probe chain
         let chain = DiscoveryChain::new(&self.client, self.options.auth.as_deref());
         let Some(result) = chain.probe(base_url).await else {
+            // The pin refused the name at connect: say so, not "no spec" (#2027).
+            if let Some(refusal) = chain.ssrf_refusal() {
+                return Err(crate::Error::Protocol(format!(
+                    "SSRF check failed for base URL: {refusal}"
+                )));
+            }
             return Err(crate::Error::Config(format!(
                 "No API spec found at {base_url} — tried well-known paths, HTML scanning"
             )));
@@ -268,5 +276,86 @@ mod tests {
         assert!(!opts.dry_run);
         assert!(opts.prefix.is_none());
         assert_eq!(opts.timeout, std::time::Duration::from_secs(30));
+    }
+
+    // -- #2027: names are pinned, not just IP literals --
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A loopback listener that only counts the connections it accepts, on
+    /// `127.0.0.1` and (where the host has IPv6) on `::1` at the same port, since
+    /// `localhost` may resolve to either.
+    async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
+        let v4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = v4.local_addr().unwrap().port();
+        let v6 = tokio::net::TcpListener::bind(("::1", port)).await.ok();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        for listener in std::iter::once(v4).chain(v6) {
+            let count = Arc::clone(&accepted);
+            tokio::spawn(async move {
+                while listener.accept().await.is_ok() {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
+        (port, accepted)
+    }
+
+    fn engine() -> DiscoveryEngine {
+        DiscoveryEngine::new(DiscoveryOptions {
+            timeout: std::time::Duration::from_secs(2),
+            ..DiscoveryOptions::default()
+        })
+    }
+
+    /// The error and every source in its chain, joined.
+    fn error_chain(error: &dyn std::error::Error) -> String {
+        let mut text = error.to_string();
+        let mut source = error.source();
+        while let Some(inner) = source {
+            text.push_str(" | ");
+            text.push_str(&inner.to_string());
+            source = inner.source();
+        }
+        text
+    }
+
+    #[tokio::test]
+    async fn discover_refuses_a_base_name_resolving_to_loopback() {
+        let (port, accepted) = counting_listener().await;
+        let error = engine()
+            .discover(&format!("http://localhost:{port}"))
+            .await
+            .expect_err("a name resolving to loopback must be refused");
+        let text = error.to_string();
+        assert!(
+            text.contains("SSRF") && text.contains("'localhost'"),
+            "{text}"
+        );
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "the listener was reached"
+        );
+    }
+
+    /// The client also follows redirects, whose targets the base-URL check
+    /// never sees: it must pin every name itself.
+    #[tokio::test]
+    async fn discovery_client_pins_names_on_every_request() {
+        let (port, accepted) = counting_listener().await;
+        let error = engine()
+            .client
+            .get(format!("http://localhost:{port}/openapi.json"))
+            .send()
+            .await
+            .expect_err("a name resolving to loopback must not connect");
+        assert!(error_chain(&error).contains("SSRF blocked"), "{error:?}");
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "the listener was reached"
+        );
     }
 }

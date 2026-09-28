@@ -785,7 +785,7 @@ impl Config {
         flagged_tools::validate_flagged_tool_pins(&self.backends)?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
-        self.security.transparency_log.validate(self.auth.enabled)?;
+        self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
