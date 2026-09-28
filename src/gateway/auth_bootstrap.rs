@@ -120,8 +120,8 @@ pub(super) fn try_dashboard_bootstrap(
             return Some(axum::response::IntoResponse::into_response((
                 axum::http::StatusCode::CONFLICT,
                 "server.public_url is HTTPS but this listener is plain HTTP, so the session \
-                 cookie would be discarded. Open the dashboard through the HTTPS address, \
-                 or remove public_url.",
+                 cookie would be discarded, even through an HTTPS proxy in front of it. \
+                 Enable mtls or remove public_url.",
             )));
         }
         if !state.dashboard_bootstrap.consume(&candidate) {

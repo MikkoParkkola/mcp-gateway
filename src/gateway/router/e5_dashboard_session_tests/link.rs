@@ -253,6 +253,10 @@ async fn a_stale_http_link_is_refused_before_it_is_spent() {
     let out = send(&state, redeem(&value, None)).await;
     assert_eq!(out.status, StatusCode::CONFLICT, "{}", out.body);
     assert!(out.body.contains("public_url"), "{}", out.body);
+    // A same-host HTTPS proxy reaches this listener over plain loopback and
+    // gets this same refusal, so the advice must not send the operator there.
+    assert!(out.body.contains("Enable mtls"), "{}", out.body);
+    assert!(!out.body.contains("HTTPS address"), "{}", out.body);
     assert_eq!(
         state.dashboard_bootstrap.peek().as_deref(),
         Some(value.as_str()),
