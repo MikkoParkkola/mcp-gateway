@@ -134,6 +134,8 @@ impl DiscoveryEngine {
     /// Create a new `DiscoveryEngine` with a configured reqwest client.
     ///
     /// The client enforces:
+    /// - every name resolved once and pinned: a name resolving to a private,
+    ///   loopback or reserved address is refused at connect (#2027)
     /// - no proxy from `HTTP(S)_PROXY` in the environment (#1881)
     /// - SSRF validation on every redirect hop
     /// - Max 5 redirects
@@ -145,10 +147,10 @@ impl DiscoveryEngine {
     /// default client is no fallback: it would follow environment proxies.
     #[must_use]
     pub fn new(options: DiscoveryOptions) -> Self {
-        // Never an environment proxy: it would reach destinations the SSRF
-        // checks here never see (#1881).
-        let client = reqwest::Client::builder()
-            .no_proxy()
+        // The pinned builder never uses an environment proxy (#1881) and pins
+        // every name this client fetches: probes, HTML-found spec links and
+        // redirect targets, none of which the base-URL check sees (#2027).
+        let client = crate::security::ssrf::pinned_client_builder()
             .timeout(options.timeout)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 let ssrf_blocked = validate_url_not_ssrf(attempt.url().as_str()).is_err();
@@ -163,6 +165,27 @@ impl DiscoveryEngine {
             .build()
             .expect("Failed to create HTTP client");
         Self { client, options }
+    }
+
+    /// Refuse a base URL whose host name resolves to a blocked address.
+    async fn check_base_name(base_url: &str) -> crate::Result<()> {
+        let host = url::Url::parse(base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned));
+        if let Some(host) = host.filter(|host| {
+            host.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_err()
+        }) {
+            crate::security::ssrf::resolve_and_validate_host(
+                &host,
+                &crate::security::ssrf::SystemResolver,
+            )
+            .await
+            .map_err(|e| crate::Error::Protocol(format!("SSRF check failed for base URL: {e}")))?;
+        }
+        Ok(())
     }
 
     /// Discover API specifications from a base URL.
@@ -184,6 +207,10 @@ impl DiscoveryEngine {
         // 1. SSRF gate on base URL
         validate_url_not_ssrf(base_url)
             .map_err(|e| crate::Error::Protocol(format!("SSRF check failed for base URL: {e}")))?;
+        // The pin refuses an internal name at connect, but the probe chain
+        // swallows that as "no spec found"; resolve the base name up front so
+        // the operator sees the real reason (#2027).
+        Self::check_base_name(base_url).await?;
 
         info!(url = %base_url, "Starting capability discovery");
 
