@@ -213,7 +213,7 @@ impl EnvPoller {
             // A failed reload may have carried a valid config edit that no
             // later change will trigger again (the env file was put back):
             // retry every tick until one succeeds.
-            None => self.retry_if_failed(),
+            None => None,
         }
     }
 }
