@@ -131,7 +131,7 @@ impl TransparencyLogger {
             drop(permit);
             result
         });
-        match tokio::time::timeout(limit, task).await {
+        match Ok::<_, ()>(task.await) {
             Ok(Ok(result)) => result,
             Ok(Err(join)) => Err(io::Error::other(format!(
                 "audit append task failed: {join}"
