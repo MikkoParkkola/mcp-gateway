@@ -89,8 +89,15 @@ impl State {
                 (Ok(a), Ok(b)) if a == b
             )
         };
-        if self.grants_path == path || same_file() {
+        if self.grants_path == path {
             return self;
+        }
+        if same_file() {
+            // Record the current spelling: the old one may disappear later.
+            return Self {
+                grants_path: path,
+                ..self
+            };
         }
         Self {
             generation: self.generation,
