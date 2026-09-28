@@ -417,6 +417,22 @@ async fn logout_is_post_only() {
     );
 }
 
+/// E5-T24: an HTTPS `public_url` written in any letter case marks cookies
+/// `Secure`; the scheme is case-insensitive.
+#[tokio::test]
+async fn an_uppercase_https_public_url_still_marks_cookies_secure() {
+    let (state, _dir) = fixture().await;
+    reload(&state, |c| {
+        c.server.public_url = Some("HTTPS://Gateway.Example".to_string());
+    });
+    let h = issue(&state);
+    let out = send(&state, logout(Some(&h))).await;
+    assert!(out.set_cookie().contains("Secure"), "{}", out.set_cookie());
+    assert!(crate::gateway::auth::is_https_url("Https://x"));
+    assert!(!crate::gateway::auth::is_https_url("http://x"));
+    assert!(!crate::gateway::auth::is_https_url("https:/"));
+}
+
 /// E5-T11: on a TLS-fronted gateway the clearing cookie is `Secure` too.
 #[tokio::test]
 async fn logout_cookie_is_secure_on_tls() {

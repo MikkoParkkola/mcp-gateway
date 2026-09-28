@@ -473,7 +473,7 @@ fn url_authority(host: &str, port: u16) -> String {
 /// reason instead of the dead link is what tells the operator which knob moved.
 fn dashboard_link_refusal(config: &Config) -> Option<String> {
     let public = config.server.public_url.as_deref()?;
-    if config.mtls.enabled || !public.starts_with("https://") {
+    if config.mtls.enabled || !crate::gateway::auth::is_https_url(public) {
         return None;
     }
     Some(format!(

@@ -547,7 +547,14 @@ pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> boo
             .server
             .public_url
             .as_deref()
-            .is_some_and(|u| u.starts_with("https://"))
+            .is_some_and(is_https_url)
+}
+
+/// `true` for an `https://` URL. Shared by the cookie-security check, the
+/// startup-banner link refusal and the OIDC issuer/`jwks_uri` checks, so one
+/// fix covers all of them.
+pub(crate) fn is_https_url(url: &str) -> bool {
+    url.starts_with("https://")
 }
 
 /// Whether a session cookie set or cleared now must be `Secure`: the listener

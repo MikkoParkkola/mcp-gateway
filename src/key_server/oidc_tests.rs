@@ -41,6 +41,20 @@ fn validate_discovery_accepts_matching_issuer_and_https() {
 }
 
 #[test]
+fn validate_discovery_accepts_uppercase_https_jwks_uri() {
+    // The scheme is case-insensitive (RFC 3986 section 3.1); a discovery
+    // document naming `HTTPS://...` is exactly as secure as lowercase and
+    // must not be rejected as `InsecureJwksUri`.
+    let doc = OidcDiscoveryDocument {
+        issuer: "https://accounts.google.com".to_string(),
+        jwks_uri: "HTTPS://www.googleapis.com/oauth2/v3/certs".to_string(),
+    };
+    let uri = validate_discovery_document("https://accounts.google.com", doc)
+        .expect("uppercase-scheme https jwks_uri must be accepted");
+    assert_eq!(uri, "HTTPS://www.googleapis.com/oauth2/v3/certs");
+}
+
+#[test]
 fn validate_discovery_rejects_issuer_mismatch() {
     // Mix-up defense: a document whose issuer differs from the requested one
     // must be rejected even if it is otherwise well-formed.
