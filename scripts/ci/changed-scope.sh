@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Decides whether a pull request changes documentation only.
 #
-#   changed-scope.sh <base sha> <pr number> <head sha>   prints docs_only=true|false
-#     (the base SHA is accepted for the callers but unused: the listing comes
-#      from the PR test-merge commit, see from_git_in)
+#   changed-scope.sh <merge sha> <pr number> <head sha>  prints docs_only=true|false
+#     (<merge sha> is github.sha of the pull_request event: GitHub's test-merge
+#      commit of the head into the base; see from_git_in)
 #   changed-scope.sh --classify < NUL-separated paths    same, for a path list
 #   changed-scope.sh --self-test
 #
@@ -32,29 +32,29 @@ classify() {
 }
 
 from_git() {
-  local base=$1 pr=$2 head=$3 repo_url=${REPO_URL:?} probe
+  local merge=$1 pr=$2 head=$3 repo_url=${REPO_URL:?} probe
   probe=$(mktemp -d)
-  from_git_in "$probe" "$base" "$pr" "$head" "$repo_url"
+  from_git_in "$probe" "$merge" "$pr" "$head" "$repo_url"
   local rc=$?
   rm -rf -- "$probe"
   return $rc
 }
 
 from_git_in() {
-  local probe=$1 pr=$3 head=$4 repo_url=$5
+  local probe=$1 merge=$2 head=$4 repo_url=$5
   git init -q "$probe"
-  # GitHub's test-merge commit refs/pull/<n>/merge: first parent is the base
-  # tip, second the PR head. Diffing the merge against its first parent lists
-  # exactly what the PR changes, however far the base has moved since the PR
-  # branched (a plain base-vs-head diff would count base-only changes too).
-  # The base repository holds this ref for fork pull requests as well. Missing
-  # or stale (a conflicting PR has none): the caller falls back to running all.
-  git -C "$probe" fetch -q --depth=2 "$repo_url" "+refs/pull/$pr/merge:refs/probe/merge" || return 1
-  [[ $(git -C "$probe" rev-parse refs/probe/merge^2) == "$head" ]] || return 1
+  # The event's own test-merge commit (github.sha on a pull_request event):
+  # first parent is the base tip it was built on, second the PR head. Diffing
+  # it against its first parent lists exactly what the PR changes, however far
+  # the base had moved since the PR branched, and it is the very tree this run
+  # tests. Unreachable (the merge was recomputed since) or not a merge of this
+  # head: the caller falls back to running everything.
+  git -C "$probe" fetch -q --depth=2 "$repo_url" "$merge" || return 1
+  [[ $(git -C "$probe" rev-parse "$merge^2") == "$head" ]] || return 1
   # --no-renames: a rename from src/ to docs/ lists both sides.
   # Into a file, not a pipe: classify stops at the first code path, and the
   # writer's SIGPIPE would then read as a failed listing under pipefail.
-  git -C "$probe" diff -z --no-renames --name-only refs/probe/merge^1 refs/probe/merge >"$probe/paths" || return 1
+  git -C "$probe" diff -z --no-renames --name-only "$merge^1" "$merge" >"$probe/paths" || return 1
   classify <"$probe/paths"
 }
 
@@ -86,7 +86,7 @@ case ${1:-} in
   --self-test) self_test ;;
   --classify) echo "docs_only=$(classify)" ;;
   *)
-    if out=$(from_git "${1:?base sha}" "${2:?pr number}" "${3:?head sha}"); then
+    if out=$(from_git "${1:?merge sha}" "${2:?pr number}" "${3:?head sha}"); then
       echo "docs_only=$out"
     else
       echo "docs_only=false"

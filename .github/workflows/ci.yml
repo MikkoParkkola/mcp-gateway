@@ -69,7 +69,7 @@ jobs:
         id: decide
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -79,7 +79,7 @@ jobs:
           if [ "$EVENT" != pull_request ]; then
             echo "docs_only=false" | tee -a "$GITHUB_OUTPUT"
           else
-            bash scripts/ci/changed-scope.sh "$BASE_SHA" "$PR_NUMBER" "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
+            bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
           fi
   public-repo-hygiene:
     name: Public repo hygiene

@@ -59,6 +59,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.sha }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
@@ -70,7 +71,7 @@ jobs:
             # Into main (required `build`): every PR builds except a docs-only
             # one, whose `build` gate then reports success without a build.
             # The classifier falls back to docs_only=false on any error.
-            if [ "$(bash scripts/ci/changed-scope.sh "$BASE_SHA" "$PR_NUMBER" "$HEAD_SHA")" = docs_only=true ]; then
+            if [ "$(bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA")" = docs_only=true ]; then
               decide false "docs-only pull request"
             else
               decide true "pull request into $BASE_REF"
