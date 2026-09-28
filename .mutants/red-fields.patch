@@ -1,0 +1,17 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 7119ed5ed..f96082493 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -539,9 +539,10 @@ impl InputBridge<'_> {
+                     reason: refused.reason,
+                 });
+             }
+-            Self::plan(&interim, declared, slice)?;
++            let prompts = Self::plan(&interim, declared, slice)?;
++            let _ = body;
+             self.gate
+-                .admit(&Self::handed_back(body))
++                .admit(&serde_json::Value::Array(prompts.iter().map(|p| serde_json::json!({"key": p.key, "method": p.kind.method(), "params": p.params})).collect()))
+                 .map_err(|error| match error {
+                     BridgeError::ChallengeRefused { .. } => {
+                         BridgeError::ChallengeRefused { dispatched }

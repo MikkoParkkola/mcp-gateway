@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 7119ed5ed..43b01dab3 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -539,7 +539,7 @@ impl InputBridge<'_> {
+                     reason: refused.reason,
+                 });
+             }
+-            Self::plan(&interim, declared, slice)?;
++            let _ = Self::plan(&interim, declared, slice);
+             self.gate
+                 .admit(&Self::handed_back(body))
+                 .map_err(|error| match error {

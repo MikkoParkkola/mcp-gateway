@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge/debug.rs b/src/gateway/input_bridge/debug.rs
+index 94bb5992f..e6f0e3ca4 100644
+--- a/src/gateway/input_bridge/debug.rs
++++ b/src/gateway/input_bridge/debug.rs
+@@ -25,7 +25,7 @@ impl std::fmt::Debug for BridgeError {
+                 .finish(),
+             Self::RoundsExhausted { last } => f
+                 .debug_struct("RoundsExhausted")
+-                .field("last", &last.as_ref().map(|_| "<redacted>"))
++                .field("last", last)
+                 .finish(),
+             Self::Undeclared {
+                 key,

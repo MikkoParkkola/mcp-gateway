@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 7119ed5ed..af0a50666 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -532,7 +532,7 @@ impl InputBridge<'_> {
+         // An undeclared one is refused here with what MRTR.9 names, so no
+         // caller ever holds a round it would have to check itself (#2173).
+         if let Some(body) = last.as_deref() {
+-            if let Some(refused) = interim.undeclared(declared) {
++            if let Some(refused) = interim.undeclared(declared).filter(|_| false) {
+                 return Err(BridgeError::Undeclared {
+                     key: refused.key.to_string(),
+                     method: refused.method.to_string(),

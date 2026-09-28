@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 810c4174d..172e9830d 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2361,6 +2361,9 @@ impl MetaMcp {
+                         result = *last;
+                         interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+                     }
++                    if let Some(reservation) = idem_reservation.as_mut() {
++                        reservation.commit(&uncertain_side_effect());
++                    }
+                 }
+                 Err(crate::gateway::input_bridge::BridgeError::Undeclared {
+                     key,
