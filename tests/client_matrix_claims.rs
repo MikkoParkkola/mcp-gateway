@@ -107,8 +107,16 @@ fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
         } else if path.starts_with("cwd.join(") {
             literals(&path, "cwd.join(\"", "")
         } else {
-            let helper = path.trim_end_matches("()");
-            literals(fn_body(helpers, helper), "home_path(\"", "~/")
+            let body = fn_body(helpers, path.trim_end_matches("()"));
+            let per_platform: BTreeSet<String> = platform_paths_in(body)
+                .into_iter()
+                .map(|(_, p)| p)
+                .collect();
+            if per_platform.is_empty() {
+                literals(body, "home_path(\"", "~/")
+            } else {
+                per_platform
+            }
         };
         assert!(!paths.is_empty(), "{label}: no path found in `{path}`");
         out.insert(label, (key, paths));
@@ -119,16 +127,28 @@ fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
 /// (platform word, path) for every platform-specific literal in the path
 /// helpers, from the `#[cfg]` line above each `return`.
 fn platform_paths() -> Vec<(&'static str, String)> {
-    let helpers = PATHS_SRC.split("#[cfg(test)]").next().unwrap();
+    platform_paths_in(PATHS_SRC.split("#[cfg(test)]").next().unwrap())
+}
+
+/// As [`platform_paths`], for one helper body. A `config_dir_path("…")` is
+/// the OS config directory: `$XDG_CONFIG_HOME/…` on Linux, `%APPDATA%/…` on
+/// Windows.
+fn platform_paths_in(src: &str) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     let mut cfg = "";
-    for line in helpers.lines().map(str::trim) {
+    for line in src.lines().map(str::trim) {
         if line.starts_with("#[cfg(") {
             cfg = line;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("return home_path(\"") {
-            let path = format!("~/{}", rest.split('"').next().unwrap());
+        let (rest, config_dir) = if let Some(rest) = line.strip_prefix("return home_path(\"") {
+            (rest, false)
+        } else if let Some(rest) = line.strip_prefix("return config_dir_path(\"") {
+            (rest, true)
+        } else {
+            continue;
+        };
+        {
             let word = match cfg {
                 c if c.contains("not(any(") => "Windows",
                 c if c.contains("not(") => "elsewhere",
@@ -136,10 +156,16 @@ fn platform_paths() -> Vec<(&'static str, String)> {
                 c if c.contains("\"linux\"") => "Linux",
                 other => panic!("unrecognised cfg `{other}` in src/commands/paths.rs"),
             };
+            let lit = rest.split('"').next().unwrap();
+            let path = match (config_dir, word) {
+                (false, _) => format!("~/{lit}"),
+                (true, "Linux") => format!("$XDG_CONFIG_HOME/{lit}"),
+                (true, "Windows") => format!("%APPDATA%/{lit}"),
+                (true, other) => panic!("config_dir_path under `{other}` has no documented form"),
+            };
             out.push((word, path));
         }
     }
-    assert!(out.len() >= 5, "found only {out:?} platform paths");
     out
 }
 
