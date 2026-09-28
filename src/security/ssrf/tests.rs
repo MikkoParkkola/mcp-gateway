@@ -402,6 +402,28 @@ fn url_schemeless_host_port_gives_actionable_error() {
     );
 }
 
+/// #2113: the validator's error names the value it refused, so it must not
+/// carry a credential from it: userinfo, query or fragment, in any of the
+/// three shapes that echo the input.
+#[test]
+fn url_errors_name_the_value_without_its_credentials() {
+    for raw in [
+        "user:SECRET1@idp.invalid/token?t=SECRET2",
+        "/rpc?token=SECRET3#SECRET4",
+        "http://u:SECRET5@[bad/path",
+        "localhost:8080/mcp?token=SECRET6",
+    ] {
+        let err = validate_url_not_ssrf(raw)
+            .expect_err("each shape is refused")
+            .to_string();
+        for secret in [
+            "SECRET1", "SECRET2", "SECRET3", "SECRET4", "SECRET5", "SECRET6",
+        ] {
+            assert!(!err.contains(secret), "{raw:?} leaked {secret}: {err}");
+        }
+    }
+}
+
 #[test]
 fn url_rejects_missing_host() {
     // file:// URLs have no host

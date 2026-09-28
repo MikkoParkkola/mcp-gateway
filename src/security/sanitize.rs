@@ -610,6 +610,45 @@ pub fn redact_url_for_diagnostics(raw: &str) -> String {
     }
 }
 
+/// A URL with its path kept, for an error that must name the value an operator
+/// mistyped: userinfo, query and fragment are removed, whether or not the
+/// input parses as a URL with a host (#2113).
+#[must_use]
+#[allow(dead_code, reason = "red-first stub")]
+pub(crate) fn redact_url_keep_path(raw: &str) -> String {
+    raw.to_string()
+}
+
+#[cfg(test)]
+mod redact_url_keep_path_tests {
+    use super::redact_url_keep_path as redact;
+
+    #[test]
+    fn a_parsed_url_keeps_its_path_and_drops_the_rest() {
+        let out = redact("https://user:PW1@api.invalid/v1/x?token=Q1#frag=F1");
+        assert_eq!(out, "https://api.invalid/v1/x");
+    }
+
+    #[test]
+    fn hostless_and_unparseable_inputs_drop_userinfo_query_and_fragment() {
+        // `user:PW2@host/p` parses as scheme `user` with no host; `bob@h/p`
+        // does not parse at all. Neither may keep what precedes the `@`.
+        for (raw, kept) in [
+            ("user:PW2@idp.invalid/p?t=Q2", "idp.invalid/p"),
+            ("bob@idp.invalid/p?t=Q3#F3", "idp.invalid/p"),
+            ("/rpc?token=Q4", "/rpc"),
+            ("search_flights", "search_flights"),
+            ("localhost:8080/mcp", "localhost:8080/mcp"),
+        ] {
+            let out = redact(raw);
+            for secret in ["PW2", "user:", "bob@", "Q2", "Q3", "F3", "Q4"] {
+                assert!(!out.contains(secret), "{raw:?} kept {secret:?}: {out:?}");
+            }
+            assert!(out.contains(kept), "{raw:?} lost {kept:?}: {out:?}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod redact_url_tests {
     use super::redact_url_for_diagnostics as redact;
