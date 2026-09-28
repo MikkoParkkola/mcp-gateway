@@ -219,10 +219,12 @@ pub enum Error {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
-    /// TLS error — certificate loading, binding, or handshake failure.
+    /// TLS error: certificate loading, TLS acceptor setup, or handshake
+    /// failure on the mTLS listener.
     ///
-    /// Use this instead of `Internal` for `rustls`/`axum-server` errors in
-    /// the TLS server path.
+    /// Use this instead of `Internal` for `rustls` and TLS-acceptor errors.
+    /// A socket or listener error that is not about TLS is `Io`, on either
+    /// listener.
     #[error("TLS error: {0}")]
     Tls(String),
 

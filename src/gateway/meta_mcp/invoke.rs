@@ -148,6 +148,7 @@ mod side_effect_markers;
 mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 mod r2_check;
+mod withheld_evidence;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
 mod account_mint;
@@ -2920,7 +2921,7 @@ impl MetaMcp {
             "schema_version": &evaluation.schema_version,
             "content_sha256": &evaluation.content_sha256,
             "provenance": &evaluation.provenance,
-            "classification": &evaluation.classification,
+            "classification": withheld_evidence::delivered(evaluation),
             "policy": &evaluation.policy,
             "audit": &evaluation.audit,
         });
