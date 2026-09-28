@@ -17,10 +17,10 @@ const WITHHELD: &str = "withheld";
 /// The classification the client receives. Unchanged when enforcement did not
 /// apply: the content itself was delivered, so its evidence reveals nothing new.
 pub(super) fn delivered(evaluation: &ContextIntegrityEvaluation) -> ContextIntegrityClassification {
-    let mut classification = evaluation.classification.clone();
-    if !evaluation.policy.enforcement_applied || classification.findings.is_empty() {
-        return classification;
+    if !evaluation.policy.enforcement_applied || evaluation.classification.findings.is_empty() {
+        return evaluation.classification.clone();
     }
+    let mut classification = evaluation.classification.clone();
     let evidence: Vec<(String, &str)> = evaluation
         .classification
         .findings
