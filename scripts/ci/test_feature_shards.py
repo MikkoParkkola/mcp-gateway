@@ -31,7 +31,7 @@ def shard_combos(workflow: dict) -> dict[str, list[str]]:
 
 
 def documented(text: str) -> list[str]:
-    return re.findall(r"^\| `([^`]+)` \| `feature-combos` \|$", text, flags=re.M)
+    return re.findall(r"^\|\s*`([^`]+)`\s*\|\s*`feature-combos`\s*\|", text, flags=re.M)
 
 
 def check(shards: dict[str, list[str]], docs: list[str]) -> list[str]:

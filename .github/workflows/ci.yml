@@ -444,8 +444,11 @@ jobs:
           components: clippy
       # One shared cache (saved by the first shard to finish), not one per
       # shard: four extra entries would crowd the 10 GB repository cache the
-      # required jobs depend on.
+      # required jobs depend on. The key is explicit so the shards cannot
+      # drift into separate entries.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: feature-combos
       # Library and binaries only: the test targets are written against the
       # default feature set and do not compile without it. Every combination
       # runs even after one fails; the step fails at the end, naming them all.
