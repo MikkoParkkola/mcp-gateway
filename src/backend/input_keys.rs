@@ -29,12 +29,12 @@ impl Backend {
     ) -> Option<String> {
         // Before the enforcement mode: a withheld tool is refused whatever
         // the argument-key setting, and for every caller (#1441).
-        if let Some(refusal) = self.blocked_tool_refusal(tool) {
-            return Some(refusal);
-        }
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
             return None;
+        }
+        if let Some(refusal) = self.blocked_tool_refusal(tool) {
+            return Some(refusal);
         }
         let Some(cached) = self.get_cached_tool_for(identity_key, tool) else {
             crate::trust::closed_keys::count("input_schema_unknown");
