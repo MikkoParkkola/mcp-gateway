@@ -10,11 +10,11 @@
 //! the fill ends without storing, and never on a caller cancellation.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::LIST_MAX_PAGES;
 use super::pool::PooledEntry;
+use crate::failsafe::CircuitState;
 use crate::trust::closed_keys::{count, count_reason};
 use crate::{Error, Result};
 
@@ -280,9 +280,13 @@ fn record_fill(
     };
     let reason = error.to_string();
     if is_transport_failure(error) {
-        let throttled = entry.failsafe.record_dispatch_failure(&reason, latency);
-        if !throttled && !warmup {
-            note_request_failure(entry);
+        if warmup {
+            // A warm-up's own failure: counted, but it marks nothing, so a
+            // later warm-up success may undo the trip.
+            let _guard = entry.request_failed_since_close.lock();
+            entry.failsafe.record_dispatch_failure(&reason, latency);
+        } else {
+            record_request_failure(entry, &reason, latency);
         }
     } else if crate::gateway::recovery::is_rate_limited(&reason) {
         entry.failsafe.record_rate_limited(&reason, latency);
@@ -297,30 +301,41 @@ fn record_fill(
 /// A reachable answer. A warm-up success resets an Open breaker only when
 /// no request failure was recorded since it last closed: warm-up may undo
 /// its own trips, never one requests caused (maintainer ruling on #1300).
+/// The check, the reset and the success are one step under the flag's lock.
 fn record_reachable(entry: &PooledEntry, warmup: bool, latency: Duration) {
-    let open = entry.failsafe.circuit_breaker.stats().state == crate::failsafe::CircuitState::Open;
-    if warmup && open && !entry.request_failed_since_close.load(Ordering::SeqCst) {
+    let mut request_failed = entry.request_failed_since_close.lock();
+    let open = entry.failsafe.circuit_breaker.stats().state == CircuitState::Open;
+    if warmup && open && !*request_failed {
         entry.failsafe.circuit_breaker.reset();
     }
-    record_request_success(entry, latency);
+    success_under(entry, &mut request_failed, latency);
 }
 
-/// A success on the slot; once the breaker is Closed the provenance flag is
-/// cleared, since no failure since the close remains.
+/// A request's success on the slot (dispatch path).
 pub(super) fn record_request_success(entry: &PooledEntry, latency: Duration) {
+    let mut request_failed = entry.request_failed_since_close.lock();
+    success_under(entry, &mut request_failed, latency);
+}
+
+/// Record a success; once the breaker is Closed no failure since the close
+/// remains, so the provenance flag clears.
+fn success_under(entry: &PooledEntry, request_failed: &mut bool, latency: Duration) {
     entry.failsafe.record_success(latency);
-    if entry.failsafe.circuit_breaker.stats().state == crate::failsafe::CircuitState::Closed {
-        entry
-            .request_failed_since_close
-            .store(false, Ordering::SeqCst);
+    if entry.failsafe.circuit_breaker.stats().state == CircuitState::Closed {
+        *request_failed = false;
     }
 }
 
-/// A non-throttle failure a request or request-triggered fill caused.
-pub(super) fn note_request_failure(entry: &PooledEntry) {
-    entry
-        .request_failed_since_close
-        .store(true, Ordering::SeqCst);
+/// A request's (or request-triggered fill's) failure, recorded and flagged
+/// under one lock. Returns `true` for a throttle, which is not a failure and
+/// flags nothing.
+pub(super) fn record_request_failure(entry: &PooledEntry, reason: &str, latency: Duration) -> bool {
+    let mut request_failed = entry.request_failed_since_close.lock();
+    let throttled = entry.failsafe.record_dispatch_failure(reason, latency);
+    if !throttled {
+        *request_failed = true;
+    }
+    throttled
 }
 
 fn count_fill(backend: &str, status: &'static str) {

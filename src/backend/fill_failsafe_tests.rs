@@ -269,8 +269,9 @@ async fn warm_up_spends_no_token() {
     assert_eq!(lister.lists(), 1);
 }
 
-/// T10 (AC2): a warm-up that cannot reach the backend opens a hair-trigger
-/// breaker. Red on base: the stub records nothing. Mutant M7.
+/// T10 (AC2), GUARD row: a warm-up that cannot reach the backend opens a
+/// hair-trigger breaker. The warm-up fill is new, so on base this fails only
+/// at the stub's setup (it cannot fail); proven by mutant M7 (no recording).
 #[tokio::test]
 async fn a_failing_warm_up_opens_the_breaker() {
     let lister = Lister::new(Mode::Down);
@@ -283,9 +284,10 @@ async fn a_failing_warm_up_opens_the_breaker() {
     assert_eq!(state(&backend), CircuitState::Open);
 }
 
-/// T12: a warm-up success resets a breaker that only warm-up failures opened,
-/// so a slow start is not refused after its catalogue is cached. Red on base:
-/// the stub records nothing. Mutant M8 (no reset).
+/// T12, GUARD row for a behaviour this design introduces: a warm-up success
+/// resets a breaker that only warm-up failures opened, so a slow start is not
+/// refused after its catalogue is cached. On base it fails only at the stub's
+/// setup; proven by mutant M8 (no reset on a warm-up success).
 #[tokio::test(start_paused = true)]
 async fn a_warm_up_success_clears_a_breaker_its_own_failures_tripped() {
     let lister = Lister::new(Mode::Down);
@@ -348,6 +350,28 @@ async fn a_request_failing_the_half_open_probe_keeps_warm_up_from_clearing_it() 
         .request("tools/list", None)
         .await
         .expect_err("the half-open probe fails");
+    assert_eq!(state(&backend), CircuitState::Open);
+    tokio::time::advance(LIST_FILL_COOLDOWN + Duration::from_secs(1)).await;
+    lister.set(Mode::Serve);
+    backend.warm_tools().await.expect("warm-up lists");
+    assert_eq!(state(&backend), CircuitState::Open);
+}
+
+/// T14, GUARD row: a breaker tripped by a request-triggered FILL (not only a
+/// dispatch) is also kept from a warm-up reset. Proven by mutant M11 (fills
+/// record their failures without the provenance flag).
+#[tokio::test(start_paused = true)]
+async fn a_warm_up_success_does_not_clear_a_breaker_tripped_by_a_discovery_fill() {
+    let lister = Lister::new(Mode::Down);
+    let backend = backend(
+        InputSchemaEnforcement::Closed,
+        &hair_trigger(Duration::from_secs(3600)),
+        &lister,
+    );
+    backend
+        .get_tools_shared()
+        .await
+        .expect_err("a fill failure");
     assert_eq!(state(&backend), CircuitState::Open);
     tokio::time::advance(LIST_FILL_COOLDOWN + Duration::from_secs(1)).await;
     lister.set(Mode::Serve);

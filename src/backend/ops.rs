@@ -405,12 +405,8 @@ impl Backend {
         error: &Error,
         exchange: &'static str,
     ) {
-        let rate_limited = entry
-            .failsafe
-            .record_dispatch_failure(&error.to_string(), latency);
-        if !rate_limited {
-            super::fill_check::note_request_failure(entry);
-        }
+        let rate_limited =
+            super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {
             tracing::warn!(
                 error = %error,
