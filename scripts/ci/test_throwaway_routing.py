@@ -152,9 +152,37 @@ def check(workflow: str, name: str, rc: list) -> None:
                 rc.append(f"{workflow}: with the variable ready '{name}' runs on {labels[0]}")
 
 
+def only_throwaway_tests(rc: list) -> None:
+    """A same-repo throwaway PR into the release line runs exactly one ci.yml
+    job, `Tests (throwaway)`: every other job must skip it, or each red-first
+    and mutant PR pays for extra hosted builds. A job without an `if:` (and
+    with no skipped dependency) always runs, so it fails this too."""
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    for var in (None, "ready"):
+        c = event("throwaway", var)
+        c["inputs"] = {}
+        # Jobs that need a skipped job are skipped unless their `if:` says otherwise.
+        c["needs"] = {name: {"result": "skipped", "outputs": {}} for name in jobs}
+        c["_status"] = {"cancelled": False, "success": False, "failure": False}
+        ran = []
+        for name, job in jobs.items():
+            cond = job.get("if")
+            needs = job.get("needs") or []
+            if cond is None:
+                if not needs:
+                    ran.append(name)
+                continue
+            if evaluate(str(cond), c):
+                ran.append(name)
+        names = sorted({jobs[n].get("name", n) for n in ran})
+        if names != ["Tests (throwaway)"] or len(ran) != 1:
+            rc.append(f"ci.yml: a throwaway PR (var={var}) runs {sorted(ran)}, expected only Tests (throwaway)")
+
+
 def main() -> int:
     rc: list[str] = []
     check("ci.yml", "Tests (throwaway)", rc)
+    only_throwaway_tests(rc)
     check("mutants.yml", "Mutants (linux)", rc)
     for line in rc:
         print(f"routing: {line}", file=sys.stderr)
