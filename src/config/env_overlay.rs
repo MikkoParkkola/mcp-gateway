@@ -434,7 +434,7 @@ impl EnvOverlay {
         match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
             Ok(text) => {
                 let mut loaded = loaded.peekable();
-                was_absent || loaded.peek().is_none() || loaded.any(|(_, t)| *t != text)
+                was_absent || loaded.peek().is_none() || !loaded.any(|(_, t)| *t == text)
             }
             Err(_) => true,
         }
