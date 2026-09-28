@@ -63,7 +63,39 @@ commit adds signature-only stubs (`journal` change fn writes the file only; `Gra
 returns `Ok` with no records; `grant_change` field present but not mapped in `audit_fields`; startup
 wiring calls a no-op). T1b and T5b are positive controls and pass on red; that is stated in the PR.
 
+## Amendments after review round 1 (these override the table above)
+
+Every assertion on records also checks `actor_id == "unknown"` and the full `grant_change` fields
+(verb, digest, expires_at, occurred_at, os_account_hint, run_id, count) against values the test set.
+
+| Cell | Change |
+|---|---|
+| T1a | Drives the CLI handlers (`upsert_local_grant`, `revoke_local_grant` in `src/commands/identity.rs`) with a fixed `USER` and an expiry; pins `expires_at`, `at` present, `os_account`. A red stub keeps the handlers on the write-only path |
+| T1b | Positive control made explicit: red and green both show 1 journal line after the first add, because the red stub for the CLI change fn appends nothing and T1b is therefore red on base too; it is listed as red, not as a control |
+| T1e | New. Grant-file write fails (parent is a file): no journal line. Journal append fails after the file write (journal path is a directory): Err naming out-of-band; file changed |
+| T1f | New. Existing journal at 0o644 is repaired to 0o600; a journal without a trailing newline gets one before the next entry, and both entries parse |
+| T2b | Precondition: the first reconcile writes the `add` record (non-vacuous), then the second adds 0 |
+| T2e | New. Parse refusal: invalid grant file plus one pending CLI entry; reload refused, live set unchanged, 0 records; fix the file, reload: the entry's record once |
+| T4c | Driven through the real startup helper, not `restart()` + reconcile |
+| T4g | After the torn line, the following valid entry's record is required. Unterminated final line: 0 records, then append a newline and reconcile: record once. Unreadable journal: after restoring mode 0o600 the pending CLI entry is recorded and no `out_of_band` appears |
+| T4h | A second reconcile after the discontinuity adds 0 records |
+| T4j | Adds a later direct edit of the same grant, which must produce one `out_of_band`; the revoke record itself must appear |
+| T4k | New. State file for a different `grants_path`: behaves as no baseline (no `out_of_band` for unjournalled pre-existing grants) |
+| T5b | Asserts no governance store is built (`build_control_plane_store` returns `None`) and the sink has no auditor |
+| T6 | Also asserts order: the publish happened (epoch bumped) before the failed append, via `FlakyStore` observing the epoch at the failing call |
+| T7c | Fault after recovering the old plan and before the new plan: state has `gap: true` and no gap record yet; next reconcile writes the gap record and clears `gap` |
+| T8b | Injection: `GrantAuditFault::CommitWrite` fails every commit write while set. Also a startup with the fault still set serves no grants and writes no snapshot |
+| T10 | Replaced by two cells: (a) a reload racing a CLI change on threads, 200 iterations, never yields `out_of_band` for a CLI grant; (b) the gateway helper reads the grant file only while holding the lock (a test hook records lock state at read time) |
+| T11 | Adds an event with `grant_change: None`: serialised line has no `grant_change` key, and a pre-change log line deserialises with `None` |
+| T12 | New. Startup ordering: the listener bind hook asserts the snapshot's `loaded_complete` is already in the log |
+| T13 | New. Grant file changed between the initial load and the locked read at startup: served rows equal the `loaded` rows |
+
+Red-first: every cell above is red on the stub commit, including T1b; the only positive control is T5b.
+
 ## Mutants (design section 11)
+
+Also M10: CLI handler skips the journal (T1a); M11: gateway reads the grant file before the lock (T10b).
+
 
 M1-M9 map to T1a, T8, T2d, T4a, T3c, T5a, T7a, T4d, T4e. One throwaway PR per mutant until the batched
 workflow lands.
