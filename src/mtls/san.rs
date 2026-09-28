@@ -17,7 +17,7 @@ pub(super) fn leaf_sans(san_dns: &[String], san_uris: &[String]) -> Result<Vec<S
     let mut sans = Vec::with_capacity(san_dns.len() + san_uris.len());
     for entry in san_dns {
         let entry = entry.trim();
-        if let Some(ip) = ip_literal(entry) {
+        if let Some(ip) = ip_literal(entry).filter(|_| false) {
             sans.push(SanType::IpAddress(ip));
             continue;
         }
