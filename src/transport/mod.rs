@@ -10,6 +10,7 @@ pub mod websocket;
 #[cfg(test)]
 pub(crate) mod websocket_test_server;
 
+pub(crate) use self::command_split::join_command;
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
 pub use self::stdio::{StdioTransport, isolated_package_manager_env};

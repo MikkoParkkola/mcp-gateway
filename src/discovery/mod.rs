@@ -13,15 +13,23 @@ use tracing::debug;
 use crate::Result;
 use crate::config::{BackendConfig, TransportConfig};
 
+mod client_entry;
 pub mod config_scanner;
+mod jsonc;
 pub mod process_scanner;
+mod secret_map;
 pub mod shadow;
+
+pub use secret_map::{REDACTED, SecretMap};
 
 use config_scanner::ConfigScanner;
 use process_scanner::ProcessScanner;
 
 /// Discovered MCP server
+///
+/// `#[non_exhaustive]` since 4.0: build one with [`DiscoveredServer::new`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DiscoveredServer {
     /// Suggested name for the backend
     pub name: String,
@@ -33,6 +41,14 @@ pub struct DiscoveredServer {
     pub transport: TransportConfig,
     /// Additional metadata
     pub metadata: ServerMetadata,
+    /// Environment the client passes a stdio server. Values are secrets:
+    /// see [`SecretMap`].
+    #[serde(default, skip_serializing_if = "SecretMap::is_empty")]
+    pub env: SecretMap,
+    /// Headers the client sends an HTTP server. Values are secrets: see
+    /// [`SecretMap`].
+    #[serde(default, skip_serializing_if = "SecretMap::is_empty")]
+    pub headers: SecretMap,
 }
 
 /// Source of discovery
@@ -78,13 +94,40 @@ pub struct ServerMetadata {
 }
 
 impl DiscoveredServer {
-    /// Convert to backend config
+    /// A discovered server with no environment and no headers.
+    #[must_use]
+    pub fn new(
+        name: String,
+        description: String,
+        source: DiscoverySource,
+        transport: TransportConfig,
+        metadata: ServerMetadata,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            source,
+            transport,
+            metadata,
+            env: SecretMap::default(),
+            headers: SecretMap::default(),
+        }
+    }
+
+    /// Convert to backend config, values included: this is what the
+    /// owner-only config writer persists. `BackendConfig` is the gateway.yaml
+    /// schema, so its `Serialize` carries `env`/`headers` values as it does
+    /// for every hand-written backend; its `Debug` shows counts only.
     #[must_use]
     pub fn to_backend_config(&self) -> BackendConfig {
+        // The one path that sees env and header values: the backend the
+        // config writer persists owner-only.
         BackendConfig {
             description: self.description.clone(),
             enabled: true,
             transport: self.transport.clone(),
+            env: self.env.expose().clone().into_iter().collect(),
+            headers: self.headers.expose().clone().into_iter().collect(),
             ..Default::default()
         }
     }
@@ -216,6 +259,10 @@ impl Default for AutoDiscovery {
 }
 
 #[cfg(test)]
+#[path = "secret_flow_tests.rs"]
+mod secret_flow_tests;
+
+#[cfg(test)]
 mod yaml_redaction_tests {
     use super::*;
 
@@ -223,20 +270,20 @@ mod yaml_redaction_tests {
 
     #[test]
     fn yaml_of_redacted_server_keeps_schema_and_drops_canary() {
-        let server = DiscoveredServer {
-            name: "leaky".into(),
-            description: "d".into(),
-            source: DiscoverySource::Environment,
-            transport: TransportConfig::Stdio {
+        let server = DiscoveredServer::new(
+            "leaky".into(),
+            "d".into(),
+            DiscoverySource::Environment,
+            TransportConfig::Stdio {
                 command: format!("node --token {CANARY} server.js"),
                 cwd: None,
                 protocol_version: None,
             },
-            metadata: ServerMetadata {
+            ServerMetadata {
                 command: Some(format!("node --token {CANARY}")),
                 ..ServerMetadata::default()
             },
-        };
+        );
         let yaml = serde_yaml::to_string(&server.redacted_for_diagnostics()).expect("yaml");
         assert!(!yaml.contains(CANARY), "{yaml}");
         assert!(yaml.contains("command:"), "{yaml}");
