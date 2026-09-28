@@ -168,7 +168,7 @@ impl Backend {
         });
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
-            if first_time(&mut logged, (name.clone(), digest.clone(), true)) {
+            if first_time(&mut logged, (name.clone(), digest.clone(), true)) || true {
                 warn!(
                     backend = %self.name,
                     tool = %name,
