@@ -562,7 +562,9 @@ async fn a_missing_grant_directory_still_reloads_later() {
     config.security.identity_grants.path = grants.to_string_lossy().into_owned();
     config.security.identity_grants.fail_on_error = false;
     let s = Box::pin(Started::run(config.clone())).await.unwrap();
-    apply_change(&grants, true, add(row("g1", "r"))).await.unwrap();
+    apply_change(&grants, true, add(row("g1", "r")))
+        .await
+        .unwrap();
 
     reload_with(&config, s.sink.clone()).await;
 
