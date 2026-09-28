@@ -40,7 +40,6 @@ use crate::{Error, Result};
 
 #[path = "message_signing_v2.rs"]
 mod v2;
-pub(crate) use v2::has_interoperable_numbers;
 
 // ── Type alias ───────────────────────────────────────────────────────────────
 
