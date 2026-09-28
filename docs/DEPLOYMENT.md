@@ -366,7 +366,7 @@ mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out /etc/mcp-gateway/tls
 # Issue server certificate
 mcp-gateway tls issue-server \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
-  --cn gateway.company.com --san-dns "gateway.company.com,localhost" \
+  --cn gateway.company.com --san-dns "gateway.company.com,localhost,127.0.0.1,::1" \
   --out /etc/mcp-gateway/tls
 
 # Issue client certificate (for mTLS)
@@ -374,6 +374,11 @@ mcp-gateway tls issue-client \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
   --cn "claude-code-agent" --out /etc/mcp-gateway/tls/clients
 ```
+
+An IP literal passed to `--san-dns` becomes an IP SAN, which is what a client dialling that
+address checks. Include `127.0.0.1,::1` when the gateway binds loopback or a wildcard address:
+local clients reach it by address, and a wildcard bind without `server.public_url` accepts
+only numeric `Host` values, so `localhost` alone is not enough there.
 
 These commands write keys `0600` and certificates `0644`. The gateway refuses a key other
 users can read, and a certificate, CA or CRL other users can change. Certificates or a CRL you
