@@ -130,12 +130,9 @@ fn import(home: &Home) -> (Value, TransportConfig) {
         &home.run(&["cap", "discover", "--format", "json"]),
         "cap discover",
     );
-    // The JSON listing is followed by a plain-text hint; read the first value.
-    let listing: Value = serde_json::Deserializer::from_str(&listing)
-        .into_iter::<Value>()
-        .next()
-        .and_then(Result::ok)
-        .unwrap_or_else(|| panic!("discover found nothing it could list as JSON: {listing}"));
+    // In json mode stdout is the listing alone (#1909).
+    let listing: Value = serde_json::from_str(&listing)
+        .unwrap_or_else(|e| panic!("discover stdout is not one JSON value ({e}): {listing}"));
     let found = listing
         .as_array()
         .into_iter()
