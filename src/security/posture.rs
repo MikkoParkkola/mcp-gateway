@@ -26,6 +26,7 @@ use crate::{Error, Result};
 /// Gateway security posture (`security.posture`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SecurityPosture {
     /// Every control keeps its own setting. The default.
     #[default]
@@ -90,7 +91,9 @@ pub(crate) fn reload_refusal(running: &Config, candidate: &Config) -> Option<Str
 
 /// A multi-user deployment running the `standard` posture.
 ///
-/// The single source of the startup warning and the `doctor` finding.
+/// The single source of the startup warning and the `doctor` finding. Public
+/// only for the binary's `doctor` command; not a stable API.
+#[doc(hidden)]
 #[must_use]
 pub fn unhardened_multi_user(config: &Config) -> bool {
     config.security.posture == SecurityPosture::Standard

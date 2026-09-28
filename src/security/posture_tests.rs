@@ -275,6 +275,7 @@ fn gateway_startup_logs_posture_once() {
         assert_eq!(records[0].0, level, "{name}: {records:?}");
         if level == "INFO" {
             assert!(records[0].1.contains("preset=team_shared"), "{records:?}");
+            assert!(records[0].1.contains("non_bypassable=true"), "{records:?}");
         }
     }
 }
