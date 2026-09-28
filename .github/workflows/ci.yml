@@ -45,6 +45,7 @@ env:
 jobs:
   public-repo-hygiene:
     name: Public repo hygiene
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,8 +68,16 @@ jobs:
         run: scripts/ci/verify-artifact-licenses.sh
       - name: Validate the hosted-runner guard
         run: scripts/ci/check-hosted-runners.sh --self-test
-      - name: Require every job to run on a GitHub-hosted runner
+      - name: Require GitHub-hosted runners (plus the one trusted label)
         run: scripts/ci/check-hosted-runners.sh
+      - name: Validate the trusted runner's admission rules
+        run: scripts/ci/trusted-runner/job-started.sh --self-test
+      - name: Validate the mutant batch classifier
+        run: python3 scripts/ci/mutants/run_mutants.py --self-test
+      - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/test_throwaway_routing.py
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
@@ -76,6 +85,7 @@ jobs:
 
   service-template-smoke:
     name: Service template smoke
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,13 +98,15 @@ jobs:
 
   usability-smoke:
     name: First-use usability smoke
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Validate first-use smoke scripts
-        run: bash -n scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh
+        # One file per `bash -n`: it checks only its first argument.
+        run: for f in scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh scripts/dev/smoke-fixture-capability.sh; do bash -n "$f"; done
       - name: Validate noninteractive setup and routed first call
         run: scripts/dev/usability-smoke.sh
 
@@ -104,6 +116,7 @@ jobs:
   # results step also fails on a missing results file or a skipped check.
   upgrade-rehearsal:
     name: Upgrade rehearsal (3.5.1 -> this build)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -191,6 +204,7 @@ jobs:
 
   helm-chart-smoke:
     name: Helm chart lint + render
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,6 +216,7 @@ jobs:
 
   helm-oci-roundtrip:
     name: Helm OCI package/push/pull
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     services:
       registry:
@@ -230,6 +245,7 @@ jobs:
 
   helm-supply-chain:
     name: Helm supply chain (cosign + SBOM)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     services:
       registry:
@@ -252,6 +268,7 @@ jobs:
 
   helm-airgap:
     name: Helm air-gap export/import
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     services:
       registry:
@@ -278,6 +295,7 @@ jobs:
 
   k8s-kind-rollback:
     name: K8s kind apply+upgrade+rollback
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -304,6 +322,7 @@ jobs:
 
   check:
     name: Clippy (pedantic)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -315,6 +334,7 @@ jobs:
 
   feature-combos:
     name: Feature combination ${{ matrix.combo }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -354,6 +374,7 @@ jobs:
 
   windows-check:
     name: Windows check
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -381,18 +402,72 @@ jobs:
           rc=$?
           echo "hash-key on an empty key exited $rc"
           [[ $rc -eq 2 ]]
-      # Library and binary unit tests. Two module trees are skipped rather than
-      # run, both for one reason: their fixtures open the task store or the
-      # personal-account store, which refuse on non-unix by design (W1, #1142).
-      # The integration targets under tests/ are compiled above and not run
-      # here yet (W1, #1142). Green means Windows coverage for what runs, and
-      # no more than that.
+      # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
+      # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
+      # clippy jobs never see them. Lint them where they compile.
+      # `unnecessary_wraps` is allowed here only: it fires on the existing
+      # non-unix no-op stubs, which keep the unix signature on purpose.
       - run: >-
-          cargo test --all-features --lib --bins --no-fail-fast --
-          --skip gateway:: --skip personal_accounts::
+          cargo clippy --all-targets --all-features --
+          -D warnings -A clippy::unnecessary_wraps
+      # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
+      # non-elevated token create symlinks, so the row runs rather than skips.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      # Library and binary unit tests, the store suites included: both stores
+      # run on Windows with owner-only DACLs (ADR-016). The integration targets
+      # under tests/ are compiled above and not run here yet (W1, #1142).
+      - run: cargo test --all-features --lib --bins --no-fail-fast -- --show-output
+      # Owner-only rows that need real Windows state: a second, non-admin
+      # account (the runner is an administrator, whose rights bypass DACLs), a
+      # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
+      # even when it failed, so no evidence hides behind an earlier failure.
+      - name: Privileged owner-only rows
+        id: privileged
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
+          $free = 68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "${_}:\") }
+          # Second user: Users only, never Administrators.
+          $pass = 'Mg1!' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+          $account = New-LocalUser -Name mgw-probe -Password (ConvertTo-SecureString $pass -AsPlainText -Force) -AccountNeverExpires
+          if ((Get-LocalGroupMember Administrators).Name -match 'mgw-probe') { throw 'mgw-probe is an administrator' }
+          $sid = $account.SID.Value
+          secedit /export /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
+          (Get-Content "$env:RUNNER_TEMP\sec.inf") -replace '^(SeInteractiveLogonRight = .*)$', "`$1,*$sid" | Set-Content "$env:RUNNER_TEMP\sec.inf"
+          secedit /configure /db "$env:RUNNER_TEMP\sec.sdb" /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
+          Set-Service seclogon -StartupType Manual; Start-Service seclogon
+          # Mapped network drive.
+          $net = $free[0]
+          net use "${net}:" \\localhost\C$
+          if ($LASTEXITCODE -ne 0) { throw 'net use failed' }
+          New-Item -ItemType Directory -Force "${net}:\mgw-net-root" | Out-Null
+          # FAT32 and exFAT volumes.
+          $vols = @(@{ fs = 'FAT32'; letter = $free[1] }, @{ fs = 'exFAT'; letter = $free[2] })
+          foreach ($v in $vols) {
+            $vhd = "$env:RUNNER_TEMP\mgw-$($v.fs).vhdx"
+            @("create vdisk file=`"$vhd`" maximum=64 type=expandable", "select vdisk file=`"$vhd`"",
+              'attach vdisk', 'create partition primary', "format fs=$($v.fs) quick",
+              "assign letter=$($v.letter)") | Set-Content "$env:RUNNER_TEMP\dp.txt"
+            diskpart /s "$env:RUNNER_TEMP\dp.txt"
+            if ($LASTEXITCODE -ne 0) { throw "diskpart $($v.fs) failed" }
+          }
+          $env:MGW_PROBE_USER = 'mgw-probe'
+          $env:MGW_PROBE_PASS = $pass
+          $env:MGW_NET_ROOT = "${net}:\mgw-net-root"
+          $env:MGW_FAT32_ROOT = "$($free[1]):\"
+          $env:MGW_EXFAT_ROOT = "$($free[2]):\"
+          cargo test --all-features --lib -- --ignored --show-output win_privileged::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   test:
     name: Tests
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -403,11 +478,101 @@ jobs:
       # that job provisions, and the gate below `needs` that job.
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
+  # The test run for red-first and mutation-proof pull requests: a same-repo
+  # `throwaway/` branch into the release line. Every other job in this file
+  # skips those runs (the inverse condition above each job), so a throwaway
+  # PR costs one runner. Merge evidence stays on the hosted `Tests` job, which
+  # every other pull request and push still runs.
+  #
+  # Two jobs, one name (`Tests (throwaway)`, never `Tests`: main requires
+  # `Tests`, and a skipped job of that name would read as passing there). The
+  # repository variable MCPGW_TRUSTED_RUNNER picks the host: unset, a hosted
+  # runner; `ready`, the project's own self-hosted runner, which is set only
+  # after that runner's registration checklist is complete. `runs-on` stays a
+  # literal on both, so the hosted-runner guard still reads every label.
+  test-throwaway-hosted:
+    name: Tests (throwaway)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER != 'ready' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The release tooling's Python suites, which `release-script-tests` runs
+      # but which that job skips here. Without this, a throwaway meant to show
+      # a workflow-wiring or release-script test going red passes on cargo
+      # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Release tooling Python suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for suite in scripts/release/test_*.py; do
+            echo "::group::$suite"
+            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # Restore only: saving from throwaway runs would evict the entries the
+      # merge-evidence jobs rely on from the shared 10 GB repository cache.
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          save-if: false
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+
+  # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
+  # named test fails on a mutant and passes on the fix; that is logic, not
+  # instruction set (nothing in the tree is conditional on the target
+  # architecture). The condition is not the security boundary: a fork's pull
+  # request runs its own copy of this file. The runner refuses any job that is
+  # not a same-repo `throwaway/` pull request into the release line before a
+  # step runs (scripts/ci/trusted-runner/), and fork workflows need approval.
+  # No secrets and a read-only token, since the runner is persistent.
+  test-trusted:
+    name: Tests (throwaway)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER == 'ready' }}
+    runs-on: mcpgw-trusted-arm64
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: 6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The release tooling's Python suites, which `release-script-tests` runs
+      # but which that job skips here. Without this, a throwaway meant to show
+      # a workflow-wiring or release-script test going red passes on cargo
+      # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Release tooling Python suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for suite in scripts/release/test_*.py; do
+            echo "::group::$suite"
+            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # Restore only: saving from throwaway runs would evict the entries the
+      # merge-evidence jobs rely on from the shared 10 GB repository cache.
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          save-if: false
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+
   task-sdk-recovery:
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     uses: ./.github/workflows/task-sdk-recovery.yml
 
   fmt:
     name: Format
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,6 +583,7 @@ jobs:
 
   audit:
     name: Dependency audit
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -431,6 +597,7 @@ jobs:
 
   kani:
     name: Kani
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     # Kani's current toolchain is validated against Ubuntu 22.04. Keep this
     # job pinned to that image rather than following latest.
     runs-on: ubuntu-22.04
@@ -453,6 +620,7 @@ jobs:
 
   public-claims:
     name: Public claims
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -473,6 +641,8 @@ jobs:
   release-script-tests:
     name: Release tooling unit tests
     runs-on: ubuntu-latest
+    # Below runs-on: the wiring mutation harness anchors on name + runs-on.
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the counter (fail on parser regression)
@@ -492,6 +662,7 @@ jobs:
 
   release-criteria:
     name: Release criteria ledger (report-only off a tag, blocking on one)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     # The ledger is a live working document: a row edited mid-flight must not
     # block unrelated PRs, but a stale header count must not reach a tag. On a
@@ -513,6 +684,7 @@ jobs:
 
   capability-pins:
     name: Capability pin counts and drift
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     # tests/capability_pin_policy.rs already asserts the privilege rule and the
     # drift rule, but only behind a full --all-features build. This is the drift
@@ -538,6 +710,7 @@ jobs:
 
   secrets-scan:
     name: Secrets scan
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -549,6 +722,7 @@ jobs:
 
   secret-leak-lint:
     name: Secret-leak lint (CWE-532)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     # Semantic check that trufflehog/osv-scanner don't cover: a struct that
     # derives Debug (or a log/print macro) over a field/variable whose name
     # is secret-shaped leaks *structure*, not a matched credential string —
@@ -565,6 +739,7 @@ jobs:
 
   file-size-ceiling:
     name: File-size ceiling (800 lines)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     # The ceiling governs a file, not a change. The files already over it
     # ratchet off a recorded baseline: a listed file may shrink, never grow,
     # and no file may newly cross 800 lines. Splitting the existing offenders
@@ -583,6 +758,7 @@ jobs:
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     # A `*_tests.rs` that no module declares is in no compilation unit: never
     # built, never run, and invisible to `cargo test`, which reports zero
     # failures and exits zero for a file it cannot see. One such file was cited
@@ -608,6 +784,7 @@ jobs:
 
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     # CI cannot detect drift — there is no listening install here, and by
     # construction a build from this tree carries this tree's controls. What it
     # proves is that the probes still discriminate: the rows run against stub

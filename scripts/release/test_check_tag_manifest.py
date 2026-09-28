@@ -1620,9 +1620,19 @@ class WorkflowWiring(unittest.TestCase):
             conditions.extend(line.split(":", 1)[1].strip() for line in guard)
         conditions.append(job_if("docker.yml", "manifest"))
         for condition in conditions:
+            # Either spelling excludes a tag: the old `!startsWith(... 'refs/tags/v')`,
+            # or the current pin to main alone (a release-line push builds the
+            # image but must publish nothing, so the sites name main exactly).
             self.assertRegex(
                 condition,
-                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)"
+                r"|github\.ref\s*==\s*'refs/heads/main'",
+                f"docker.yml pushes on a tag again: {condition}",
+            )
+            # A main pin OR-ed with a tag test would still match the pin above.
+            self.assertNotRegex(
+                condition,
+                r"(?<!!)\bstartsWith\(\s*github\.ref\s*,\s*'refs/tags/",
                 f"docker.yml pushes on a tag again: {condition}",
             )
         self.assertEqual(
@@ -2184,6 +2194,25 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_throwaway_runs_carry_the_release_tooling_python_suites(self):
+        # A throwaway pull request skips `release-script-tests`, so without its
+        # own run of the Python suites a workflow-wiring or release-script red
+        # cannot show on one: the throwaway passes on cargo alone.
+        throwaway = {
+            name: body for name, body in jobs("ci.yml").items()
+            if re.search(r"(?m)^    name: Tests \(throwaway\)$", body)
+        }
+        self.assertGreaterEqual(len(throwaway), 1, "ci.yml has no Tests (throwaway) job")
+        for name in throwaway:
+            text = "\n".join("\n".join(b) for b in steps("ci.yml", name))
+            self.assertRegex(
+                text, r"for suite in scripts/release/test_\*\.py; do",
+                f"{name}: must run every scripts/release/test_*.py suite",
+            )
+            self.assertRegex(text, r'python3 "\$suite" \|\| \{ echo "::error::\$suite failed"; fail=1; \}')
+            self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
+            self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only

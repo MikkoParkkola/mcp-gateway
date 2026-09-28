@@ -1016,14 +1016,16 @@ CASES = [
         # It no longer has a step-level `push:` to reopen -- the build pushes
         # by digest under no name -- so the way back in is the condition that
         # decides whether the manifest job runs at all. Anchored to the line
-        # above it: the job-level condition is a prefix of the step-level ones,
-        # so on its own it matches four times and mutates the wrong copy.
+        # above it: the job-level condition is identical to the step-level ones,
+        # so on its own it matches several times and mutates the wrong copy.
+        # The mutation re-admits tags beside the main-only pin.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
         "    needs: build\n"
-        "    if: github.event_name != 'pull_request'"
-        " && !startsWith(github.ref, 'refs/tags/v')",
-        "    needs: build\n    if: github.event_name != 'pull_request'",
+        "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+        "    needs: build\n"
+        "    if: github.event_name == 'push' && (github.ref == 'refs/heads/main'"
+        " || startsWith(github.ref, 'refs/tags/v'))",
         CAUGHT,
     ),
     (
@@ -1381,6 +1383,52 @@ CASES += [
      + MUTATIONS_STEP, CAUGHT),
     ("docker-build-stops-waiting-for-unit-tests", "ci.yml",
      "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
+]
+
+# Throwaway runs carry the release tooling's Python suites. The hosted job is
+# named by its runner line, the trusted one by its env block, so each anchor
+# names one job although both run the same steps.
+_HOSTED_PY = (
+    "    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    "        with:\n          persist-credentials: false\n"
+)
+_TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
+_HOSTED_PY_STEP = _HOSTED_PY + (
+    "      # The release tooling's Python suites, which `release-script-tests` runs\n"
+    '      # but which that job skips here. Without this, a throwaway meant to show\n'
+    '      # a workflow-wiring or release-script test going red passes on cargo\n'
+    '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
+    '      - name: Release tooling Python suites\n'
+    '        run: |\n'
+    '          set -uo pipefail\n'
+    '          fail=0\n'
+    '          for suite in scripts/release/test_*.py; do\n'
+    '            echo "::group::$suite"\n'
+    '            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }\n'
+    '            echo "::endgroup::"\n'
+    '          done\n'
+    '          exit "$fail"\n'
+)
+CASES += [
+    ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
+    ("throwaway-python-failure-swallowed", "ci.yml",
+     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     "      # Restore only: saving from throwaway runs would evict the entries the\n"
+     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "        with:\n          save-if: false\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "  # Same run on the self-hosted arm64 runner.",
+     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     "      # Restore only: saving from throwaway runs would evict the entries the\n"
+     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "        with:\n          save-if: false\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "  # Same run on the self-hosted arm64 runner.", CAUGHT),
+    ("trusted-throwaway-swallows-failures", "ci.yml",
+     _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):

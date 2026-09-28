@@ -86,7 +86,7 @@ pub struct EnvOverlay {
     ///
     /// Kept so the substitution scan and the parser cannot disagree. Reopening
     /// a path re-reads whatever is there at that moment, and a reload is
-    /// triggered by a watcher on exactly these paths, so a rewrite between the
+    /// triggered by a poll of exactly these paths, so a rewrite between the
     /// two reads is the expected interleaving rather than an exotic one.
     sources: Vec<(PathBuf, String)>,
     /// Listed env files that did not exist. Still legal; named in any
@@ -411,6 +411,35 @@ impl EnvOverlay {
         &self.owned
     }
 
+    /// Whether `path` on disk now differs from what this overlay loaded from
+    /// it (#1286).
+    ///
+    /// Read through the loader's own read, whole: content is compared, never
+    /// size or mtime. Missing matches only a path this overlay found missing;
+    /// a lookup error (a link loop, a denied directory), an unreadable or
+    /// refused file, or a path this overlay neither loaded nor found missing
+    /// (a failed load) always differs.
+    ///
+    /// A path listed more than once is unchanged only when every recorded
+    /// load of it agrees with the disk: one stale load still differs.
+    pub(crate) fn differs_on_disk(&self, path: &Path) -> bool {
+        let was_absent = self.absent.iter().any(|p| p == path);
+        let mut loaded = self.sources.iter().filter(|(p, _)| p == path);
+        // The same absence test `apply_file` makes, so the two agree.
+        match path.try_exists() {
+            Ok(false) => return !was_absent || loaded.next().is_some(),
+            Err(_) => return true,
+            Ok(true) => {}
+        }
+        match super::secret_file::read_secret_file(path, super::secret_file::SecretFile::EnvFile) {
+            Ok(text) => {
+                let mut loaded = loaded.peekable();
+                was_absent || loaded.peek().is_none() || loaded.any(|(_, t)| *t != text)
+            }
+            Err(_) => true,
+        }
+    }
+
     /// Everything the overlay contributes, for consumers that need a map rather
     /// than point lookups.
     #[must_use]
@@ -457,10 +486,22 @@ impl EnvOverlay {
     /// Applies one env file. A missing file is not an error — the old loader
     /// skipped it silently and configs rely on that for optional files.
     pub(crate) fn apply_file(&mut self, path: &Path) -> Result<()> {
-        if !path.exists() {
-            tracing::debug!("Env file not found (skipped): {}", path.display());
-            self.absent.push(path.to_path_buf());
-            return Ok(());
+        // `try_exists`, not `exists`: a lookup that fails (a link loop, a
+        // denied directory) is not absence. Treating it as absence would let a
+        // reload succeed and drop every value the file supplied (#1286).
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!("Env file not found (skipped): {}", path.display());
+                self.absent.push(path.to_path_buf());
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(Error::Config(format!(
+                    "Cannot read env file {}: {e}",
+                    path.display()
+                )));
+            }
         }
         // The mode check and the read share one handle (CONFIG.2). A refusal
         // is fatal on the serving loaders and a WARN on the tolerant ones,
@@ -473,7 +514,9 @@ impl EnvOverlay {
             self.insert(key, value);
         }
         self.sources.push((path.to_path_buf(), text));
-        tracing::info!("Loaded env file: {}", path.display());
+        // Debug: a failed reload is retried every poll and would repeat this
+        // line; startup logs the resolved list once at INFO instead.
+        tracing::debug!("Loaded env file: {}", path.display());
         Ok(())
     }
 

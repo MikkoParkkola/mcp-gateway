@@ -260,6 +260,24 @@ reload log and report show this as a negative `revoked` count. Grant reloads
 are recorded in the tracing log only, not in the governance audit log. A
 gateway running with auth disabled has no actor to attribute them to.
 
+### Change journal
+
+Each successful `identity grants` add, `--replace` and revoke also appends one
+line to a journal beside the grant file (`<grant file>.journal.jsonl`, mode
+0600 on Unix). The line holds the verb, grant id, the row's digest before and after
+the change, expiry, time, actor `unknown`, and the OS account that ran the
+command. The OS account is an unauthenticated hint, not an identity. A refused
+change appends nothing. If the grant file is written but the journal append
+fails, the command exits non-zero and says the change may have no
+journal entry. A journal that other users can write to (group or world
+write bit) refuses the change before the grant file is written: check its entries against the grant file or
+restore a trusted copy, then `chmod go-w` it. A grant file that repeats a grant id is refused until the duplicate is
+removed by hand. The CLI holds a lock file
+beside the grant file across the write and the append, so two CLI runs cannot
+interleave. The gateway does not read the journal yet; recording its entries
+in the governance audit log, under the same lock, is tracked in #1869. The
+journal grows by one line per change and is not rotated.
+
 ## Recommendations
 
 `LocalIdentityGrantStore::recommend` is a recommendation-only layer for
