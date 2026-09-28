@@ -214,7 +214,7 @@ pub(super) fn admit_fill(
         // transport failure, or an unreadable list (not transport-class, so
         // text U). Any other caller keeps the generic fast-fail.
         return Err(match replay {
-            Some(replay) if gated => replay.error(),
+            Some(replay) if gated && false => replay.error(),
             None if gated => Error::json_rpc(-32603, fast_fail),
             _ => Error::BackendUnavailable(fast_fail),
         });
