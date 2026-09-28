@@ -258,7 +258,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v2.5.2
+          cosign-release: v2.6.5
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate supply-chain smoke script
@@ -285,7 +285,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v2.5.2
+          cosign-release: v2.6.5
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate air-gap smoke script
@@ -1062,7 +1062,7 @@ jobs:
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v2.5.2
+          cosign-release: v2.6.5
 
       # Read-only: verifies v4.0.0-beta.2, signed and SBOM-attested by run
       # 36193916273, with the release verify step's body verbatim. Only the
