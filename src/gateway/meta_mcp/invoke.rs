@@ -947,6 +947,20 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         &self,
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // The operator kill switch is read once at the top of the call, so an
+        // operator who disables the server mid-exchange would not stop the
+        // remaining rounds. Checked per round, before anything is dispatched:
+        // `NotAdmitted`, so the idempotency key is not burned by work that
+        // never ran.
+        if self.meta.kill_switch.is_killed(self.server) {
+            return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                message: format!(
+                    "Server '{}' is currently disabled by operator kill switch",
+                    self.server
+                ),
+            });
+        }
+
         // Admitted here as well as at the first dispatch, because the spend
         // check is per backend call and `invoke_tool` ran it once, before the
         // backend asked anything. A bridged exchange adds a call per round, so
