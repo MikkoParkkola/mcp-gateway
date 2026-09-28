@@ -281,6 +281,25 @@ async fn t10a_the_lock_spans_the_write_and_the_append() {
     assert_eq!(entries(&path).len(), 1);
 }
 
+/// A hand-edited file with a duplicate id: revoke edits the first row, so the
+/// entry's `prev_digest` must be that row's, not the last duplicate's.
+#[tokio::test]
+async fn duplicate_ids_report_the_row_that_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    let first = row("g1", "first");
+    let file = IdentityGrantFile::new(vec![first.clone(), row("g1", "second")]);
+    super::write_identity_grants_file(&path, &file)
+        .await
+        .unwrap();
+
+    change(&path, revoke("g1")).await.unwrap();
+
+    let got = entries(&path);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].prev_digest, Some(grant_digest(&first)));
+}
+
 #[test]
 fn reader_leaves_an_unterminated_tail_for_later() {
     let line = serde_json::to_string(&sample_entry("e1")).unwrap();

@@ -181,11 +181,14 @@ pub(crate) async fn apply_change_with(
         Err(_) if create_if_missing && !grants.exists() => IdentityGrantFile::new(Vec::new()),
         Err(error) => return Err(ChangeError::Refused(error)),
     };
-    let before: std::collections::BTreeMap<String, String> = file
-        .grants
-        .iter()
-        .map(|row| (row.grant_id.clone(), grant_digest(row)))
-        .collect();
+    // The first row per id: the changes below find and edit the first match,
+    // so a file carrying a duplicate id must not report another row's digest.
+    let mut before = std::collections::BTreeMap::<String, String>::new();
+    for row in &file.grants {
+        before
+            .entry(row.grant_id.clone())
+            .or_insert_with(|| grant_digest(row));
+    }
     let (verb, grant_id) = change(&mut file).map_err(ChangeError::Refused)?;
     let row = file
         .grants
