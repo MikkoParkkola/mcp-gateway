@@ -70,7 +70,7 @@ impl Backend {
         // since been blocked reads as empty, so it is discarded too (#1441).
         self.tools_slot(None)
             .tools_cache
-            .invalidate_if(|tools| tools.iter().all(|t| self.is_blocked_tool(&t.name)));
+            .invalidate_if(|tools| self.all_blocked(tools));
     }
 
     /// Number of tools cached on `binding`'s slot (non-blocking, no network I/O).

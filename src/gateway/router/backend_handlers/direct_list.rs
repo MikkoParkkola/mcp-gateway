@@ -44,6 +44,7 @@ pub(super) async fn drain(
     backend_name: &str,
 ) -> crate::Result<JsonRpcResponse> {
     let mut tools = Vec::new();
+    let mut unreadable = false;
     let mut cursor: Option<Value> = None;
     for _ in 0..DIRECT_LIST_MAX_PAGES {
         let mut page_params = params
@@ -69,15 +70,25 @@ pub(super) async fn drain(
             return Ok(page);
         }
         let result = page.result.unwrap_or(Value::Null);
-        if let Some(items) = result.get("tools").and_then(Value::as_array) {
-            tools.extend(items.iter().cloned());
+        match result.get("tools").and_then(Value::as_array) {
+            Some(items) => tools.extend(items.iter().cloned()),
+            // A page without a tools array says nothing about which tools
+            // exist, so this drain must not be judged as a complete listing:
+            // it could clear blocks on names it never showed (#1441).
+            None => unreadable = true,
         }
         match result.get("nextCursor") {
             Some(next) if !next.is_null() => cursor = Some(next.clone()),
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
                 let credential = !propagated_headers.is_empty();
-                let withheld = backend.remember_listed_tools(identity_key, credential, &tools);
+                let listing = if unreadable {
+                    crate::backend::Listing::Truncated
+                } else {
+                    crate::backend::Listing::Complete
+                };
+                let withheld =
+                    backend.remember_listed_tools_as(identity_key, credential, &tools, listing);
                 // Dropped here, from the raw list this drain judged, not by a
                 // later read of the backend's blocked set, which a concurrent
                 // listing may change before the response is sent (#1441).

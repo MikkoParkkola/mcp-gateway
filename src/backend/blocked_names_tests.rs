@@ -322,3 +322,17 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
         );
     }
 }
+
+/// X10: a direct drain that met a page with no tools array is not a complete
+/// listing, so it cannot clear a block on a name it never showed.
+#[tokio::test]
+async fn x10_an_unreadable_drain_does_not_clear_a_block() {
+    let backend = per_user_backend();
+    let _ = backend.remember_listed_tools(Some("a"), false, &catalogue());
+    let _ =
+        backend.remember_listed_tools_as(Some("a"), false, &[], crate::backend::Listing::Truncated);
+    assert!(
+        refused(&backend, "b", POISONED),
+        "an unreadable drain cleared a block"
+    );
+}

@@ -284,6 +284,13 @@ impl Backend {
         )
     }
 
+    /// Whether every tool in `tools` is blocked, decided from one snapshot of
+    /// the blocked set so a concurrent listing cannot change it midway.
+    pub(crate) fn all_blocked(&self, tools: &[Tool]) -> bool {
+        let blocked = self.descriptor_gate.blocked.read();
+        tools.iter().all(|t| blocked.contains_key(&t.name))
+    }
+
     /// Whether a served list may carry `tool`.
     pub(crate) fn is_blocked_tool(&self, tool: &str) -> bool {
         self.descriptor_gate.blocked.read().contains_key(tool)

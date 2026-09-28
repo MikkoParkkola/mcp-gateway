@@ -68,11 +68,30 @@ impl Backend {
     ///
     /// Returns the names this list withheld (#1441), so the caller can drop
     /// them from the very response it judged.
+    #[cfg(test)]
     pub(crate) fn remember_listed_tools(
         &self,
         identity_key: Option<&str>,
         sent_caller_credential: bool,
         tools: &[Value],
+    ) -> std::collections::BTreeSet<String> {
+        self.remember_listed_tools_as(
+            identity_key,
+            sent_caller_credential,
+            tools,
+            super::descriptor_gate::Listing::Complete,
+        )
+    }
+
+    /// [`Self::remember_listed_tools`] for a drain that may not have read
+    /// the whole catalogue: a `Truncated` listing clears only the blocks on
+    /// names it served, never on names it did not show.
+    pub(crate) fn remember_listed_tools_as(
+        &self,
+        identity_key: Option<&str>,
+        sent_caller_credential: bool,
+        tools: &[Value],
+        listing: super::descriptor_gate::Listing,
     ) -> std::collections::BTreeSet<String> {
         let key = self.pool_key_for(identity_key);
         // Entry by entry, as `normalize_tools_list_response` reads them: one
@@ -105,11 +124,7 @@ impl Backend {
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
             // Not stored, but observed: a blocked name is per backend. Keyed
             // by the caller, whose own catalogue this page is.
-            self.commit_verdicts(
-                identity_key.unwrap_or("credentialed"),
-                super::descriptor_gate::Listing::Complete,
-                verdicts,
-            );
+            self.commit_verdicts(identity_key.unwrap_or("credentialed"), listing, verdicts);
             return withheld;
         }
         let lease = self.begin_internal_activity_for(&key);
@@ -121,7 +136,7 @@ impl Backend {
             PoolKey::Shared => String::new(),
         };
         entry.tools_cache.replace(parsed, || {
-            self.commit_verdicts(&source, super::descriptor_gate::Listing::Complete, verdicts);
+            self.commit_verdicts(&source, listing, verdicts);
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);
