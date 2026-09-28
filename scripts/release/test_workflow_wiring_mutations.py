@@ -1395,6 +1395,13 @@ CASES += [
      '      # No build cache: the release calls this too, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
     ("release-setup-node-caches-again", "release.yml",
      "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n", CAUGHT),
+    # Equivalent spellings are not a cache: a quoted callee is still scanned,
+    # and YAML's `False` is still off.
+    ("release-calls-the-recovery-workflow-quoted", "release.yml",
+     "    uses: ./.github/workflows/task-sdk-recovery.yml\n",
+     "    uses: './.github/workflows/task-sdk-recovery.yml' # quoted\n", TOLERATED),
+    ("release-setup-node-cache-off-capitalised", "release.yml",
+     "          package-manager-cache: false\n", "          package-manager-cache: False\n", TOLERATED),
     ("release-setup-node-sets-a-cache", "release.yml",
      "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n          cache: npm\n", CAUGHT),
 ]

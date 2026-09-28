@@ -2222,7 +2222,7 @@ class WorkflowWiring(unittest.TestCase):
         # the release's context. setup-node caches on its own when it finds a
         # package manager, so it must say it will not.
         release = WORKFLOWS / "release.yml"
-        called = re.findall(r"(?m)^    uses: \./\.github/workflows/(\S+)$", release.read_text(encoding="utf-8"))
+        called = re.findall(r"""(?m)^    uses:\s*["']?\./\.github/workflows/([^"'\s#]+)""", release.read_text(encoding="utf-8"))
         self.assertIn("task-sdk-recovery.yml", called, "the called-workflow inventory shrank")
         found = []
         for wf in ["release.yml", *called]:
@@ -2233,7 +2233,8 @@ class WorkflowWiring(unittest.TestCase):
                     found.append(f"{label} restores a cache")
                 if artifact_keys(block, ("cache",)):
                     found.append(f"{label} sets cache:")
-                if "actions/setup-node@" in uses and artifact_keys(block, ("package-manager-cache",)) != ["false"]:
+                flags = [v.lower() for v in artifact_keys(block, ("package-manager-cache",))]
+                if "actions/setup-node@" in uses and (not flags or set(flags) != {"false"}):
                     found.append(f"{label} leaves package-manager-cache on")
         self.assertEqual(found, [], "a release job restores a cache")
 
