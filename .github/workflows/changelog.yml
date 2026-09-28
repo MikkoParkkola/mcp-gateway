@@ -1,0 +1,38 @@
+name: Changelog fragment
+
+# A PR that changes src/ adds changelog.d/<number>.<type>.md instead of editing
+# the shared Unreleased section, which made every open PR conflict on each
+# merge. Its own workflow, so adding or removing the `no-changelog` label
+# re-runs this check alone rather than the whole CI.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fragment:
+    name: Changelog fragment present
+    # Skipped for a `throwaway/` branch of this repository: red-first and
+    # mutant PRs never merge, so they need no entry. A fork is never skipped.
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Test the fragment tooling
+        run: python3 scripts/release/test_changelog_fragments.py
+      - name: Require a fragment for a src/ change
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/release/changelog_fragments.py check --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Fragments assemble cleanly
+        run: python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null
