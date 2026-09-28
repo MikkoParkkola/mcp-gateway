@@ -248,21 +248,39 @@ mod tests {
         assert!(!err.to_string().contains(CANARY));
     }
 
-    /// A dead port: bind to learn a free address, then give it up.
-    async fn closed_port() -> String {
+    /// A dead port, and the connection that keeps it dead (#1754): the
+    /// client end of a live loopback connection owns the port without
+    /// listening, so a connect to it is refused on every platform and no
+    /// other process can bind the port and answer it, the way it could a
+    /// dropped listener's port. The client is bound explicitly, without
+    /// address reuse: a port `connect()` picks for itself can be handed to a
+    /// later connect, which then reaches itself. (A bound socket that never
+    /// connects is refused on Linux but times out on macOS.) Hold the pair
+    /// until the request is done; it drops server end first, so the `TIME_WAIT`
+    /// lands on the listener's port, not the explicitly bound one.
+    async fn closed_port() -> (String, (tokio::net::TcpStream, tokio::net::TcpStream)) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind ephemeral port");
-        let address = listener.local_addr().expect("local addr");
-        drop(listener);
-        format!("http://{address}/mcp")
+        let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+        socket.set_reuseaddr(false).expect("no address reuse");
+        socket
+            .bind("127.0.0.1:0".parse().expect("loopback"))
+            .expect("bind client port");
+        let client = socket
+            .connect(listener.local_addr().expect("local addr"))
+            .await
+            .expect("connect");
+        let (server, _) = listener.accept().await.expect("accept");
+        let address = client.local_addr().expect("client addr");
+        (format!("http://{address}/mcp"), (server, client))
     }
 
     /// An unredirected connect failure is provably pre-dispatch: nothing was
     /// written, so the idempotency key must be released rather than settled.
     #[tokio::test]
     async fn an_unredirected_connect_failure_is_pre_dispatch() {
-        let url = closed_port().await;
+        let (url, _held) = closed_port().await;
         let error = reqwest::Client::new()
             .post(&url)
             .send()
@@ -297,7 +315,7 @@ mod tests {
     /// `src/transport/http/tests.rs` -- this row only pins the classifier.
     #[tokio::test]
     async fn a_connect_failure_the_caller_cannot_vouch_for_stays_coarse() {
-        let url = closed_port().await;
+        let (url, _held) = closed_port().await;
         let error = reqwest::Client::new()
             .post(&url)
             .send()
@@ -358,7 +376,7 @@ mod tests {
     /// are post-dispatch by construction.
     #[tokio::test]
     async fn the_coarse_constructor_never_returns_the_narrow_variant() {
-        let url = closed_port().await;
+        let (url, _held) = closed_port().await;
         let error = reqwest::Client::new()
             .post(&url)
             .send()
