@@ -393,10 +393,11 @@ async fn s10_a_reload_after_shutdown_reads_nothing() {
     ));
     let ctx = context()
         .with_load(s10_load)
-        .with_identity_grant_sink(grants)
+        .with_identity_grant_sink(Arc::clone(&grants))
         .with_stop(stop);
-    // Finished on its first poll: the grants step reads its file through
-    // `spawn_blocking`, so a reload that started it would still be pending.
+    // Held by the test: a reload that started the grants step would wait on
+    // it, so finishing on the first poll proves the step never started.
+    let _grants_held = grants.lock.lock().await;
     let refused = futures::FutureExt::now_or_never(ctx.reload_outcome())
         .expect("a reload after shutdown started reading the grants file")
         .expect_err("a reload after shutdown refuses");
