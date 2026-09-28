@@ -48,6 +48,17 @@ pub(crate) enum Completeness {
     Unknown,
 }
 
+impl Completeness {
+    /// A list the slot holds, by the slot's truncated mark.
+    pub(crate) fn held(truncated: bool) -> Self {
+        if truncated {
+            Self::Truncated
+        } else {
+            Self::Complete
+        }
+    }
+}
+
 /// A transport failure of a tools fill, kept so a check-site call inside the
 /// cooldown answers with the same variant, message and budget treatment (a
 /// rate-limit text stays one) as the failure it stands in for (A3).

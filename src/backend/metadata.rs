@@ -173,12 +173,7 @@ impl Backend {
     ) -> Option<(Arc<Vec<Tool>>, Completeness)> {
         let slot = self.tools_slot(binding);
         slot.tools_cache.with_cached(|held| {
-            let truncated = slot.tools_truncated.load(Ordering::SeqCst);
-            let completeness = if truncated {
-                Completeness::Truncated
-            } else {
-                Completeness::Complete
-            };
+            let completeness = Completeness::held(slot.tools_truncated.load(Ordering::SeqCst));
             held.map(|list| (Arc::clone(list), completeness))
         })
     }
@@ -235,7 +230,7 @@ impl Backend {
     ) -> Result<Arc<Vec<T>>>
     where
         S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
-        F: Fn(Value, &super::pool::PooledEntry) -> Result<Vec<T>>,
+        F: Fn(Value) -> Result<(Vec<T>, Option<HashSet<String>>)>,
     {
         let key = self.pool_key_for(binding);
         let identity_key = match &key {
@@ -292,11 +287,11 @@ impl Backend {
                             identity_key,
                         )
                         .await?;
-                        let items = match merged {
-                            Some(result) => parse(result, &entry)?,
-                            None => Vec::new(),
+                        let (items, resend) = match merged {
+                            Some(result) => parse(result)?,
+                            None => (Vec::new(), None),
                         };
-                        Ok((items, truncated))
+                        Ok((items, truncated, resend))
                     })
                     .await;
                     let end = match &drained {
@@ -314,7 +309,7 @@ impl Backend {
                     if let Some(guard) = guard.as_mut() {
                         guard.end(end);
                     }
-                    let (items, truncated) = drained?;
+                    let (items, truncated, resend) = drained?;
 
                     debug!(
                         backend = %self.name,
@@ -324,15 +319,16 @@ impl Backend {
                         "Backend metadata cached"
                     );
 
-                    Ok((items, (truncated, guard)))
+                    Ok((items, (truncated, guard, resend)))
                 },
-                |(truncated, guard)| {
+                |(truncated, guard, resend)| {
                     // Written only once the store is accepted, and on every
                     // accepted store, so a complete fill clears it (design D).
                     if let Some(flag) = family.truncated_flag {
                         flag(&entry).store(truncated, Ordering::SeqCst);
                     }
-                    if let Some(permitted) = entry.resend_pending.lock().take() {
+                    // Only this accepted store's own set (F13).
+                    if let Some(permitted) = resend {
                         *entry.resend_permitted.write() = permitted;
                     }
                     // The only place a guard reaches `Stored`: a voided store
@@ -400,7 +396,7 @@ impl Backend {
             },
             extra_headers,
             bound,
-            |result, entry| {
+            |result| {
                 let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
                 // Discovery is where the explicit annotations are still readable,
                 // and it always precedes a `tools/call` (ADR-012 A1). Written
@@ -410,10 +406,10 @@ impl Backend {
                 // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
                 // it, and keeps the set on the slot whose catalogue derived it — a
                 // backend-wide one would let one identity's fill decide another
-                // identity's retry policy. Published only when the store is
-                // accepted, so a voided fill cannot restore a revoked resend.
-                *entry.resend_pending.lock() = Some(prepare_tool_metadata(&self.name, &mut tools));
-                Ok(tools)
+                // identity's retry policy. Only this fill's accepted store
+                // publishes it, so a voided fill cannot restore a revoked resend.
+                let resend = prepare_tool_metadata(&self.name, &mut tools);
+                Ok((tools, Some(resend)))
             },
         )
         .await
@@ -422,12 +418,10 @@ impl Backend {
     /// The caller's tool list for R2's check, and whether it is the slot's
     /// whole catalogue (design §2 step 2).
     ///
-    /// The fill is bounded by `timeout` when this caller leads it; a caller
-    /// waiting on someone else's fill waits at most `timeout` plus
-    /// `LIST_FILL_WAIT_GRACE`. Completeness is read under the slot's read
-    /// guard: only a list the slot still holds (`Arc::ptr_eq`) is `Complete`
-    /// or `Truncated`, so a voided store is always `Unknown`. It lives here,
-    /// beside `tools_slot` and `tools_fill`, so neither needs widening.
+    /// A leading caller's fill is bounded by `timeout`, a waiter's by
+    /// `timeout` plus `LIST_FILL_WAIT_GRACE`. Only a list the slot still holds
+    /// (`Arc::ptr_eq`, read under its guard) is `Complete` or `Truncated`, so
+    /// a voided store is `Unknown`. Beside `tools_slot` so neither widens.
     pub(crate) async fn tools_for_check(
         &self,
         binding: Option<&str>,
@@ -442,14 +436,7 @@ impl Backend {
         let slot = self.tools_slot(binding);
         let completeness = slot.tools_cache.with_cached(|current| match current {
             Some(held) if Arc::ptr_eq(held, &tools) => {
-                if slot
-                    .tools_truncated
-                    .load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    Completeness::Truncated
-                } else {
-                    Completeness::Complete
-                }
+                Completeness::held(slot.tools_truncated.load(Ordering::SeqCst))
             }
             _ => Completeness::Unknown,
         });
@@ -544,7 +531,12 @@ impl Backend {
             },
             extra_headers,
             FillBound::DrainBudget,
-            |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+            |result| {
+                Ok((
+                    serde_json::from_value::<ResourcesListResult>(result)?.resources,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -592,11 +584,9 @@ impl Backend {
             },
             extra_headers,
             FillBound::DrainBudget,
-            |result, _| {
-                Ok(
-                    serde_json::from_value::<ResourcesTemplatesListResult>(result)?
-                        .resource_templates,
-                )
+            |result| {
+                let templates = serde_json::from_value::<ResourcesTemplatesListResult>(result)?;
+                Ok((templates.resource_templates, None))
             },
         )
         .await
@@ -645,7 +635,12 @@ impl Backend {
             },
             extra_headers,
             FillBound::DrainBudget,
-            |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
+            |result| {
+                Ok((
+                    serde_json::from_value::<PromptsListResult>(result)?.prompts,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -722,9 +717,8 @@ async fn drain_list_pages(
         if let Some(error) = response.error {
             return Err(Error::json_rpc(error.code, error.message));
         }
-        // Readable: a string cursor or none, and the list is an array, or
-        // absent on a page that carries a cursor. A mistyped cursor would
-        // otherwise read as the last page.
+        // Readable: a string cursor or none; the list an array, or absent
+        // beside a cursor. A mistyped cursor would read as the last page.
         let readable = |r: &Value| {
             let cursor = r.get("nextCursor").filter(|c| !c.is_null());
             cursor.is_none_or(Value::is_string)
@@ -734,11 +728,9 @@ async fn drain_list_pages(
                 }
         };
         let Some(mut result) = response.result.filter(readable) else {
-            // No `result`, or a malformed one, says nothing about the list's
-            // shape, on any page (F13: it would read as zero items, so a
-            // complete list would refuse a present tool as absent): a
-            // transient page failure, so keep the last complete catalogue
-            // (design E).
+            // A missing or malformed page is a transient page failure (F13:
+            // as zero items it would make a present tool absent); keep the
+            // last complete catalogue (design E).
             return Err(Error::json_rpc(
                 -32603,
                 format!("{} page {} is not a readable list", family.method, page + 1),
