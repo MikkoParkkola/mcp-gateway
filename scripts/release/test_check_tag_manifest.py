@@ -750,10 +750,11 @@ HANDOFF_RETENTION_DAYS = 14
 # GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
 # certain conditions).
 COSIGN_FLOOR = (2, 6, 5)
-# One recogniser for an installer step, shared by every check that looks for
-# one: YAML allows the key and the action reference bare, single- or
-# double-quoted, and a check that knows fewer forms than the others lets a
-# step escape it.
+# One recogniser for an installer step, shared by the checks that must know a
+# step is the installer (push-guard inventory, rehearsal exemption): YAML
+# allows the key and the action reference bare, single- or double-quoted, and
+# a check that knows fewer forms than the others lets a step escape it. The
+# pin floor is broader still and fails closed on any mention.
 COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?sigstore/cosign-installer@""")
 
 
@@ -2220,7 +2221,11 @@ class WorkflowWiring(unittest.TestCase):
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
             wf = path.name
             for block in steps(wf):
-                if not any(COSIGN_INSTALLER.match(line) for line in block):
+                # Any mention outside a comment counts, not only the block
+                # form: a flow-style or anchored step the recogniser does not
+                # parse still installs cosign, and its pin then cannot be read,
+                # so it fails here rather than escaping the floor.
+                if not any("sigstore/cosign-installer@" in line.split("#", 1)[0] for line in block):
                     continue
                 pins = artifact_keys(block, ("cosign-release",))
                 self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
