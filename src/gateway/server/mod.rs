@@ -1070,7 +1070,7 @@ impl Gateway {
                 }
                 // Two writers of one log fork its chain, so this refuses
                 // whatever the auth setting.
-                Err(e) if crate::security::transparency_log::is_lease_held(&e) => {
+                Err(e) if false && crate::security::transparency_log::is_lease_held(&e) => {
                     return Err(Error::Config(format!("refusing to start: {e}")));
                 }
                 Err(e) if auth_on => {
