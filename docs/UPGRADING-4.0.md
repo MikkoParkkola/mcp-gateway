@@ -73,6 +73,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 85
 - Item 86
 - Item 87
+- Item 89
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -194,6 +195,8 @@ without it.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
+| 88 | Reserved: lands with a pending change | None yet |
+| 89 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2240,6 +2243,29 @@ by URL already do:
 
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
+
+## 89. List fills count toward the breaker and the rate limiter
+
+In 3.x, a list fill (the `tools/list`, `resources/list`, `resources/templates/list` or
+`prompts/list` a cold cache sends for discovery, `gateway_search`, `gateway_list_tools`,
+resources or prompts) went straight to the backend. It ignored an open circuit breaker,
+spent no `failsafe.rate_limit` token, and its outcome never reached the breaker.
+
+In 4.0 every list fill a request starts, including the background refresh a discovery request
+starts, is gated like a tool call:
+
+- An open breaker refuses it with the circuit-open error, and sends nothing.
+- It spends one `failsafe.rate_limit` token from the same budget as tool calls. A cold-cache
+  burst over N list keys spends N tokens.
+- A list that cannot be reached counts as a failure toward the breaker. A throttled answer counts
+  as neither. An answer that arrives but cannot be used counts as reachable, is logged as a
+  warning and is counted in `mcp_backend_requests_total{status="list_unusable"}`.
+
+Startup warm-up fills are never refused and spend no token, but their outcome is recorded, so a
+backend that is down at startup opens its breaker before traffic arrives.
+
+**Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
+caches warm (`meta_mcp.warm_start`).
 
 ## Upgrading from 3.5.x: a walkthrough
 
