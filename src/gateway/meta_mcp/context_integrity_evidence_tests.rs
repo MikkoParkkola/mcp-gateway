@@ -85,6 +85,16 @@ async fn a_withheld_result_carries_no_part_of_the_matched_text() {
             .is_empty(),
         "{result:#}"
     );
+    assert_eq!(
+        result["_context_integrity"]["policy"]["decision"], "deny",
+        "the fixture must withhold, not rewrite: {result:#}"
+    );
+    for finding in result["_context_integrity"]["classification"]["findings"]
+        .as_array()
+        .expect("findings are delivered")
+    {
+        assert_eq!(finding["evidence"], "withheld", "{result:#}");
+    }
     let delivered = body(&result);
     for needle in [PHRASE, "zx-canary-2204", "exfiltrate-the-vault"] {
         assert!(
@@ -119,7 +129,10 @@ async fn monitor_only_metadata_keeps_its_evidence() {
 fn a_withheld_result_logs_its_evidence_for_the_operator() {
     use crate::security::firewall::response_tests::audit::capture_warnings;
     let (result, log) = capture_warnings(|| {
-        tokio::runtime::Runtime::new()
+        // Current-thread, so the scoped log capture sees every event.
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .expect("runtime")
             .block_on(invoke_under(ContextIntegrityPolicyMode::Enforce))
     });
