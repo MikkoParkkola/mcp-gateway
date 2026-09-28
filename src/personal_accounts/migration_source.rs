@@ -194,8 +194,9 @@ fn not_private(path: String, detail: &str) -> SourceRefusal {
 /// the literal. The gateway account is named by its SID, which stays right in
 /// an elevated prompt run as another account. The DACL is replaced in ONE
 /// write with a protected DACL holding only the gateway account's grant, so no
-/// intermediate state exposes the file; ownership, when foreign, is taken
-/// first (that line needs an administrator prompt).
+/// intermediate state exposes the file. With a foreign owner the lines need an
+/// administrator prompt: take ownership, write the DACL as owner, then give
+/// ownership to the gateway account.
 #[cfg(windows)]
 fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) -> String {
     use crate::private_fs::PrivacyRefusal as P;
@@ -237,8 +238,12 @@ fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) 
         out.push_str(" as an administrator, because the file has another owner");
     }
     out.push_str(":\n");
+    // With a foreign owner, the elevated account first takes ownership itself
+    // (an owner may always write the DACL), writes the DACL, and only then
+    // hands ownership to the gateway account. Handing it over first could
+    // leave the elevated account with no right to write the DACL.
     if foreign_owner {
-        let _ = writeln!(out, "icacls '{literal}' /setowner '*{me}'");
+        let _ = writeln!(out, "takeown /F '{literal}'");
     }
     let _ = writeln!(
         out,
@@ -246,6 +251,9 @@ fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) 
          $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;{me})', 'Access'); \
          (Get-Item -LiteralPath '{literal}').SetAccessControl($acl)"
     );
+    if foreign_owner {
+        let _ = writeln!(out, "icacls '{literal}' /setowner '*{me}'");
+    }
     out
 }
 

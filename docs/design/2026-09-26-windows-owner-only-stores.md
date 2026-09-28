@@ -442,9 +442,12 @@ Found by the final code review and the first mutation runs:
   an allowed path gets lines that repair it (W-T10h). The lines are for Windows
   PowerShell: single-quoted literal paths, with every quote character PowerShell
   recognises doubled as a second layer. They name the gateway account by its SID, so they
-  stay right in an elevated prompt run as another account. Ownership, when foreign, is
-  taken first with `icacls /setowner`; the DACL is then replaced in one write with a
-  protected DACL holding only the gateway account's grant, so no intermediate state
-  exposes the file (a separate `icacls /reset` would briefly restore inherited access).
+  stay right in an elevated prompt run as another account. With a foreign owner, the
+  elevated account first takes ownership itself (`takeown`), then replaces the DACL in one
+  write with a protected DACL holding only the gateway account's grant, and only then gives
+  ownership to the gateway account (`icacls /setowner`): handing ownership over first could
+  leave the elevated account with no right to write the DACL. The single DACL write means no
+  intermediate state exposes the file (a separate `icacls /reset` would briefly restore
+  inherited access).
   A NULL DACL no longer hides a foreign owner (W-T10g). W-T10b, W-T10d and W-T10e run the
   printed lines and require the file accepted afterwards.
