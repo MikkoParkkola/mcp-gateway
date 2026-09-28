@@ -35,6 +35,14 @@ fn string_map(name: &str, config: &Value, key: &str) -> SecretMap {
         .collect()
 }
 
+/// A client `env`/header value in gateway syntax: `${env:NAME}` becomes
+/// `${NAME}`; `None` when a client-only variable (`${input:…}`,
+/// `${workspaceFolder}`, …) is left that a gateway load would refuse.
+#[allow(dead_code, clippy::unnecessary_wraps, reason = "red-first stub")]
+pub(super) fn gateway_value(value: &str) -> Option<String> {
+    Some(value.to_string())
+}
+
 /// Parse one entry, or `None` for a shape that is neither stdio nor HTTP.
 pub(super) fn parse(
     name: &str,
