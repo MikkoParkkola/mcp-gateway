@@ -200,9 +200,10 @@ impl Backend {
             .iter()
             .filter_map(|tool| serde_json::from_value(tool.clone()).ok())
             .collect();
-        // The same normalisation a discovery fill applies; the resend set it
-        // returns stays with discovery, so this fill grants no retries.
-        let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
+        // The same normalisation a discovery fill applies. This list grants
+        // no retries, but it may revoke one: a tool it no longer marks safe
+        // to resend leaves the slot's resend set with the replacement.
+        let safe = super::prepare_tool_metadata(&self.name, &mut parsed);
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
         // A store, not a fill: it must not depend on the slot reading as
@@ -215,6 +216,10 @@ impl Backend {
             // cooldowns. A fill it voids sees the value and stamps nothing.
             *entry.tools_fill_failed_at.lock() = None;
             *entry.tools_refresh_failed_at.lock() = None;
+            entry
+                .resend_permitted
+                .write()
+                .retain(|tool| safe.contains(tool));
         });
     }
 }
@@ -369,5 +374,32 @@ mod tests {
             "the later-landing fill overwrote it"
         );
         assert!(judged(&backend, "a").await.is_some());
+    }
+
+    /// Review fold: a direct list may revoke a resend permission but never
+    /// grant one. `kept` stays read-only, `dropped` loses its hint, and `new`
+    /// is newly read-only. Mutant M49 (keep the old set) reddens it.
+    #[tokio::test]
+    async fn a_direct_list_revokes_but_never_grants_a_resend() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        let entry = backend.pooled_entry(&crate::backend::PoolKey::Shared);
+        *entry.resend_permitted.write() = ["kept", "dropped"].map(String::from).into();
+        let tool = |name: &str, read_only: bool| {
+            json!({"name": name, "inputSchema": {"type": "object"},
+                "annotations": {"readOnlyHint": read_only}})
+        };
+        let listed = [
+            tool("kept", true),
+            tool("dropped", false),
+            tool("new", true),
+        ];
+        backend.remember_listed_tools(None, false, &listed).await;
+        let expected = std::collections::HashSet::from(["kept".to_owned()]);
+        assert_eq!(*entry.resend_permitted.read(), expected);
     }
 }
