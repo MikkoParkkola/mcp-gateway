@@ -41,6 +41,10 @@ REF_RE = re.compile(r"^refs/heads/throwaway/mutants-[0-9]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PLATFORMS = ("linux", "windows")
 MUTANTS_DIR = ".mutants"
+# Where the batch's manifest and patches live, and the head it proves. The
+# throwaway path uses MUTANTS_DIR and HEAD^; PR mode (`--source pr`) sets both
+# from the pull request (.mutants/<number>/ and the PR head SHA).
+_batch = {"dir": MUTANTS_DIR, "head": None}
 # The harness may ride along in the batch commit (a source head older than it
 # lacks it) only when it is byte-identical to the reviewed copy.
 HARNESS = (".github/workflows/mutants.yml", "scripts/ci/mutants/run_mutants.py")
@@ -283,14 +287,14 @@ def plan() -> list[Row]:
 
 
 def header(rows: list[Row]) -> dict:
-    manifest = Path(MUTANTS_DIR, "manifest.tsv")
+    manifest = Path(_batch["dir"], "manifest.tsv")
     return {
-        "head_sha": git("rev-parse", "HEAD^"),
-        "batch_sha": git("rev-parse", "HEAD"),
+        "head_sha": _batch["head"] or git("rev-parse", "HEAD^"),
+        "batch_sha": _batch["head"] or git("rev-parse", "HEAD"),
         "run_id": os.environ.get("GITHUB_RUN_ID", ""),
         "runner": os.environ.get("RUNNER_NAME", ""),
         "manifest_sha256": sha256(manifest),
-        "patch_sha256": {r.id: sha256(Path(MUTANTS_DIR, r.patch)) for r in rows},
+        "patch_sha256": {r.id: sha256(Path(_batch["dir"], r.patch)) for r in rows},
         "rustc": subprocess.run(["rustc", "-vV"], capture_output=True, text=True).stdout.strip(),
     }
 
@@ -301,7 +305,7 @@ def revert() -> None:
 
 
 def judge(row: Row, cargo: list[str], logs: Path) -> Verdict:
-    applied = subprocess.run(["git", "apply", str(Path(MUTANTS_DIR, row.patch))], capture_output=True, text=True)
+    applied = subprocess.run(["git", "apply", str(Path(_batch["dir"], row.patch))], capture_output=True, text=True)
     if applied.returncode != 0:
         return Verdict("VOID", "apply")
     build = run_cmd([*cargo, "--no-run"], COMPILE_LIMIT, logs / f"{row.id}-compile.log")
@@ -312,8 +316,13 @@ def judge(row: Row, cargo: list[str], logs: Path) -> Verdict:
     return classify_test(run_cmd([*cargo, *row.args], TEST_LIMIT, logs / f"{row.id}.log"))
 
 
-def run(platform: str, out: Path) -> int:
-    rows = [r for r in plan() if r.platform == platform]
+def run(platform: str, out: Path, source: str = "throwaway") -> int:
+    planned = plan_pr() if source == "pr" else plan()
+    rows = [r for r in planned if r.platform == platform]
+    skipped = [r.id for r in planned if r.platform != platform]
+    if source == "pr" and skipped:
+        print(f"skipped {len(skipped)} {'/'.join(sorted({r.platform for r in planned} - {platform}))} row(s) "
+              f"in PR mode (they run on the throwaway path): {skipped}", flush=True)
     meta = header(rows)
     logs = out / "logs"
     cargo = ["cargo", "test", "--all-features"]
@@ -334,6 +343,11 @@ def run(platform: str, out: Path) -> int:
         results.append({"id": row.id, "platform": platform, "args": " ".join(row.args), **verdict.__dict__})
         print(f"{row.id}: {verdict.result} ({verdict.detail})", flush=True)
     write_outputs(out, platform, meta, results)
+    if source == "pr":
+        errors = pr_batch_errors(results, read_expect(Path(_batch["dir"])))
+        for e in errors:
+            print(f"::error::{e}", file=sys.stderr)
+        return 1 if errors else 0
     return 1 if any(r["result"] == "ERROR" for r in results) else 0
 
 
@@ -356,46 +370,145 @@ def write_outputs(out: Path, platform: str, meta: dict, results: list[dict]) -> 
 
 
 
-# In-PR evidence modes: signatures only (red-first commit).
-FILTER_RE = re.compile(r".*")
+# ---------------------------------------------------------------------------
+# In-PR evidence (evidence.yml): the red-first check and PR-mode mutant
+# batches. Both read their inputs from GitHub-provided SHAs in the
+# environment, never from the tree's own claims, and both fail closed.
+
+FILTER_RE = re.compile(r"^[A-Za-z0-9_:-]+$")
 MAX_FILTERS = 20
-_batch = {"dir": MUTANTS_DIR, "head": None}
 
 
 def env_sha(name: str) -> str:
-    return os.environ.get(name, "")
+    value = os.environ.get(name, "")
+    if not SHA_RE.match(value):
+        raise Abort(f"{name} is not a 40-hex commit SHA: {value!r}")
+    return value
 
 
 def parse_filters(value: str) -> list[str]:
-    return [value]
+    """`Red-first: a::b, c::d` -> exact test names; data only, never shell text."""
+    items = [v.strip() for v in value.split(",") if v.strip()]
+    if not items:
+        raise Abort("the Red-first: trailer names no test")
+    if len(items) > MAX_FILTERS:
+        raise Abort(f"the Red-first: trailer names {len(items)} tests; at most {MAX_FILTERS}")
+    bad = [v for v in items if not FILTER_RE.match(v)]
+    if bad:
+        raise Abort(f"Red-first: test names may use only [A-Za-z0-9_:-]; rejected {bad}")
+    return items
 
 
 def find_red_first(base: str, head: str) -> tuple[str, list[str]]:
-    raise Abort("not implemented")
+    """The newest of the PR's own commits (first parent only: commits merged in
+    from the base are not the PR's) that carries a Red-first: trailer."""
+    for sha in git("rev-list", "--first-parent", f"{base}..{head}").split():
+        value = git("log", "-1", "--format=%(trailers:key=Red-first,valueonly,separator=%x2C)", sha).strip()
+        if value:
+            return sha, parse_filters(value)
+    raise Abort("no commit of this pull request carries a Red-first: trailer")
 
 
 def judge_red(run: Outcome) -> Verdict:
-    return Verdict("FAIL", "not implemented")
+    """Before the fix the named test must fail on its own assertion."""
+    v = classify_test(run)
+    if v.result == "RED" and v.executed == 1:
+        return v
+    if v.result == "RED":
+        return Verdict("FAIL", f"{v.executed} tests ran; the name must select exactly one", v.executed)
+    return Verdict("FAIL", f"not red before the fix: {v.result} ({v.detail})", v.executed, v.evidence)
 
 
 def judge_green(run: Outcome) -> Verdict:
-    return Verdict("FAIL", "not implemented")
+    """At the PR head the same test must pass, and be the only one selected."""
+    v = classify_test(run)
+    if v.result == "SURVIVED" and v.executed == 1:
+        return Verdict("PASS", "passes at the head", 1)
+    return Verdict("FAIL", f"not green at the head: {v.result} ({v.detail}, {v.executed} ran)", v.executed, v.evidence)
 
 
 def redfirst(out: Path) -> int:
-    return 2
+    base, head = env_sha("BASE_SHA"), env_sha("HEAD_SHA")
+    red, filters = find_red_first(base, head)
+    changed = git("diff", "--name-only", f"{red}^", red).splitlines()
+    logs = out / "logs"
+    cargo = ["cargo", "test", "--all-features"]
+    results = []
+    for phase, commit, judge_fn in (("red", red, judge_red), ("head", head, judge_green)):
+        git("checkout", "--quiet", "--detach", commit)
+        build = run_cmd([*cargo, "--no-run"], COMPILE_LIMIT, logs / f"{phase}-compile.log")
+        for name in filters:
+            if build.timed_out or build.exit != 0:
+                # A compile error is never red: it proves nothing about the test.
+                verdict = Verdict("FAIL", f"{phase} commit does not compile")
+            else:
+                verdict = judge_fn(run_cmd([*cargo, name, "--", "--exact"], TEST_LIMIT, logs / f"{phase}-{name}.log"))
+            results.append({"phase": phase, "commit": commit, "test": name, **verdict.__dict__})
+            print(f"{phase} {name}: {verdict.result} ({verdict.detail})", flush=True)
+    meta = {"base_sha": base, "head_sha": head, "red_sha": red, "red_changed_files": changed,
+            "run_id": os.environ.get("GITHUB_RUN_ID", ""), "harness": os.environ.get("HARNESS_REF", "")}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "red-first.json").write_text(json.dumps({**meta, "results": results}, indent=2), encoding="utf-8")
+    ok = all(r["result"] in ("RED", "PASS") for r in results)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(f"### Red-first at `{red}` -> head `{head}`: {'proven' if ok else 'NOT proven'}\n\n")
+            f.write("| phase | test | result | detail |\n|---|---|---|---|\n")
+            for r in results:
+                f.write(f"| {r['phase']} | `{r['test']}` | {r['result']} | {r['detail'].replace('|', '/')} |\n")
+    return 0 if ok else 1
 
 
 def plan_pr() -> list[Row]:
-    raise Abort("not implemented")
+    """PR mode: the manifest sits at .mutants/<PR number>/ in the PR itself, it
+    names a commit the PR head descends from (a manifest cannot name the
+    commit that carries it), and the checkout is exactly the PR head."""
+    number = os.environ.get("PR_NUMBER", "")
+    if not number.isdigit():
+        raise Abort(f"PR_NUMBER is not a pull request number: {number!r}")
+    head = env_sha("HEAD_SHA")
+    if git("rev-parse", "HEAD") != head:
+        raise Abort("the checkout is not the pull request head")
+    folder = Path(MUTANTS_DIR, number)
+    manifest = folder / "manifest.tsv"
+    if not manifest.is_file():
+        raise Abort(f"{manifest} is missing (the manifest lives under the PR's own number)")
+    head_sha, rows = parse_manifest(manifest.read_text(encoding="utf-8"))
+    if subprocess.run(["git", "merge-base", "--is-ancestor", head_sha, head], capture_output=True).returncode != 0:
+        raise Abort(f"manifest head_sha {head_sha} is not an ancestor of the PR head {head}")
+    for row in rows:
+        if not (folder / row.patch).is_file():
+            raise Abort(f"row {row.id}: patch {row.patch} is missing from {folder}")
+    _batch.update(dir=str(folder), head=head)
+    return rows
 
 
 def read_expect(folder: Path) -> dict[str, str] | None:
-    return None
+    path = folder / "expect.tsv"
+    if not path.is_file():
+        return None
+    out = {}
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 2 or parts[1].strip() not in ("RED", "SURVIVED"):
+            raise Abort(f"{path} line {n}: want id<TAB>RED|SURVIVED")
+        out[parts[0].strip()] = parts[1].strip()
+    return out
 
 
 def pr_batch_errors(results: list[dict], expect: dict[str, str] | None) -> list[str]:
-    return []
+    """PR mode fails on any ERROR, on a batch with no RED row, and (when an
+    expect file is present) on a SURVIVED row not declared SURVIVED."""
+    errors = [f"{r['id']}: ERROR ({r['detail']})" for r in results if r["result"] == "ERROR"]
+    if not any(r["result"] == "RED" for r in results):
+        errors.append("no mutant was killed (zero RED rows)")
+    if expect is not None:
+        errors += [f"{r['id']}: SURVIVED but not declared SURVIVED in expect.tsv"
+                   for r in results if r["result"] == "SURVIVED" and expect.get(r["id"]) != "SURVIVED"]
+    return errors
 
 
 def evidence_self_test() -> list[str]:
@@ -538,7 +651,6 @@ def walk_check() -> list[str]:
     return errs
 
 
-
 def self_test() -> int:
     ok = "running 3 tests\ntest a ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
     empty = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n"
@@ -619,13 +731,14 @@ def self_test() -> int:
         rc = 1
     if rc == 0:
         total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad)
-        print(f"self-test: {total} classifier, manifest and ref cases as expected")
+        print(f"self-test: {total} classifier, manifest and ref cases, plus the in-PR evidence cases, as expected")
     return rc
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["plan", "run"], nargs="?")
+    ap.add_argument("mode", choices=["plan", "run", "redfirst"], nargs="?")
+    ap.add_argument("--source", choices=["throwaway", "pr"], default="throwaway")
     ap.add_argument("--platform", choices=PLATFORMS)
     ap.add_argument("--out", type=Path, default=Path("mutants-out"))
     ap.add_argument("--self-test", action="store_true")
@@ -642,8 +755,10 @@ def main() -> int:
                     f.write("\n".join(lines) + "\n")
             return 0
         if a.mode == "run" and a.platform:
-            return run(a.platform, a.out)
-        ap.error("need plan, run --platform P, or --self-test")
+            return run(a.platform, a.out, a.source)
+        if a.mode == "redfirst":
+            return redfirst(a.out)
+        ap.error("need plan, run --platform P [--source pr], redfirst, or --self-test")
     except Abort as exc:
         print(f"::error::mutant batch aborted: {exc}", file=sys.stderr)
         return 2
