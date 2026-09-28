@@ -348,6 +348,12 @@ impl Backend {
         self.get_tools_for_binding(None, &[]).await
     }
 
+    /// Startup warm-up's fill: recorded on the breaker, never admitted or
+    /// charged a token (#1300). Warm-start is its only caller.
+    pub(crate) async fn warm_tools(&self) -> Result<Arc<Vec<Tool>>> {
+        self.tools_fill(None, &[], FillBound::Warmup, false).await
+    }
+
     /// The tool catalogue THIS CALLER's pool slot serves.
     ///
     /// `binding` is the caller's `PropagatedCredential::cache_binding`, and
