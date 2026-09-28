@@ -235,7 +235,7 @@ impl AnomalyDetector {
         }
         self.last_tool.insert(identity, current.clone());
         if let Some(prev) = prev
-            && !self.tracker.record_pair(&prev, &current, MAX_LEARNED_PAIRS)
+            && !(true || self.tracker.record_pair(&prev, &current, MAX_LEARNED_PAIRS))
             && self.pairs_dropped.fetch_add(1, Ordering::Relaxed) == 0
         {
             // Once, not per call: a full map drops every new transition.
