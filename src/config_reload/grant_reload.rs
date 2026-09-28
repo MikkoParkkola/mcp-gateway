@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::{error, info};
+use tracing::info;
 
-use super::{RELOAD_LOCK_WAIT, ReloadContext, grant_delta};
+use super::{RELOAD_LOCK_WAIT, ReloadContext, env_poll, grant_delta};
 use crate::identity_grants::{GrantSubject, IdentityGrant, LocalIdentityGrantStore};
 
 /// The publish target for a grant reload, plus the lock that serializes it.
@@ -28,6 +28,8 @@ pub struct IdentityGrantSink {
     pub(super) epoch: Arc<std::sync::atomic::AtomicU64>,
     pub(super) path: PathBuf,
     pub(super) lock: tokio::sync::Mutex<()>,
+    /// Throttles an unchanged grants read error: retries re-read the file.
+    read_errors: parking_lot::Mutex<env_poll::WarnLimiter>,
 }
 
 impl IdentityGrantSink {
@@ -43,6 +45,7 @@ impl IdentityGrantSink {
             epoch,
             path,
             lock: tokio::sync::Mutex::new(()),
+            read_errors: parking_lot::Mutex::new(env_poll::WarnLimiter::default()),
         }
     }
 }
@@ -131,7 +134,7 @@ impl ReloadContext {
         // operator retries instead of inspecting a grants file that is fine.
         let Ok(_grants_guard) = tokio::time::timeout(RELOAD_LOCK_WAIT, sink.lock.lock()).await
         else {
-            error!(path = %sink.path.display(), "Identity-grant reload busy");
+            env_poll::report_grants_busy(&sink.read_errors, &sink.path);
             return Some(Err(
                 "identity grants reload busy: another grant reload is in progress; retry"
                     .to_string(),
@@ -139,13 +142,12 @@ impl ReloadContext {
         };
 
         let file = match crate::identity_grants::read_identity_grants_file(&sink.path).await {
-            Ok(file) => file,
+            Ok(file) => {
+                *sink.read_errors.lock() = env_poll::WarnLimiter::default();
+                file
+            }
             Err(reason) => {
-                error!(
-                    path = %sink.path.display(),
-                    %reason,
-                    "Identity-grant reload refused; the live grants still apply"
-                );
+                env_poll::report_grants_refusal(&sink.read_errors, &sink.path, &reason);
                 return Some(Err(format!(
                     "identity grants not reloaded from {}: {reason}",
                     sink.path.display()

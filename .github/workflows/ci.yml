@@ -402,15 +402,68 @@ jobs:
           rc=$?
           echo "hash-key on an empty key exited $rc"
           [[ $rc -eq 2 ]]
-      # Library and binary unit tests. Two module trees are skipped rather than
-      # run, both for one reason: their fixtures open the task store or the
-      # personal-account store, which refuse on non-unix by design (W1, #1142).
-      # The integration targets under tests/ are compiled above and not run
-      # here yet (W1, #1142). Green means Windows coverage for what runs, and
-      # no more than that.
+      # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
+      # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
+      # clippy jobs never see them. Lint them where they compile.
+      # `unnecessary_wraps` is allowed here only: it fires on the existing
+      # non-unix no-op stubs, which keep the unix signature on purpose.
       - run: >-
-          cargo test --all-features --lib --bins --no-fail-fast --
-          --skip gateway:: --skip personal_accounts::
+          cargo clippy --all-targets --all-features --
+          -D warnings -A clippy::unnecessary_wraps
+      # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
+      # non-elevated token create symlinks, so the row runs rather than skips.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      # Library and binary unit tests, the store suites included: both stores
+      # run on Windows with owner-only DACLs (ADR-016). The integration targets
+      # under tests/ are compiled above and not run here yet (W1, #1142).
+      - run: cargo test --all-features --lib --bins --no-fail-fast -- --show-output
+      # Owner-only rows that need real Windows state: a second, non-admin
+      # account (the runner is an administrator, whose rights bypass DACLs), a
+      # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
+      # even when it failed, so no evidence hides behind an earlier failure.
+      - name: Privileged owner-only rows
+        id: privileged
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
+          $free = 68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "${_}:\") }
+          # Second user: Users only, never Administrators.
+          $pass = 'Mg1!' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+          $account = New-LocalUser -Name mgw-probe -Password (ConvertTo-SecureString $pass -AsPlainText -Force) -AccountNeverExpires
+          if ((Get-LocalGroupMember Administrators).Name -match 'mgw-probe') { throw 'mgw-probe is an administrator' }
+          $sid = $account.SID.Value
+          secedit /export /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
+          (Get-Content "$env:RUNNER_TEMP\sec.inf") -replace '^(SeInteractiveLogonRight = .*)$', "`$1,*$sid" | Set-Content "$env:RUNNER_TEMP\sec.inf"
+          secedit /configure /db "$env:RUNNER_TEMP\sec.sdb" /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
+          Set-Service seclogon -StartupType Manual; Start-Service seclogon
+          # Mapped network drive.
+          $net = $free[0]
+          net use "${net}:" \\localhost\C$
+          if ($LASTEXITCODE -ne 0) { throw 'net use failed' }
+          New-Item -ItemType Directory -Force "${net}:\mgw-net-root" | Out-Null
+          # FAT32 and exFAT volumes.
+          $vols = @(@{ fs = 'FAT32'; letter = $free[1] }, @{ fs = 'exFAT'; letter = $free[2] })
+          foreach ($v in $vols) {
+            $vhd = "$env:RUNNER_TEMP\mgw-$($v.fs).vhdx"
+            @("create vdisk file=`"$vhd`" maximum=64 type=expandable", "select vdisk file=`"$vhd`"",
+              'attach vdisk', 'create partition primary', "format fs=$($v.fs) quick",
+              "assign letter=$($v.letter)") | Set-Content "$env:RUNNER_TEMP\dp.txt"
+            diskpart /s "$env:RUNNER_TEMP\dp.txt"
+            if ($LASTEXITCODE -ne 0) { throw "diskpart $($v.fs) failed" }
+          }
+          $env:MGW_PROBE_USER = 'mgw-probe'
+          $env:MGW_PROBE_PASS = $pass
+          $env:MGW_NET_ROOT = "${net}:\mgw-net-root"
+          $env:MGW_FAT32_ROOT = "$($free[1]):\"
+          $env:MGW_EXFAT_ROOT = "$($free[2]):\"
+          cargo test --all-features --lib -- --ignored --show-output win_privileged::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   test:
     name: Tests
@@ -448,6 +501,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The release tooling's Python suites, which `release-script-tests` runs
+      # but which that job skips here. Without this, a throwaway meant to show
+      # a workflow-wiring or release-script test going red passes on cargo
+      # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Release tooling Python suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for suite in scripts/release/test_*.py; do
+            echo "::group::$suite"
+            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
@@ -477,6 +544,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The release tooling's Python suites, which `release-script-tests` runs
+      # but which that job skips here. Without this, a throwaway meant to show
+      # a workflow-wiring or release-script test going red passes on cargo
+      # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Release tooling Python suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for suite in scripts/release/test_*.py; do
+            echo "::group::$suite"
+            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.

@@ -15,9 +15,9 @@ the binary could know whether a given deployment is affected; item 8 refuses the
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
-the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
-load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 73, 74 and 80 print no notice: read them here
+the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
+`role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77 and 80 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -95,16 +95,16 @@ upgrading a running deployment.
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
-| 68 | Reserved: lands with #1473 | None yet |
+| 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
 | 69 | Reserved: lands with a pending change | None yet |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Reserved: lands with a pending change | None yet |
-| 72 | Reserved: lands with a pending change | None yet |
+| 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 | 75 | Reserved: lands with a pending change | None yet |
 | 76 | Reserved: lands with a pending change | None yet |
-| 77 | Reserved: lands with a pending change | None yet |
+| 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | Reserved: lands with a pending change | None yet |
 | 79 | Reserved: lands with a pending change | None yet |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
@@ -1764,6 +1764,30 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 **Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
 gets -32601. Create and follow tasks through `POST /mcp` instead.
 
+## 68. Windows runs the task and personal-account stores, owner-only
+
+Before 4.0 both stores refused to start on Windows: their custody lock and their privacy
+checks existed only for unix. In 4.0 they run on Windows with protection equivalent to the unix
+`0700` directories and `0600` files:
+
+- Every directory and file the stores create is owner-only from its first instant: owner is the
+  gateway's account, one grant to that account, and nothing inherited from the parent.
+- On every open, each store directory and file is checked on the open handle and refused when
+  another account is granted access, the owner is someone else, the DACL inherits or is NULL,
+  or the object is a symlink or junction. A store directory reached through a junction, on a
+  network drive, or on a volume with no ACLs (FAT32, exFAT) is refused.
+- The directories stay open for as long as the store runs, so they cannot be renamed or
+  swapped for a junction underneath it.
+- A 3.x OAuth token file offered for migration is refused when other accounts can read it
+  (the 3.x gateway wrote it with the directory's inherited ACL). The refusal names the rule it
+  broke and prints the `icacls` commands, for PowerShell, that make the file owner-only.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** keep the store directories on a local NTFS or ReFS path, not a
+mapped drive or a junction. If a 3.x token migration is refused, run the printed `icacls` lines
+in PowerShell (as an administrator when it says the file has another owner) and retry.
+
 ## 70. Secrets stay out of the request URI and its trace
 
 The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
@@ -1785,6 +1809,35 @@ reached the log.
 **Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
+
+## 72. Env files are polled, and a failed reload is retried
+
+A 3.x gateway and earlier 4.0 betas watched each env file's directory, fixed at startup. An
+env file reached through a link (`current/.env` after a release switch, or an env file that
+is itself a symlink) kept reloading from the old target, and no change was seen on NFS or
+FUSE mounts.
+
+In 4.0:
+
+- A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
+  re-reads every listed env file every 2 seconds and reloads when its content differs from
+  what is loaded. A file that appears later is picked up. A stdio gateway, or one that found
+  its config on its own, watches no files, as before.
+- A lookup error on an env file (a link loop, a directory the gateway cannot search) fails
+  the load instead of reading as a missing file.
+- After any failed reload, whatever caused it, the reload is retried every 2 seconds until
+  one succeeds. A refused config (a posture refusal, or a change a reload refuses, such as
+  new message-signing material) is re-evaluated each time and refused each time; no backend
+  is started or stopped and the refused config is not published. The identity-grants file is
+  reloaded on its own at each attempt, as on any reload, and a changed grants file still
+  takes effect. Its warning is logged at most once a minute per file unless the error
+  changes.
+- A change to a restart-only field, such as `server.port`, is not a failure: the reload
+  succeeds, applies what can change live, reports the rest as needing a restart, and is not
+  retried.
+
+**Action:** none required. A broken or refused `config.yaml` now stays in retry until it is
+fixed or reverted, so fix it rather than waiting for the next file event.
 
 ## 73. Task calls to surfaced tools are confirmed unless known to be harmless
 
@@ -1832,6 +1885,39 @@ holds whichever saved last.
 
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
+
+Capability calls, OpenAPI import by URL (`mcp-gateway cap import`), capability discovery
+(`mcp-gateway cap discover`) and the web UI's import followed `HTTP_PROXY`, `HTTPS_PROXY`
+and `ALL_PROXY` from the environment. A proxied request is resolved by the proxy, not the
+gateway, so it skipped the gateway's SSRF check on resolved addresses: with a proxy set, a
+capability could reach loopback, private networks or a cloud metadata endpoint through it.
+
+In 4.0 these clients ignore the proxy environment variables and connect directly;
+capability calls and imports check every resolved address. To proxy capability calls, name
+the proxy in config:
+
+```yaml
+capabilities:
+  egress_proxy: "http://proxy.internal:3128"
+```
+
+- Every capability call then goes to that proxy, and the proxy resolves destination names.
+  Private-range enforcement for names becomes the proxy's job; IP-literal destinations are
+  still refused. A plain `http://` destination sends its URL and headers, credentials
+  included, to the proxy.
+- The value must be an `http://` or `https://` URL with a host; anything else fails the
+  config load. It applies at restart. Startup logs a warning naming the proxy (without
+  credentials).
+- Imports and discovery have no proxy setting and always connect directly. So do one-shot
+  capability calls from the CLI (`mcp-gateway cap test`, `mcp-gateway tool invoke`); the key
+  applies to the gateway's own capability calls.
+- Unchanged: backend connections still follow the environment proxy.
+
+**Action:** if capability calls must leave through a proxy, set `capabilities.egress_proxy`.
+Imports that could only reach their spec through a proxy must be fetched another way, for
+example downloaded and imported from a file.
 
 ## 80. Discovery keeps env, headers and argument boundaries
 
