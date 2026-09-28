@@ -155,28 +155,44 @@ def check(workflow: str, name: str, rc: list) -> None:
 def only_throwaway_tests(rc: list) -> None:
     """A same-repo throwaway PR into the release line runs exactly one ci.yml
     job, `Tests (throwaway)`: every other job must skip it, or each red-first
-    and mutant PR pays for extra hosted builds. A job without an `if:` (and
-    with no skipped dependency) always runs, so it fails this too."""
+    and mutant PR pays for extra hosted builds. Jobs are resolved in
+    dependency order with GitHub's rules, so a job that runs only because a
+    dependency (including the throwaway test job itself) succeeded is caught."""
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     for var in (None, "ready"):
-        c = event("throwaway", var)
-        c["inputs"] = {}
-        # Jobs that need a skipped job are skipped unless their `if:` says otherwise.
-        c["needs"] = {name: {"result": "skipped", "outputs": {}} for name in jobs}
-        c["_status"] = {"cancelled": False, "success": False, "failure": False}
-        ran = []
-        for name, job in jobs.items():
-            cond = job.get("if")
+        base = event("throwaway", var)
+        base["inputs"] = {}
+        result: dict[str, str] = {}
+
+        def resolve(name, stack=()):
+            if name in result:
+                return result[name]
+            job = jobs[name]
             needs = job.get("needs") or []
-            if cond is None:
-                if not needs:
-                    ran.append(name)
-                continue
-            if evaluate(str(cond), c):
-                ran.append(name)
+            needs = [needs] if isinstance(needs, str) else needs
+            for n in needs:
+                resolve(n, stack + (name,))
+            declared = {n: {"result": result[n], "outputs": {}} for n in needs}
+            ok = all(result[n] == "success" for n in needs)
+            ctx = dict(base, needs=dict(base["needs"], **declared),
+                       _status={"cancelled": False, "success": ok,
+                                "failure": any(result[n] == "failure" for n in needs)})
+            cond = str(job.get("if", ""))
+            if not cond:
+                runs = ok
+            elif not re.search(r"\b(cancelled|always|success|failure)\(", cond) and not ok:
+                runs = False
+            else:
+                runs = evaluate(cond, ctx)
+            result[name] = "success" if runs else "skipped"
+            return result[name]
+
+        for name in jobs:
+            resolve(name)
+        ran = sorted(n for n, r in result.items() if r == "success")
         names = sorted({jobs[n].get("name", n) for n in ran})
         if names != ["Tests (throwaway)"] or len(ran) != 1:
-            rc.append(f"ci.yml: a throwaway PR (var={var}) runs {sorted(ran)}, expected only Tests (throwaway)")
+            rc.append(f"ci.yml: a throwaway PR (var={var}) runs {ran}, expected only Tests (throwaway)")
 
 
 def main() -> int:
