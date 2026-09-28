@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The twenty-nine 4.0.0 changes, in the order they are printed.
+/// The thirty 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -107,6 +107,11 @@ an empty one counts as absent, and logs carry an 8-hex fingerprint instead of th
 off, holding a session id is what makes a session yours.",
     "A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is \
 refused with -32602 instead of being forwarded to the backend as a fresh call.",
+    "A tool call to a tool the gateway has not yet listed for that caller now lists the backend \
+first, as the caller, instead of being forwarded unchecked. Under `closed`, a list the backend \
+answers but the gateway cannot read refuses the call (an unreachable backend fails as a call to it \
+would), and so does a tool the backend's complete list lacks; set \
+`input_schema_enforcement: standard` to forward. A cold call spends a rate-limit token on the list.",
     "A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not \
 serve is now refused with HTTP 400 and -32022; 3.x ignored the header. A request without it, or \
 with a served revision, is unchanged.",
