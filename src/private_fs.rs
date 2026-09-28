@@ -111,7 +111,14 @@ const GENERIC_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
 pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusal> {
     let mut found = Vec::new();
     let Some(aces) = inspection.dacl.as_ref() else {
+        // A NULL DACL grants everyone everything, so nothing else about the
+        // DACL matters; the owner still does, because the repair must fix it.
         found.push(PrivacyRefusal::NullDacl);
+        match inspection.owner.as_ref() {
+            Some(owner) if owner == user => {}
+            Some(owner) => found.push(PrivacyRefusal::ForeignOwner(owner.to_sddl())),
+            None => found.push(PrivacyRefusal::Unreadable),
+        }
         return found;
     };
     let mut read_write = false;

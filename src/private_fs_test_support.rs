@@ -29,17 +29,22 @@ pub(crate) fn fixture_fail(row: &str, detail: &str) -> ! {
     panic!("WT-FIXTURE {row}: {detail}")
 }
 
-/// Run every `icacls` line a refusal printed, verbatim, in Windows
-/// PowerShell, as a user pastes them. Returns how many ran; a failing line is
-/// a fixture error.
+/// Run every repair line a refusal printed (the lines after its "run these
+/// lines" header), verbatim, in Windows PowerShell, as a user pastes them.
+/// Returns how many ran; a failing line is a fixture error.
 pub(crate) fn run_printed_repair(row: &str, text: &str) -> usize {
     let lines: Vec<&str> = text
         .lines()
+        .skip_while(|l| !l.contains("run these lines"))
+        .skip(1)
         .map(str::trim)
-        .filter(|l| l.starts_with("icacls "))
+        .filter(|l| !l.is_empty())
         .collect();
     for line in &lines {
-        if let Err(error) = powershell(&format!("{line}; exit $LASTEXITCODE")) {
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'; {line}; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
+        );
+        if let Err(error) = powershell(&script) {
             fixture_fail(row, &format!("remediation command failed: {line}: {error}"));
         }
     }

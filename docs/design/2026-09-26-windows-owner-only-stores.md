@@ -436,10 +436,15 @@ Found by the final code review and the first mutation runs:
   colliding name).
 - A8, bounds. Owner SID and DACL reads in `win_acl::inspect` are bounded by the descriptor's
   own length (`GetSecurityDescriptorLength`), not by the maximum SID size.
-- A9, 3.x repair text. The printed repair is for PowerShell, not cmd: single quotes keep
-  the path literal (cmd expands a `%NAME%` inside double quotes). It names the gateway
-  account by its SID, so it stays right in an elevated prompt run as another account, and
-  it runs `icacls '<f>' /reset` before `/inheritance:r /grant:r '*<sid>:F'`: `/reset` drops
-  every explicit entry whatever its type (a callback ACE, a user deny, a foreign grant),
-  which the per-SID `/remove:g` lines of §2.4 did not. W-T10b, W-T10d and W-T10e run the
+- A9, 3.x repair text. A runnable repair is printed only for a path made of letters,
+  digits, space and `\ : . _ - ( )` (an allowlist, since an administrator may run it
+  elevated); any other path gets written instructions and no runnable line (W-T10f), and
+  an allowed path gets lines that repair it (W-T10h). The lines are for Windows
+  PowerShell: single-quoted literal paths, with every quote character PowerShell
+  recognises doubled as a second layer. They name the gateway account by its SID, so they
+  stay right in an elevated prompt run as another account. Ownership, when foreign, is
+  taken first with `icacls /setowner`; the DACL is then replaced in one write with a
+  protected DACL holding only the gateway account's grant, so no intermediate state
+  exposes the file (a separate `icacls /reset` would briefly restore inherited access).
+  A NULL DACL no longer hides a foreign owner (W-T10g). W-T10b, W-T10d and W-T10e run the
   printed lines and require the file accepted afterwards.

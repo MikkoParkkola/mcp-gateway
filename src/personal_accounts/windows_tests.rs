@@ -377,7 +377,10 @@ const LEGACY: &str = r#"{"access_token":"legacy-3x-access-token","token_type":"B
 /// A 3.x token written the 3.x way (`fs::write`, inherited DACL) under a
 /// parent whose inheritable DACL grants the user and BUILTIN\Users read.
 fn legacy_token(row: &str) -> (tempfile::TempDir, PathBuf) {
-    let root = tempfile::tempdir().unwrap();
+    // Under the working directory, not the system temp dir: the runner's temp
+    // path holds an 8.3 name (`RUNNER~1`), and `~` is outside the character
+    // set for which the refusal prints a runnable repair.
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let parent = root.path().join("oauth");
     std::fs::create_dir(&parent).unwrap();
     let user = crate::private_fs::test_support::user_sid();
@@ -425,7 +428,7 @@ fn wt10b_legacy_token_remediation_works() {
     );
     assert!(
         crate::private_fs::test_support::run_printed_repair("W-T10b", &text) > 0,
-        "WT-ASSERT W-T10b: the refusal printed no icacls commands: {text}"
+        "WT-ASSERT W-T10b: the refusal printed no repair lines: {text}"
     );
     assert!(
         read_legacy_source(&path).is_ok(),
@@ -690,5 +693,100 @@ fn wt10e_remediation_removes_an_unsupported_ace() {
     assert!(
         after.is_ok(),
         "WT-ASSERT W-T10e: still refused after the printed repair: {after:?}"
+    );
+}
+
+// W-T10f: a path outside the allowed character set gets repair
+// instructions and no runnable line; the path's quote characters never reach
+// a command.
+#[test]
+fn wt10f_unsafe_path_gets_instructions_only() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let marker = root.path().join("injected");
+    // A folder name that would end a naive single-quoted literal and run code.
+    let hostile = format!("oauth\u{2019}; New-Item '{}' ;\u{2018}", marker.display());
+    let parent = root.path().join(hostile);
+    std::fs::create_dir(&parent).unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    let sddl = format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;FR;;;BU)");
+    crate::private_fs::test_support::plant_sddl("W-T10f", &parent, &sddl, &sddl);
+    let path = parent.join("0123456789abcdef_tokens.json");
+    std::fs::write(&path, LEGACY).unwrap();
+    let text = read_legacy_source(&path)
+        .err()
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    if !text.contains("S-1-5-32-545") {
+        fixture_fail(
+            "W-T10f",
+            &format!("the inherited grant did not refuse: {text}"),
+        );
+    }
+    assert!(
+        !text.contains("run these lines") && text.contains("no command is printed"),
+        "WT-ASSERT W-T10f: a runnable line was printed for a path outside the allowed set: {text}"
+    );
+    assert_eq!(
+        crate::private_fs::test_support::run_printed_repair("W-T10f", &text),
+        0,
+        "WT-ASSERT W-T10f: the instructions carried a runnable line"
+    );
+    assert!(!marker.exists(), "WT-ASSERT W-T10f: code from the path ran");
+}
+
+// W-T10h: a path inside the allowed set (letters, digits, space and
+// `\ : . _ - ( )`) gets runnable lines, and they repair the file.
+#[test]
+fn wt10h_allowed_path_gets_a_working_runnable_repair() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let parent = root.path().join("oauth dir (3.x)_v-1.0");
+    std::fs::create_dir(&parent).unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    let sddl = format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;FR;;;BU)");
+    crate::private_fs::test_support::plant_sddl("W-T10h", &parent, &sddl, &sddl);
+    let path = parent.join("0123456789abcdef_tokens.json");
+    std::fs::write(&path, LEGACY).unwrap();
+    let text = read_legacy_source(&path)
+        .err()
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    assert!(
+        text.contains("run these lines"),
+        "WT-ASSERT W-T10h: no runnable line for an allowed path: {text}"
+    );
+    assert!(
+        crate::private_fs::test_support::run_printed_repair("W-T10h", &text) > 0,
+        "WT-ASSERT W-T10h: the refusal printed no repair lines: {text}"
+    );
+    let after = read_legacy_source(&path);
+    assert!(
+        after.is_ok(),
+        "WT-ASSERT W-T10h: still refused after the printed repair: {after:?}"
+    );
+}
+
+// W-T10g: a NULL DACL on a foreign-owned file reports both, so one printed
+// repair fixes both.
+#[test]
+fn wt10g_null_dacl_and_foreign_owner_repaired_in_one_pass() {
+    let (_root, path) = legacy_token("W-T10g");
+    let back =
+        crate::private_fs::test_support::plant_any("W-T10g", &path, "O:BAD:NO_ACCESS_CONTROL");
+    let text = read_legacy_source(&path)
+        .err()
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    if !text.contains("NullDacl") {
+        fixture_fail("W-T10g", &format!("planted {back}; refusal was {text}"));
+    }
+    assert!(
+        text.contains("ForeignOwner"),
+        "WT-ASSERT W-T10g: a NULL DACL hid the foreign owner: {text}"
+    );
+    crate::private_fs::test_support::run_printed_repair("W-T10g", &text);
+    let after = read_legacy_source(&path);
+    assert!(
+        after.is_ok(),
+        "WT-ASSERT W-T10g: still refused after one printed repair: {after:?}"
     );
 }
