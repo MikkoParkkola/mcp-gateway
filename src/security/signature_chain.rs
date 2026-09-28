@@ -358,6 +358,9 @@ pub(crate) fn verify_chain(
     {
         return Err(ChainRefusal::Future);
     }
+    if links.windows(2).any(|p| p[0].ts > p[1].ts) {
+        return Err(ChainRefusal::Future);
+    }
     Ok(links)
 }
 
