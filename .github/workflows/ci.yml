@@ -124,6 +124,8 @@ jobs:
         run: |
           bash scripts/ci/changed-scope.sh --self-test
           python3 scripts/ci/test_docs_only_gating.py
+      - name: Validate the feature-combination shards against the documented matrix
+        run: python3 scripts/ci/test_feature_shards.py
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
