@@ -331,6 +331,31 @@ async fn t3b_an_exhausted_exchange_releases_the_idempotency_key() {
     );
 }
 
+/// T3d — the same rule on a path that ends before the result completes: a
+/// caller the gateway cannot bind a continuation to is refused after the
+/// exhausted exchange, and the key must still be released on the way out. T3b
+/// cannot see this, because a completed interim removes the key regardless.
+#[tokio::test]
+async fn t3d_an_exhausted_exchange_that_cannot_be_sealed_releases_the_key() {
+    let (m, calls) = meta_that_always_asks(ROOTS);
+    let m = with_idempotency(m);
+    let channel = Answering::default();
+    let retry = keyed("key-t3d");
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: None,
+        ..legacy_caller(&channel, &retry)
+    };
+    m.invoke_tool(&args(), Some("session-1"), &caller)
+        .await
+        .expect_err("no principal to bind the continuation to");
+    let first = calls.lock().len();
+    let _ = m.invoke_tool(&args(), Some("session-1"), &caller).await;
+    assert!(
+        calls.lock().len() > first,
+        "the key was settled, so the retry was replayed"
+    );
+}
+
 /// T3c — the last round reaches the client for the first time at the
 /// fallthrough, so MRTR.9 is applied to it there: a question this caller never
 /// declared is refused, not sealed into an envelope.
