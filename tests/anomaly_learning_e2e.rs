@@ -55,8 +55,10 @@ async fn direct(gateway: &HttpGateway, session: &str, tool: &str) -> Value {
         .client
         .post(format!("{}/mcp/{BACKEND}", gateway.url))
         .header("mcp-session-id", session)
-        .json(&json!({"jsonrpc": "2.0", "id": tool, "method": "tools/call",
-            "params": {"name": tool, "arguments": {}}}))
+        .json(
+            &json!({"jsonrpc": "2.0", "id": tool, "method": "tools/call",
+            "params": {"name": tool, "arguments": {}}}),
+        )
         .send()
         .await
         .expect("direct route HTTP");
@@ -89,7 +91,12 @@ async fn real_direct_calls_train_the_router_firewall() {
             );
         }
     }
-    assert!(direct(&gateway, &session, "tool_a").await.get("result").is_some());
+    assert!(
+        direct(&gateway, &session, "tool_a")
+            .await
+            .get("result")
+            .is_some()
+    );
     let body = direct(&gateway, &session, "tool_c").await;
     assert!(
         refused_as_anomaly(&body),
@@ -111,7 +118,9 @@ async fn real_meta_calls_train_the_router_firewall() {
             );
         }
     }
-    assert!(!refused_as_anomaly(&meta(&gateway, &session, "tool_a").await));
+    assert!(!refused_as_anomaly(
+        &meta(&gateway, &session, "tool_a").await
+    ));
     let body = meta(&gateway, &session, "tool_c").await;
     assert!(
         refused_as_anomaly(&body),

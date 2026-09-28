@@ -22,6 +22,30 @@ impl FirewallConfig {
     ///
     /// A message naming the first out-of-range field.
     pub fn validate(&self) -> Result<(), String> {
+        if !self.anomaly_detection {
+            return Ok(());
+        }
+        // Scores are in [0, 1]. At or below 0.5 the old neutral score would
+        // flag every call; above 1.0 nothing could ever be flagged.
+        let log = self.anomaly_threshold;
+        if !(log > 0.5 && log <= 1.0) {
+            return Err(format!(
+                "security.firewall.anomaly_threshold must be above 0.5 and at most 1.0, got {log}"
+            ));
+        }
+        if let Some(block) = self.anomaly_block_threshold
+            && !(block > log && block <= 1.0)
+        {
+            return Err(format!(
+                "security.firewall.anomaly_block_threshold must be above anomaly_threshold \
+                 ({log}) and at most 1.0, got {block}"
+            ));
+        }
+        if self.anomaly_min_observations == 0 {
+            return Err(
+                "security.firewall.anomaly_min_observations must be at least 1".to_string(),
+            );
+        }
         Ok(())
     }
 }
@@ -52,7 +76,10 @@ mod tests {
             let result = load(&format!("{on}    {field}: {bad}\n"));
             assert!(result.is_err(), "{field}: {bad} must refuse to load");
             let message = result.unwrap_err().to_string();
-            assert!(message.contains(field), "the refusal names {field}: {message}");
+            assert!(
+                message.contains(field),
+                "the refusal names {field}: {message}"
+            );
         }
         for (field, good) in [
             ("anomaly_threshold", "0.51"),

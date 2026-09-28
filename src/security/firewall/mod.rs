@@ -29,6 +29,7 @@ use crate::transition::TransitionTracker;
 
 pub mod anomaly;
 mod anomaly_config;
+mod anomaly_gate;
 use anomaly_config::{default_anomaly_min_observations, default_anomaly_threshold};
 pub mod audit;
 pub mod budget_guard;
@@ -40,11 +41,11 @@ mod response;
 pub mod tenant_guard;
 
 #[cfg(test)]
+mod anomaly_learning_tests;
+#[cfg(test)]
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
-#[cfg(test)]
-mod anomaly_learning_tests;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -128,7 +129,6 @@ pub struct FirewallConfig {
     #[serde(default)]
     pub budget: budget_guard::BudgetGuardConfig,
 }
-
 
 impl Default for FirewallConfig {
     fn default() -> Self {
@@ -402,94 +402,10 @@ impl Firewall {
             }
         }
 
-        // 2. Anomaly detection — score how unusual this tool call sequence is.
-        //
-        // The key is the caller, and after MCP 2026-07-28 there is no session
-        // to be the caller. A detector handed a per-request identifier sees a
-        // first request every time and answers with its neutral score forever:
-        // it keeps running and stops protecting. `observe` says so instead, and
-        // this is the call site that has to do something about it.
-        // The identity the detector keys on. After MCP 2026-07-28 there is no
-        // session to be the caller, so the authenticated principal stands in.
-        // An empty session id is not an identity and must never be used as one:
-        // every stateless caller would share a single bucket, and one caller's
-        // ordinary sequence would make another's unusual one look ordinary.
-        // Decided by the caller, which is the only layer holding the validated
-        // credential. Empty means there is no identity — never a display name,
-        // which is operator-configured and shared by every anonymous caller.
+        // 2. Anomaly detection (`anomaly_gate.rs`). Empty is not an identity:
+        // it must never key the detector, tenant or budget guards.
         let anomaly_identity = (!control_identity.is_empty()).then_some(control_identity);
-
-        let mut anomaly_blind = false;
-        let anomaly_score = self.anomaly.as_ref().and_then(|a| {
-            match a.observe(anomaly_identity, server, tool) {
-                crate::security::firewall::anomaly::Observation::Scored(score) => Some(score),
-                crate::security::firewall::anomaly::Observation::WarmingUp => None,
-                crate::security::firewall::anomaly::Observation::Unobservable => {
-                    // A detector with nothing to key on cannot protect. Allowing
-                    // the call anyway is the shape of failure that reads as
-                    // success: the control still runs, still logs, and stops
-                    // deciding anything. The firewall is opt-in, so refusing is
-                    // the answer an operator who switched it on asked for.
-                    tracing::warn!(
-                        server = server,
-                        tool = tool,
-                        "OWASP ASI10: anomaly detection has no caller identity to key on; \
-                         refusing rather than passing the call unscored"
-                    );
-                    anomaly_blind = true;
-                    None
-                }
-            }
-        });
-
-        if anomaly_blind {
-            findings.push(Finding {
-                scan_type: ScanType::SequenceAnomaly,
-                severity: Severity::High,
-                description:
-                    "Anomaly detection has no caller identity to key on; call refused unscored"
-                        .to_string(),
-                matched: format!("{server}:{tool}"),
-                location: FindingLocation::SequenceAnomaly,
-            });
-        }
-
-        if let Some(score) = anomaly_score {
-            let above_block = self
-                .config
-                .anomaly_block_threshold
-                .is_some_and(|t| score >= t);
-            let above_log = score >= self.config.anomaly_threshold;
-
-            if above_block {
-                tracing::warn!(
-                    session_id = %crate::gateway::session_id::session_fp(session_id),
-                    server = server,
-                    tool = tool,
-                    anomaly_score = score,
-                    "OWASP ASI10: rogue-agent anomaly blocked (score {score:.2})"
-                );
-                findings.push(Finding {
-                    scan_type: ScanType::SequenceAnomaly,
-                    severity: Severity::High,
-                    description: format!(
-                        "Anomaly detection triggered: unusual tool sequence blocked \
-                         (score {score:.2} ≥ block_threshold {:.2})",
-                        self.config.anomaly_block_threshold.unwrap_or(1.0),
-                    ),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::SequenceAnomaly,
-                });
-            } else if above_log {
-                findings.push(Finding {
-                    scan_type: ScanType::SequenceAnomaly,
-                    severity: Severity::Low,
-                    description: format!("Unusual tool sequence (anomaly score: {score:.2})"),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::SequenceAnomaly,
-                });
-            }
-        }
+        let gate = self.score_anomaly(session_id, anomaly_identity, server, tool, &mut findings);
 
         // 2b. Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Reuses
         // `anomaly_identity` — the authenticated principal, never a session —
@@ -508,12 +424,14 @@ impl Firewall {
         // principal as the anomaly detector, over an explicit window.
         let budget_refuse = self.check_budget(anomaly_identity, server, tool, &mut findings);
 
-        let action = if anomaly_blind || tenant_blind || budget_refuse {
+        let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
             self.resolve_action(tool, &findings)
         };
         let allowed = action != FirewallAction::Block;
+        let anomaly_score = gate.score;
+        self.learn(gate, allowed);
 
         let verdict = FirewallVerdict {
             allowed,
@@ -1236,7 +1154,9 @@ mod tests {
 
         // A validated credential key, never the display name: two API keys may
         // share a name, and every anonymous caller presents the same one.
-        let verdict = fw.check_request("", "srv", "tool", &args, "alice", "credential:abc123");
+        // The first call only establishes a predecessor (warming up, #1756).
+        fw.check_request("", "srv", "tool_a", &args, "alice", "credential:abc123");
+        let verdict = fw.check_request("", "srv", "tool_b", &args, "alice", "credential:abc123");
 
         assert!(
             verdict.allowed,
@@ -1253,7 +1173,8 @@ mod tests {
         let fw = anomaly_firewall(0.7, Some(0.9));
         let args = json!({ "q": "ok" });
 
-        let verdict = fw.check_request("s1", "srv", "tool", &args, "anonymous", "s1");
+        fw.check_request("s1", "srv", "tool_a", &args, "anonymous", "s1");
+        let verdict = fw.check_request("s1", "srv", "tool_b", &args, "anonymous", "s1");
 
         assert!(verdict.allowed);
         assert!(verdict.anomaly_score.is_some());
@@ -1355,20 +1276,32 @@ mod tests {
 
     #[test]
     fn anomaly_finding_is_high_severity_only_when_above_block_threshold() {
-        // Score 0.95 is above log (0.7) but below block (0.99) → Low, not High.
-        let fw = anomaly_firewall(0.7, Some(0.99));
+        // a->c seen once in ten scores 0.9: above log (0.7), below block
+        // (0.99), so Low, not High.
+        use crate::transition::TransitionTracker;
+        let tracker = Arc::new(TransitionTracker::new());
+        for n in 0..10 {
+            let caller = format!("train-{n}");
+            tracker.record_transition(&caller, "srv:tool_a");
+            let next = if n == 0 {
+                "srv:rare_tool"
+            } else {
+                "srv:tool_b"
+            };
+            tracker.record_transition(&caller, next);
+        }
+        let cfg = FirewallConfig {
+            anomaly_detection: true,
+            anomaly_block_threshold: Some(0.99),
+            anomaly_min_observations: 1,
+            ..FirewallConfig::default()
+        };
+        let fw = Firewall::from_config(cfg, Some(tracker));
         prime_session(&fw, "sess");
-        let verdict = fw.check_request(
-            "sess",
-            "srv",
-            "never_seen_tool",
-            &json!({}),
-            "caller",
-            "sess",
-        );
+        let verdict = fw.check_request("sess", "srv", "rare_tool", &json!({}), "caller", "sess");
         assert!(
             verdict.allowed,
-            "Score 0.95 < block_threshold 0.99 must pass"
+            "Score 0.9 < block_threshold 0.99 must pass"
         );
         assert!(
             verdict

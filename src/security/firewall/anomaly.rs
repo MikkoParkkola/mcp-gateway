@@ -8,25 +8,35 @@
 //!
 //! # Scoring
 //!
-//! The anomaly score is a value in `[0.0, 1.0]`:
+//! Each call is scored against the caller's own predecessor, using what the
+//! detector has learned from calls the firewall admitted:
 //!
-//! | Condition | Score | Meaning |
-//! |-----------|-------|---------|
-//! | First tool in session (no prior context) | 0.5 | Neutral — no data |
-//! | Known predecessor, no data for it | 0.5 | Cold start — neutral |
-//! | Current tool appears in predictions | `1.0 - confidence` | Lower confidence → higher anomaly |
-//! | Current tool never seen after predecessor | 0.95 | Very unusual |
+//! | Condition | Result |
+//! |-----------|--------|
+//! | First call for this identity | `WarmingUp` (not a score) |
+//! | Predecessor with fewer than `anomaly_min_observations` transitions | `WarmingUp` |
+//! | Current tool seen after the predecessor | `1.0 - confidence` |
+//! | Current tool never seen after the predecessor | 1.0 |
 //!
-//! Scores above the configured `anomaly_threshold` (default 0.7) are flagged
-//! as `Severity::Low` findings, which produce an audit log entry but do not
-//! block or warn by default.
+//! Scores at or above `anomaly_threshold` (default 0.7) are logged; at or
+//! above `anomaly_block_threshold` the call is refused, and no firewall rule
+//! can downgrade that refusal.
+//!
+//! # Learning
+//!
+//! [`AnomalyDetector::begin`] scores without learning; the firewall calls
+//! [`AnomalyDetector::commit`] only for an admitted call, so a refused call
+//! never teaches the detector. Before #1756 nothing recorded into the tracker
+//! the firewall held, and every call scored a neutral 0.5.
 //!
 //! # Session lifecycle
 //!
 //! Call `remove_session` (via the `SessionLifecycle` hook) when a session
 //! disconnects to prevent unbounded memory growth.
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
@@ -43,6 +53,12 @@ const MAX_TRACKED_IDENTITIES: usize = 100_000;
 /// Number of per-identity scoring locks.
 const STRIPES: usize = 64;
 
+/// Distinct learned transitions kept; a new one past this is counted, not kept.
+const MAX_LEARNED_PAIRS: usize = 100_000;
+
+/// Default `firewall.anomaly_min_observations`.
+const DEFAULT_MIN_OBSERVATIONS: u64 = 20;
+
 /// Per-session anomaly detector backed by transition probability data.
 pub struct AnomalyDetector {
     tracker: Arc<TransitionTracker>,
@@ -53,6 +69,23 @@ pub struct AnomalyDetector {
     last_tool: DashMap<String, String>,
     /// Per-identity scoring locks, striped by a hash of the identity.
     stripes: Box<[parking_lot::Mutex<()>]>,
+    /// Transitions a predecessor needs before its successors are scored.
+    min_observations: u64,
+    /// Calls answered `WarmingUp`.
+    warming_up: AtomicU64,
+    /// New transitions not learned because the pair map was full.
+    pairs_dropped: AtomicU64,
+}
+
+/// A call scored by [`AnomalyDetector::begin`] and not yet learned.
+///
+/// Holds the identity's scoring lock; dropping it without
+/// [`AnomalyDetector::commit`] learns nothing.
+pub(crate) struct Scoring<'a> {
+    _lock: parking_lot::MutexGuard<'a, ()>,
+    identity: String,
+    prev: Option<String>,
+    current: String,
 }
 
 /// What the detector could establish about one call.
@@ -95,20 +128,21 @@ impl Observation {
 }
 
 impl AnomalyDetector {
-    /// Score a call against the caller's own recent history.
+    /// Score a call against the caller's own recent history, and learn it.
     ///
-    /// `identity` is the stable per-caller key — the authenticated principal
-    /// after the migration, the session before it. `None` means the caller
-    /// could not be identified, and the honest answer is then
-    /// [`Observation::Unobservable`] rather than a passing score.
-    ///
-    /// Per caller, never globally: one caller's ordinary sequence must not make
-    /// another's unusual one look ordinary.
+    /// `identity` is the stable per-caller key. `None` means the caller could
+    /// not be identified, and the honest answer is then
+    /// [`Observation::Unobservable`] rather than a passing score. Per caller,
+    /// never globally: one caller's ordinary sequence must not make another's
+    /// unusual one look ordinary. Scores and learns in one step; the firewall
+    /// uses [`Self::begin`] and [`Self::commit`] so a refused call is not
+    /// learned.
     pub fn observe(&self, identity: Option<&str>, server: &str, tool: &str) -> Observation {
-        let Some(identity) = identity else {
-            return Observation::Unobservable;
-        };
-        Observation::Scored(self.score_transition(identity, server, tool))
+        let (observation, scoring) = self.begin(identity, server, tool);
+        if let Some(scoring) = scoring {
+            self.commit(scoring);
+        }
+        observation
     }
 
     /// Create a new detector.
@@ -119,75 +153,121 @@ impl AnomalyDetector {
         Self {
             tracker,
             threshold,
+            min_observations: DEFAULT_MIN_OBSERVATIONS,
             last_tool: DashMap::new(),
             stripes: (0..STRIPES).map(|_| parking_lot::Mutex::new(())).collect(),
+            warming_up: AtomicU64::new(0),
+            pairs_dropped: AtomicU64::new(0),
         }
     }
 
-    /// Score a tool invocation.
+    /// Score and learn one call, as [`Self::observe`] does.
     ///
-    /// Returns a value in `[0.0, 1.0]` where 1.0 means "never observed".
-    /// Updates the per-session last-tool record after scoring.
-    pub fn score_transition(&self, session_id: &str, server: &str, tool: &str) -> f64 {
-        let current = format!("{server}:{tool}");
+    /// Returns a value in `[0.0, 1.0]` where 1.0 means "never observed". A
+    /// call that is still warming up answers 0.5; callers that must tell the
+    /// two apart use [`Self::observe`].
+    pub fn score_transition(&self, identity: &str, server: &str, tool: &str) -> f64 {
+        match self.observe(Some(identity), server, tool) {
+            Observation::Scored(score) => score,
+            Observation::Unobservable | Observation::WarmingUp => 0.5,
+        }
+    }
 
-        // The read of the predecessor and the write of the successor are one
-        // operation, held under a single entry guard. As a separate `get` and
-        // `insert` they could interleave: two concurrent calls for one identity
-        // both observed the same predecessor and both overwrote it, so a
-        // sequence could be walked in parallel with every step scored as though
-        // it were the first — which is precisely the sequence a detector exists
-        // to notice.
-        // Bounded. Every distinct identity leaves a predecessor behind, and
-        // nothing reclaims one: `SessionLifecycle` was built to fire cleanup on
-        // disconnect and is not wired to anything (recorded as its own issue),
-        // and a stateless caller never disconnects because it never connected.
-        // Without a ceiling this map is a memory-exhaustion vector reachable by
-        // anyone who can present distinct credentials.
-        //
-        // Evicting an arbitrary entry costs that one caller its predecessor —
-        // its next call scores as a first call — which is a far smaller loss
-        // than unbounded growth, and is why the ceiling is generous.
-        if self.last_tool.len() >= MAX_TRACKED_IDENTITIES
-            && !self.last_tool.contains_key(session_id)
+    /// Score a call without learning it, holding the identity's scoring lock.
+    ///
+    /// The lock is held until the returned [`Scoring`] is committed or
+    /// dropped, so calls from one identity are judged one at a time and never
+    /// against a predecessor another call is about to replace. It is a
+    /// separate stripe lock, not a map entry guard: the capacity path in
+    /// [`Self::commit`] reads the whole map, which would deadlock against a
+    /// held entry guard on the same shard.
+    pub(crate) fn begin(
+        &self,
+        identity: Option<&str>,
+        server: &str,
+        tool: &str,
+    ) -> (Observation, Option<Scoring<'_>>) {
+        let Some(identity) = identity else {
+            return (Observation::Unobservable, None);
+        };
+        let lock = self.stripe(identity).lock();
+        let current = format!("{server}:{tool}");
+        let prev = self
+            .last_tool
+            .get(identity)
+            .map(|entry| entry.value().clone());
+        let observation = match prev.as_deref() {
+            None => Observation::WarmingUp,
+            Some(prev) => self.score_after(prev, &current),
+        };
+        if observation == Observation::WarmingUp {
+            self.warming_up.fetch_add(1, Ordering::Relaxed);
+        }
+        let scoring = Scoring {
+            _lock: lock,
+            identity: identity.to_owned(),
+            prev,
+            current,
+        };
+        (observation, Some(scoring))
+    }
+
+    /// Learn a call the firewall admitted, and release its scoring lock.
+    pub(crate) fn commit(&self, scoring: Scoring<'_>) {
+        let Scoring {
+            _lock,
+            identity,
+            prev,
+            current,
+        } = scoring;
+        // Bounded: every distinct identity leaves a predecessor behind and a
+        // stateless caller never disconnects, so without a ceiling this map
+        // is a memory-exhaustion vector. Evicting an arbitrary entry costs
+        // that caller its predecessor, nothing more.
+        if self.last_tool.len() >= MAX_TRACKED_IDENTITIES && !self.last_tool.contains_key(&identity)
         {
-            // The victim is chosen in its OWN statement so the iterator — and
-            // the shard lock it holds — is dropped before the removal asks for
-            // that same shard as a writer. Written as one `if let`, the guard
-            // outlives the `remove` inside it and the thread deadlocks against
-            // itself: the map is sharded, so this only bites once the ceiling
-            // is actually reached, which no ordinary test run does.
+            // The victim is chosen in its OWN statement so the iterator's
+            // shard lock is dropped before `remove` asks for it as a writer.
             let victim = self.last_tool.iter().next().map(|e| e.key().clone());
             if let Some(victim) = victim {
                 self.last_tool.remove(&victim);
             }
         }
-
-        match self.last_tool.entry(session_id.to_string()) {
-            dashmap::mapref::entry::Entry::Vacant(slot) => {
-                // First tool for this identity — no prior context.
-                slot.insert(current);
-                0.5
-            }
-            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
-                let previous = slot.get().clone();
-                // Ask the tracker for the likely successors of the previous tool.
-                // min_confidence=0.0 and min_count=0 → return all successors.
-                let predictions = self.tracker.predict_next(previous.as_str(), 0.0, 0);
-
-                let score = if predictions.is_empty() {
-                    // Cold start for this predecessor: no data → neutral.
-                    0.5
-                } else {
-                    match predictions.iter().find(|p| p.tool == current) {
-                        Some(p) => 1.0 - p.confidence,
-                        None => 0.95, // Never seen after the previous tool.
-                    }
-                };
-                slot.insert(current);
-                score
-            }
+        self.last_tool.insert(identity, current.clone());
+        if let Some(prev) = prev
+            && !self.tracker.record_pair(&prev, &current, MAX_LEARNED_PAIRS)
+            && self.pairs_dropped.fetch_add(1, Ordering::Relaxed) == 0
+        {
+            // Once, not per call: a full map drops every new transition.
+            tracing::warn!(
+                max_pairs = MAX_LEARNED_PAIRS,
+                "OWASP ASI10: anomaly detector's learned-transition map is full; new \
+                 transitions are no longer learned"
+            );
         }
+    }
+
+    /// The score of `current` after `prev`, or `WarmingUp` when `prev` has
+    /// fewer recorded transitions than the configured minimum.
+    fn score_after(&self, prev: &str, current: &str) -> Observation {
+        if self.tracker.successor_total(prev) < self.min_observations {
+            return Observation::WarmingUp;
+        }
+        let predictions = self.tracker.predict_next(prev, 0.0, 0);
+        match predictions.iter().find(|p| p.tool == current) {
+            Some(p) => Observation::Scored(1.0 - p.confidence),
+            // Never seen: the most unusual a transition can be, so never
+            // below a rare one (`1 - confidence` approaches 1.0 from below).
+            None => Observation::Scored(1.0),
+        }
+    }
+
+    fn stripe(&self, identity: &str) -> &parking_lot::Mutex<()> {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        identity.hash(&mut hasher);
+        #[allow(clippy::cast_possible_truncation)] // modulo STRIPES fits usize
+        let index = (hasher.finish() % STRIPES as u64) as usize;
+        &self.stripes[index]
     }
 
     /// The configured anomaly threshold.
@@ -198,18 +278,15 @@ impl AnomalyDetector {
     /// Set how many transitions a predecessor needs before its successors are
     /// scored (`firewall.anomaly_min_observations`).
     #[must_use]
-    pub fn with_min_observations(self, _min_observations: u64) -> Self {
+    pub fn with_min_observations(mut self, min_observations: u64) -> Self {
+        self.min_observations = min_observations;
         self
     }
 
     /// Calls answered [`Observation::WarmingUp`] since start.
+    #[cfg(test)]
     pub(crate) fn warming_up_count(&self) -> u64 {
-        0
-    }
-
-    /// New transitions not learned because the learned-pair map was full.
-    pub(crate) fn pairs_dropped_count(&self) -> u64 {
-        0
+        self.warming_up.load(Ordering::Relaxed)
     }
 
     /// Hold `identity`'s scoring lock, so a test can prove a concurrent call
@@ -221,8 +298,8 @@ impl AnomalyDetector {
     }
 
     #[cfg(test)]
-    pub(crate) fn hold_stripe(&self, _identity: &str) -> parking_lot::MutexGuard<'_, ()> {
-        self.stripes[0].lock()
+    pub(crate) fn hold_stripe(&self, identity: &str) -> parking_lot::MutexGuard<'_, ()> {
+        self.stripe(identity).lock()
     }
 
     /// Remove per-session state when a session disconnects.
@@ -411,8 +488,14 @@ mod tests {
         detector.score_transition("never", "srv", "tool_a");
         let never = detector.score_transition("never", "srv", "tool_d");
 
-        assert!((never - 1.0).abs() < f64::EPSILON, "never-seen must score 1.0, got {never}");
-        assert!(rare < never, "rare ({rare}) must score below never-seen ({never})");
+        assert!(
+            (never - 1.0).abs() < f64::EPSILON,
+            "never-seen must score 1.0, got {never}"
+        );
+        assert!(
+            rare < never,
+            "rare ({rare}) must score below never-seen ({never})"
+        );
     }
 
     #[test]
@@ -420,8 +503,14 @@ mod tests {
         // A first call has no predecessor, and a predecessor with 5 recorded
         // transitions is below the minimum of 20: neither is a score.
         let detector = AnomalyDetector::new(trained(5), 0.7).with_min_observations(20);
-        assert_eq!(detector.observe(Some("id"), "srv", "tool_a"), Observation::WarmingUp);
-        assert_eq!(detector.observe(Some("id"), "srv", "tool_b"), Observation::WarmingUp);
+        assert_eq!(
+            detector.observe(Some("id"), "srv", "tool_a"),
+            Observation::WarmingUp
+        );
+        assert_eq!(
+            detector.observe(Some("id"), "srv", "tool_b"),
+            Observation::WarmingUp
+        );
         assert_eq!(detector.warming_up_count(), 2);
     }
 
@@ -432,13 +521,19 @@ mod tests {
         let warm = AnomalyDetector::new(trained(20), 0.7).with_min_observations(20);
         warm.observe(Some("id"), "srv", "tool_a");
         assert!(
-            matches!(warm.observe(Some("id"), "srv", "tool_b"), Observation::Scored(_)),
+            matches!(
+                warm.observe(Some("id"), "srv", "tool_b"),
+                Observation::Scored(_)
+            ),
             "20 transitions out of tool_a meet a minimum of 20"
         );
 
         let cold = AnomalyDetector::new(trained(19), 0.7).with_min_observations(20);
         cold.observe(Some("id"), "srv", "tool_a");
-        assert_eq!(cold.observe(Some("id"), "srv", "tool_b"), Observation::WarmingUp);
+        assert_eq!(
+            cold.observe(Some("id"), "srv", "tool_b"),
+            Observation::WarmingUp
+        );
     }
 
     #[test]
