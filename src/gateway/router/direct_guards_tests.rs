@@ -661,3 +661,35 @@ async fn t3c_a_bridged_round_and_a_direct_call_share_one_budget() {
         );
     }
 }
+
+/// Admission (UPGRADING 69): the shared policy check every admission path
+/// runs (`gateway_invoke`, task create, admission plans, signing prepare)
+/// refuses a killed backend or a disabled capability up front.
+#[tokio::test]
+async fn admission_policy_refuses_a_killed_backend_or_disabled_capability() {
+    type Arm = fn(&mut MetaMcp);
+    let rows: [(&str, Arm); 2] = [
+        ("kill_switch", |m| m.kill_switch().kill("alpha")),
+        ("capability_disable", |m| {
+            let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
+            for _ in 0..cfg.window_size {
+                m.kill_switch()
+                    .record_capability_failure("alpha", "read", &cfg);
+            }
+        }),
+    ];
+    for (control, arm) in rows {
+        let fx = fixture(Answer::Ok, arm).await;
+        let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            api_key_name: Some("k-std"),
+            ..crate::gateway::meta_mcp::anonymous_caller()
+        };
+        let err = fx
+            .state
+            .meta_mcp
+            .check_invocation_policy(&json!({"server": "alpha", "tool": "read"}), None, &ctx)
+            .expect_err(control);
+        assert_eq!(err.to_rpc_code(), -32000, "{control}: {err}");
+        assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{control}");
+    }
+}
