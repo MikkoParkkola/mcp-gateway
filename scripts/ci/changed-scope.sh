@@ -31,6 +31,15 @@ classify() {
   if [[ $any -eq 1 ]]; then echo true; else echo false; fi
 }
 
+# Reads NUL-separated deleted paths; true when any sits at the repository root.
+deletes_root_file() {
+  local path
+  while IFS= read -r -d '' path; do
+    [[ $path == */* ]] || { echo true; return; }
+  done
+  echo false
+}
+
 from_git() {
   local merge=$1 pr=$2 head=$3 repo_url=${REPO_URL:?} probe
   probe=$(mktemp -d)
@@ -55,6 +64,12 @@ from_git_in() {
   # Into a file, not a pipe: classify stops at the first code path, and the
   # writer's SIGPIPE would then read as a failed listing under pipefail.
   git -C "$probe" diff -z --no-renames --name-only "$merge^1" "$merge" >"$probe/paths" || return 1
+  # Root Markdown/text files are packaging inputs (the Dockerfile copies the
+  # licence and notice files; Cargo.toml's include lists README, CHANGELOG and
+  # more). Editing one is documentation; deleting one breaks the image or the
+  # crate package, so any deleted root file means "run everything".
+  git -C "$probe" diff -z --no-renames --name-only --diff-filter=D "$merge^1" "$merge" >"$probe/deleted" || return 1
+  if [[ $(deletes_root_file <"$probe/deleted") == true ]]; then echo false; return; fi
   classify <"$probe/paths"
 }
 
@@ -78,7 +93,13 @@ self_test() {
   expect true  "filename with a newline"        $'docs/odd\nname.md'
   expect false "newline name hiding a src path" $'docs/x\nsrc/y.rs' src/y.rs
   expect false "bare docs directory name"       docs
-  [[ $rc -eq 0 ]] && echo "self-test: 13 path lists classified as expected"
+  for spec in "true:COMMERCIAL.md" "true:README.md docs/a.md" "false:docs/old.md" "false:"; do
+    local want=${spec%%:*} list=${spec#*:} p=()
+    [[ -n $list ]] && read -r -a p <<<"$list"
+    if ((${#p[@]})); then got=$(printf '%s\0' "${p[@]}" | deletes_root_file); else got=$(deletes_root_file </dev/null); fi
+    if [[ $got != "$want" ]]; then echo "self-test: deleted [$list]: expected $want, got $got" >&2; rc=1; fi
+  done
+  [[ $rc -eq 0 ]] && echo "self-test: 13 path lists and 4 deletion lists classified as expected"
   return $rc
 }
 

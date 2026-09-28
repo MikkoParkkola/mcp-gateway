@@ -189,7 +189,7 @@ image when it changes `Dockerfile`, `.dockerignore`, `Cargo.toml`, `Cargo.lock`,
 `deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything,
 except that a docs-only one skips the image build.
 A **docs-only** pull request (every changed file under `docs/`, or a Markdown or text file at
-the repository root; `scripts/ci/changed-scope.sh`) skips clippy, feature combinations, Kani,
+the repository root, with no root file deleted; `scripts/ci/changed-scope.sh`) skips clippy, feature combinations, Kani,
 formatting, audit, Helm/kind, the upgrade rehearsal and the smoke jobs. Every job that runs tests
 still runs (tests read the docs), as do hygiene, the secret scans, public claims, the release
 ledger and the file-size check. If that decision fails, everything runs.
