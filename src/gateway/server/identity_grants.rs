@@ -63,7 +63,8 @@ const STARTUP_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5)
 /// stdio line is read.
 ///
 /// Fail closed: if the reconciliation or the snapshot cannot be recorded
-/// (including a journal lock that stays busy), this run serves no grants.
+/// (including a journal lock that stays busy), this run serves no grants and
+/// returns no sink, so no later reload publishes any either.
 ///
 /// # Errors
 ///
@@ -86,23 +87,31 @@ pub(super) async fn start_identity_grant_audit(
         store_dir,
         &path,
     ));
-    let served = match audit_startup(&auditor, &path).await {
-        Ok(rows) => rows,
-        Err(reason) => {
-            error!(%reason, path = %path.display(), "identity grant changes could not be recorded at startup; serving no grants");
-            Vec::new()
-        }
-    };
+    let outcome = audit_startup(&auditor, &path).await;
     let (live, epoch) = meta_mcp.identity_grant_sink();
-    crate::gateway::publish_identity_grants(
-        &live,
-        &epoch,
-        crate::identity_grants::LocalIdentityGrantStore::from_grants(served),
-    );
-    let sink = Arc::into_inner(sink)
-        .expect("the sink was just built")
-        .with_auditor(auditor);
-    Ok(Some(Arc::new(sink)))
+    let publish = |rows| {
+        crate::gateway::publish_identity_grants(
+            &live,
+            &epoch,
+            crate::identity_grants::LocalIdentityGrantStore::from_grants(rows),
+        );
+    };
+    match outcome {
+        Ok(rows) => {
+            publish(rows);
+            let sink = Arc::into_inner(sink)
+                .expect("the sink was just built")
+                .with_auditor(auditor);
+            Ok(Some(Arc::new(sink)))
+        }
+        Err(reason) => {
+            error!(%reason, path = %path.display(), "identity grant changes could not be recorded at startup; serving no grants until restart");
+            publish(Vec::new());
+            // No sink: every reload this run leaves grants empty. The next
+            // start recovers and snapshots first (design section 6 step 6).
+            Ok(None)
+        }
+    }
 }
 
 /// Reconcile, record and snapshot under the journal lock; the rows returned
@@ -127,7 +136,8 @@ async fn audit_startup(
 
 /// The stdio half: stdio opens no governance store for anything else, so it
 /// opens one here when grants are on, then runs the same startup audit. The
-/// returned sink holds the store (and its lease) for the process lifetime.
+/// returned sink holds the store (and its lease) for the process lifetime;
+/// after a failed startup audit there is no sink and grants stay empty.
 ///
 /// # Errors
 ///
