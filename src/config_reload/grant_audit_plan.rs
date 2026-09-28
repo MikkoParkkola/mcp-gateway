@@ -81,7 +81,15 @@ impl State {
     /// in the one log, and an unrecorded gap stays owed.
     pub(super) fn for_path(self, grants: &Path) -> Self {
         let path = grants.display().to_string();
-        if self.grants_path == path {
+        // One file under two spellings (relative and absolute, a symlink) is
+        // still the same file: dropping its consumed ids would re-record them.
+        let same_file = || {
+            matches!(
+                (std::fs::canonicalize(&self.grants_path), std::fs::canonicalize(grants)),
+                (Ok(a), Ok(b)) if a == b
+            )
+        };
+        if self.grants_path == path || same_file() {
             return self;
         }
         Self {
