@@ -246,6 +246,7 @@ pub(crate) async fn apply_change_with(
         serde_json::to_vec(&entry).map_err(|e| ChangeError::Unjournalled(e.to_string()))?;
     line.push(b'\n');
     let journal = journal_path(grants);
+    drop(_lock);
     tokio::task::spawn_blocking(move || append_line(&journal, &line))
         .await
         .map_err(|e| ChangeError::Unjournalled(e.to_string()))?
