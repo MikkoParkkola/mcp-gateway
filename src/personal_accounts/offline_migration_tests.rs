@@ -318,8 +318,7 @@ fn multi_api_key_config_reports_stdio_only_reachability() {
         report
             .reachability
             .contains("That covers a REST capability or an MCP backend bound to this account"),
-        "stdio reach covers both kinds of backend (#1961), got {:?}",
-        report.reachability
+        "stdio reach covers both kinds of backend (#1961)"
     );
 }
 
@@ -348,7 +347,6 @@ fn eligible_single_user_config_reports_stdio_and_http_reachability() {
         report
             .reachability
             .contains("the direct /mcp/{name} route still needs a verified end-user identity"),
-        "the reachability must state the direct-route limit (#1961), got {:?}",
-        report.reachability
+        "the reachability must state the direct-route limit (#1961)"
     );
 }
