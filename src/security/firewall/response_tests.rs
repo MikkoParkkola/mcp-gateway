@@ -749,28 +749,34 @@ fn firewall_response_credential_in_object_key() {
     }
 }
 
-/// #2114: an injection fragment is raw backend text; a credential beside the
-/// marker (here in a key) must not reach the audit log through that finding.
+/// #2114: an injection finding quotes raw backend text; a credential beside
+/// the marker (in a key, or in a value where the 200-char quote would cut the
+/// token) must not reach the audit log through that finding.
 #[test]
 fn firewall_response_injection_finding_masks_a_credential() {
-    let (firewall, _dir, path) = response_fixture(FirewallConfig {
-        rules: vec![response_rule("inspect_me", FirewallAction::Allow)],
-        ..FirewallConfig::default()
-    });
-    let mut response = json!({ "content": { format!("{INJECTION} {CANARY}"): 1 } });
-    firewall
-        .check_response_artifact(
-            &mut response,
-            &[target("backend-a", "inspect_me")],
-            &correlation(),
-            ResponseArtifactKind::FinalResponse,
-            ResponseMutationPolicy::Redact,
-        )
-        .expect("nonempty server-bound targets");
-    let log = std::fs::read_to_string(&path).unwrap();
-    assert!(log.contains("prompt_injection"), "{log}");
-    assert!(
-        !log.contains(CANARY),
-        "credential reached the audit log: {log}"
-    );
+    let straddle = format!("{INJECTION} {} {CANARY}", "x".repeat(160));
+    for mut response in [
+        json!({ "content": { format!("{INJECTION} {CANARY}"): 1 } }),
+        json!({ "content": straddle }),
+    ] {
+        let (firewall, _dir, path) = response_fixture(FirewallConfig {
+            rules: vec![response_rule("inspect_me", FirewallAction::Allow)],
+            ..FirewallConfig::default()
+        });
+        firewall
+            .check_response_artifact(
+                &mut response,
+                &[target("backend-a", "inspect_me")],
+                &correlation(),
+                ResponseArtifactKind::FinalResponse,
+                ResponseMutationPolicy::Redact,
+            )
+            .expect("nonempty server-bound targets");
+        let log = std::fs::read_to_string(&path).unwrap();
+        assert!(log.contains("prompt_injection"), "{log}");
+        assert!(
+            !log.contains("ghp_"),
+            "credential reached the audit log: {log}"
+        );
+    }
 }
