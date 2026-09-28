@@ -216,12 +216,12 @@ fn startup_warn_matches_unhardened_table() {
             // As a load would: the info line reports effective values.
             resolve(&mut config, FirewallBuild::Compiled).unwrap();
             let expected = multi_user && posture == SecurityPosture::Standard;
-            assert_eq!(
-                unhardened_multi_user(&config),
-                expected,
-                "{shape} under {posture:?}"
-            );
+            let warning = unhardened_multi_user_warning(&config);
+            assert_eq!(warning.is_some(), expected, "{shape} under {posture:?}");
             let records = posture_records(|| log_startup(&config));
+            if let Some(warning) = warning {
+                assert!(records.iter().any(|(_, m)| m == warning), "{records:?}");
+            }
             let warns = records.iter().filter(|(level, _)| level == "WARN").count();
             assert_eq!(
                 warns,

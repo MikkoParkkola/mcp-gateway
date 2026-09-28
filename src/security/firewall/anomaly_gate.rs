@@ -57,7 +57,8 @@ impl Firewall {
                 tracing::warn!(
                     server = server,
                     tool = tool,
-                    "OWASP ASI10: anomaly detection has no caller identity to key on; \
+                    "OWASP ASI10: anomaly detection cannot observe this call (no caller \
+                     identity, or under the hardened posture a full learned-pair map); \
                      refusing rather than passing the call unscored"
                 );
                 gate.blind = true;
@@ -65,7 +66,8 @@ impl Firewall {
                     scan_type: ScanType::SequenceAnomaly,
                     severity: Severity::High,
                     description:
-                        "Anomaly detection has no caller identity to key on; call refused unscored"
+                        "Anomaly detection cannot observe this call (no caller identity, or a full \
+                         learned-pair map); call refused unscored"
                             .to_string(),
                     matched,
                     location: FindingLocation::SequenceAnomaly,

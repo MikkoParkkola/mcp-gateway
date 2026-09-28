@@ -75,6 +75,8 @@ pub struct AnomalyDetector {
     warming_up: AtomicU64,
     /// New transitions not learned because the pair map was full.
     pairs_dropped: AtomicU64,
+    /// Refuse a call whose transition cannot be learned (hardened posture).
+    refuse_unlearnable: bool,
 }
 
 /// A call scored by [`AnomalyDetector::begin`] and not yet learned.
@@ -159,6 +161,7 @@ impl AnomalyDetector {
             stripes: (0..STRIPES).map(|_| parking_lot::Mutex::new(())).collect(),
             warming_up: AtomicU64::new(0),
             pairs_dropped: AtomicU64::new(0),
+            refuse_unlearnable: false,
         }
     }
 
@@ -201,6 +204,14 @@ impl AnomalyDetector {
             None => Observation::WarmingUp,
             Some(prev) => self.score_after(prev, &current),
         };
+        if self.refuse_unlearnable
+            && let Some(prev) = prev.as_deref()
+            && !self.tracker.can_learn(prev, &current, MAX_LEARNED_PAIRS)
+        {
+            // Hardened: the call could never be learned, so a cold
+            // predecessor would stay cold and pass unscored forever.
+            return (Observation::Unobservable, None);
+        }
         if observation == Observation::WarmingUp {
             self.warming_up.fetch_add(1, Ordering::Relaxed);
         }
@@ -281,14 +292,15 @@ impl AnomalyDetector {
     /// Refuse a call whose transition cannot be learned because the pair map
     /// is full (`security.posture: hardened`), instead of passing it unscored.
     #[must_use]
-    pub(crate) fn refusing_unlearnable(self) -> Self {
+    pub(crate) fn refusing_unlearnable(mut self) -> Self {
+        self.refuse_unlearnable = true;
         self
     }
 
     /// New transitions not learned because the pair map was full.
     #[cfg(test)]
     pub(crate) fn pairs_dropped_count(&self) -> u64 {
-        0
+        self.pairs_dropped.load(Ordering::Relaxed)
     }
 
     /// Calls answered [`Observation::WarmingUp`] since start.

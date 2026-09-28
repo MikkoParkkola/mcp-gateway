@@ -8,13 +8,11 @@ use mcp_gateway::config::Config;
 use super::CheckResult;
 
 pub(super) fn check_security_posture(config: &Config) -> CheckResult {
-    let row = if mcp_gateway::security::posture::unhardened_multi_user(config) {
-        CheckResult::warn(
-            "security-posture",
-            "multi-user deployment running security.posture=standard",
-        )
-        .with_hint("set security.posture: hardened (restart required)")
-        .with_manual_fix("set security.posture: hardened in gateway.yaml, then restart")
+    let warning = mcp_gateway::security::posture::unhardened_multi_user_warning(config);
+    let row = if let Some(warning) = warning {
+        CheckResult::warn("security-posture", warning)
+            .with_hint("set security.posture: hardened (restart required)")
+            .with_manual_fix("set security.posture: hardened in gateway.yaml, then restart")
     } else {
         CheckResult::pass(
             "security-posture",
@@ -33,7 +31,7 @@ fn posture_name(config: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use mcp_gateway::security::posture::{SecurityPosture, unhardened_multi_user};
+    use mcp_gateway::security::posture::{SecurityPosture, unhardened_multi_user_warning};
     use serde_json::json;
 
     use super::super::CheckStatus;
@@ -73,12 +71,12 @@ mod tests {
             for posture in [SecurityPosture::Standard, SecurityPosture::Hardened] {
                 config.security.posture = posture;
                 let expected = multi_user && posture == SecurityPosture::Standard;
-                assert_eq!(
-                    unhardened_multi_user(&config),
-                    expected,
-                    "{shape} {posture:?}"
-                );
+                let warning = unhardened_multi_user_warning(&config);
+                assert_eq!(warning.is_some(), expected, "{shape} {posture:?}");
                 let row = check_security_posture(&config);
+                if let Some(warning) = warning {
+                    assert_eq!(row.detail, warning, "the startup text, verbatim");
+                }
                 assert_eq!(row.label, "security-posture");
                 assert_eq!(row.category, "security");
                 let status = if expected {

@@ -318,8 +318,15 @@ impl Firewall {
     /// Apply the security posture: under `hardened`, a call whose transition
     /// the anomaly detector cannot learn (pair map full) is refused.
     #[must_use]
-    pub(crate) fn with_posture(self, posture: crate::security::posture::SecurityPosture) -> Self {
-        let _ = posture;
+    pub(crate) fn with_posture(
+        mut self,
+        posture: crate::security::posture::SecurityPosture,
+    ) -> Self {
+        if posture == crate::security::posture::SecurityPosture::Hardened {
+            self.anomaly = self
+                .anomaly
+                .map(anomaly::AnomalyDetector::refusing_unlearnable);
+        }
         self
     }
 

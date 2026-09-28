@@ -546,17 +546,18 @@ impl Gateway {
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        // A config built in memory never passed through `Config::load`.
+        // Before validation, so the ranges of what it forces are checked.
+        crate::security::posture::resolve(
+            &mut config,
+            crate::security::posture::FirewallBuild::CURRENT,
+        )?;
         {
             // A cheap snapshot, dropped here: nothing environmental is held
             // while the gateway is built or awaited on.
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
         }
-        // A config built in memory never passed through `Config::load`.
-        crate::security::posture::resolve(
-            &mut config,
-            crate::security::posture::FirewallBuild::CURRENT,
-        )?;
         crate::security::posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
@@ -1187,7 +1188,11 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt).with_env(Arc::clone(&self.env)));
+            let fw = Arc::new(
+                Firewall::from_config(fw_cfg, fw_tt)
+                    .with_env(Arc::clone(&self.env))
+                    .with_posture(self.config.security.posture),
+            );
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }
@@ -1746,7 +1751,11 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
+            let fw = Arc::new(
+                Firewall::from_config(fw_cfg, tt)
+                    .with_env(Arc::clone(&self.env))
+                    .with_posture(self.config.security.posture),
+            );
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }

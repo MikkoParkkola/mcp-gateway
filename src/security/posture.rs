@@ -10,13 +10,18 @@
 //! What `hardened` enforces in this version:
 //! - the context-integrity preset is at least `team_shared`
 //!   (`enterprise_strict` is kept) and `non_bypassable` is on;
+//! - the firewall and anomaly detection are on, and an anomaly score at or
+//!   above the block threshold (1.0 unless set within `[0.9, 1.0]`; below
+//!   0.9 refuses start) blocks;
+//! - a call whose transition cannot be learned because the learned-pair map
+//!   is full is refused rather than passed unscored;
 //! - startup is refused on a build without the `firewall` feature.
 //!
 //! Changing the posture needs a restart; a reload that changes it is refused.
 //!
 //! A multi-user deployment (see [`crate::config::AuthConfig::implies_multi_user`])
 //! that runs `standard` gets one startup warning and a `doctor` finding; both
-//! come from [`unhardened_multi_user`], so they cannot disagree.
+//! come from [`unhardened_multi_user_warning`], so they cannot disagree.
 
 use serde::{Deserialize, Serialize};
 
@@ -80,6 +85,33 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
         context_integrity.preset = Preset::TeamShared;
     }
     context_integrity.non_bypassable = true;
+    #[cfg(feature = "firewall")]
+    force_anomaly_blocking(&mut config.security.firewall)?;
+    Ok(())
+}
+
+/// The lowest block threshold `hardened` accepts (maintainer decision M4).
+#[cfg(feature = "firewall")]
+const BLOCK_THRESHOLD_FLOOR: f64 = 0.9;
+
+/// Firewall and anomaly detection on; block at 1.0 unless set in
+/// `[0.9, 1.0]`. At 1.0 only a transition never seen after a warmed
+/// predecessor blocks. A value above 1.0 is left for the range check that the
+/// now-enabled detection runs, which refuses it.
+#[cfg(feature = "firewall")]
+fn force_anomaly_blocking(firewall: &mut crate::security::firewall::FirewallConfig) -> Result<()> {
+    firewall.enabled = true;
+    firewall.anomaly_detection = true;
+    match firewall.anomaly_block_threshold {
+        None => firewall.anomaly_block_threshold = Some(1.0),
+        Some(block) if block < BLOCK_THRESHOLD_FLOOR => {
+            return Err(Error::ConfigValidation(format!(
+                "security.posture=hardened needs security.firewall.anomaly_block_threshold \
+                 of at least {BLOCK_THRESHOLD_FLOOR}, got {block}; remove it to use 1.0"
+            )));
+        }
+        Some(_) => {}
+    }
     Ok(())
 }
 
@@ -89,17 +121,23 @@ pub(crate) fn reload_refusal(running: &Config, candidate: &Config) -> Option<Str
         .then(|| "config reload refused: security.posture requires restart".to_string())
 }
 
-/// A multi-user deployment running the `standard` posture.
+/// The warning for a multi-user deployment running the `standard` posture,
+/// or `None`.
 ///
-/// The single source of the startup warning and the `doctor` finding. Public
-/// only for the binary's `doctor` command; not a stable API.
+/// The single source of the startup warning and the `doctor` finding, which
+/// uses this text verbatim. Public only for the binary's `doctor` command;
+/// not a stable API.
 #[doc(hidden)]
 #[must_use]
-pub fn unhardened_multi_user(config: &Config) -> bool {
-    config.security.posture == SecurityPosture::Standard
+pub fn unhardened_multi_user_warning(config: &Config) -> Option<&'static str> {
+    let unhardened = config.security.posture == SecurityPosture::Standard
         && config
             .auth
-            .implies_multi_user(!config.key_server.oidc.is_empty())
+            .implies_multi_user(!config.key_server.oidc.is_empty());
+    unhardened.then_some(
+        "multi-user deployment running security.posture=standard; set security.posture: \
+         hardened (restart required; see `mcp-gateway doctor`, row security-posture)",
+    )
 }
 
 /// Log the posture once at startup.
@@ -110,16 +148,26 @@ pub(crate) fn log_startup(config: &Config) {
     if config.security.posture == SecurityPosture::Hardened {
         let context_integrity = &config.security.context_integrity;
         let preset = serde_json::to_value(context_integrity.preset).unwrap_or_default();
+        #[cfg(feature = "firewall")]
+        let firewall = {
+            let fw = &config.security.firewall;
+            format!(
+                " firewall.enabled={} anomaly_detection={} anomaly_block_threshold={}",
+                fw.enabled,
+                fw.anomaly_detection,
+                fw.anomaly_block_threshold.unwrap_or_default()
+            )
+        };
+        #[cfg(not(feature = "firewall"))]
+        let firewall = String::new();
         tracing::info!(
-            "security.posture=hardened enforcing: context_integrity preset={} non_bypassable={}",
+            "security.posture=hardened enforcing: context_integrity preset={} \
+             non_bypassable={}{firewall}",
             preset.as_str().unwrap_or_default(),
             context_integrity.non_bypassable
         );
-    } else if unhardened_multi_user(config) {
-        tracing::warn!(
-            "multi-user deployment running security.posture=standard; set security.posture: \
-             hardened (see `mcp-gateway doctor`, row security-posture)"
-        );
+    } else if let Some(warning) = unhardened_multi_user_warning(config) {
+        tracing::warn!("{warning}");
     }
 }
 
