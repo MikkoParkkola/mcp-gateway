@@ -84,11 +84,11 @@ async fn a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
 
     let signalled = Instant::now();
     stop.send(()).expect("server is running");
-    let served = timeout(HANG_STOP, server)
+    let outcome = timeout(HANG_STOP, server)
         .await
         .expect("the server did not return within 5 s while a request was open");
     let elapsed = signalled.elapsed();
-    served.expect("server task").expect("serve");
+    outcome.expect("server task").expect("serve");
     assert!(
         elapsed < Duration::from_millis(1500),
         "shutdown took {elapsed:?} with a {grace:?} timeout"
