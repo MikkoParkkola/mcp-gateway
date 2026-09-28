@@ -17,6 +17,7 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+mod listener;
 mod persistence;
 #[cfg(test)]
 mod replica_state_tests;
@@ -75,7 +76,7 @@ use control_plane_store::{build_control_plane_store, control_plane_base};
 use identity_grants::{identity_grant_sink_for, load_configured_identity_grants};
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
-use support::{log_startup_banner, serve_tls, shutdown_signal};
+use support::{log_startup_banner, shutdown_signal};
 
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
@@ -2074,29 +2075,16 @@ impl Gateway {
                 )
             });
 
-        // Run server — plain HTTP or mTLS depending on config
-        if self.config.mtls.enabled {
-            // `axum_server` needs a std listener; the socket is the same one.
-            let std_listener = listener
-                .into_std()
-                .map_err(|e| Error::Tls(format!("could not hand the listener to TLS: {e}")))?;
-            serve_tls(
-                app,
-                std_listener,
-                addr,
-                &self.config.mtls,
-                shutdown_signal(shutdown_tx),
-            )
-            .await?;
-        } else {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-            .await
-            .map_err(|e| Error::Tls(e.to_string()))?;
-        }
+        // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
+        let std_listener = listener.into_std()?;
+        listener::serve(
+            app,
+            std_listener,
+            addr,
+            &self.config,
+            shutdown_signal(shutdown_tx),
+        )
+        .await?;
 
         // Save search ranker usage data
         persistence::save_with_logging(

@@ -77,6 +77,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 85
 - Item 86
 - Item 87
+- Item 88
 - Item 95
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
@@ -199,7 +200,7 @@ without it.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
-| 88 | Reserved: lands with #2183 | None yet |
+| 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
 | 89 | Reserved: lands with #2195 | None yet |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
@@ -2256,6 +2257,25 @@ by URL already do:
 
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
+
+## 88. The HTTP listener gives open requests `server.shutdown_timeout`, then stops
+
+After SIGTERM or Ctrl+C, a plain-HTTP gateway waited for every open request to finish,
+with no limit. One request that never finished, such as a hung upstream call or a long
+stream, kept the process running until the orchestrator killed it. The mTLS listener waited
+a fixed 30 seconds whatever the config said.
+
+In 4.0 both listeners stop the same way (#2147):
+
+- New connections are refused as soon as the signal arrives.
+- Open requests get `server.shutdown_timeout` (default 30 s) to finish. Requests still
+  running at the deadline, including open event streams, are cut.
+- The gateway then saves its state and waits, within the same bound, for any in-flight
+  work the cut released, before it stops its backends.
+
+**Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
+orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) above
+twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
 
 ## 90. A request header naming an unserved protocol version is refused
 
