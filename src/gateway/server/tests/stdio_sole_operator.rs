@@ -431,7 +431,9 @@ async fn e2e_post(
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    (session, response.text().await.expect("read the /mcp body"))
+    let status = response.status();
+    let body = response.text().await.expect("read the /mcp body");
+    (session, format!("HTTP {status}: {body}"))
 }
 
 #[tokio::test]
@@ -443,8 +445,8 @@ async fn http_run_path_refuses_a_multi_key_caller_the_managed_account() {
         .expect("a free loopback port");
     let auth = format!(
         "auth:\n  enabled: true\n  single_user: true\n  api_keys:\n    \
-         - name: keyA\n      key_sha256: \"{}\"\n    \
-         - name: keyB\n      key_sha256: \"{}\"\n",
+         - name: keyA\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n    \
+         - name: keyB\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n",
         api_key_digest_spec(b"scoped-key-a"),
         api_key_digest_spec(b"scoped-key-b"),
     );
@@ -479,6 +481,7 @@ async fn http_run_path_refuses_a_multi_key_caller_the_managed_account() {
     .await
     .unwrap_or_else(|_| panic!("the call never reached the account resolve; last: {last}"));
     server.abort();
+    drop(server.await);
     assert!(
         invoked.contains("carries no verified end-user identity"),
         "over HTTP, two configured API keys must never share stored OAuth grants under one \
