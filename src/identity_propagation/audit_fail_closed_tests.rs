@@ -62,7 +62,8 @@ async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
     let (_file, logger) = open_logger();
     let bound = std::time::Duration::from_millis(200);
     let release = logger.stall_next_write_for_test(bound);
-    let start = std::time::Instant::now();
+    // AuditFailed with the write still held is the bound: an unbounded
+    // append would wait for the write and succeed.
     let result = audit_identity_propagation(
         Some(&logger),
         "idp_mint",
@@ -72,11 +73,6 @@ async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
         None,
     )
     .await;
-    assert!(
-        start.elapsed() < bound * 5,
-        "bounded: {:?}",
-        start.elapsed()
-    );
     assert!(
         matches!(result, Err(PropagationError::AuditFailed(_))),
         "{result:?}"

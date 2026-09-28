@@ -178,6 +178,15 @@ impl TransparencyLogger {
         super::rotation::StallRelease(b)
     }
 
+    /// Bound every append past the stall gate's hang guard, and return it.
+    /// A call that queued on the permit would then outlast the held write,
+    /// which clears the stall; one refused at once leaves it stalled.
+    pub(crate) fn lift_append_bound_for_test(&self) -> Duration {
+        let limit = super::rotation::StallGate::DEADLINE * 2;
+        *self.bound.limit.lock().expect("limit lock") = limit;
+        limit
+    }
+
     /// Whether a write's generation is still in the kernel.
     pub(crate) fn write_in_flight_for_test(&self) -> bool {
         self.bound

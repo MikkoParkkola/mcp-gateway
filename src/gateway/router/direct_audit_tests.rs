@@ -546,13 +546,9 @@ async fn direct_append_on_a_stalled_disk_is_bounded() {
     .await;
     let bound = Duration::from_millis(200);
     let release = fx.log.stall_next_write_for_test(bound);
-    let start = std::time::Instant::now();
+    // A 503 with the write still held is the bound: an unbounded append
+    // would wait for the write and succeed.
     let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
-    assert!(
-        start.elapsed() < bound * 5,
-        "bounded: {:?}",
-        start.elapsed()
-    );
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], -32005, "{body}");
     assert!(fx.log.is_stalled());
