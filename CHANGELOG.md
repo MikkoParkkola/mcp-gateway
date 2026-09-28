@@ -195,11 +195,6 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Security
 
-- **Tools with a poisoned description are withheld.** Every backend tool list is checked with the
-  tool-poisoning rule (AX-010). A tool that fails at blocking severity is left out of every list
-  the gateway serves and refused by name, for every caller, once any listing has shown it. Each
-  withheld description is logged once with a digest; `allow_flagged_tools` serves a reviewed tool,
-  pinned to that digest. The unused `detect_collisions` is removed. UPGRADING-4.0 §75. (#1441)
 - **Secrets stay out of the request URI and its trace.** The HTTP trace span records the method and
   route template, never the full URI, so a session id or a dashboard link value no longer reaches
   DEBUG logs. `/api/costs` takes a session id in the `X-Cost-Session-Id` header (`?session=` is 400),
