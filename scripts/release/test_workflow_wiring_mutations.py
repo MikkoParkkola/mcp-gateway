@@ -1385,6 +1385,20 @@ CASES += [
      "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
 ]
 
+# Release jobs restore no cache: one case per way one comes back.
+CASES += [
+    ("release-verify-restores-the-rust-cache", "release.yml",
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("release-verify-restores-a-cache-quoted", "release.yml",
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - "uses": \'actions/cache/restore@v4\'\n        with:\n          path: target\n          key: release\n', CAUGHT),
+    ("called-recovery-restores-the-rust-cache", "task-sdk-recovery.yml",
+     '      # No build cache: only the release calls this, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+    ("release-setup-node-caches-again", "release.yml",
+     "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n", CAUGHT),
+    ("release-setup-node-sets-a-cache", "release.yml",
+     "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n          cache: npm\n", CAUGHT),
+]
+
 # Throwaway runs carry the release tooling's Python suites. The hosted job is
 # named by its runner line, the trusted one by its env block, so each anchor
 # names one job although both run the same steps.
