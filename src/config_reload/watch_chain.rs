@@ -208,7 +208,7 @@ impl ChainWatch {
         self.ledger.lock().clone()
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn watched(&self) -> BTreeSet<PathBuf> {
         self.watched_now()
     }
