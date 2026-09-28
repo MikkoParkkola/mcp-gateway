@@ -148,8 +148,8 @@ impl DiscoveryEngine {
     #[must_use]
     pub fn new(options: DiscoveryOptions) -> Self {
         // The pinned builder never uses an environment proxy (#1881) and pins
-        // every name this client fetches: probes, HTML-found spec links and
-        // redirect targets, none of which the base-URL check sees (#2027).
+        // every name this client connects to, probes and redirect targets
+        // alike; the base-URL check sees IP literals only (#2027).
         let client = crate::security::ssrf::pinned_client_builder()
             .timeout(options.timeout)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {

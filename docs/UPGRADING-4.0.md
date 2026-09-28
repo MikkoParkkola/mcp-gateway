@@ -1988,8 +1988,9 @@ but a host name was resolved when the request was sent and never checked. A name
 resolved to a loopback, private, link-local or cloud metadata address, in the base URL or
 in a redirect, was fetched.
 
-In 4.0 `cap import-url` resolves every name once and connects only to the checked
-addresses, as capability calls and `cap import` of a spec by URL already do:
+In 4.0 `cap import-url` checks every address a name resolves to on each connection and
+connects only to those checked addresses, as capability calls and `cap import` of a spec
+by URL already do:
 
 - A base URL whose host resolves to a blocked address fails with
   `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to private/reserved address <ip>`.
