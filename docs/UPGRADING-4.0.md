@@ -17,10 +17,10 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
 load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67 and 70 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 73 and 74 print no notice: read them here
 before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -98,7 +98,10 @@ upgrading a running deployment.
 | 68 | Reserved: lands with #1473 | None yet |
 | 69 | Reserved: lands with a pending change | None yet |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
+| 71 | Reserved: lands with a pending change | None yet |
+| 72 | Reserved: lands with a pending change | None yet |
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
+| 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -154,9 +157,10 @@ The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 
-One boundary is deliberate and worth knowing: a capacity failure worded as a throttle — for
-example `request throttled: upstream out of capacity` — is still treated as rate limiting and
-therefore still exempt. Narrowing that needs a rate-limit co-signal and is not in 4.0.0.
+One boundary is worth knowing: a capacity failure worded as a throttle — for example
+`request throttled: upstream out of capacity` — is still treated as rate limiting and
+therefore still exempt. Narrowing that needs a rate-limit co-signal; it is 4.0.0 work tracked
+in #1613, and this paragraph changes when it lands.
 
 ## 5. One license across the repository
 
@@ -1325,10 +1329,32 @@ beside the log so that record can still be written on a full disk. The reserve e
 log has rotated at least once. Set `rotation.on_disk_full: refuse` to keep every record and go
 unready instead (the item 43 behaviour).
 
-Do not rotate the log with an external tool (logrotate, `copytruncate`, a cron `mv`). Any
-external rotation breaks the hash chain, and verify then reports it as tampering.
+Do not rotate, rename or move the log's files with an external tool (logrotate,
+`copytruncate`, a cron `mv`). Only the gateway may touch them: any external rotation breaks the
+hash chain, and verify then reports it as tampering.
 
-On Windows, a writer recognises a file by its creation time, because there is no inode. So run a single gateway process per log path there; two processes sharing one path can miss each other's rotation.
+One gateway process writes a log path, on every platform. The log takes a writer lease on
+`<path>.lock` when it opens and holds it until the gateway exits. A second gateway on the same
+path is refused at startup, with an error naming the path, whatever the auth setting. This is
+enforced because the writer keeps the chain's counter and hash in memory, so two writers would
+fork the chain. `audit verify` and `audit show` only read and take no lease, so they work beside
+a running gateway.
+
+A restart where the supervisor starts the new process before the old one has exited waits for
+the lease for up to 10 seconds, then refuses; the wait is not configurable in 4.0. Stop the old
+gateway first when its shutdown can take longer. Replicas
+must not share a log path: use one replica per volume, or put the pod name in the path. The Helm
+chart deploys with the Recreate strategy when the audit log is on a persistent volume, so the
+old pod exits before the new one starts.
+
+The lease needs a filesystem with working byte-range locks. A local disk has them; some network
+shares (NFS without lockd, some SMB setups) do not, and there the lease cannot exclude a writer
+on another host.
+
+Before this version, a writer did not hold a lease. When upgrading, stop the old gateway before
+starting this one on the same log path: an older binary cannot see the lease, so a supervisor
+that overlaps the two could still let both write once. `mcp-gateway audit verify` reports any
+fork that results.
 
 Sizing: one tool call writes one or two records of about 1 KiB, so each MiB holds roughly
 500-1000 calls, and the default 832 MiB holds the last 400k-800k calls. For more, set
@@ -1780,6 +1806,24 @@ In 4.0:
 **Action:** clients that make task calls to surfaced tools on these backends should declare
 `elicitation` and answer the prompt, or call without `task`.
 
+## 74. A stdio gateway writes `costs.json`
+
+With `cost_governance` enabled, a stdio gateway (`mcp-gateway --stdio`) loaded today's spend
+from `costs.json` at startup but never saved it, so each restart reset the daily budgets.
+
+In 4.0 the stdio gateway saves the file as the HTTP gateway does:
+
+- when the client closes stdin, after the calls still in flight have finished;
+- every 5 minutes while it runs.
+
+A gateway stopped any other way (killed, or its task cancelled when embedded) loses at most the
+last 5 minutes of spend. The file is per process: two gateways sharing one data directory
+(`MCP_GATEWAY_CONFIG_DIR`, default `~/.mcp-gateway`) each enforce their own budget, and the file
+holds whichever saved last.
+
+**Action:** none for most setups. If several stdio gateways share a data directory and you need
+each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
@@ -1837,6 +1881,7 @@ These need no action and have no startup notice.
 - **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
   `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
   has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
+  Item 74 covers stdio.
 - **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
   a private capability checkout under `$HOME/github` if it existed. If you relied on that,
   add the directory to `capabilities.directories`.
