@@ -164,6 +164,7 @@ impl Transport for MyTransport {
 
 - **Formatting:** `cargo fmt` before every commit. CI rejects unformatted code.
 - **Linting:** `cargo clippy --all-features -- -D warnings`. Pedantic warnings are promoted to errors in CI.
+- **Feature sets:** test targets are supported with the default feature set only; builds without default features are covered for the library and binary alone (the *Feature combination* job in `.github/workflows/ci.yml`).
 - **Safety:** `unsafe` code is denied at the crate level. No exceptions.
 - **Errors:** `thiserror` for typed errors, `anyhow` for application-level.
 - **Logging:** `tracing` macros (`info!`, `debug!`, `warn!`), never `println!`.

@@ -1313,7 +1313,7 @@ impl Gateway {
             let account_strategies = meta_mcp.account_strategies();
             account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
-                CapabilityExecutor::new()
+                CapabilityExecutor::for_config(&self.config.capabilities)
                     .with_env(Arc::clone(&self.env))
                     .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
                     .with_account_strategies(account_strategies),
@@ -2291,7 +2291,7 @@ impl Gateway {
             let account_strategies = meta_mcp.account_strategies();
             account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
-                CapabilityExecutor::new()
+                CapabilityExecutor::for_config(&self.config.capabilities)
                     .with_env(Arc::clone(&self.env))
                     .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
                     .with_account_strategies(account_strategies),

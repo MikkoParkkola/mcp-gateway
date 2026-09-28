@@ -57,6 +57,10 @@ module = "src/security/transparency_log_append.rs"
 reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
 
 [[coverage.not_a_control]]
+module = "src/security/signature_chain.rs"
+reason = "ASI07 chain signing and verification with no caller yet; it becomes a control row when the invoke paths enforce it (design increment 2)"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
 
