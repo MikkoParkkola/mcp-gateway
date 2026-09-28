@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use crate::cost_accounting::{
     config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
 };
-#[cfg(feature = "cost-governance")]
+#[cfg(any(feature = "cost-governance", test))]
 use std::sync::Arc;
 
 pub(super) fn standard_data_dir() -> PathBuf {
@@ -88,6 +88,77 @@ pub(super) fn boot_cost_governance(
     (Some(registry), Some(enforcer))
 }
 
+/// How often a running gateway saves today's spend to `costs.json`. A hard
+/// kill loses at most this much.
+#[cfg(feature = "cost-governance")]
+pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Save today's spend to `<data_dir>/costs.json`.
+#[cfg(feature = "cost-governance")]
+pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
+    let persisted = super::support::build_persisted_costs(&enforcer.snapshot());
+    save_with_logging(
+        &data_dir.join("costs.json"),
+        |path| crate::cost_accounting::persistence::save(path, &persisted),
+        "Failed to save cost governance data",
+        "Saved cost governance data",
+    );
+}
+
+/// Save today's spend every `every` until `shutdown` fires, or until the
+/// returned task is aborted when `shutdown` is `None`.
+#[cfg(feature = "cost-governance")]
+pub(super) fn spawn_cost_saver(
+    enforcer: Arc<BudgetEnforcer>,
+    data_dir: PathBuf,
+    every: std::time::Duration,
+    shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(every);
+        // Consume the immediate first tick, so the first save comes one
+        // interval after start rather than before anything is spent.
+        interval.tick().await;
+        let stopped = async move {
+            match shutdown {
+                Some(mut rx) => drop(rx.recv().await),
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(stopped);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => save_costs(&enforcer, &data_dir),
+                () = &mut stopped => break,
+            }
+        }
+    })
+}
+
+impl super::Gateway {
+    /// Point this gateway's data directory at `dir` (the in-process tests'
+    /// tempdir), so a test never reads or writes the developer's own.
+    #[cfg(test)]
+    pub(super) fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data_dir = Some(dir);
+        self
+    }
+}
+
+impl super::AbortOnDrop {
+    /// Abort the task and wait until it has ended, so nothing it was doing
+    /// can land after this returns.
+    #[cfg_attr(
+        not(any(feature = "cost-governance", test)),
+        expect(dead_code, reason = "only the stdio cost saver is stopped this way")
+    )]
+    pub(crate) async fn stop(mut self) {
+        self.0.abort();
+        // Cancelled is the expected outcome; a panic is reported by the runtime.
+        drop((&mut self.0).await);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +213,92 @@ mod tests {
         );
 
         assert!(called.get());
+    }
+
+    #[cfg(feature = "cost-governance")]
+    fn enforcer_with_spend(usd: f64) -> Arc<BudgetEnforcer> {
+        let cfg = CostGovernanceConfig {
+            enabled: true,
+            ..CostGovernanceConfig::default()
+        };
+        let registry = Arc::new(CostRegistry::new(&cfg));
+        let enforcer = Arc::new(BudgetEnforcer::new(cfg, registry));
+        enforcer.record_spend("tool", Some("key"), usd);
+        enforcer
+    }
+
+    /// What `boot_cost_governance` would restore from `dir`, as global spend.
+    #[cfg(feature = "cost-governance")]
+    fn restored_global(dir: &Path) -> f64 {
+        let cfg = CostGovernanceConfig {
+            enabled: true,
+            ..CostGovernanceConfig::default()
+        };
+        let (_, enforcer) = boot_cost_governance(&cfg, dir);
+        enforcer.expect("enabled").snapshot().global_daily_usd
+    }
+
+    #[cfg(feature = "cost-governance")]
+    #[test]
+    fn save_costs_writes_what_the_next_boot_restores() {
+        let dir = tempfile::tempdir().unwrap();
+        save_costs(&enforcer_with_spend(0.25), dir.path());
+        let global = restored_global(dir.path());
+        assert!((global - 0.25).abs() < 1e-9, "the next boot reads {global}");
+    }
+
+    /// The saver writes on its interval and ends when shutdown is sent.
+    #[cfg(feature = "cost-governance")]
+    #[tokio::test]
+    async fn cost_saver_stops_on_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let costs = dir.path().join("costs.json");
+        let (tx, rx) = tokio::sync::broadcast::channel(1);
+        let enforcer = enforcer_with_spend(0.2);
+        let task = spawn_cost_saver(
+            Arc::clone(&enforcer),
+            dir.path().to_path_buf(),
+            std::time::Duration::from_millis(50),
+            Some(rx),
+        );
+        // Each tick saves the spend as it is then, not a snapshot taken once.
+        for (spent, expected) in [(0.0, 0.2), (0.3, 0.5)] {
+            enforcer.record_spend("tool", Some("key"), spent);
+            let saved = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while !costs.exists() || (restored_global(dir.path()) - expected).abs() > 1e-9 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            assert!(
+                saved.is_ok(),
+                "the saver never wrote {expected}; the next boot reads {}",
+                restored_global(dir.path())
+            );
+        }
+        tx.send(()).expect("the saver is listening");
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("the saver kept running after shutdown")
+            .expect("the saver panicked");
+    }
+
+    /// `stop` returns only once the aborted task's future has been dropped.
+    #[tokio::test]
+    async fn stop_waits_for_the_aborted_task() {
+        let held = Arc::new(());
+        let inside = Arc::clone(&held);
+        let guard = super::super::AbortOnDrop::new(tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            drop(inside);
+        }));
+        // Let the task start and take its clone.
+        tokio::task::yield_now().await;
+        guard.stop().await;
+        assert_eq!(
+            Arc::strong_count(&held),
+            1,
+            "stop returned while the aborted task still held its state"
+        );
     }
 }

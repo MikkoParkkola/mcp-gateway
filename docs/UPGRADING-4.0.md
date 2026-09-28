@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
 load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67 and 70 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70 and 74 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
@@ -99,6 +99,9 @@ upgrading a running deployment.
 | 69 | Reserved: lands with a pending change | None yet |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Dashboard sessions end after 30 minutes idle or 8 hours total; the dashboard's own refresh is not activity; an ended session gets a 401 that clears the cookie | Log in again with `mcp-gateway dashboard-link`; set `auth.dashboard_session` to change the limits |
+| 72 | Reserved: lands with a pending change | None yet |
+| 73 | Reserved: lands with a pending change | None yet |
+| 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -154,9 +157,10 @@ The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 
-One boundary is deliberate and worth knowing: a capacity failure worded as a throttle — for
-example `request throttled: upstream out of capacity` — is still treated as rate limiting and
-therefore still exempt. Narrowing that needs a rate-limit co-signal and is not in 4.0.0.
+One boundary is worth knowing: a capacity failure worded as a throttle — for example
+`request throttled: upstream out of capacity` — is still treated as rate limiting and
+therefore still exempt. Narrowing that needs a rate-limit co-signal; it is 4.0.0 work tracked
+in #1613, and this paragraph changes when it lands.
 
 ## 5. One license across the repository
 
@@ -1800,6 +1804,24 @@ cookie lifetime it was given.
 
 Library users: `DashboardBootstrap::issue_session` and `session_is_valid` are removed.
 
+## 74. A stdio gateway writes `costs.json`
+
+With `cost_governance` enabled, a stdio gateway (`mcp-gateway --stdio`) loaded today's spend
+from `costs.json` at startup but never saved it, so each restart reset the daily budgets.
+
+In 4.0 the stdio gateway saves the file as the HTTP gateway does:
+
+- when the client closes stdin, after the calls still in flight have finished;
+- every 5 minutes while it runs.
+
+A gateway stopped any other way (killed, or its task cancelled when embedded) loses at most the
+last 5 minutes of spend. The file is per process: two gateways sharing one data directory
+(`MCP_GATEWAY_CONFIG_DIR`, default `~/.mcp-gateway`) each enforce their own budget, and the file
+holds whichever saved last.
+
+**Action:** none for most setups. If several stdio gateways share a data directory and you need
+each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
@@ -1857,6 +1879,7 @@ These need no action and have no startup notice.
 - **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
   `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
   has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
+  Item 74 covers stdio.
 - **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
   a private capability checkout under `$HOME/github` if it existed. If you relied on that,
   add the directory to `capabilities.directories`.
