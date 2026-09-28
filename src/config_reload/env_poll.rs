@@ -264,7 +264,7 @@ impl WarnLimiter {
     /// Whether this failure of `path` should be logged at warn (else debug).
     pub(super) fn should_warn(&mut self, path: &Path, error: &str, now: Instant) -> bool {
         let fresh = |(last_error, at): &(String, Instant)| {
-            last_error == error && now.duration_since(*at) < WARN_EVERY
+            now.duration_since(*at) < WARN_EVERY && !last_error.is_empty()
         };
         // Compared with the latest warning that concerns this path: its own,
         // or a config-file failure's, whichever came later. So an error that
