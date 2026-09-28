@@ -751,9 +751,10 @@ HANDOFF_RETENTION_DAYS = 14
 # certain conditions).
 COSIGN_FLOOR = (2, 6, 5)
 # One recogniser for an installer step, shared by every check that looks for
-# one: YAML allows the action reference bare, single- or double-quoted, and a
-# check that knows fewer forms than the others lets a step escape it.
-COSIGN_INSTALLER = re.compile(r"""^\s*(?:- )?uses:\s*["']?sigstore/cosign-installer@""")
+# one: YAML allows the key and the action reference bare, single- or
+# double-quoted, and a check that knows fewer forms than the others lets a
+# step escape it.
+COSIGN_INSTALLER = re.compile(r"""^\s*(?:- )?(["']?)uses\1:\s*["']?sigstore/cosign-installer@""")
 
 
 def artifact_keys(block, keys):
