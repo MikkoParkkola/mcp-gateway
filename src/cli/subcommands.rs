@@ -325,7 +325,8 @@ pub enum KubernetesCommand {
         #[arg(long, default_value_t = 1)]
         cycles: usize,
 
-        /// Keep reconciling until the process is stopped.
+        /// Keep reconciling until the process is stopped. With `--format json`,
+        /// each cycle prints one compact JSON document on its own line (NDJSON).
         #[arg(long)]
         watch: bool,
 
