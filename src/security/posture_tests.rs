@@ -255,8 +255,8 @@ fn gateway_startup_logs_posture_once() {
     unhardened.security.transparency_log.path = dir.path().join("audit.log").display().to_string();
     // The same multi-user shape: only the posture tells the two apart.
     let mut hardened = unhardened.clone();
+    // Not resolved here: the constructor must apply the floor itself.
     hardened.security.posture = SecurityPosture::Hardened;
-    resolve(&mut hardened, FirewallBuild::Compiled).unwrap();
     for (name, config, level) in [
         ("unhardened", unhardened, "WARN"),
         ("hardened", hardened, "INFO"),
@@ -273,5 +273,8 @@ fn gateway_startup_logs_posture_once() {
         });
         assert_eq!(records.len(), 1, "{name}: {records:?}");
         assert_eq!(records[0].0, level, "{name}: {records:?}");
+        if level == "INFO" {
+            assert!(records[0].1.contains("preset=team_shared"), "{records:?}");
+        }
     }
 }

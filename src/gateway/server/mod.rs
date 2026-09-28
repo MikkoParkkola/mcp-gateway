@@ -583,7 +583,7 @@ impl Gateway {
     /// registration fails.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
     async fn new_with_env(
-        config: Config,
+        mut config: Config,
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
@@ -593,6 +593,11 @@ impl Gateway {
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
         }
+        // A config built in memory never passed through `Config::load`.
+        crate::security::posture::resolve(
+            &mut config,
+            crate::security::posture::FirewallBuild::CURRENT,
+        )?;
         crate::security::posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
