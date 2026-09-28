@@ -63,9 +63,8 @@ async fn refusal(
     );
     let error = Box::pin(execute_as(&meta, BACKEND, credential_principal))
         .await
-        .err()
-        .map(|error| error.to_string())
-        .unwrap_or_else(|| panic!("no grant is stored; the call must be refused"));
+        .expect_err("no grant is stored; the call must be refused")
+        .to_string();
     (error, dispatches.count())
 }
 
@@ -150,9 +149,11 @@ async fn operator_without_identity_is_refused_on_a_non_account_backend() {
     );
     let error = Box::pin(execute_as(&meta, BACKEND, Some(STDIO_CREDENTIAL_PRINCIPAL)))
         .await
-        .err()
-        .map(|error| error.to_string())
-        .unwrap_or_else(|| panic!("a propagation backend must refuse a caller with no identity"));
-    assert!(error.contains(NO_IDENTITY), "{error}");
+        .expect_err("a propagation backend must refuse a caller with no identity")
+        .to_string();
+    assert!(
+        error.contains(NO_IDENTITY) && !error.contains(NOT_CONNECTED),
+        "{error}"
+    );
     assert_eq!(dispatches.count(), 0);
 }
