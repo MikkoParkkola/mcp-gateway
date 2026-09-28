@@ -124,7 +124,19 @@ async fn audit_startup(
     let read = crate::identity_grants::journal::read_locked(path, STARTUP_LOCK_WAIT)
         .await
         .ok_or_else(|| "the grant journal lock stayed busy".to_string())?;
-    let rows = read.grants?.grants;
+    let rows = match read.grants {
+        Ok(file) => file.grants,
+        // Startup already tolerated this read (`fail_on_error: false`), or
+        // refused to start. Serve and record the empty set, but do not
+        // reconcile: an unreadable file is not a removal. The sink stays, so
+        // a fixed file is picked up by the next reload.
+        Err(reason) => {
+            warn!(%reason, path = %path.display(), "identity grants unreadable at startup; serving none until a reload reads them");
+            auditor.snapshot(&[], chrono::Utc::now())?;
+            drop(read.guard);
+            return Ok(Vec::new());
+        }
+    };
     let prepared = auditor.prepare(&rows, &read.journal).map_err(|r| r.0)?;
     if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
         return Err(reason);
