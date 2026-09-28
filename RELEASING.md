@@ -18,7 +18,7 @@ outputs from, another:
 | Workflow | Publishes | Jobs, in order |
 |---|---|---|
 | `release.yml` | GitHub release + binaries, crates.io, npm, Homebrew tap | `security-gate`, `secret-leak-lint`, `release-criteria`, `task-sdk-recovery` → `verify` → `build` → `release` → `publish`, `npm-publish`, `homebrew-update` (in parallel) |
-| `ci.yml` | ghcr.io images (`:VERSION`, `:latest`, `:MAJOR.MINOR`, each also `-full`), MCP Registry listing | the CI suite plus `release-criteria` → `docker-build` (amd64, arm64) → `docker-manifest` → `publish-mcp-registry` |
+| `ci.yml` | ghcr.io images (`:VERSION`, `:latest`, `:MAJOR.MINOR`, each also `-full`), MCP Registry listing | the CI suite plus `release-criteria` and `release-script-tests` → `docker-build` (amd64, arm64) → `docker-manifest` → `publish-mcp-registry` |
 | `docker.yml` | nothing on a tag | builds, scans and smoke-tests the image; its push steps are off on tags |
 
 The VS Code and Cursor install buttons in `README.md` are deeplinks that run
@@ -43,6 +43,9 @@ the same script in their `Extract tag` steps. **Exit 0 from `check_tag_manifest.
 necessary, not sufficient.** It checks that the tag, `Cargo.toml` and `Cargo.lock` agree
 on the version and classifies stable versus prerelease. It says nothing about whether the
 release is ready.
+
+The release tooling's unit tests run in `ci.yml`'s `release-script-tests` job and fail
+every pull request that breaks them. Only the live ledger checks are report-only off a tag.
 
 Readiness is gated by the `release-criteria` job (in both `release.yml` and `ci.yml`), in
 particular `Require completed acceptance in publishing context`, which runs
