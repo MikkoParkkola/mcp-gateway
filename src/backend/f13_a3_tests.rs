@@ -388,3 +388,47 @@ fn a3_t15_a_newer_list_without_the_tool_is_a_miss() {
         "judged from the superseded list"
     );
 }
+
+/// Review fold: a discovery fill voided by a direct list must not restore a
+/// resend permission that list revoked. Mutant M50 (publish the fill's set
+/// before its store) reddens it.
+#[tokio::test]
+async fn a_voided_fill_does_not_restore_a_revoked_resend() {
+    let lister = Lister::new(Mode::Barrier);
+    let safe = json!({"name": "edit", "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": true}});
+    *lister.pages.lock() = vec![(vec![safe], None)];
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    let unsafe_now = json!({"name": "edit", "inputSchema": {"type": "object"}});
+    let (fill, ()) = tokio::join!(backend.get_tools_for_binding(None, &[]), async {
+        lister.started.notified().await;
+        backend
+            .remember_listed_tools(None, false, &[unsafe_now])
+            .await;
+        lister.release.notify_one();
+    });
+    let _ = fill;
+    assert!(
+        !backend.resend_permitted_snapshot().contains("edit"),
+        "the voided fill restored the resend"
+    );
+}
+
+/// Review fold: a protocol-version rejection is replayed from the cooldown,
+/// variant and versions intact, instead of listing again. Mutant M51 (leave
+/// it unreplayable) reddens it.
+#[tokio::test(start_paused = true)]
+async fn a3_t16_a_version_rejection_is_replayed_from_the_cooldown() {
+    let lister = Lister::new(Mode::Version);
+    let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
+    for _ in 0..2 {
+        let answer = check(&backend, "edit", &undeclared()).await;
+        assert!(
+            matches!(answer, Err(crate::Error::ProtocolVersionRejected { ref supported })
+                if supported == &["2025-06-18"]),
+            "{answer:?}"
+        );
+        tokio::time::advance(Duration::from_millis(10)).await;
+    }
+    assert_eq!(lister.lists(), 1, "the second call listed again");
+}

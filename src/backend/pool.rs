@@ -99,6 +99,9 @@ pub(crate) struct PooledEntry {
     /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
     /// every resend, which is the safe direction.
     pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
+    /// The set a tools fill derived, published to `resend_permitted` only
+    /// when its store is accepted: a voided fill must not undo a newer list.
+    pub(crate) resend_pending: parking_lot::Mutex<Option<std::collections::HashSet<String>>>,
     /// Set when the last tools-cache drain (MIK 7570 PAGING.1) stopped before
     /// the upstream catalogue was exhausted (page cap, repeated cursor, or the
     /// fill budget). Cleared by the next fill that drains to completion.
@@ -202,6 +205,7 @@ impl PooledEntry {
             failsafe: Failsafe::new(name, failsafe_config),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
+            resend_pending: parking_lot::Mutex::new(None),
             tools_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),

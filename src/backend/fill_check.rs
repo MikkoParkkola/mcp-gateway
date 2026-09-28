@@ -52,10 +52,11 @@ pub(crate) enum Completeness {
 /// cooldown answers with the same variant, message and budget treatment (a
 /// rate-limit text stays one) as the failure it stands in for (A3).
 #[derive(Clone, Debug)]
-pub(crate) struct Replay {
-    /// The original variant, rebuilt as is.
-    variant: fn(String) -> Error,
-    message: String,
+pub(crate) enum Replay {
+    /// A message-carrying variant, rebuilt as is.
+    Message(fn(String) -> Error, String),
+    /// A protocol-version rejection and the versions the backend named.
+    VersionRejected(Vec<String>),
 }
 
 impl Replay {
@@ -75,13 +76,21 @@ impl Replay {
             Error::Config(m) => (Error::Config, m.clone()),
             Error::ConfigValidation(m) => (Error::ConfigValidation, m.clone()),
             Error::OAuth(m) => (Error::OAuth, m.clone()),
+            Error::ProtocolVersionRejected { supported } => {
+                return Some(Self::VersionRejected(supported.clone()));
+            }
             _ => return None,
         };
-        Some(Self { variant, message })
+        Some(Self::Message(variant, message))
     }
 
     fn error(&self) -> Error {
-        (self.variant)(self.message.clone())
+        match self {
+            Self::Message(variant, message) => variant(message.clone()),
+            Self::VersionRejected(supported) => Error::ProtocolVersionRejected {
+                supported: supported.clone(),
+            },
+        }
     }
 }
 

@@ -33,6 +33,8 @@ enum Mode {
     Io,
     /// A handshake failure (`Protocol`).
     Handshake,
+    /// The backend rejected the protocol version (`ProtocolVersionRejected`).
+    Version,
     Hang,
     /// Signals `started`, waits for `release`, then serves.
     Barrier,
@@ -136,6 +138,11 @@ impl crate::transport::Transport for Lister {
             Mode::Handshake => {
                 tokio::task::yield_now().await;
                 return Err(crate::Error::Protocol("initialize refused".into()));
+            }
+            Mode::Version => {
+                tokio::task::yield_now().await;
+                let supported = vec!["2025-06-18".to_owned()];
+                return Err(crate::Error::ProtocolVersionRejected { supported });
             }
             Mode::Io => {
                 tokio::task::yield_now().await;

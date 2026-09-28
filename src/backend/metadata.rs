@@ -332,6 +332,9 @@ impl Backend {
                     if let Some(flag) = family.truncated_flag {
                         flag(&entry).store(truncated, Ordering::SeqCst);
                     }
+                    if let Some(permitted) = entry.resend_pending.lock().take() {
+                        *entry.resend_permitted.write() = permitted;
+                    }
                     // The only place a guard reaches `Stored`: a voided store
                     // drops it unrun, still `Drained`, and so stamps (F13).
                     if let Some(mut guard) = guard {
@@ -407,8 +410,9 @@ impl Backend {
                 // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
                 // it, and keeps the set on the slot whose catalogue derived it — a
                 // backend-wide one would let one identity's fill decide another
-                // identity's retry policy.
-                *entry.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
+                // identity's retry policy. Published only when the store is
+                // accepted, so a voided fill cannot restore a revoked resend.
+                *entry.resend_pending.lock() = Some(prepare_tool_metadata(&self.name, &mut tools));
                 Ok(tools)
             },
         )
