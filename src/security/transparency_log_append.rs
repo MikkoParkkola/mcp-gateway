@@ -61,6 +61,11 @@ impl TransparencyLogger {
             Err(e) if e.kind() == io::ErrorKind::NotFound => true,
             Err(e) => return Err(e),
         };
+        let _again = if resync {
+            Some(crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?)
+        } else {
+            None
+        };
         if moved || resync {
             self.rebuild(inner, &path, &self.lease)?;
         }
