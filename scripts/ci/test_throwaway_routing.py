@@ -152,9 +152,59 @@ def check(workflow: str, name: str, rc: list) -> None:
                 rc.append(f"{workflow}: with the variable ready '{name}' runs on {labels[0]}")
 
 
+def only_throwaway_tests(rc: list) -> None:
+    """A same-repo throwaway PR into the release line runs exactly one ci.yml
+    job, `Tests (throwaway)`: every other job must skip it, or each red-first
+    and mutant PR pays for extra hosted builds. Jobs are resolved in
+    dependency order with GitHub's rules, so a job that runs only because a
+    dependency (including the throwaway test job itself) succeeded is caught."""
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    # A started job may succeed or fail; a downstream job can react to either
+    # (`if: failure()`), so both outcomes are resolved and their runs combined.
+    for var, outcome in ((v, o) for v in (None, "ready") for o in ("success", "failure")):
+        base = event("throwaway", var)
+        base["inputs"] = {}
+        result: dict[str, str] = {}
+        # failure() is true when any ancestor failed, not only a direct need.
+        failed_upstream: dict[str, bool] = {}
+
+        def resolve(name, stack=()):
+            if name in result:
+                return result[name]
+            job = jobs[name]
+            needs = job.get("needs") or []
+            needs = [needs] if isinstance(needs, str) else needs
+            for n in needs:
+                resolve(n, stack + (name,))
+            declared = {n: {"result": result[n], "outputs": {}} for n in needs}
+            ok = all(result[n] == "success" for n in needs)
+            # Only declared dependencies exist in `needs`, as on GitHub.
+            ctx = dict(base, needs=declared,
+                       _status={"cancelled": False, "success": ok,
+                                "failure": any(result[n] == "failure" or failed_upstream[n] for n in needs)})
+            cond = str(job.get("if", ""))
+            if not cond:
+                runs = ok
+            elif not re.search(r"\b(cancelled|always|success|failure)\s*\(", cond) and not ok:
+                runs = False
+            else:
+                runs = evaluate(cond, ctx)
+            result[name] = outcome if runs else "skipped"
+            failed_upstream[name] = any(result[n] == "failure" or failed_upstream[n] for n in needs)
+            return result[name]
+
+        for name in jobs:
+            resolve(name)
+        ran = sorted(n for n, r in result.items() if r != "skipped")
+        names = sorted({jobs[n].get("name", n) for n in ran})
+        if names != ["Tests (throwaway)"] or len(ran) != 1:
+            rc.append(f"ci.yml: a throwaway PR (var={var}, jobs {outcome}) runs {ran}, expected only Tests (throwaway)")
+
+
 def main() -> int:
     rc: list[str] = []
     check("ci.yml", "Tests (throwaway)", rc)
+    only_throwaway_tests(rc)
     check("mutants.yml", "Mutants (linux)", rc)
     for line in rc:
         print(f"routing: {line}", file=sys.stderr)
