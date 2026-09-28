@@ -384,9 +384,11 @@ Loaded via Figment (`config.rs`): YAML file + environment variable overrides. Ke
 
 1. SIGINT/SIGTERM received
 2. Broadcast shutdown signal to health check and idle checker tasks
-3. Save ranker usage data and transition tracking data to disk
-4. Drain in-flight requests: acquire all 10,000 semaphore permits (with timeout from `config.server.shutdown_timeout`)
-5. Stop all backends (`BackendRegistry::stop_all()`)
+3. The HTTP listener (plain or mTLS) refuses new connections and gives open requests
+   `config.server.shutdown_timeout`, then cancels the rest (`gateway/server/listener.rs`)
+4. Save ranker usage data and transition tracking data to disk
+5. Drain in-flight requests: acquire all 10,000 semaphore permits (with timeout from `config.server.shutdown_timeout`)
+6. Stop all backends (`BackendRegistry::stop_all()`)
 
 Implemented in `gateway/server.rs:441-491`.
 
