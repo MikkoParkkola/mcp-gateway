@@ -1,12 +1,38 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 or 54 refuses it
-(listed in bold below).
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of the
+items listed under the bold heading below refuses it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 55 and 58 below, then stamps the new version. The notice is printed rather than logged, so
+the items below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
+
+- Item 1
+- Item 2
+- Item 3
+- Item 4
+- Item 6
+- Item 11
+- Item 23
+- Item 24
+- Item 25
+- Item 26
+- Item 27
+- Item 30
+- Item 31
+- Item 32
+- Item 33
+- Item 34
+- Item 37
+- Item 39
+- Item 43
+- Item 45
+- Item 47
+- Item 48
+- Item 49
+- Item 55
+- Item 58
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -14,15 +40,68 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54 and 76 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 71, 72, 73, 74, 77, 78, 80, 83, 84, 85, 86 and 87 print no notice: read them here
-before upgrading.
+that names it. The items below print no notice: read them here before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
-with one warning, and the gateway starts without it.** Read those first if you are
-upgrading a running deployment.
+- Item 14
+- Item 15
+- Item 22
+- Item 28
+- Item 36
+- Item 42
+- Item 50
+- Item 52
+- Item 53
+- Item 61
+- Item 63
+- Item 65
+- Item 66
+- Item 67
+- Item 68
+- Item 70
+- Item 71
+- Item 72
+- Item 73
+- Item 74
+- Item 77
+- Item 78
+- Item 80
+- Item 83
+- Item 84
+- Item 85
+- Item 86
+- Item 87
+
+**These items refuse the gateway's start. Read them first if you are upgrading a running
+deployment.**
+
+- Item 2
+- Item 8
+- Item 12
+- Item 13
+- Item 16, only while `trust_caller_identity_headers` is still set
+- Item 17, only for a `key_server` rule without a configured issuer or with a blank matcher
+- Item 27, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
+- Item 29
+- Item 30, only for a bad `GATEWAY_ATTESTATION_MODE`
+- Item 34
+- Item 35
+- Item 37, only above one declared replica
+- Item 38, only for a credential over plain HTTP on a network bind without mTLS
+- Item 39, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+- Item 40, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
+- Item 41, only for an API key configured as plaintext `key`
+- Item 43, only with auth on and no working audit log
+- Item 44, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
+- Item 46, only for `enforce` without a signing key
+- Item 51, only for a `role: admin` rule whose only condition is `domain`
+- Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
+- Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
+
+**Item 7 permanently fails the backend it names, with one warning, and the gateway starts
+without it.**
 
 ## What changed
 
@@ -103,7 +182,7 @@ upgrading a running deployment.
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 | 75 | Reserved: lands with a pending change | None yet |
-| 76 | Reserved: lands with a pending change | None yet |
+| 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Reserved: lands with a pending change | None yet |
@@ -1941,6 +2020,38 @@ holds whichever saved last.
 
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## 76. Anomaly detection now learns, and its blocks stand
+
+`security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
+against a transition record that nothing wrote to, so every call scored a neutral 0.5 and no
+threshold above 0.5 ever flagged or blocked anything. The detector now learns from the calls the
+firewall admits, on both the meta route and the per-backend `/mcp/{name}` route. Each call is
+scored against its caller's own previous call; what counts as usual is learned from all admitted
+calls together.
+
+- A caller's first call, or a call after a tool with fewer than
+  `security.firewall.anomaly_min_observations` recorded transitions (new, default 20), is
+  *warming up*. It is not scored, never flagged and never blocked.
+- A transition never seen after a warmed-up tool scores 1.0, and a seen one scores
+  `1 - confidence`. The old never-seen score was 0.95, below a rarely seen one.
+- A call refused by the firewall is not learned, so retrying a blocked call cannot teach the
+  detector to accept it.
+- A score at or above `anomaly_block_threshold` is refused, and a firewall rule can no longer
+  downgrade that refusal to allow or warn. The refusal carries JSON-RPC error `-32002` on every
+  route; the per-backend `/mcp/{name}` route used to answer `-32600`.
+- With `anomaly_detection: true`, the gateway refuses to start when `anomaly_threshold` is not
+  above 0.5 and at most 1.0, when `anomaly_block_threshold` is not above `anomaly_threshold` and
+  at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
+- The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
+  are off by default.
+- Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
+  transitions, plus any calls already in flight when it reaches 20) any admitted caller's calls
+  shape what counts as usual after it.
+
+**Action:** if you set `anomaly_detection: true`, expect real scores and, with a block threshold,
+real refusals once each tool has 20 recorded transitions. Check that `anomaly_threshold` is above
+0.5, and drop any firewall rule you relied on to soften anomaly blocks.
 
 ## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
 

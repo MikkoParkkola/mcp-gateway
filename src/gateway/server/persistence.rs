@@ -143,6 +143,18 @@ impl super::Gateway {
         self.data_dir = Some(dir);
         self
     }
+
+    /// Attach already-started custody, so an in-process test reaches the
+    /// account installer at each serve call site without the issuer fetch
+    /// `start_account_custody` performs for a managed descriptor.
+    #[cfg(test)]
+    pub(super) fn with_account_custody(
+        mut self,
+        custody: std::sync::Arc<crate::personal_accounts::GatewayCustody>,
+    ) -> Self {
+        self.custody = Some(custody);
+        self
+    }
 }
 
 impl super::AbortOnDrop {
