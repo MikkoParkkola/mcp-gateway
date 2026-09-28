@@ -253,6 +253,9 @@ pub(crate) struct CleanupState {
 }
 
 #[cfg(test)]
+#[path = "descriptor_withholding_tests.rs"]
+mod descriptor_withholding_tests;
+#[cfg(test)]
 mod list_paging_tests;
 #[cfg(test)]
 mod pool_tests;
