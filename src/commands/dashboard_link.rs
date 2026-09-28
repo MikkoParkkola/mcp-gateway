@@ -69,11 +69,25 @@ pub fn dashboard_link_base(
 /// # Errors
 ///
 /// A message naming the target and asking for `https://` or a loopback URL.
-// Red commit only: the stub has no caller yet.
-#[cfg_attr(not(test), allow(dead_code))]
-#[allow(clippy::unnecessary_wraps)]
-pub(crate) fn check_target(_base: &str) -> Result<(), String> {
-    Ok(())
+pub(crate) fn check_target(base: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(base).map_err(|e| format!("not a URL: {base} ({e})"))?;
+    if url.scheme() != "http" {
+        return Ok(());
+    }
+    let loopback = match url.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if loopback {
+        Ok(())
+    } else {
+        Err(format!(
+            "refusing to send the admin credential in cleartext to {base}; \
+             use https:// or a loopback address"
+        ))
+    }
 }
 
 /// Ask the gateway at `base` for a fresh link.
@@ -82,6 +96,7 @@ pub(crate) fn check_target(_base: &str) -> Result<(), String> {
 ///
 /// A message carrying the gateway's status or the transport failure.
 pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String> {
+    check_target(base)?;
     let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
     let response = reqwest::Client::new()
         .post(&endpoint)

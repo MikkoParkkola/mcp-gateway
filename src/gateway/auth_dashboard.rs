@@ -150,10 +150,12 @@ impl DashboardBootstrap {
     /// End the session `handle`; `true` only when it was live at `now`. An
     /// expired entry is removed too, but it ended at its limit, not here.
     #[cfg(any(test, feature = "webui"))]
-    pub(crate) fn revoke(&self, handle: &str, _now: Now, _limits: &SessionLimits) -> bool {
+    pub(crate) fn revoke(&self, handle: &str, now: Now, limits: &SessionLimits) -> bool {
         self.sessions
             .lock()
-            .is_ok_and(|mut sessions| sessions.remove(handle).is_some())
+            .ok()
+            .and_then(|mut sessions| sessions.remove(handle))
+            .is_some_and(|times| !times.expired(now, limits))
     }
 
     /// Replace any unused bootstrap value with a fresh one and return it.

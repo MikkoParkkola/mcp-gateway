@@ -9,7 +9,8 @@ use axum::response::Response;
 use tracing::warn;
 
 use super::{
-    AuthState, Now, bearer_unauthorized_response, cookie_secure, session_cookie, session_limits,
+    AuthState, Now, bearer_unauthorized_response, cookie_secure, cookies_are_secure,
+    session_cookie, session_limits,
 };
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
@@ -105,6 +106,19 @@ pub(super) fn try_dashboard_bootstrap(
                  API key, or run `mcp-gateway init` to generate one, then restart for \
                  a fresh link.",
             ));
+        }
+        // Checked BEFORE the value is spent, like the admin-credential check:
+        // an HTTPS `public_url` added by reload makes the session cookie
+        // `Secure`, and a browser on this plain-HTTP listener would drop it,
+        // wasting the only link. The same refusal the link endpoint gives.
+        if cookies_are_secure(&state.live_config) && !state.tls_enabled {
+            warn!("Dashboard bootstrap refused: HTTPS public_url on a plain-HTTP listener");
+            return Some(axum::response::IntoResponse::into_response((
+                axum::http::StatusCode::CONFLICT,
+                "server.public_url is HTTPS but this listener is plain HTTP, so the session \
+                 cookie would be discarded. Open the dashboard through the HTTPS address, \
+                 or remove public_url.",
+            )));
         }
         if !state.dashboard_bootstrap.consume(&candidate) {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");

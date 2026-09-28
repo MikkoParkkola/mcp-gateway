@@ -48,12 +48,19 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
     // session because the log is down is worse than a missing record. Written
     // only when a live session actually ended: the route is unauthenticated,
     // so recording every attempt would let anyone fill the log.
+    // Through the bounded append, so a stuck audit write cannot hold the answer.
     if ended && let Some(log) = &state.transparency_log {
         let mut fields = serde_json::Map::new();
         fields.insert("route".into(), LOGOUT_PATH.into());
         fields.insert("method".into(), "POST".into());
         let envelope = AuditEnvelope::ok(dashboard_session_who());
-        if let Err(error) = log.append_admin_action("admin_ui", fields, &envelope) {
+        let written = log
+            .append_bounded(move |l| {
+                l.append_admin_action("admin_ui", fields, &envelope)
+                    .map_err(std::io::Error::other)
+            })
+            .await;
+        if let Err(error) = written {
             tracing::warn!(%error, "Dashboard logout not recorded; the session was still revoked");
         }
     }
