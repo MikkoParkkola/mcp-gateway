@@ -2207,17 +2207,20 @@ class WorkflowWiring(unittest.TestCase):
         # on what it should refuse (see COSIGN_FLOOR).
         # Read per installer step, so a step that sets no version (and gets
         # the installer's default) or quotes it is not skipped.
+        # Every workflow file, not a named list: an installer added to another
+        # workflow must meet the same floor. Only the action's own `with:`
+        # input counts; a `cosign-release` under `env:` never reaches it.
         found = []
-        for wf in ("release.yml", "ci.yml", "docker.yml"):
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            wf = path.name
             for block in steps(wf):
                 if not any(re.search(r"uses:\s*sigstore/cosign-installer@", line) for line in block):
                     continue
-                pin = [
-                    m for line in block
-                    if (m := re.match(r"^\s+cosign-release:\s*['\"]?v(\d+)\.(\d+)\.(\d+)['\"]?\s*$", line))
-                ]
-                self.assertEqual(len(pin), 1, f"{wf}: {block[0].strip()} must pin cosign-release to one vX.Y.Z")
-                found.append((wf, tuple(int(x) for x in pin[0].groups())))
+                pins = artifact_keys(block, ("cosign-release",))
+                self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
+                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pins[0])
+                self.assertIsNotNone(m, f"{wf}: cosign-release {pins[0]!r} is not vX.Y.Z")
+                found.append((wf, tuple(int(x) for x in m.groups())))
         self.assertTrue(found, "no cosign-release pin found")
         # The floor is for the v2 line the workflows use. A v3 pin needs its
         # own floor added here first, or any v3.0.x would compare above it.
