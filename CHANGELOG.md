@@ -120,11 +120,6 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 ### Fixed
 
-- **The published crate's tests build and pass.** Some tests read documentation, deploy
-  manifests and release records that the crate did not include, so `cargo test` on the
-  published crate failed to compile. Those files are now packaged, and CI builds the tests
-  from the packaged crate on every pull request and runs them after each merge.
-
 - The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
   command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
 - **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
