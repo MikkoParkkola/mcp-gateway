@@ -75,7 +75,7 @@ pub(super) fn acquire_with(
         if let Some(lease) = ExclusiveFileLock::try_lease(&lock_path)? {
             return Ok(lease);
         }
-        if now().duration_since(start) >= wait {
+        if now().duration_since(start) >= wait || true {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 LeaseHeld {
