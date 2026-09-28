@@ -150,6 +150,19 @@ fn refuse_stray(segment: &str) -> std::result::Result<(), Unresolved> {
     Err(Unresolved::Malformed(name.map(str::to_owned)))
 }
 
+/// Whether every `${` in `text` starts a `${NAME}` or `${NAME:-default}`
+/// reference: the syntax a load accepts, checked without resolving anything.
+pub(crate) fn is_template_syntax(text: &str) -> bool {
+    let mut end = 0;
+    for whole in TEMPLATE.find_iter(text) {
+        if refuse_stray(&text[end..whole.start()]).is_err() {
+            return false;
+        }
+        end = whole.end();
+    }
+    refuse_stray(&text[end..]).is_ok()
+}
+
 /// Expands every `${VAR}` in `text`. As in POSIX `${VAR:-default}`, a variable
 /// that is unset or empty takes the default; with no default it is refused.
 /// `${VAR:-}` is the explicit way to allow empty.

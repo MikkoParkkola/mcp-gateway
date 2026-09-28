@@ -187,19 +187,19 @@ impl ProcessScanner {
                         continue;
                     };
 
-                    servers.push(DiscoveredServer {
-                        name: pattern.server_name.clone(),
-                        description: format!("{} (running)", pattern.description),
-                        source: DiscoverySource::RunningProcess,
+                    servers.push(DiscoveredServer::new(
+                        pattern.server_name.clone(),
+                        format!("{} (running)", pattern.description),
+                        DiscoverySource::RunningProcess,
                         transport,
-                        metadata: ServerMetadata {
+                        ServerMetadata {
                             config_path: None,
                             pid,
                             port,
                             command: Some(command.clone()),
                             working_dir: None,
                         },
-                    });
+                    ));
 
                     break; // Only match first pattern
                 }
@@ -254,19 +254,19 @@ impl ProcessScanner {
                         continue;
                     };
 
-                    servers.push(DiscoveredServer {
-                        name: pattern.server_name.clone(),
-                        description: format!("{} (running)", pattern.description),
-                        source: DiscoverySource::RunningProcess,
+                    servers.push(DiscoveredServer::new(
+                        pattern.server_name.clone(),
+                        format!("{} (running)", pattern.description),
+                        DiscoverySource::RunningProcess,
                         transport,
-                        metadata: ServerMetadata {
+                        ServerMetadata {
                             config_path: None,
                             pid,
                             port,
                             command: Some(command.to_string()),
                             working_dir: None,
                         },
-                    });
+                    ));
 
                     break;
                 }
