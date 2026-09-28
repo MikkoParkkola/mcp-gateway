@@ -187,7 +187,13 @@ Smaller PRs are reviewed faster. For large changes, open an issue first.
 CodeQL code scanning run once per merge, on the push to the release branch (and on `main` and
 tags), not on each pull-request push; a pull request into the release branch still builds the
 image when it changes `Dockerfile`, `.dockerignore`, `Cargo.toml`, `Cargo.lock`,
-`deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything.
+`deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything,
+except that a docs-only one skips the image build.
+A **docs-only** pull request (every changed file under `docs/`, or a Markdown or text file at
+the repository root, with no root file deleted; `scripts/ci/changed-scope.sh`) skips clippy, feature combinations, Kani,
+formatting, audit, Helm/kind, the upgrade rehearsal and the smoke jobs. Every job that runs tests
+still runs (tests read the docs), as do hygiene, the secret scans, public claims, the release
+ledger and the file-size check. If that decision fails, everything runs.
 Maintainer `throwaway/` branches (red-first and mutation-proof runs, never merged) run only the
 test suite (`Tests (throwaway)`), on a hosted runner until the project's own arm64 runner is
 registered, then on that runner; see `scripts/ci/trusted-runner/`.
@@ -260,6 +266,7 @@ We want your PR to merge fast. Here is what helps.
 - [ ] **Tests for new behavior**, not just regression. If your change adds a config field, add a test that exercises it. If it adds a branch, add a test that hits it.
 - [ ] **CI green on Linux**. We ignore known-flaky checks labelled `flaky-ci`, but Linux must pass.
 - [ ] **`cargo fmt --all && cargo clippy --all-features -- -D warnings`** clean on your branch.
+- [ ] **A test that reads a repository file** (`include_str!`, or a path under `CARGO_MANIFEST_DIR`) has that exact path in `Cargo.toml` `include`. The published crate carries only that list; the `package-tests` job builds the tests from it and fails otherwise.
 - [ ] **Threat-model note for security-sensitive code** (auth, OAuth, URL handling, path handling, secrets, deserialization of untrusted input): a short note in the PR description covering what inputs come from untrusted sources, what validation you run, what you chose not to validate and why.
 
 ### Strongly encouraged
