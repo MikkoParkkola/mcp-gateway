@@ -2047,3 +2047,39 @@ async fn ac_mrtr_7a_the_backend_request_key_is_neither_scanned_nor_delivered() {
         );
     }
 }
+
+/// #1990 — a retry round that still claims `input_required` in a shape the
+/// gateway cannot carry is an upstream fault, not a completed call.
+///
+/// `from_result` folds "completed" and "asked badly" into one `None`; the
+/// bridge used to read that as success and hand the broken body back as the
+/// terminal result, which the caller then settles under the idempotency key.
+/// Both unusable shapes are pinned: a non-object `inputRequests`, and a round
+/// with neither a question nor a state.
+#[tokio::test]
+async fn mik_1990_a_malformed_input_required_round_is_not_a_completed_call() {
+    let content = json!({"branch": "main"});
+    for malformed in [
+        json!({"resultType": "input_required", "inputRequests": "x"}),
+        json!({"resultType": "input_required", "inputRequests": {}}),
+    ] {
+        let client = FakeClient::new(accepts(1, &content));
+        let backend = FakeBackend::new(vec![malformed.clone()]);
+        let records = Records::default();
+        let outcome = bridge(
+            &client,
+            &backend,
+            &records,
+            declared_all(),
+            None,
+            &interim(&[("k", ask("first?"))]),
+        )
+        .await;
+
+        assert!(
+            outcome.is_err(),
+            "a body that claims input_required and cannot be carried must fail the \
+             exchange, not return as the terminal result: {malformed} -> {outcome:?}"
+        );
+    }
+}
