@@ -17,6 +17,7 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+mod listener;
 mod persistence;
 #[cfg(test)]
 mod replica_state_tests;
