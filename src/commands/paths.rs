@@ -42,7 +42,7 @@ pub fn zed_settings_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     return home_path(".config/zed/settings.json");
     #[cfg(target_os = "linux")]
-    return config_dir_path("zed/settings.json");
+    return home_path(".config/zed/settings.json");
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     return config_dir_path("Zed/settings.json");
 }
