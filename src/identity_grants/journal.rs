@@ -183,6 +183,19 @@ pub(crate) async fn apply_change_with(
     // Held until this function returns: from before the read to after the
     // append, so a gateway reload never sees the file without its entry.
     let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
+    // Refuse before the grant file is touched: a journal other users can
+    // write to never takes an entry (append_line re-checks), so the change
+    // would land unjournalled.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let journal = journal_path(grants);
+        if let Ok(meta) = tokio::fs::symlink_metadata(&journal).await
+            && meta.permissions().mode() & 0o022 != 0
+        {
+            return Err(ChangeError::Refused(writable_journal(&journal)));
+        }
+    }
 
     let mut file = match super::read_identity_grants_file(grants).await {
         Ok(file) => file,
@@ -293,6 +306,17 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
     std::fs::File::open(dir)?.sync_all()
 }
 
+/// Refusal text for a journal other users can write to.
+#[cfg(unix)]
+fn writable_journal(journal: &Path) -> String {
+    format!(
+        "grant journal {} is writable by group or other; refusing to use an \
+         untrusted file (check its entries against the grant file or restore a \
+         trusted copy, then chmod go-w it)",
+        journal.display()
+    )
+}
+
 /// Append one line, owner-only, and flush it to disk. A journal whose last
 /// byte is not a newline (a torn earlier append) gets one first, so the new
 /// entry starts on its own line.
@@ -329,12 +353,7 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
         // trusts bytes it should refuse. Only tighten read exposure (e.g.
         // 0644); refuse when the write bits themselves are open.
         if mode & 0o022 != 0 {
-            return Err(std::io::Error::other(format!(
-                "grant journal {} is writable by group or other; refusing to \
-                 append onto an untrusted file (check its entries against the \
-                 grant file or restore a trusted copy, then chmod go-w it)",
-                journal.display()
-            )));
+            return Err(std::io::Error::other(writable_journal(journal)));
         }
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
