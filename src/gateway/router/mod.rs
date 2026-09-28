@@ -74,6 +74,10 @@ mod direct_tasks_owner_tests;
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
 #[cfg(test)]
+mod f13_fetch_on_miss_tests;
+#[cfg(test)]
+mod f13_text_a_tests;
+#[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
 mod log_level_admin_tests;

@@ -23,7 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
-/// A backend that answers `tools/list` with an empty catalogue and anything
+/// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
     calls: Arc<AtomicUsize>,
@@ -37,10 +37,15 @@ impl Transport for Scripted {
         method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
         let id = RequestId::Number(1);
+        // F13: a cold `tools/call` lists the backend first. The list names the
+        // tool the rows call, and it is not a call, so `calls` skips it.
+        if method == "tools/list" {
+            let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
+            return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(match (method, self.error) {
-            ("tools/list", _) => JsonRpcResponse::success(id, json!({"tools": []})),
             (_, Some(code)) => JsonRpcResponse::error(Some(id), code, "backend says no"),
             _ => JsonRpcResponse::success(
                 id,
