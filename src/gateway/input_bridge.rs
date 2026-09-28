@@ -505,11 +505,11 @@ impl InputBridge<'_> {
         // in-band, but it is still a question the backend composed after an
         // answer, so it passes the same immutable gate every asked round did
         // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
-        if last.is_some()
-            && let Ok(prompts) = Self::plan(&interim, declared, slice)
+        if let Some(body) = last.as_deref()
+            && Self::plan(&interim, declared, slice).is_ok()
         {
             self.gate
-                .admit(&Self::handed_back(&prompts))
+                .admit(&Self::handed_back(body, &interim))
                 .map_err(|error| match error {
                     BridgeError::ChallengeRefused { .. } => {
                         BridgeError::ChallengeRefused { dispatched }
@@ -603,23 +603,24 @@ impl InputBridge<'_> {
 
     /// The last round as the caller receives it.
     ///
-    /// [`Self::challenge`] holds `Prompt::key` back because an asked round
-    /// never shows it to the client. A handed-back round does: the caller gets
-    /// the backend's `inputRequests` as composed and echoes each key with its
-    /// answer, so here the key is client-visible and is inspected too.
-    fn handed_back(prompts: &[Prompt]) -> Value {
-        Value::Array(
-            prompts
-                .iter()
-                .map(|prompt| {
-                    serde_json::json!({
-                        "key": prompt.key,
-                        "method": prompt.kind.method(),
-                        "params": prompt.params,
-                    })
-                })
-                .collect(),
-        )
+    /// An asked round is rebuilt from its prompts because only that
+    /// projection goes on the wire. A handed-back round is not rebuilt: the
+    /// caller gets the backend's result whole, every field of every request
+    /// entry included, with only `requestState` swapped for a sealed
+    /// continuation. So the gate sees that result without `requestState`, and
+    /// the request keys again as string values, because the caller echoes
+    /// each key and a scanner that walks object values would pass over it.
+    fn handed_back(body: &Value, interim: &crate::protocol::mrtr::InputRequired) -> Value {
+        let mut shown = body.clone();
+        if let Some(fields) = shown.as_object_mut() {
+            fields.remove("requestState");
+        }
+        let keys: Vec<&str> = interim
+            .requests
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+        serde_json::json!({ "result": shown, "keys": keys })
     }
 
     /// Put one round's prompts to the client and collect what came back.
