@@ -530,8 +530,8 @@ impl TokenStorage {
         // Same gap as the config writer, so the same warning: without a mode to
         // set at creation, the file inherits the directory's permissions and an
         // OAuth token is as readable as wherever the storage directory lives.
-        crate::config_persistence::warn_once_about_inherited_acls("OAuth token", &self.base_dir);
         static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+        crate::config_persistence::warn_once_about_inherited_acls("OAuth token", &self.base_dir);
         for _ in 0..8 {
             let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
             let tmp = self
