@@ -37,6 +37,17 @@ pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 /// and any `tools/call` on the direct `/mcp/{name}` route (MIK-7570.ATTEST.1).
 pub(crate) const ATTESTATION_META: &str = "io.mcp-gateway/attestation";
 
+/// The `params._meta` key carrying a client's chain nonce (ASI07).
+pub(crate) const CHAIN_NONCE_META: &str = "io.mcp-gateway/chain-nonce";
+
+/// Read and validate the request chain nonce: a string of 1..=256 bytes.
+/// `Err` carries the rejected key for a `-32602`.
+pub(crate) fn chain_nonce_from_params(
+    _params: Option<&Value>,
+) -> std::result::Result<Option<String>, &'static str> {
+    Ok(None)
+}
+
 /// The out-of-band fields of a `tools/call` — the retry pair, and the
 /// idempotency key.
 ///

@@ -530,6 +530,12 @@ pub struct MetaMcp {
     /// are byte-identical to the un-stamped path (rung 1.2 guarantee).
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
+    /// ASI07 chain identity and emission mode; `None` = feature off.
+    pub(super) chain_signer: Option<(
+        Arc<crate::security::signature_chain::ChainSigner>,
+        crate::config::ChainEmit,
+    )>,
+
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
     /// `Some` when `security.claim_capture.enabled = true`; `None` otherwise.
@@ -685,6 +691,7 @@ impl MetaMcp {
             message_signer: None,
             nonce_store: None,
             provenance_signer: None,
+            chain_signer: None,
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
@@ -969,6 +976,16 @@ impl MetaMcp {
     /// otherwise.
     pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
         self.provenance_signer = Some(Arc::new(signer));
+    }
+
+    /// Enable ASI07 origin-link emission.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn set_chain_signer(
+        &mut self,
+        signer: crate::security::signature_chain::ChainSigner,
+        emit: crate::config::ChainEmit,
+    ) {
+        self.chain_signer = Some((Arc::new(signer), emit));
     }
 
     /// Enable shadow claim capture (MIK-6908, rung 3.1).

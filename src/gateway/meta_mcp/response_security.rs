@@ -55,6 +55,19 @@ pub(crate) enum DeliveryInspection {
     AlreadyInspected,
 }
 
+/// Where a final result came from, as decided by the dispatch outcome. Only
+/// backend results and replays of them are eligible for an origin link.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ChainSource {
+    /// A real backend result reached the provenance stamp.
+    Backend,
+    /// A sync-admission replay of a stored backend result.
+    Replay,
+    /// Gateway-authored output: dispatch-error wrappers, meta-only tools.
+    #[default]
+    NotEligible,
+}
+
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
 pub(crate) struct ResponseDeliveryContext<'a> {
     pub method: &'a str,
@@ -62,6 +75,10 @@ pub(crate) struct ResponseDeliveryContext<'a> {
     pub correlation: ResponseCorrelation<'a>,
     pub mutation: crate::security::response_policy::ResponseMutationPolicy,
     pub signing: Option<&'a super::signing::SigningInvocationContext>,
+    /// Eligibility of this result for a chain link.
+    pub chain_source: ChainSource,
+    /// `io.mcp-gateway/chain-nonce` captured from the request, if any.
+    pub chain_nonce: Option<&'a str>,
 }
 
 impl super::MetaMcp {
@@ -272,3 +289,7 @@ mod challenge_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_delivery_tests.rs"]
 mod delivery_tests;
+
+#[cfg(test)]
+#[path = "chain_emission_tests.rs"]
+mod chain_emission_tests;

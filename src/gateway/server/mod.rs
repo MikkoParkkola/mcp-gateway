@@ -2983,6 +2983,8 @@ impl Gateway {
                 mutation:
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
+                chain_source: super::meta_mcp::response_security::ChainSource::NotEligible,
+                chain_nonce: None,
             },
         ).await;
         if let Some(execution) = execution {

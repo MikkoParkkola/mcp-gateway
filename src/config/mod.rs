@@ -51,7 +51,7 @@ pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file}
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
-    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
+    AgentAuthConfig, AgentDefinitionConfig, ChainEmit, SignatureChainConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
     CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
     DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
