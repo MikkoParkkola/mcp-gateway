@@ -254,10 +254,11 @@ fn normalize_tools_list_response(
         }
     }
 
-    // Judged again here only to apply the pins and the other exclusions: this
-    // list has been through credential redaction, which can remove the text a
-    // finding rests on. The verdict on the raw list, committed when the drain
-    // stored it, decides what is withheld (#1441).
+    // Not judged again: this list has been through credential redaction, which
+    // can remove the text a finding rests on and changes the digest a pin
+    // matches. The drain judged the raw list and already dropped what it
+    // withheld; the header exclusion and annotations still apply here, and
+    // names blocked for the backend are dropped as a backstop (#1441).
     let _ = prepare_tool_metadata(
         backend_name,
         backend.flagged_tool_pins(),
