@@ -1806,6 +1806,9 @@ reached the log.
 **Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
+With an HTTPS `server.public_url` on a plain-HTTP listener (the `tls_terminated_upstream` shape),
+the link is refused with 409 whichever way it is opened, until #2130 lands: enable `mtls` so the
+listener serves HTTPS, or remove `public_url`, to sign in by link.
 
 ## 71. Dashboard sessions expire, and logout ends them
 
