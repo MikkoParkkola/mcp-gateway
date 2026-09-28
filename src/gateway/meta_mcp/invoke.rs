@@ -2383,10 +2383,7 @@ impl MetaMcp {
                 // passes MRTR.9 here. The key keeps its release-on-drop
                 // default: a backend that stopped to ask has not acted.
                 Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
-                    if let Some(last) = last {
-                        result = *last;
-                        interim = crate::protocol::mrtr::InputRequired::from_result(&result);
-                    }
+                    drop(last);
                     refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
                 }
                 // A policy refusal keeps its type across the bridge boundary.
