@@ -436,9 +436,11 @@ impl ConfigScanner {
             .await
     }
 
-    /// Scan Zed editor configuration (`~/.config/zed/settings.json`).
+    /// Scan Zed editor configuration (Zed's config directory, see
+    /// [`Self::zed_config_path`]).
     ///
-    /// Format: `{ "context_servers": { "<name>": { "command": { "path": "...", "args": [...] } } } }`
+    /// Format: `{ "context_servers": { "<name>": { "command": "...", "args": [...] } } }`,
+    /// or `{ "url": "..." }` for an HTTP server.
     ///
     /// # Errors
     ///
@@ -593,7 +595,8 @@ impl ConfigScanner {
         Ok(home.join(".cursor/mcp.json"))
     }
 
-    /// Get Zed settings path (`~/.config/zed/settings.json`).
+    /// Get Zed settings path: `~/.config/zed/settings.json` on macOS, the OS
+    /// config directory joined with `zed` (Linux) or `Zed` elsewhere.
     fn zed_config_path() -> Result<PathBuf> {
         let home = dirs::home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
@@ -610,7 +613,9 @@ impl ConfigScanner {
             .unwrap_or(home.join(".config"))
             .join("zed/settings.json");
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let path = dirs::config_dir().unwrap_or(home).join("Zed/settings.json");
+        let path = dirs::config_dir()
+            .unwrap_or(home.join(".config"))
+            .join("Zed/settings.json");
 
         Ok(path)
     }
