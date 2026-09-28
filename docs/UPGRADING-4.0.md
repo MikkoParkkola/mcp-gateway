@@ -71,6 +71,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 84
 - Item 85
 - Item 86
+- Item 87
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -190,6 +191,7 @@ without it.**
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
+| 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2122,6 +2124,25 @@ own. Without `--watch`, `--format json` still prints one indented document (#190
 
 **Action:** a script reading `--watch --format json` parses each line on its own, for example
 with `jq -c .` or a line-by-line JSON reader.
+
+## 87. `cap import-url` refuses names that resolve to internal addresses
+
+`mcp-gateway cap import-url` refused a private or loopback IP address written in the URL,
+but a host name was resolved when the request was sent and never checked. A name that
+resolved to a loopback, private, link-local or cloud metadata address, in the base URL or
+in a redirect, was fetched.
+
+In 4.0 `cap import-url` checks every address a name resolves to on each connection and
+connects only to those checked addresses, as capability calls and `cap import` of a spec
+by URL already do:
+
+- A base URL whose host resolves to a blocked address fails with
+  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to private/reserved address <ip>`.
+- A redirect to such a name is not followed.
+- Public names are unaffected. Environment proxies stay ignored (item 77).
+
+**Action:** to build capabilities from an internal API, download its spec and run
+`mcp-gateway cap import <file>`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
