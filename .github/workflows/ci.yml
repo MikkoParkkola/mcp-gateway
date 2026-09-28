@@ -632,7 +632,7 @@ jobs:
   # running them happens after a merge, in packaged-suite.yml.
   package-tests:
     name: Tests build from the packaged crate
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
