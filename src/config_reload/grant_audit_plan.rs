@@ -14,7 +14,9 @@ use crate::control_plane::{
     GrantChangeVerb,
 };
 use crate::identity_grants::IdentityGrant;
-use crate::identity_grants::journal::{JournalEntry, JournalVerb, grant_digest, parse_journal};
+use crate::identity_grants::journal::{
+    JournalEntry, JournalVerb, grant_digest, parse_journal, served_rows,
+};
 
 /// The state file (design 5.1).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,10 +62,18 @@ impl State {
         }
     }
 
-    /// Write atomically.
+    /// Write atomically, then sync the directory so the rename survives a
+    /// power loss: the plan is the exactly-once barrier only once durable.
     pub(super) fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        crate::config_persistence::write_text_atomic(path, &text)
+        crate::config_persistence::write_text_atomic(path, &text)?;
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            std::fs::File::open(dir)
+                .and_then(|d| d.sync_all())
+                .map_err(|e| format!("sync {}: {e}", dir.display()))?;
+        }
+        Ok(())
     }
 
     /// State kept for another grant file carries no baseline or consumed ids
@@ -107,22 +117,13 @@ pub(super) fn record(
     }
 }
 
-/// The first row per grant id: the row the CLI edits and digests.
-fn first_rows(rows: &[IdentityGrant]) -> BTreeMap<String, &IdentityGrant> {
-    let mut first = BTreeMap::new();
-    for row in rows {
-        first.entry(row.grant_id.clone()).or_insert(row);
-    }
-    first
-}
-
 /// A record before its event id is assigned.
 struct Draft {
     /// `Some(entry id)` for a journal record.
     entry: Option<String>,
     target: String,
     change: GrantChangeRecord,
-    reason: &'static str,
+    reason: String,
 }
 
 fn journal_verb(verb: JournalVerb) -> GrantChangeVerb {
@@ -133,12 +134,12 @@ fn journal_verb(verb: JournalVerb) -> GrantChangeVerb {
     }
 }
 
-fn indeterminate(cause: &str) -> Draft {
+fn indeterminate(cause: &str, detail: &str) -> Draft {
     Draft {
         entry: None,
         target: cause.to_string(),
         change: GrantChangeRecord::new(GrantChangeVerb::Indeterminate),
-        reason: "grant history here cannot be stated exactly",
+        reason: format!("grant history here cannot be stated exactly: {detail}"),
     }
 }
 
@@ -156,7 +157,7 @@ fn mismatch(
         entry: None,
         target: grant_id.to_string(),
         change,
-        reason: "grant file changed with no journal entry",
+        reason: "grant file changed with no journal entry".to_string(),
     }
 }
 
@@ -170,19 +171,21 @@ fn journal_record(entry: &JournalEntry) -> Draft {
         entry: Some(entry.entry_id.clone()),
         target: entry.grant_id.clone(),
         change,
-        reason: "identity grants CLI change",
+        reason: "identity grants CLI change".to_string(),
     }
 }
 
 /// Steps 2-5: the records this reconciliation owes, and the state to commit
 /// after them. `reported` holds the unreadable-journal causes this process
-/// already recorded (once per cause per process).
+/// already recorded (once per cause per process); the set to keep once this
+/// plan is durable is returned with it.
 pub(super) fn plan(
     state: &State,
     rows: &[IdentityGrant],
     journal: &JournalRead,
-    reported: &mut BTreeSet<String>,
-) -> (Vec<PlannedRecord>, State) {
+    reported: &BTreeSet<String>,
+) -> (Vec<PlannedRecord>, State, BTreeSet<String>) {
+    let mut reported = reported.clone();
     let generation = state.generation + 1;
     // Every plan holds the gap record when the gap is set (step 5), so every
     // committed plan may clear it.
@@ -194,7 +197,10 @@ pub(super) fn plan(
     };
     let mut out = Vec::new();
     if state.gap {
-        out.push(indeterminate("gap"));
+        out.push(indeterminate(
+            "gap",
+            "an earlier grant change was applied but not recorded",
+        ));
     }
     let bytes = match journal {
         JournalRead::Missing => {
@@ -209,29 +215,13 @@ pub(super) fn plan(
             // Steps 3-4 skipped and the baseline kept: CLI changes are
             // recorded once the journal is readable again.
             if reported.insert(cause.clone()) {
-                out.push(indeterminate("journal-unreadable"));
+                out.push(indeterminate("journal-unreadable", cause));
             }
-            return (finish(out, generation), next);
+            return (finish(out, generation), next, reported);
         }
     };
     let parsed = parse_journal(&bytes);
-    let present: BTreeSet<&str> = parsed.entries.iter().map(|e| e.entry_id.as_str()).collect();
-    let missing: Vec<String> = state
-        .consumed
-        .iter()
-        .filter(|id| !id.starts_with("torn:") && !present.contains(id.as_str()))
-        .filter(|id| !state.missing_reported.contains(*id))
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        out.push(indeterminate("journal-discontinuity"));
-        next.missing_reported.extend(missing);
-    }
-    for torn in &parsed.torn {
-        if next.consumed.insert(format!("torn:{torn}")) {
-            out.push(indeterminate("journal-torn-line"));
-        }
-    }
+    journal_damage(state, &parsed, &mut next, &mut out);
 
     let oob = if state.gap {
         GrantChangeVerb::Indeterminate
@@ -245,11 +235,12 @@ pub(super) fn plan(
         .flatten()
         .map(|(id, digest)| (id.clone(), Some(digest.clone())))
         .collect();
-    for entry in parsed
-        .entries
-        .iter()
-        .filter(|e| !state.consumed.contains(&e.entry_id))
-    {
+    for entry in &parsed.entries {
+        // New entries only, each once: a line repeated within this read is
+        // skipped like one consumed earlier.
+        if !next.consumed.insert(entry.entry_id.clone()) {
+            continue;
+        }
         // Step 3: an intervening direct edit shows as a `prev_digest` that is
         // not the expected digest. With no baseline, the first entry for a
         // grant seeds it instead.
@@ -268,15 +259,15 @@ pub(super) fn plan(
         }
         out.push(journal_record(entry));
         expected.insert(entry.grant_id.clone(), Some(entry.digest.clone()));
-        next.consumed.insert(entry.entry_id.clone());
     }
 
     // Step 4. Grants the journal never mentions are compared only against a
     // baseline; without one they predate the journal.
-    let actual = first_rows(rows);
-    let mut ids: BTreeSet<&String> = expected.keys().collect();
+    // The served row per id, so a record describes what is enforced.
+    let actual = served_rows(rows);
+    let mut ids: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
     if has_baseline {
-        ids.extend(actual.keys());
+        ids.extend(actual.keys().copied());
     }
     for id in ids {
         let want = expected.get(id).cloned().flatten();
@@ -289,10 +280,40 @@ pub(super) fn plan(
     next.grants = Some(
         actual
             .iter()
-            .map(|(id, row)| (id.clone(), grant_digest(row)))
+            .map(|(id, row)| ((*id).to_string(), grant_digest(row)))
             .collect(),
     );
-    (finish(out, generation), next)
+    (finish(out, generation), next, reported)
+}
+
+/// Step 2's damage checks: consumed entries missing from the journal (one
+/// record naming them, once) and torn lines (one record each, once).
+fn journal_damage(
+    state: &State,
+    parsed: &crate::identity_grants::journal::ParsedJournal,
+    next: &mut State,
+    out: &mut Vec<Draft>,
+) {
+    let present: BTreeSet<&str> = parsed.entries.iter().map(|e| e.entry_id.as_str()).collect();
+    let missing: Vec<String> = state
+        .consumed
+        .iter()
+        .filter(|id| !id.starts_with("torn:") && !present.contains(id.as_str()))
+        .filter(|id| !state.missing_reported.contains(*id))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        out.push(indeterminate(
+            "journal-discontinuity",
+            &format!("journal entries missing: {}", missing.join(", ")),
+        ));
+        next.missing_reported.extend(missing);
+    }
+    for torn in &parsed.torn {
+        if next.consumed.insert(format!("torn:{torn}")) {
+            out.push(indeterminate("journal-torn-line", torn));
+        }
+    }
 }
 
 /// Event ids (step 6): a journal record keeps its entry id; every other record
@@ -309,7 +330,7 @@ fn finish(drafts: Vec<Draft>, generation: u64) -> Vec<PlannedRecord> {
                     verb_name(draft.change.verb)
                 ),
             };
-            record(event_id, &draft.target, draft.change, draft.reason)
+            record(event_id, &draft.target, draft.change, &draft.reason)
         })
         .collect()
 }

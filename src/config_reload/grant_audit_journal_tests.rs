@@ -188,3 +188,58 @@ async fn t4k_state_for_another_path_is_no_baseline() {
         f.records()
     );
 }
+
+/// Review fix: a file with two rows for one id is served by its last row, so
+/// the out-of-band record carries the last row's digest.
+#[tokio::test]
+async fn duplicate_rows_record_the_served_row() {
+    let f = Fixture::new();
+    f.cli(add(row("g1", "r"))).await;
+    f.reconcile().await.unwrap();
+    let served = row("g1", "second");
+    f.direct_write(vec![row("g1", "first"), served.clone()])
+        .await;
+    f.reconcile().await.unwrap();
+    let got = f.records();
+    assert_eq!(
+        got.last().cloned(),
+        Some((V::OutOfBand, "g1".into(), Some(grant_digest(&served)))),
+        "{got:?}"
+    );
+}
+
+/// Review fix: a journal line repeated within one read is recorded once.
+#[tokio::test]
+async fn repeated_journal_line_is_recorded_once() {
+    let f = Fixture::new();
+    f.cli(add(row("g1", "r"))).await;
+    let line = std::fs::read(journal_path(&f.grants)).unwrap();
+    append_raw(&f, &line);
+    f.reconcile().await.unwrap();
+    let got = f.records();
+    assert_eq!(got.len(), 1, "{got:?}");
+    let ids = f.event_ids();
+    assert_eq!(ids.len(), 1, "{ids:?}");
+}
+
+/// Review fix: an unreadable-journal cause whose plan could not be written
+/// is recorded by the next reconciliation.
+#[tokio::test]
+async fn unreadable_cause_survives_a_failed_plan_write() {
+    let f = Fixture::new();
+    f.cli(add(row("g1", "r"))).await;
+    f.reconcile().await.unwrap();
+    let rows = f.rows().await;
+    let unreadable = JournalRead::Unreadable("mode refused".into());
+    *f.auditor.fault.lock() = Some(GrantAuditFault::PlanWrite);
+    assert!(f.auditor.prepare(&rows, &unreadable).is_err());
+    *f.auditor.fault.lock() = None;
+    let p = f.auditor.prepare(&rows, &unreadable).unwrap();
+    f.auditor.record(p);
+    let got = f.records();
+    assert_eq!(
+        got.iter().filter(|r| r.0 == V::Indeterminate).count(),
+        1,
+        "{got:?}"
+    );
+}

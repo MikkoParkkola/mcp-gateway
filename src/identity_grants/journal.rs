@@ -348,13 +348,23 @@ pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
     parsed
 }
 
-/// The rows active at `now` by `IdentityGrant::is_active_at`: what a startup
-/// snapshot records as `loaded`. The first row per grant id, as the CLI edits.
+/// The rows the gateway serves: the last row per grant id, as
+/// `LocalIdentityGrantStore::from_grants` keeps it, in grant-id order.
+#[must_use]
+pub(crate) fn served_rows(
+    rows: &[IdentityGrant],
+) -> std::collections::BTreeMap<&str, &IdentityGrant> {
+    rows.iter()
+        .map(|row| (row.grant_id.as_str(), row))
+        .collect()
+}
+
+/// The served rows active at `now` by `IdentityGrant::is_active_at`: what a
+/// startup snapshot records as `loaded`.
 #[must_use]
 pub(crate) fn active_rows(rows: &[IdentityGrant], now: DateTime<Utc>) -> Vec<&IdentityGrant> {
-    let mut seen = std::collections::BTreeSet::new();
-    rows.iter()
-        .filter(|row| seen.insert(row.grant_id.as_str()))
+    served_rows(rows)
+        .into_values()
         .filter(|row| row.is_active_at(now))
         .collect()
 }
@@ -404,11 +414,11 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
     let file = super::read_identity_grants_file(grants).await;
     let journal = journal_path(grants);
     let read = tokio::task::spawn_blocking(move || {
-        crate::config::read_checked_file(&journal, crate::config::CheckedFile::IdentityGrants)
+        crate::config::read_checked_bytes(&journal, crate::config::CheckedFile::IdentityGrants)
     })
     .await;
     let journal = match read {
-        Ok(Ok(text)) => JournalRead::Bytes(text.into_bytes()),
+        Ok(Ok(bytes)) => JournalRead::Bytes(bytes),
         Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => JournalRead::Missing,
         Ok(Err(e)) => JournalRead::Unreadable(e.to_string()),
         Err(e) => JournalRead::Unreadable(e.to_string()),

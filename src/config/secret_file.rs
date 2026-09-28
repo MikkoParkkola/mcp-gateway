@@ -172,6 +172,20 @@ pub(crate) fn read_guarded_file(
     path: &Path,
     what: SecretFile,
 ) -> std::result::Result<String, GuardedRead> {
+    let bytes = read_guarded_bytes(path, what)?;
+    String::from_utf8(bytes).map_err(|_| {
+        GuardedRead::Refused(format!(
+            "Cannot read {} {}: it is not UTF-8.",
+            what.noun(),
+            path.display()
+        ))
+    })
+}
+
+/// [`read_guarded_file`] without the UTF-8 check, for a file whose lines are
+/// judged one by one (the grant-change journal: one torn append must not make
+/// every later line unreadable).
+fn read_guarded_bytes(path: &Path, what: SecretFile) -> std::result::Result<Vec<u8>, GuardedRead> {
     use std::io::Read as _;
 
     let noun = what.noun();
@@ -199,12 +213,7 @@ pub(crate) fn read_guarded_file(
             file.read_to_end(&mut bytes).map_err(GuardedRead::Io)?;
         }
     }
-    String::from_utf8(bytes).map_err(|_| {
-        GuardedRead::Refused(format!(
-            "Cannot read {noun} {}: it is not UTF-8.",
-            path.display()
-        ))
-    })
+    Ok(bytes)
 }
 
 /// Opens `path` for reading without waiting on it (F18 A2). A plain open of a
@@ -326,7 +335,19 @@ pub(crate) enum CheckedFile {
 /// An `io::Error` whose message names the file and the reason. A refused mode,
 /// size or encoding is `PermissionDenied`; a missing file keeps `NotFound`.
 pub(crate) fn read_checked_file(path: &Path, what: CheckedFile) -> std::io::Result<String> {
-    let class = match what {
+    let bytes = read_checked_bytes(path, what)?;
+    String::from_utf8(bytes).map_err(|_| {
+        GuardedRead::Refused(format!(
+            "Cannot read {} {}: it is not UTF-8.",
+            checked_class(what).noun(),
+            path.display()
+        ))
+        .into()
+    })
+}
+
+fn checked_class(what: CheckedFile) -> SecretFile {
+    match what {
         CheckedFile::TlsKey => SecretFile::TlsKey,
         CheckedFile::TlsCert => SecretFile::TlsCert,
         CheckedFile::TlsCrl => SecretFile::TlsCrl,
@@ -334,8 +355,18 @@ pub(crate) fn read_checked_file(path: &Path, what: CheckedFile) -> std::io::Resu
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,
-    };
-    read_guarded_file(path, class).map_err(|e| match e {
+    }
+}
+
+/// [`read_checked_file`] without the UTF-8 check, for a file whose lines are
+/// judged one by one.
+///
+/// # Errors
+///
+/// As [`read_checked_file`], less the encoding refusal.
+pub(crate) fn read_checked_bytes(path: &Path, what: CheckedFile) -> std::io::Result<Vec<u8>> {
+    let class = checked_class(what);
+    read_guarded_bytes(path, class).map_err(|e| match e {
         GuardedRead::Io(e) => std::io::Error::new(
             e.kind(),
             format!("Cannot read {} {}: {e}", class.noun(), path.display()),

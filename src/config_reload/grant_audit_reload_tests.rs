@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use super::grant_audit::{GrantAuditor, STATE_FILE};
+use super::grant_audit::{GrantAuditFault, GrantAuditor, STATE_FILE};
 use super::grant_audit_tests::{FlakyStore, add, row, upsert};
 use super::{ConfigWatcher, IdentityGrantSink, LiveConfig, ReloadContext, ReloadTrigger};
 use crate::backend::BackendRegistry;
@@ -24,6 +24,7 @@ struct Reload {
     live: Arc<parking_lot::RwLock<LocalIdentityGrantStore>>,
     epoch: Arc<AtomicU64>,
     sink: Arc<IdentityGrantSink>,
+    auditor: Arc<GrantAuditor>,
 }
 
 impl Reload {
@@ -38,7 +39,7 @@ impl Reload {
         let auditor = Arc::new(GrantAuditor::new(store.clone(), &state_dir, &grants));
         let sink = Arc::new(
             IdentityGrantSink::new(live.clone(), epoch.clone(), grants.clone())
-                .with_auditor(auditor),
+                .with_auditor(auditor.clone()),
         );
         Self {
             _dir: dir,
@@ -48,6 +49,7 @@ impl Reload {
             live,
             epoch,
             sink,
+            auditor,
         }
     }
 
@@ -237,4 +239,48 @@ async fn t2c_watcher_reload_records_the_change() {
     }
     let _ = shutdown_tx.send(());
     assert_eq!(r.verbs(), vec![(V::Add, "g1".into())]);
+}
+
+/// T6b (plan write): the state file reads fine but the plan write fails; the
+/// reload is refused and publishes nothing.
+#[tokio::test]
+async fn t6b_failed_plan_write_refuses_the_reload() {
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    r.reload().await.unwrap();
+    r.cli(add(row("g2", "r"))).await;
+    *r.auditor.fault.lock() = Some(GrantAuditFault::PlanWrite);
+    let refused = r.reload().await.expect_err("the change must be refused");
+    assert!(
+        refused.contains("audit plan could not be written"),
+        "{refused}"
+    );
+    assert_eq!(r.live_ids(), vec!["g1".to_string()]);
+    assert_eq!(r.epoch.load(Ordering::SeqCst), 1);
+    assert_eq!(r.verbs().len(), 1);
+}
+
+/// Review fix: a torn append that split a multibyte character is one torn
+/// line, not an unreadable journal: the next CLI change is still recorded.
+#[tokio::test]
+async fn torn_multibyte_line_does_not_block_later_entries() {
+    use std::io::Write as _;
+    let r = Reload::new();
+    r.cli(add(row("g1", "r"))).await;
+    let journal = crate::identity_grants::journal::journal_path(&r.grants);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&journal)
+        .unwrap();
+    file.write_all(b"{\"grant_id\":\"\xe2\x82").unwrap();
+    drop(file);
+    r.cli(add(row("g2", "r"))).await;
+    r.reload().await.unwrap();
+    let got = r.verbs();
+    assert!(got.contains(&(V::Add, "g2".into())), "{got:?}");
+    assert!(
+        got.iter()
+            .any(|v| v.0 == V::Indeterminate && v.1 == "journal-torn-line"),
+        "{got:?}"
+    );
 }

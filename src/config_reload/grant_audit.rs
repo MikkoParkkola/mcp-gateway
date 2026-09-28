@@ -81,6 +81,8 @@ pub(crate) enum GrantAuditFault {
     BeforeCommit,
     /// Every commit write fails while set.
     CommitWrite,
+    /// The plan write fails (the state file itself stays readable).
+    PlanWrite,
 }
 
 /// The state file name inside the governance store directory.
@@ -118,6 +120,9 @@ impl std::fmt::Debug for GrantAuditor {
     }
 }
 
+/// Records per page in the recovery scan; a plan larger than this pages.
+const RECOVERY_PAGE: usize = 100;
+
 const PLAN_REFUSED: &str = "grant change refused: the audit plan could not be written";
 
 impl GrantAuditor {
@@ -152,6 +157,11 @@ impl GrantAuditor {
     /// Steps 1-6: finish any pending plan, compute this reconciliation's
     /// records, and persist them as the new plan.
     ///
+    /// The caller serialises each `prepare` with its [`Self::record`] (the
+    /// sink's grant lock on reload, the single startup call): the auditor's
+    /// own mutex is released between the two, and an interleaved `prepare`
+    /// would recover, and re-append, the plan still being recorded.
+    ///
     /// # Errors
     ///
     /// [`Refusal`] when the plan cannot be made durable, or an earlier plan
@@ -164,7 +174,7 @@ impl GrantAuditor {
         let mut inner = self.inner.lock();
         let state = self.finish_pending(&mut inner)?;
         let state = state.for_path(&self.grants_path);
-        let (records, next) = plan(&state, rows, journal, &mut inner.reported);
+        let (records, next, reported) = plan(&state, rows, journal, &inner.reported);
         if records.is_empty() {
             // Nothing to record: commit the new baseline directly, and skip
             // the write when only the generation would change.
@@ -179,6 +189,7 @@ impl GrantAuditor {
                     .map_err(|e| Refusal(format!("{PLAN_REFUSED}: {e}")))?;
                 inner.state = Some(next);
             }
+            inner.reported = reported;
             return Ok(Prepared {
                 records: Vec::new(),
             });
@@ -188,10 +199,16 @@ impl GrantAuditor {
             records: records.clone(),
             next: Box::new(next),
         });
+        #[cfg(test)]
+        if self.fault_is(GrantAuditFault::PlanWrite) {
+            return Err(Refusal(format!("{PLAN_REFUSED}: injected")));
+        }
         planned
             .save(&self.state_path)
             .map_err(|e| Refusal(format!("{PLAN_REFUSED}: {e}")))?;
         inner.state = Some(planned);
+        // Only a durable plan marks its unreadable-journal cause reported.
+        inner.reported = reported;
         #[cfg(test)]
         if self.fault_is(GrantAuditFault::AfterPlanWrite) {
             return Err(Refusal("injected crash after the plan write".to_string()));
@@ -239,7 +256,7 @@ impl GrantAuditor {
     /// Scans newest-first until it has examined as many grant records as the
     /// plan holds (design 5.3): by the invariant, no newer one can exist.
     fn append_missing(&self, records: &[PlannedRecord]) -> Result<(), String> {
-        let mut filter = AuditFilter::new(records.len().clamp(1, 500));
+        let mut filter = AuditFilter::new(records.len().clamp(1, RECOVERY_PAGE));
         filter.actor_id = Some(UNKNOWN_ACTOR.to_string());
         filter.action = Some(ControlPlaneAction::MutateGrant);
         let mut seen = std::collections::BTreeSet::new();

@@ -29,10 +29,10 @@ use crate::identity_grants::{
 /// An in-memory store whose `append_audit` fails while `fail_from` is at or
 /// below the call number (1-based); 0 means never.
 #[derive(Default)]
-pub(super) struct FlakyStore {
+pub(crate) struct FlakyStore {
     inner: InMemoryControlPlaneStore,
     calls: AtomicUsize,
-    pub(super) fail_from: AtomicUsize,
+    pub(crate) fail_from: AtomicUsize,
     /// When set, the grant epoch seen at the first failed append, plus one
     /// (0: no failure observed). Proves publish happened before the append.
     pub(super) watch_epoch: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
@@ -40,7 +40,7 @@ pub(super) struct FlakyStore {
 }
 
 impl FlakyStore {
-    pub(super) fn events(&self) -> Vec<ControlPlaneAuditEvent> {
+    pub(crate) fn events(&self) -> Vec<ControlPlaneAuditEvent> {
         let mut page = self
             .inner
             .read_audit(&AuditFilter::new(10_000))

@@ -378,3 +378,38 @@ async fn t12_stdio_snapshot_precedes_the_first_response() {
     assert!(matches!(read, Ok(Ok(n)) if n > 0), "no initialize response");
     assert!(log.contains("loaded_complete"), "{log}");
 }
+
+/// T3c + T3d through the startup helper: a failed `loaded` or closing append
+/// serves no grants.
+#[tokio::test]
+async fn t3cd_failed_snapshot_append_serves_nothing() {
+    use std::sync::atomic::Ordering;
+    // Two grants: appends 1-2 record the adds, 3-4 the `loaded`, 5 the close.
+    for fail_at in [3, 5] {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["g1", "g2"] {
+            apply_change(&grants_path(dir.path()), true, add(row(id, "r")))
+                .await
+                .unwrap();
+        }
+        let config = config(dir.path(), true);
+        let gateway = Gateway::new(config.clone()).await.unwrap();
+        let meta = Box::pin(gateway.build_meta_mcp()).await.unwrap().meta_mcp;
+        let flaky = Arc::new(crate::config_reload::grant_audit_tests::FlakyStore::default());
+        flaky.fail_from.store(fail_at, Ordering::SeqCst);
+        let store: Arc<dyn ControlPlaneStore> = flaky.clone();
+        std::fs::create_dir_all(store_dir(dir.path())).unwrap();
+        start_identity_grant_audit(&config, &meta, Some(&store), &store_dir(dir.path()))
+            .await
+            .unwrap();
+        let (live, _) = meta.identity_grant_sink();
+        assert!(live.read().values().next().is_none(), "fail_at={fail_at}");
+        assert!(
+            !flaky.events().iter().any(|e| e
+                .grant_change
+                .as_ref()
+                .is_some_and(|c| c.verb == V::LoadedComplete)),
+            "fail_at={fail_at}"
+        );
+    }
+}

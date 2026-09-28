@@ -2112,7 +2112,7 @@ mod grant_audit_journal_tests;
 #[cfg(test)]
 mod grant_audit_reload_tests;
 #[cfg(test)]
-mod grant_audit_tests;
+pub(crate) mod grant_audit_tests;
 
 #[cfg(test)]
 mod tests;

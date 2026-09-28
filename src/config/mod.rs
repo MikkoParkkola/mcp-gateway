@@ -41,7 +41,7 @@ use secret_ref::SecretRef;
 
 // New items (F18), not widened ones: the one mode-checked read for files
 // outside `config`.
-pub(crate) use secret_file::{CheckedFile, read_checked_file};
+pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
