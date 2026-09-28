@@ -752,9 +752,8 @@ impl Config {
 
     /// As [`Config::validate`], resolving `env:` references through `overlay`.
     ///
-    /// A separate entry point rather than a field on `Config`: validation runs
-    /// against the environment the load produced, and that environment is not
-    /// part of the config it validates.
+    /// A separate entry point rather than a field on `Config`: validation runs against
+    /// the environment the load produced, which is not part of the config it validates.
     ///
     /// # Errors
     ///
@@ -790,6 +789,7 @@ impl Config {
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
         self.tasks.validate()?;
+        self.capabilities.egress_proxy_url()?;
         // Descriptor structure first, and separately: a `personal_managed`
         // descriptor under `enabled: false` must refuse, and the arm below
         // deliberately accepts `NotEnabled` from `resolve` so that an

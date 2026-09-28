@@ -69,12 +69,11 @@ if [[ ! -s "$port_file" ]]; then
 fi
 fixture_port="$(cat "$port_file")"
 
-"$repo_root/scripts/dev/smoke-fixture-capability.sh" "$work"
+"$repo_root/scripts/dev/smoke-fixture-capability.sh" "$work" "http://127.0.0.1:$fixture_port"
 
 (
   cd "$work"
-  HOME="$home" HTTP_PROXY="http://127.0.0.1:$fixture_port" NO_PROXY="" \
-    "$bin" --config gateway.yaml --host 127.0.0.1 --port "$port" \
+  HOME="$home" "$bin" --config gateway.yaml --host 127.0.0.1 --port "$port" \
     >"$tmp/gateway.log" 2>&1 &
   echo "$!" >"$tmp/gateway.pid"
 )

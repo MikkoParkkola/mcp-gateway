@@ -105,6 +105,9 @@ capabilities:
   name: gateway
   directories:
   - ./capabilities
+  # Capability calls ignore HTTP(S)_PROXY. To send them through a proxy, name
+  # it here; the proxy then resolves (and must police) destination names.
+  # egress_proxy: http://proxy.internal:3128
 cache:
   enabled: true
   default_ttl: 60s
