@@ -279,7 +279,7 @@ pub(crate) fn verify_chain(
         return Err(ChainRefusal::Size);
     }
     let items = chain.as_array().ok_or(ChainRefusal::Schema)?;
-    if items.len() >= policy.max_links {
+    if items.len() > policy.max_links {
         return Err(ChainRefusal::Size);
     }
     if items.iter().any(|item| exceeds(item, MAX_LINK_BYTES)) {
