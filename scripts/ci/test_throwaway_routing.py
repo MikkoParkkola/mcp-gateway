@@ -159,7 +159,9 @@ def only_throwaway_tests(rc: list) -> None:
     dependency order with GitHub's rules, so a job that runs only because a
     dependency (including the throwaway test job itself) succeeded is caught."""
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    for var in (None, "ready"):
+    # A started job may succeed or fail; a downstream job can react to either
+    # (`if: failure()`), so both outcomes are resolved and their runs combined.
+    for var, outcome in ((v, o) for v in (None, "ready") for o in ("success", "failure")):
         base = event("throwaway", var)
         base["inputs"] = {}
         result: dict[str, str] = {}
@@ -174,25 +176,26 @@ def only_throwaway_tests(rc: list) -> None:
                 resolve(n, stack + (name,))
             declared = {n: {"result": result[n], "outputs": {}} for n in needs}
             ok = all(result[n] == "success" for n in needs)
-            ctx = dict(base, needs=dict(base["needs"], **declared),
+            # Only declared dependencies exist in `needs`, as on GitHub.
+            ctx = dict(base, needs=declared,
                        _status={"cancelled": False, "success": ok,
                                 "failure": any(result[n] == "failure" for n in needs)})
             cond = str(job.get("if", ""))
             if not cond:
                 runs = ok
-            elif not re.search(r"\b(cancelled|always|success|failure)\(", cond) and not ok:
+            elif not re.search(r"\b(cancelled|always|success|failure)\s*\(", cond) and not ok:
                 runs = False
             else:
                 runs = evaluate(cond, ctx)
-            result[name] = "success" if runs else "skipped"
+            result[name] = outcome if runs else "skipped"
             return result[name]
 
         for name in jobs:
             resolve(name)
-        ran = sorted(n for n, r in result.items() if r == "success")
+        ran = sorted(n for n, r in result.items() if r != "skipped")
         names = sorted({jobs[n].get("name", n) for n in ran})
         if names != ["Tests (throwaway)"] or len(ran) != 1:
-            rc.append(f"ci.yml: a throwaway PR (var={var}) runs {ran}, expected only Tests (throwaway)")
+            rc.append(f"ci.yml: a throwaway PR (var={var}, jobs {outcome}) runs {ran}, expected only Tests (throwaway)")
 
 
 def main() -> int:
