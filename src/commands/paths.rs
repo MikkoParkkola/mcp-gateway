@@ -63,6 +63,21 @@ mod tests {
         assert_eq!(p.file_name().unwrap().to_string_lossy(), "settings.json");
     }
 
+    /// #1811: Zed reads `config_dir()/settings.json`, which is `~/.config/zed`
+    /// on macOS and the OS config dir elsewhere (zed-industries/zed @ 1a28cff4,
+    /// `crates/paths/src/paths.rs:133-152`).
+    #[test]
+    fn zed_settings_path_matches_zed_config_dir() {
+        let p = zed_settings_path();
+        if cfg!(target_os = "macos") {
+            assert_eq!(p, home_path(".config/zed/settings.json"));
+        } else if cfg!(target_os = "linux") {
+            assert_eq!(p, dirs::config_dir().unwrap().join("zed/settings.json"));
+        } else {
+            assert_eq!(p, dirs::config_dir().unwrap().join("Zed/settings.json"));
+        }
+    }
+
     #[test]
     fn windsurf_path_ends_with_mcp_config_json() {
         let p = windsurf_path();

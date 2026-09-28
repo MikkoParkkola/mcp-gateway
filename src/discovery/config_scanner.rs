@@ -791,3 +791,7 @@ mod tests {
 #[cfg(test)]
 #[path = "config_scanner_ws_tests.rs"]
 mod ws_tests;
+
+#[cfg(test)]
+#[path = "config_scanner_zed_tests.rs"]
+mod zed_tests;
