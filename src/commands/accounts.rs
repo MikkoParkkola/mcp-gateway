@@ -144,6 +144,7 @@ fn print_migrated(report: &MigratedCredential) {
     }
     println!("  descriptor_id: {}", report.descriptor_id);
     println!("  source file:   {}", report.source);
+    println!("  reachability:  {}", report.reachability);
     println!();
     println!(
         "Your 3.x credential file was not modified, renamed or deleted. Keep it \

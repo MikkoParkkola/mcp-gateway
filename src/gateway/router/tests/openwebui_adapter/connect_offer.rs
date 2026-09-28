@@ -145,6 +145,7 @@ async fn gateway(shape: Shape) -> Gateway {
         Some(&fixture.custody()),
         &state.gateway_key_pair,
         &state.meta_mcp,
+        crate::gateway::server::account_bindings::ServeMode::Http,
     )
     .expect("the production installer accepts the binding");
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));

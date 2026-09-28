@@ -235,8 +235,9 @@ this runbook does not edit the ledger.
 
 1. **Re-run failed jobs in the same run. Do not re-push the tag or dispatch a new run.**
    `gh run rerun <run-id> --failed` re-runs only the failed jobs and the jobs that depend
-   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` with
-   `tag: v4.0.0`) repeats every publish that already succeeded. On crates.io and npm that
+   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` at
+   `--ref v4.0.0` with `tag: v4.0.0`; a dispatch from any other ref is refused) repeats
+   every publish that already succeeded. On crates.io and npm that
    is a hard failure, because the version already exists.
    **A re-run builds the tagged commit again.** It cannot pick up a fix pushed to a
    branch afterwards. Re-run only for a transient failure: a runner, network or registry
