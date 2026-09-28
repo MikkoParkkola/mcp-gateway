@@ -22,6 +22,7 @@ cannot exceed the review that guards it.
 """
 
 import os
+import re
 import pathlib
 import shutil
 import subprocess
@@ -266,8 +267,8 @@ CASES = [
     (
         "needs-verify-replaced-by-a-comment",
         "release.yml",
-        "    needs: [build, verify, packaged-suite]",
-        "    needs: [build, packaged-suite] # verify",
+        "    needs: [resolve, build, verify, packaged-suite]",
+        "    needs: [resolve, build, packaged-suite] # verify",
         CAUGHT,
     ),
     (
@@ -560,8 +561,8 @@ CASES = [
     (
         "needs-in-block-form",
         "release.yml",
-        "    needs: [build, verify, packaged-suite]",
-        "    needs:\n      - build\n      - verify\n      - packaged-suite",
+        "    needs: [resolve, build, verify, packaged-suite]",
+        "    needs:\n      - resolve\n      - build\n      - verify\n      - packaged-suite",
         TOLERATED,
     ),
     (
@@ -1408,18 +1409,50 @@ CASES += [
      "    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_packaged_suite",
      "    if: github.event_name == 'pull_request' || (inputs.rehearse_packaged_suite", CAUGHT),
     ("release-stops-waiting-for-the-packaged-suite", "release.yml",
-     "    needs: [build, verify, packaged-suite]\n", "    needs: [build, verify]\n", CAUGHT),
+     "    needs: [resolve, build, verify, packaged-suite]\n", "    needs: [resolve, build, verify]\n", CAUGHT),
     ("packaged-suite-dropped-from-the-release", "release.yml",
-     "  packaged-suite:\n    uses: ./.github/workflows/packaged-suite.yml\n",
-     "  packaged-suite:\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
+     "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/packaged-suite.yml\n",
+     "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
     ("crates-publish-stops-waiting-for-release", "release.yml",
-     "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
+     "  publish:\n    needs: [resolve, release, verify]\n", "  publish:\n    needs: [resolve, verify]\n", CAUGHT),
     ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
      "      # that job provisions, and the gate below `needs` that job.\n"
      "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n",
      "      # that job provisions, and the gate below `needs` that job.\n"
      "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst --skip some_new_skip\n",
      CAUGHT),
+]
+
+# One resolved commit for the whole release: a case per call site. Each anchor
+# runs from the job header to that job's `ref:` line, so it names one site.
+def _release_ref_sites():
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    sha = "${{ needs.resolve.outputs.sha }}"
+    sites = []
+    for m in re.finditer(r"(?m)^  ([a-z0-9-]+):\n", text):
+        job = m.group(1)
+        nxt = re.search(r"(?m)^  [a-z0-9-]+:\n", text[m.end():])
+        stop = m.end() + nxt.start() if nxt else len(text)
+        body = text[m.start():stop]
+        ref = body.find(f"ref: {sha}\n")
+        if ref < 0:
+            continue
+        anchor = body[: ref + len(f"ref: {sha}\n")]
+        sites.append((job, anchor))
+    return sites
+
+
+for _job, _anchor in _release_ref_sites():
+    CASES += [
+        (f"{_job}-uses-the-tag-name", "release.yml", _anchor,
+         _anchor.replace("${{ needs.resolve.outputs.sha }}", "${{ inputs.tag || github.ref }}"), CAUGHT),
+    ]
+CASES += [
+    ("security-gate-checks-out-the-default-ref", "release.yml",
+     "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: ${{ needs.resolve.outputs.sha }}\n      - name: Scan Rust dependencies against OSV\n",
+     "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Scan Rust dependencies against OSV\n", CAUGHT),
+    ("packaged-suite-stops-waiting-for-resolve", "release.yml",
+     "  packaged-suite:\n    needs: resolve\n", "  packaged-suite:\n", CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):

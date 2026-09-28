@@ -2193,6 +2193,7 @@ class WorkflowWiring(unittest.TestCase):
         # tests cannot see a file the package leaves out.
         release_jobs = jobs("release.yml")
         self.assertIn("uses: ./.github/workflows/packaged-suite.yml", release_jobs.get("packaged-suite", ""))
+
         self.assertIn("packaged-suite", needs_of(release_jobs["release"]) or "", "release must wait for the packaged suite")
         for publisher in ("publish", "npm-publish", "homebrew-update"):
             self.assertIn("release", needs_of(release_jobs[publisher]) or "", f"{publisher} must wait for release")
@@ -2242,6 +2243,38 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_the_release_builds_tests_and_publishes_one_resolved_commit(self):
+        # A tag name is movable: a job, called workflow or re-run that resolves
+        # it again can build, test or publish a different commit than the rest
+        # of the release. `resolve` turns it into a SHA once; every checkout of
+        # this repository and every called workflow must use that SHA.
+        sha = "${{ needs.resolve.outputs.sha }}"
+        release_jobs = jobs("release.yml")
+        self.assertIn("resolve", release_jobs, "release.yml has no resolve job")
+        self.assertIsNone(needs_of(release_jobs["resolve"]), "resolve must run first")
+        checked = []
+        for name, body in release_jobs.items():
+            if name == "resolve":
+                continue
+            refs = []
+            for block in steps("release.yml", name):
+                if not any(re.search(r"uses:\s*actions/checkout@", l) for l in block):
+                    continue
+                if artifact_keys(block, ("repository",)):
+                    continue  # another repository (the Homebrew tap)
+                refs.append(artifact_keys(block, ("ref",)))
+            if re.search(r"(?m)^    uses: \./\.github/workflows/", body):
+                refs.append(re.findall(r"(?m)^      ref:\s*(.+?)\s*$", body))
+            for found in refs:
+                self.assertEqual(found, [sha], f"{name}: checks out or passes {found or 'the default ref'}, not the resolved commit")
+                checked.append(name)
+            if refs:
+                self.assertIn("resolve", needs_of(body) or "", f"{name}: uses the resolved commit, so it must need resolve")
+        self.assertGreaterEqual(len(set(checked)), 10, sorted(set(checked)))
+        for line in "\n".join(live_lines("release.yml")).splitlines():
+            if re.match(r"^\s+ref:", line):
+                self.assertNotRegex(line, r"github\.ref|inputs\.tag|github\.sha", f"a ref must be the resolved commit: {line.strip()}")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
