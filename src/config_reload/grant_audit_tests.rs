@@ -33,6 +33,10 @@ pub(super) struct FlakyStore {
     inner: InMemoryControlPlaneStore,
     calls: AtomicUsize,
     pub(super) fail_from: AtomicUsize,
+    /// When set, the grant epoch seen at the first failed append, plus one
+    /// (0: no failure observed). Proves publish happened before the append.
+    pub(super) watch_epoch: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
+    pub(super) epoch_at_failure: std::sync::atomic::AtomicU64,
 }
 
 impl FlakyStore {
@@ -75,7 +79,18 @@ impl ControlPlaneStore for FlakyStore {
         let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         let from = self.fail_from.load(Ordering::SeqCst);
         if from != 0 && n >= from {
-            return Err(StoreError::Io(std::io::Error::other("injected append failure")));
+            if let Some(epoch) = self.watch_epoch.get() {
+                let seen = epoch.load(Ordering::SeqCst) + 1;
+                let _ = self.epoch_at_failure.compare_exchange(
+                    0,
+                    seen,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+            }
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected append failure",
+            )));
         }
         self.inner.append_audit(event)
     }
@@ -165,7 +180,11 @@ impl Fixture {
     }
 
     pub(super) fn event_ids(&self) -> Vec<String> {
-        self.store.events().into_iter().map(|e| e.event_id).collect()
+        self.store
+            .events()
+            .into_iter()
+            .map(|e| e.event_id)
+            .collect()
     }
 
     pub(super) fn state_json(&self) -> serde_json::Value {
@@ -249,7 +268,10 @@ async fn t2a_add_then_revoke_between_loads_yields_two_records() {
         ]
     );
     let ids = f.event_ids();
-    assert!(ids.iter().all(|id| id.starts_with("grant-journal:")), "{ids:?}");
+    assert!(
+        ids.iter().all(|id| id.starts_with("grant-journal:")),
+        "{ids:?}"
+    );
 }
 
 /// T2a fields: a journal record carries expiry, the CLI's clock and the OS hint.
@@ -377,7 +399,10 @@ async fn t4f_t4j_no_baseline() {
     f.reconcile().await.unwrap();
     let got = f.records();
     assert!(got.contains(&(V::Revoke, "g0".into(), d(&g0))), "{got:?}");
-    assert!(got.contains(&(V::OutOfBand, "g1".into(), d(&edited))), "{got:?}");
+    assert!(
+        got.contains(&(V::OutOfBand, "g1".into(), d(&edited))),
+        "{got:?}"
+    );
     assert!(
         !got.iter().any(|r| r.0 == V::OutOfBand && r.1 == "g0"),
         "{got:?}"

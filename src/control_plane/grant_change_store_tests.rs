@@ -53,7 +53,13 @@ fn t11_grant_change_round_trips_through_the_file_store() {
     s.append_audit(&event("e2", None)).unwrap();
 
     let page = s.read_audit(&AuditFilter::new(10)).unwrap();
-    let by_id = |id: &str| page.events.iter().find(|e| e.event_id == id).unwrap().clone();
+    let by_id = |id: &str| {
+        page.events
+            .iter()
+            .find(|e| e.event_id == id)
+            .unwrap()
+            .clone()
+    };
     assert_eq!(by_id("e1").grant_change, Some(full));
     assert_eq!(by_id("e2").grant_change, None);
 

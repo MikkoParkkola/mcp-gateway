@@ -13,12 +13,12 @@ pub mod grant_change;
 pub mod role_mapping;
 pub mod store;
 
-pub use grant_change::{GrantChangeRecord, GrantChangeVerb};
 pub use export::{
     CollectingSink, ExportConfig, ExportCursor, ExportEntry, ExportError, ExportSink, ExportSource,
     ExportStatus, FileExportSink, LogExporter, PollOutcome, SourceExportStatus,
     default_cursor_path,
 };
+pub use grant_change::{GrantChangeRecord, GrantChangeVerb};
 pub use role_mapping::{ControlPlaneConfig, ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
 pub use store::{
     AuditCursor, AuditFilter, AuditPage, ControlPlaneStore, FileControlPlaneStore,
@@ -883,6 +883,6 @@ pub struct ControlPlaneReadOnlyView {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod grant_change_store_tests;
+#[cfg(test)]
+mod tests;

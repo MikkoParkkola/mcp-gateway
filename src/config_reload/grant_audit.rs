@@ -12,7 +12,7 @@
 //! [`GrantAuditor::prepare`] (steps 1-6 up to the plan write) and
 //! [`GrantAuditor::record`] (appends and commit).
 
-#![cfg_attr(not(test), allow(dead_code, reason = "red-first stub"))]
+#![allow(dead_code, reason = "red-first stub")]
 #![allow(
     clippy::unused_self,
     clippy::unnecessary_wraps,

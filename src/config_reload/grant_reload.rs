@@ -45,6 +45,26 @@ impl IdentityGrantSink {
             lock: tokio::sync::Mutex::new(()),
         }
     }
+
+    /// Record every reload's grant changes through `auditor` (MIK-7570.AUDIT.4).
+    #[allow(
+        dead_code,
+        clippy::needless_pass_by_value,
+        clippy::unused_self,
+        reason = "red-first stub"
+    )]
+    #[must_use]
+    pub(crate) fn with_auditor(self, auditor: Arc<super::grant_audit::GrantAuditor>) -> Self {
+        let _ = auditor;
+        self
+    }
+
+    /// Whether reloads through this sink are recorded.
+    #[cfg(test)]
+    #[allow(clippy::unused_self, reason = "red-first stub")]
+    pub(crate) fn has_auditor(&self) -> bool {
+        false
+    }
 }
 
 /// The subjects whose authorization changed between two grant snapshots.

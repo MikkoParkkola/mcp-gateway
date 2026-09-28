@@ -149,14 +149,22 @@ async fn t3_snapshot_records_active_grants_and_the_count() {
     let rows = vec![row("g1", "r"), row("g2", "r"), expired, revoked];
     f.auditor.snapshot(&rows, chrono::Utc::now()).unwrap();
     let got = f.records();
-    let loaded: Vec<_> = got.iter().filter(|r| r.0 == V::Loaded).map(|r| r.1.clone()).collect();
+    let loaded: Vec<_> = got
+        .iter()
+        .filter(|r| r.0 == V::Loaded)
+        .map(|r| r.1.clone())
+        .collect();
     assert_eq!(loaded, vec!["g1".to_string(), "g2".to_string()]);
     let events = f.store.events();
     let closing = events.last().unwrap().grant_change.clone().unwrap();
     assert_eq!(closing.verb, V::LoadedComplete);
     assert_eq!(closing.count, Some(2));
     let run = closing.run_id.clone().unwrap();
-    assert!(events.iter().all(|e| e.grant_change.as_ref().unwrap().run_id.as_deref() == Some(run.as_str())));
+    assert!(
+        events
+            .iter()
+            .all(|e| e.grant_change.as_ref().unwrap().run_id.as_deref() == Some(run.as_str()))
+    );
 
     let empty = Fixture::new();
     empty.auditor.snapshot(&[], chrono::Utc::now()).unwrap();
@@ -172,6 +180,9 @@ async fn t3cd_failed_snapshot_append_is_an_error() {
         let f = Fixture::new();
         fail_appends_from(&f, fail_at);
         let rows = vec![row("g1", "r"), row("g2", "r")];
-        assert!(f.auditor.snapshot(&rows, chrono::Utc::now()).is_err(), "{fail_at}");
+        assert!(
+            f.auditor.snapshot(&rows, chrono::Utc::now()).is_err(),
+            "{fail_at}"
+        );
     }
 }
