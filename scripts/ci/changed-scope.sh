@@ -22,8 +22,7 @@ classify() {
     case $path in
       docs/?*) ;;
       */*) echo false; return ;;
-      *.md | *.txt) ;;
-      *) echo false; return ;;
+      *) ;;
     esac
   done
   if [[ $any -eq 1 ]]; then echo true; else echo false; fi
