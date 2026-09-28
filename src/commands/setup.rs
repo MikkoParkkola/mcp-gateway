@@ -318,17 +318,17 @@ mod tests {
     use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 
     fn make_stdio_server(name: &str, source: DiscoverySource) -> DiscoveredServer {
-        DiscoveredServer {
-            name: name.to_string(),
-            description: format!("{name} description"),
+        DiscoveredServer::new(
+            name.to_string(),
+            format!("{name} description"),
             source,
-            transport: TransportConfig::Stdio {
+            TransportConfig::Stdio {
                 command: format!("npx -y @test/{name}"),
                 cwd: None,
                 protocol_version: None,
             },
-            metadata: ServerMetadata::default(),
-        }
+            ServerMetadata::default(),
+        )
     }
 
     #[test]
@@ -479,17 +479,17 @@ mod tests {
         let mut config = Config::default();
         config.backends.insert(
             "test".to_string(),
-            DiscoveredServer {
-                name: "test".to_string(),
-                description: "a test server".to_string(),
-                source: DiscoverySource::ClaudeDesktop,
-                transport: TransportConfig::Stdio {
+            DiscoveredServer::new(
+                "test".to_string(),
+                "a test server".to_string(),
+                DiscoverySource::ClaudeDesktop,
+                TransportConfig::Stdio {
                     command: "npx -y test".to_string(),
                     cwd: None,
                     protocol_version: None,
                 },
-                metadata: ServerMetadata::default(),
-            }
+                ServerMetadata::default(),
+            )
             .to_backend_config(),
         );
 

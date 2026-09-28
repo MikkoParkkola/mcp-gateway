@@ -199,8 +199,19 @@ pub fn merge_into_config(
     let mut doc: Value = if existed {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Cannot parse {}: {e}", path.display()))?
+        // A file this command cannot round-trip (Zed's settings allow
+        // comments and trailing commas) is refused, never rewritten without
+        // them; the entry is printed so it can be pasted by hand.
+        serde_json::from_str(&content).map_err(|e| {
+            let snippet =
+                serde_json::to_string_pretty(&json!({ servers_key: { entry_name: entry } }))
+                    .unwrap_or_default();
+            format!(
+                "Cannot parse {} as plain JSON ({e}). It may contain comments or trailing \
+                 commas, which this command does not rewrite. Add this entry by hand:\n{snippet}",
+                path.display()
+            )
+        })?
     } else {
         json!({})
     };
