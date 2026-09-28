@@ -7,6 +7,7 @@ use mcp_gateway::config::Config;
 
 use super::CheckResult;
 
+#[allow(dead_code)] // red stub: unwired until the implementation
 pub(super) fn check_security_posture(config: &Config) -> CheckResult {
     let _ = config;
     CheckResult::pass("security-posture", "")

@@ -38,6 +38,7 @@ pub enum SecurityPosture {
 ///
 /// A parameter rather than a `cfg!` inside [`resolve`], so the refusal on a
 /// build without the feature is testable from the default build.
+#[allow(dead_code)] // red stub: unwired until the implementation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FirewallBuild {
     /// The feature is compiled in.
@@ -46,6 +47,7 @@ pub(crate) enum FirewallBuild {
     Absent,
 }
 
+#[allow(dead_code)] // red stub: unwired until the implementation
 impl FirewallBuild {
     /// The build this binary is.
     pub(crate) const CURRENT: Self = if cfg!(feature = "firewall") {
@@ -60,6 +62,7 @@ impl FirewallBuild {
 /// # Errors
 ///
 /// Returns [`Error::ConfigValidation`] when `hardened` cannot be honoured.
+#[allow(dead_code)] // red stub: unwired until the implementation
 pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
     let _ = (config, build);
     Ok(())
@@ -75,6 +78,7 @@ pub fn unhardened_multi_user(config: &Config) -> bool {
 }
 
 /// Log the posture once at startup.
+#[allow(dead_code)] // red stub: unwired until the implementation
 pub(crate) fn log_startup(config: &Config) {
     let _ = config;
 }
