@@ -98,11 +98,16 @@ pub(super) async fn dashboard_link(
     // A session opened by this link ends no later than the key that minted
     // it: otherwise a key used minutes before its expiry would buy a full
     // absolute limit of access after it.
-    // A key missing from the live config (renamed or removed by a reload)
-    // cannot prove its expiry, so it may not mint: fail closed, never uncapped.
+    // The expiry comes from the resolved key that authenticated this request,
+    // not the live file, so a reload cannot split them. A key that is not
+    // found cannot prove its expiry, so it may not mint: fail closed.
     let not_after = if client.credential_kind == CredentialKind::ApiKey {
-        let live = state.live_config.get();
-        let Some(key) = live.auth.api_keys.iter().find(|k| k.name == client.name) else {
+        let Some(key) = state
+            .auth_config
+            .api_keys
+            .iter()
+            .find(|k| k.name == client.name)
+        else {
             return admin_auth_required().into_response();
         };
         key.expires_at.map(std::time::SystemTime::from)
