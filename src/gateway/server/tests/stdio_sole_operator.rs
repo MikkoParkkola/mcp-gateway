@@ -225,3 +225,267 @@ async fn http_multiple_api_keys_never_asserts_sole_operator() {
         "a multi-key gateway must refuse before ever attempting a mint; got: {error}"
     );
 }
+
+// ── T5/T6: the serve call sites, end to end ─────────────────────────────────
+//
+// T1/T2 above pass the mode by hand; these reach the installer only through
+// `run_stdio_on` and `Gateway::run`, so a wrong mode at either call site
+// fails here. Custody is production's `start_custody` over an initialized
+// store with an EMPTY descriptor map: nothing is fetched, while the
+// descriptor stays declared in `accounts`, so the installer still installs a
+// managed strategy for it.
+
+/// The account-bound capability both cases invoke.
+const E2E_TOOL: &str = "drive_read";
+const E2E_KEY_VAR: &str = "FIXTURE_E2E_STORE_KEY";
+const E2E_SECRET_VAR: &str = "FIXTURE_E2E_CLIENT_SECRET";
+/// Long enough for a loaded CI runner to boot and scan one capability file.
+const E2E_ARRIVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A tempdir holding the config, its env file, the capability and the store.
+struct E2eFixture {
+    _temp: tempfile::TempDir,
+    root: std::path::PathBuf,
+}
+
+impl E2eFixture {
+    fn new() -> Self {
+        let temp = tempfile::TempDir::new().expect("fixture tempdir");
+        let root = temp.path().canonicalize().expect("fixture root resolves");
+        let key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, STORE_KEY);
+        crate::gateway::test_helpers::write_owner_only(
+            root.join("accounts.env"),
+            format!("{E2E_KEY_VAR}={key}\n{E2E_SECRET_VAR}=synthetic-secret\n"),
+        )
+        .expect("write the fixture env file");
+        std::fs::create_dir(root.join("caps")).expect("capability dir");
+        std::fs::write(
+            root.join("caps").join(format!("{E2E_TOOL}.yaml")),
+            format!(
+                "name: {E2E_TOOL}\ndescription: Read one folder through a personal account\n\
+                 auth:\n  required: true\n  type: bearer\n  key: oauth:{PROVIDER}\n  \
+                 account: {DESCRIPTOR_ID}\nproviders:\n  primary:\n    service: rest\n    \
+                 config:\n      base_url: http://127.0.0.1:9\n      path: /read\n      method: GET\n"
+            ),
+        )
+        .expect("write the capability");
+        Self { _temp: temp, root }
+    }
+
+    /// The gateway config: `auth_yaml` is the only part the cases differ in.
+    fn config_yaml(&self, port: u16, auth_yaml: &str) -> String {
+        let root = self.root.display();
+        format!(
+            "env_files:\n  - {root}/accounts.env\n\
+             server:\n  host: 127.0.0.1\n  port: {port}\n\
+             {auth_yaml}\
+             tasks:\n  store_dir: {root}/tasks\n\
+             capabilities:\n  enabled: true\n  name: capabilities\n  directories:\n    - {root}/caps\n\
+             accounts:\n  schema_version: accounts.v1\n  enabled: true\n  deployment: single_process\n  \
+             instance_id: stdio-sole-operator-tests\n  store_dir: {root}/records\n  \
+             authority_dir: {root}/authority\n  current_key_id: current\n  keys:\n    \
+             current: env:{E2E_KEY_VAR}\n  descriptors:\n    {DESCRIPTOR_ID}:\n      \
+             mode: personal_managed\n      provider: {PROVIDER}\n      \
+             resource: https://wire.example.invalid/\n      \
+             issuer: https://accounts.wire-fixture.invalid\n      \
+             authorization_endpoint: https://accounts.wire-fixture.invalid/authorize\n      \
+             token_endpoint: https://accounts.wire-fixture.invalid/token\n      \
+             client_id: synthetic-client\n      client_secret_ref: env:{E2E_SECRET_VAR}\n      \
+             redirect_uri: https://gateway.example.invalid/oauth/callback\n      \
+             scopes:\n        - https://wire.example.invalid/read\n      \
+             send_resource_parameter: false\n"
+        )
+    }
+}
+
+/// A gateway built the way startup builds one (config and env file evaluated
+/// together), carrying production custody over an initialized, empty store.
+async fn e2e_gateway(fixture: &E2eFixture, port: u16, auth_yaml: &str) -> crate::gateway::Gateway {
+    let path = fixture.root.join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, fixture.config_yaml(port, auth_yaml))
+        .expect("write the fixture config");
+    let evaluated = Config::load_evaluated(Some(&path)).expect("the fixture config evaluates");
+    let env = Arc::new(crate::config::LiveEnv::new(
+        evaluated.overlay,
+        evaluated.env_paths,
+    ));
+    let store = {
+        let overlay = env.get();
+        crate::personal_accounts::config::resolve(evaluated.config.accounts.as_ref(), &*overlay)
+            .expect("the accounts block resolves")
+            .expect("the accounts block is enabled")
+            .store
+    };
+    drop(PersonalAccountStore::initialize(store.clone()).expect("store initializes"));
+    let custody = crate::personal_accounts::start_custody(store, BTreeMap::new(), Arc::clone(&env))
+        .await
+        .expect("store-only custody starts without a network fetch");
+    crate::gateway::Gateway::new_with_env(evaluated.config, env, Some(path))
+        .await
+        .expect("the fixture config builds a gateway")
+        .with_data_dir(fixture.root.join("data"))
+        .with_account_custody(Arc::new(custody))
+}
+
+/// The `gateway_invoke` of the account-bound capability, as JSON-RPC id 2.
+fn e2e_invoke() -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "capabilities", "tool": E2E_TOOL, "arguments": {},
+        }},
+    })
+}
+
+fn e2e_initialize() -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "sole-operator-e2e", "version": "0"},
+        },
+    })
+}
+
+/// Whether `text` holds either refusal a resolve can reach, so a poll stops on
+/// the WRONG one too and the assertion, not a timeout, names the failure.
+fn e2e_reached_resolve(text: &str) -> bool {
+    text.contains("carries no verified end-user identity")
+        || text.contains("no connected account (fail-closed)")
+}
+
+#[tokio::test]
+async fn stdio_run_path_serves_its_operator_the_managed_account() {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+
+    let fixture = E2eFixture::new();
+    let auth = "auth:\n  enabled: false\n";
+    let gateway = e2e_gateway(&fixture, 0, auth).await;
+    let (mut client, input) = tokio::io::duplex(64 * 1024);
+    let (output, reader) = tokio::io::duplex(1 << 20);
+    let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let mut answers = Vec::new();
+    for frame in [e2e_initialize(), e2e_invoke()] {
+        client
+            .write_all(format!("{frame}\n").as_bytes())
+            .await
+            .expect("write to the gateway's stdin");
+        let id = frame["id"].as_i64().expect("request id");
+        let answer = tokio::time::timeout(E2E_ARRIVAL, async {
+            while let Some(line) = lines.next_line().await.expect("read the gateway's stdout") {
+                let reply: serde_json::Value =
+                    serde_json::from_str(&line).expect("one JSON frame per line");
+                if reply["id"].as_i64() == Some(id) && reply.get("method").is_none() {
+                    return Some(reply);
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no response to request {id}"));
+        let Some(answer) = answer else {
+            // Stdout closed: the serve loop ended, and its own error says why.
+            panic!("the stdio loop ended early: {:?}", task.await);
+        };
+        answers.push(answer);
+    }
+    drop(client);
+    drop(tokio::time::timeout(E2E_ARRIVAL, task).await);
+    let invoked = answers[1].to_string();
+    assert!(
+        e2e_reached_resolve(&invoked),
+        "the call must reach the account resolve; got: {invoked}"
+    );
+    assert!(
+        !invoked.contains("carries no verified end-user identity"),
+        "a stdio gateway is spawned by its one operator and must not ask it for a \
+         verified identity (the stdio call site installs ServeMode::Stdio); got: {invoked}"
+    );
+    assert!(
+        invoked.contains("no connected account (fail-closed)"),
+        "the operator reaches custody, which has no grant seeded; got: {invoked}"
+    );
+}
+
+/// One `/mcp` POST as caller A. Returns the session id it was given and the
+/// raw body, so a JSON and an SSE answer are read the same way.
+async fn e2e_post(
+    client: &reqwest::Client,
+    port: u16,
+    session: Option<&str>,
+    frame: &serde_json::Value,
+) -> (Option<String>, String) {
+    let mut request = client
+        .post(format!("http://127.0.0.1:{port}/mcp"))
+        .bearer_auth("scoped-key-a")
+        .header("accept", "application/json, text/event-stream")
+        .json(frame);
+    if let Some(session) = session {
+        request = request.header("mcp-session-id", session);
+    }
+    let response = request.send().await.expect("the gateway answers /mcp");
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    (session, response.text().await.expect("read the /mcp body"))
+}
+
+#[tokio::test]
+async fn http_run_path_refuses_a_multi_key_caller_the_managed_account() {
+    let fixture = E2eFixture::new();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .expect("a free loopback port");
+    let auth = format!(
+        "auth:\n  enabled: true\n  single_user: true\n  api_keys:\n    \
+         - name: keyA\n      key_sha256: \"{}\"\n    \
+         - name: keyB\n      key_sha256: \"{}\"\n",
+        api_key_digest_spec(b"scoped-key-a"),
+        api_key_digest_spec(b"scoped-key-b"),
+    );
+    let gateway = e2e_gateway(&fixture, port, &auth).await;
+    let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
+    let client = reqwest::Client::new();
+    // Polled: the listener binds and the capability scan runs after spawn, so
+    // an early call can miss the tool. Stops on EITHER refusal.
+    let mut last = String::from("(no /mcp answer yet)");
+    let invoked = tokio::time::timeout(E2E_ARRIVAL, async {
+        loop {
+            if let Ok(response) = client
+                .get(format!("http://127.0.0.1:{port}/livez"))
+                .send()
+                .await
+                && response.status().is_success()
+            {
+                let (session, _) = e2e_post(&client, port, None, &e2e_initialize()).await;
+                let (_, body) = e2e_post(&client, port, session.as_deref(), &e2e_invoke()).await;
+                if e2e_reached_resolve(&body) {
+                    return body;
+                }
+                last = body;
+            }
+            assert!(
+                !server.is_finished(),
+                "the HTTP gateway stopped while booting"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the call never reached the account resolve; last: {last}"));
+    server.abort();
+    assert!(
+        invoked.contains("carries no verified end-user identity"),
+        "over HTTP, two configured API keys must never share stored OAuth grants under one \
+         sole-operator principal (the HTTP call site installs ServeMode::Http); got: {invoked}"
+    );
+    assert!(
+        !invoked.contains("no connected account (fail-closed)"),
+        "a multi-key gateway must refuse before ever attempting a mint; got: {invoked}"
+    );
+}
