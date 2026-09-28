@@ -186,9 +186,7 @@ pub enum DeliveryError {
 }
 
 /// Why the whole bridged call failed.
-///
-/// `PartialEq` without `Eq`: [`BridgeError::RoundsExhausted`] carries a JSON body.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeError {
     /// An entry could not be put to this client at all, and nothing was sent.
     Refused {
