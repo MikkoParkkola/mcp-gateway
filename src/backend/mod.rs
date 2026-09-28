@@ -25,6 +25,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 
 mod annotations;
 mod cached_metadata;
+mod descriptor_gate;
 mod era;
 mod input_keys;
 mod lifecycle;
@@ -141,6 +142,9 @@ pub struct Backend {
     /// because concurrent restarts are already serialised by the slot's
     /// `start_lock`; this is only about excluding shutdown.
     lifecycle: tokio::sync::RwLock<()>,
+    /// Tools withheld for a blocking tool-poisoning finding, across every
+    /// caller slot, and the log lines already written for them (#1441).
+    descriptor_gate: descriptor_gate::DescriptorGate,
     /// Makes [`Backend::stop`] single-flight.
     ///
     /// Without it, two concurrent callers both run the teardown and whichever

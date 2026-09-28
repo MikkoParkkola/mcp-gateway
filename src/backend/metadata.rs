@@ -264,6 +264,9 @@ impl Backend {
                     if let Some(flag) = family.truncated_flag {
                         flag(&entry).store(truncated, Ordering::SeqCst);
                     }
+                    if let Some(commit) = family.commit {
+                        commit(self, &entry);
+                    }
                 },
             )
             .await
@@ -306,6 +309,7 @@ impl Backend {
                 kind: "tools",
                 list_key: "tools",
                 truncated_flag: Some(tools_truncated_flag),
+                commit: Some(commit_pending_verdicts),
             },
             extra_headers,
             |result, entry| {
@@ -319,7 +323,12 @@ impl Backend {
                 // it, and keeps the set on the slot whose catalogue derived it — a
                 // backend-wide one would let one identity's fill decide another
                 // identity's retry policy.
-                *entry.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
+                let prepared =
+                    prepare_tool_metadata(&self.name, self.flagged_tool_pins(), &mut tools);
+                *entry.resend_permitted.write() = prepared.resend_permitted;
+                // Committed by `commit_pending_verdicts`, only once the store
+                // is accepted: a superseded fill must not unblock a name (#1441).
+                *entry.pending_verdicts.lock() = Some(prepared.verdicts);
                 Ok(tools)
             },
         )
@@ -409,6 +418,7 @@ impl Backend {
                 kind: "resources",
                 list_key: "resources",
                 truncated_flag: None,
+                commit: None,
             },
             extra_headers,
             |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
@@ -454,6 +464,7 @@ impl Backend {
                 kind: "resource_templates",
                 list_key: "resourceTemplates",
                 truncated_flag: None,
+                commit: None,
             },
             extra_headers,
             |result, _| {
@@ -504,6 +515,7 @@ impl Backend {
                 kind: "prompts",
                 list_key: "prompts",
                 truncated_flag: None,
+                commit: None,
             },
             extra_headers,
             |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
@@ -532,6 +544,15 @@ struct ListFamily {
     list_key: &'static str,
     /// Only the tools family records truncation (MIK 7570 PAGING.1 design D).
     truncated_flag: Option<fn(&super::pool::PooledEntry) -> &AtomicBool>,
+    /// Run after an accepted store; only the tools family commits verdicts.
+    commit: Option<fn(&Backend, &super::pool::PooledEntry)>,
+}
+
+/// Apply the verdicts a tools fill parked on its slot (#1441).
+fn commit_pending_verdicts(backend: &Backend, entry: &super::pool::PooledEntry) {
+    if let Some(verdicts) = entry.pending_verdicts.lock().take() {
+        backend.commit_verdicts(verdicts);
+    }
 }
 
 /// Drain every `nextCursor` page into one result, then let the caller parse

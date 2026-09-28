@@ -11,6 +11,7 @@ mod backend_debug;
 mod config_file;
 mod env_overlay;
 mod features;
+mod flagged_tools;
 mod input_schema;
 mod secret_file;
 mod secret_ref;
@@ -781,6 +782,7 @@ impl Config {
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
+        flagged_tools::validate_flagged_tool_pins(&self.backends)?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
         self.security.transparency_log.validate(self.auth.enabled)?;

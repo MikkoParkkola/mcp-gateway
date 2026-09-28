@@ -37,7 +37,9 @@ The mcp-gateway has security defenses for the six primary MCP attack vectors ide
 **Module**: `src/security/scope_collision.rs`
 **Status**: IMPLEMENTED AND VERIFIED
 
-**Defense**: `detect_collisions()` scans all `(backend_name, tools)` pairs and flags any tool name appearing on more than one backend. `validate_tool_name()` rejects tool names containing path traversal, shell metacharacters, control characters, null bytes, or exceeding 128 characters.
+> **Update (4.0, #1441):** `detect_collisions()` was removed. Nothing in the gateway ever called it, and it compared tool names, while every served surface addresses a tool as backend plus name, so two backends sharing a name do not collide. The collision tests listed below went with it. `validate_tool_name()` stays.
+
+**Defense**: `detect_collisions()` scanned all `(backend_name, tools)` pairs and flagged any tool name appearing on more than one backend. `validate_tool_name()` rejects tool names containing path traversal, shell metacharacters, control characters, null bytes, or exceeding 128 characters.
 
 **Tests proving the defense works**:
 

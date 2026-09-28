@@ -11,8 +11,9 @@ use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
 
 impl Backend {
-    /// Refusal text for a `tools/call` whose arguments carry keys the tool's
-    /// `inputSchema` does not declare, or `None` when the call may proceed.
+    /// Refusal text for a `tools/call` of a withheld tool (#1441), or whose
+    /// arguments carry keys the tool's `inputSchema` does not declare, or
+    /// `None` when the call may proceed.
     ///
     /// The schema comes from THIS caller's slot only: a "valid parameters"
     /// list built from another caller's catalogue would disclose it. A tool
@@ -26,6 +27,11 @@ impl Backend {
         tool: &str,
         arguments: &Value,
     ) -> Option<String> {
+        // Before the enforcement mode: a withheld tool is refused whatever
+        // the argument-key setting, and for every caller (#1441).
+        if let Some(refusal) = self.blocked_tool_refusal(tool) {
+            return Some(refusal);
+        }
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
             return None;
@@ -66,9 +72,6 @@ impl Backend {
         tools: &[Value],
     ) {
         let key = self.pool_key_for(identity_key);
-        if matches!(key, PoolKey::Shared) && sent_caller_credential {
-            return;
-        }
         // Entry by entry, as `normalize_tools_list_response` reads them: one
         // malformed tool must not leave the slot cold for every other one.
         let mut parsed: Vec<crate::protocol::Tool> = tools
@@ -76,13 +79,23 @@ impl Backend {
             .filter_map(|tool| serde_json::from_value(tool.clone()).ok())
             .collect();
         // The same normalisation a discovery fill applies; the resend set it
-        // returns stays with discovery, so this fill grants no retries.
-        let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
+        // returns stays with discovery, so this fill grants no retries. The
+        // list is raw here (the direct route redacts only afterwards), so this
+        // is where its descriptors are judged (#1441).
+        let prepared =
+            super::prepare_tool_metadata(&self.name, self.flagged_tool_pins(), &mut parsed);
+        let verdicts = prepared.verdicts;
+        if matches!(key, PoolKey::Shared) && sent_caller_credential {
+            // Not stored, but observed: a blocked name is per backend.
+            self.commit_verdicts(verdicts);
+            return;
+        }
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
         // A store, not a fill: it must not depend on the slot reading as
         // stale, nor queue behind a discovery fill already on the wire.
         entry.tools_cache.replace(parsed, || {
+            self.commit_verdicts(verdicts);
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);

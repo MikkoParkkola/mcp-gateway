@@ -557,7 +557,7 @@ fn sample_tool(name: &str) -> Tool {
 fn normalize_tool_annotations_fills_missing_hints() {
     let mut tools = vec![sample_tool("search_messages"), sample_tool("send_message")];
 
-    prepare_tool_metadata("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &std::collections::BTreeMap::new(), &mut tools);
 
     let search = tools[0].annotations.as_ref().unwrap();
     assert_eq!(search.read_only_hint, Some(true));
@@ -584,7 +584,7 @@ fn normalize_tool_annotations_preserves_existing_true_hints_and_adds_false_hints
     });
     let mut tools = vec![tool];
 
-    prepare_tool_metadata("hebb", &mut tools);
+    prepare_tool_metadata("hebb", &std::collections::BTreeMap::new(), &mut tools);
 
     let annotations = tools[0].annotations.as_ref().unwrap();
     assert_eq!(annotations.read_only_hint, Some(true));
@@ -605,7 +605,7 @@ fn normalize_tool_annotations_preserves_downstream_annotation_title_and_hints() 
     });
     let mut tools = vec![tool];
 
-    prepare_tool_metadata("remote-api", &mut tools);
+    prepare_tool_metadata("remote-api", &std::collections::BTreeMap::new(), &mut tools);
 
     let annotations = tools[0].annotations.as_ref().unwrap();
     assert_eq!(annotations.title.as_deref(), Some("Remote Write"));

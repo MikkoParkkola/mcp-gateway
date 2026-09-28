@@ -217,7 +217,11 @@ fn backend_security_error_with_status(
 
 /// Fill missing MCP tool annotation hints on direct backend `tools/list`
 /// responses before returning them to clients.
-fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcResponse) {
+fn normalize_tools_list_response(
+    backend: &crate::backend::Backend,
+    response: &mut JsonRpcResponse,
+) {
+    let backend_name = backend.name.as_str();
     if response.error.is_some() {
         return;
     }
@@ -250,7 +254,12 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         }
     }
 
-    prepare_tool_metadata(backend_name, &mut tools);
+    // Judged again here only to apply the pins and the other exclusions: this
+    // list has been through credential redaction, which can remove the text a
+    // finding rests on. The verdict on the raw list, committed when the drain
+    // stored it, decides what is withheld (#1441).
+    let _ = prepare_tool_metadata(backend_name, backend.flagged_tool_pins(), &mut tools);
+    tools.retain(|tool| !backend.is_blocked_tool(&tool.name));
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
@@ -1089,7 +1098,7 @@ async fn backend_handler_inner(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
-                normalize_tools_list_response(&name, &mut response);
+                normalize_tools_list_response(&backend, &mut response);
                 // List = invoke: only what this route's `tools/call` admits.
                 let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
                 let client = client.as_ref();
