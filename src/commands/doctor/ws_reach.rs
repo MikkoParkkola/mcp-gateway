@@ -76,9 +76,11 @@ mod tests {
         );
         drop(listener);
         // The closed port stays bound, never listening, until the check is
-        // done: a connect is refused, and no other process can re-bind the
-        // port and answer it the way a freed port could (#1754).
+        // done: a connect is refused, and ephemeral allocation by another
+        // process cannot hand the port out and answer it, the way it could
+        // with a freed port (#1754).
         let closed = tokio::net::TcpSocket::new_v4().unwrap();
+        closed.set_reuseaddr(false).unwrap();
         closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let port = closed.local_addr().unwrap().port();
         let down = check_ws_backend(
@@ -89,8 +91,9 @@ mod tests {
         .expect("a ws_url backend is checked");
         drop(closed);
         assert!(
-            down.status == super::super::CheckStatus::Fail,
-            "{}",
+            down.status == super::super::CheckStatus::Fail
+                && down.detail.starts_with("connection failed"),
+            "a refused connect, not a timeout: {}",
             down.detail
         );
         let text = format!("{} {} {:?}", down.label, down.detail, down.hint);

@@ -248,21 +248,25 @@ mod tests {
         assert!(!err.to_string().contains(CANARY));
     }
 
-    /// A dead port: bind to learn a free address, then give it up.
-    async fn closed_port() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
+    /// A dead port, and the socket that keeps it dead: bound, never
+    /// listening, so a connect is refused and no other process's ephemeral
+    /// allocation can take the port and answer it (#1754). Hold the socket
+    /// until the request is done.
+    fn closed_port() -> (String, tokio::net::TcpSocket) {
+        let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+        socket.set_reuseaddr(false).expect("no address reuse");
+        socket
+            .bind("127.0.0.1:0".parse().expect("loopback"))
             .expect("bind ephemeral port");
-        let address = listener.local_addr().expect("local addr");
-        drop(listener);
-        format!("http://{address}/mcp")
+        let address = socket.local_addr().expect("local addr");
+        (format!("http://{address}/mcp"), socket)
     }
 
     /// An unredirected connect failure is provably pre-dispatch: nothing was
     /// written, so the idempotency key must be released rather than settled.
     #[tokio::test]
     async fn an_unredirected_connect_failure_is_pre_dispatch() {
-        let url = closed_port().await;
+        let (url, _closed) = closed_port();
         let error = reqwest::Client::new()
             .post(&url)
             .send()
@@ -297,7 +301,7 @@ mod tests {
     /// `src/transport/http/tests.rs` -- this row only pins the classifier.
     #[tokio::test]
     async fn a_connect_failure_the_caller_cannot_vouch_for_stays_coarse() {
-        let url = closed_port().await;
+        let (url, _closed) = closed_port();
         let error = reqwest::Client::new()
             .post(&url)
             .send()
@@ -358,7 +362,7 @@ mod tests {
     /// are post-dispatch by construction.
     #[tokio::test]
     async fn the_coarse_constructor_never_returns_the_narrow_variant() {
-        let url = closed_port().await;
+        let (url, _closed) = closed_port();
         let error = reqwest::Client::new()
             .post(&url)
             .send()

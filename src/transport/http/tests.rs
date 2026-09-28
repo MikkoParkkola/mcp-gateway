@@ -2291,9 +2291,13 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
 /// falsifier above would still be green.
 #[tokio::test]
 async fn an_unredirected_connect_failure_is_pre_dispatch_end_to_end() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    // Bound and never listening for the whole test: the connect is refused,
+    // and no other process's ephemeral allocation can take the port and
+    // answer it, the way it could with a dropped listener's port (#1754).
+    let closed = tokio::net::TcpSocket::new_v4().unwrap();
+    closed.set_reuseaddr(false).unwrap();
+    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = closed.local_addr().unwrap();
 
     let base = format!("http://{addr}/mcp");
     let transport =
