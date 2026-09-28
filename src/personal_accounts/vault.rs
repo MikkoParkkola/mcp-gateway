@@ -145,7 +145,8 @@ pub(crate) struct VaultStrategy {
     /// when a request carries no verified identity.
     ///
     /// A CONFIGURATION FACT, resolved ONCE at install from
-    /// [`AuthConfig::grants_single_user_principal`](crate::config::features::auth::AuthConfig::grants_single_user_principal)
+    /// [`sole_operator_asserted`](crate::gateway::server::account_bindings::sole_operator_asserted)
+    /// (always true over stdio; the HTTP single-user settings otherwise)
     /// and never re-decided per request. A per-request decision would be a
     /// second place the mode could be computed, and the mode is a property of
     /// the deployment, not of the caller — a caller must never be able to
