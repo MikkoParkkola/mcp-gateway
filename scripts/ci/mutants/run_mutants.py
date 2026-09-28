@@ -298,21 +298,30 @@ def fetch_check() -> list[str]:
     errors = []
     with tempfile.TemporaryDirectory() as tmp:
         origin, full, shallow = (Path(tmp, n) for n in ("origin", "full", "shallow"))
-        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
-                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+        # Isolated from the caller's git setup: no inherited GIT_DIR, no global
+        # or system config (signing, hooks, url rewrites).
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
         def run(*args, cwd=None):
-            subprocess.run(args, cwd=cwd, env=env, check=True, capture_output=True)
+            done = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True)
+            if done.returncode != 0:
+                raise Abort(f"fixture `{' '.join(args)}` failed: {done.stderr.strip()}")
 
-        run("git", "init", "-q", "-b", RELEASE_LINE, str(origin))
-        for n in (1, 2):
-            run("git", "commit", "-q", "--allow-empty", "-m", f"c{n}", cwd=origin)
-        url = origin.as_uri()
-        run("git", "clone", "-q", url, str(full))
-        run("git", "clone", "-q", "--depth=1", url, str(shallow))
-        # A new tip after cloning: a depth-1 fetch brings 1 commit of history,
-        # a plain fetch into the shallow clone would bring 2 (tip + old tip).
-        run("git", "commit", "-q", "--allow-empty", "-m", "c3", cwd=origin)
+        try:
+            run("git", "init", "-q", "-b", RELEASE_LINE, str(origin))
+            for n in (1, 2):
+                run("git", "commit", "-q", "--allow-empty", "-m", f"c{n}", cwd=origin)
+            url = origin.as_uri()
+            run("git", "clone", "-q", url, str(full))
+            run("git", "clone", "-q", "--depth=1", url, str(shallow))
+            # A new tip after cloning: a depth-1 fetch brings 1 commit of history,
+            # a plain fetch into the shallow clone would bring 2 (tip + old tip).
+            run("git", "commit", "-q", "--allow-empty", "-m", "c3", cwd=origin)
+        except Abort as exc:
+            return [str(exc)]
         here = os.getcwd()
         for clone, want, history in ((full, "false", "3"), (shallow, "true", "1")):
             os.chdir(clone)
