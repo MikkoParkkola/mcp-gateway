@@ -65,6 +65,8 @@ impl ToolTotal {
 /// be written.
 #[cfg(feature = "cost-governance")]
 pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
+    // Numbers each save's scratch file within this process (see below).
+    static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| crate::Error::Config(format!("Failed to create cost dir: {e}")))?;
@@ -72,12 +74,35 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     let json = serde_json::to_string_pretty(costs)
         .map_err(|e| crate::Error::Config(format!("Failed to serialize costs: {e}")))?;
     // Write then rename, so a crash mid-write leaves the previous file, not a
-    // truncated one that fails to parse and restarts the budgets at zero.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)
-        .map_err(|e| crate::Error::Config(format!("Failed to write costs: {e}")))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| crate::Error::Config(format!("Failed to replace costs: {e}")))?;
+    // truncated one that fails to parse and restarts the budgets at zero. The
+    // scratch name is unique per save: gateways sharing a data directory (and
+    // one gateway's periodic and final saves) must never write one file.
+    // A name already taken (a file left by a killed process whose id this
+    // one reuses) is skipped, never reused or removed: it is not ours.
+    let (tmp, mut file) = loop {
+        let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(crate::Error::Config(format!("Failed to save costs: {e}"))),
+        }
+    };
+    // Synced and closed before the rename: the renamed file holds the whole
+    // snapshot after a power loss, and Windows renames only a closed file.
+    let written =
+        std::io::Write::write_all(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
+    drop(file);
+    let saved = written.and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = saved {
+        // This save created the scratch file, so it is ours to remove.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(crate::Error::Config(format!("Failed to save costs: {e}")));
+    }
     tracing::info!(path = %path.display(), "Saved cost data");
     Ok(())
 }
@@ -163,6 +188,105 @@ mod tests {
         assert_eq!(tool.call_count, 10);
         assert!((tool.total_cost_usd - 0.10).abs() < 1e-9);
         assert!((loaded.key_totals["dev_key"] - 2.50).abs() < 1e-9);
+    }
+
+    /// Two writers saving one path at once each finish with one whole
+    /// snapshot on disk: no save fails and nothing is left half-written.
+    /// A shared scratch name lets one writer rename the other's file away
+    /// (a failed save) or interleave into it (a torn file).
+    #[test]
+    fn concurrent_saves_use_distinct_scratch_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::sync::Arc::new(dir.path().join("costs.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writers: Vec<_> = [1_u64, 2]
+            .into_iter()
+            .map(|writer| {
+                let (path, barrier) = (path.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let mut costs = PersistedCosts {
+                        saved_at: writer,
+                        ..PersistedCosts::default()
+                    };
+                    // Enough entries that a write is not one syscall.
+                    for i in 0..200 {
+                        costs.key_totals.insert(format!("key-{writer}-{i}"), 0.5);
+                    }
+                    barrier.wait();
+                    (0..200)
+                        .map(|_| save(&path, &costs).map_err(|e| e.to_string()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for writer in writers {
+            for result in writer.join().expect("writer thread") {
+                result.expect("a concurrent save failed");
+            }
+        }
+        let loaded = load(&path).expect("the file on disk is one whole snapshot");
+        assert!(
+            loaded.saved_at == 1 || loaded.saved_at == 2,
+            "the file is neither writer's snapshot: saved_at {}",
+            loaded.saved_at
+        );
+        let owner = format!("key-{}-", loaded.saved_at);
+        assert!(
+            loaded.key_totals.len() == 200
+                && loaded.key_totals.keys().all(|k| k.starts_with(&owner)),
+            "the file mixes the two writers' snapshots"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "costs.json")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "scratch files left behind: {leftovers:?}"
+        );
+    }
+
+    /// A save that cannot replace the destination reports the error and
+    /// leaves no scratch file behind in the user's data directory.
+    #[test]
+    fn a_failed_rename_removes_its_scratch_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("costs.json");
+        // A non-empty directory where the file should go: the rename fails.
+        std::fs::create_dir_all(path.join("occupied")).unwrap();
+        assert!(save(&path, &PersistedCosts::default()).is_err());
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["costs.json".to_string()], "scratch left behind");
+    }
+
+    /// A scratch name already on disk (left by a killed process whose id this
+    /// one reuses) is skipped: the save still succeeds and the leftover is
+    /// neither overwritten nor removed.
+    #[test]
+    fn a_leftover_scratch_file_is_neither_reused_nor_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("costs.json");
+        // Every name this process can reach before the test's save, with
+        // room for the saves other tests make in parallel.
+        let leftovers: Vec<_> = (0..5_000)
+            .map(|n| path.with_extension(format!("json.{}.{n}.tmp", std::process::id())))
+            .collect();
+        for leftover in &leftovers {
+            std::fs::write(leftover, b"left by an earlier process").unwrap();
+        }
+        save(&path, &PersistedCosts::default()).expect("a free scratch name is used instead");
+        assert!(
+            leftovers
+                .iter()
+                .all(|l| std::fs::read(l).is_ok_and(|b| b == b"left by an earlier process")),
+            "a leftover scratch file was overwritten or removed"
+        );
     }
 
     #[test]

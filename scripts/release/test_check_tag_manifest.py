@@ -2156,6 +2156,35 @@ class WorkflowWiring(unittest.TestCase):
                 continue
             self.assertRegex(line, permitted, raw_line)
 
+    def test_release_tooling_unit_tests_block_on_every_ref(self):
+        # release-criteria is report-only off a tag because its live-ledger
+        # checks read documents edited mid-flight. The tooling's own unit tests
+        # read nothing live, so they run in a job that fails every ref: in the
+        # report-only job a broken publish-gate test merged green and first
+        # failed on the tag.
+        unit = (
+            "test_count_release_criteria.py",
+            "test_scope_acceptance.py",
+            "test_check_tag_manifest.py",
+            "test_check_nfr_demo_1_recordings.py",
+            "test_workflow_wiring_mutations.py",
+        )
+        body = jobs("ci.yml").get("release-script-tests")
+        self.assertIsNotNone(body, "ci.yml has no release-script-tests job")
+        swallow = [
+            line for line in body.splitlines()
+            if re.match(r"^ {4}continue-on-error:", line)
+            and not re.match(r"^ {4}continue-on-error:\s*false\s*$", line)
+        ]
+        self.assertEqual(swallow, [], "release-script-tests must not swallow failures")
+        ran = {script for block in steps("ci.yml", "release-script-tests")
+               for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
+        self.assertEqual(ran, set(unit), "release-script-tests must run every tooling unit test")
+        stray = {script for block in steps("ci.yml", "release-criteria")
+                 for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
+        self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
+        self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
         # input. Once it expires, re-running that job publishes nothing

@@ -7,6 +7,13 @@ on:
   pull_request:
     branches: [main, docs/ranking-1-release-line]
 
+# A new push to a pull request cancels that PR's superseded run. Every other
+# event (branch push, tag) gets a group of its own run id, so it is never
+# cancelled, and never queued behind or replaced by another run.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
