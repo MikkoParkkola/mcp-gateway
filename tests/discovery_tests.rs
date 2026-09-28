@@ -94,23 +94,23 @@ async fn test_discovered_server_to_backend_config() {
     use mcp_gateway::config::TransportConfig;
     use mcp_gateway::discovery::{DiscoveredServer, ServerMetadata};
 
-    let server = DiscoveredServer {
-        name: "test-server".to_string(),
-        description: "Test Server".to_string(),
-        source: DiscoverySource::Environment,
-        transport: TransportConfig::Http {
+    let server = DiscoveredServer::new(
+        "test-server".to_string(),
+        "Test Server".to_string(),
+        DiscoverySource::Environment,
+        TransportConfig::Http {
             http_url: "http://localhost:3000".to_string(),
             streamable_http: false,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: None,
             pid: None,
             port: Some(3000),
             command: None,
             working_dir: None,
         },
-    };
+    );
 
     let backend_config = server.to_backend_config();
     assert_eq!(backend_config.description, "Test Server");
@@ -150,63 +150,63 @@ fn make_discovered(name: &str) -> mcp_gateway::discovery::DiscoveredServer {
     use mcp_gateway::config::TransportConfig;
     use mcp_gateway::discovery::{DiscoveredServer, ServerMetadata};
 
-    DiscoveredServer {
-        name: name.to_string(),
-        description: format!("{name} server"),
-        source: DiscoverySource::Environment,
-        transport: TransportConfig::Http {
+    DiscoveredServer::new(
+        name.to_string(),
+        format!("{name} server"),
+        DiscoverySource::Environment,
+        TransportConfig::Http {
             http_url: format!("http://localhost:3000/{name}"),
             streamable_http: false,
             protocol_version: None,
         },
-        metadata: ServerMetadata::default(),
-    }
+        ServerMetadata::default(),
+    )
 }
 
 fn make_stdio_discovered(name: &str, command: &str) -> mcp_gateway::discovery::DiscoveredServer {
     use mcp_gateway::config::TransportConfig;
     use mcp_gateway::discovery::{DiscoveredServer, ServerMetadata};
 
-    DiscoveredServer {
-        name: name.to_string(),
-        description: format!("{name} server"),
-        source: DiscoverySource::ClaudeCode,
-        transport: TransportConfig::Stdio {
+    DiscoveredServer::new(
+        name.to_string(),
+        format!("{name} server"),
+        DiscoverySource::ClaudeCode,
+        TransportConfig::Stdio {
             command: command.to_string(),
             cwd: None,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: Some(std::path::PathBuf::from("/tmp/client-config.json")),
             pid: None,
             port: None,
             command: Some(command.to_string()),
             working_dir: None,
         },
-    }
+    )
 }
 
 fn make_http_discovered(name: &str, url: &str) -> mcp_gateway::discovery::DiscoveredServer {
     use mcp_gateway::config::TransportConfig;
     use mcp_gateway::discovery::{DiscoveredServer, ServerMetadata};
 
-    DiscoveredServer {
-        name: name.to_string(),
-        description: format!("{name} server"),
-        source: DiscoverySource::Environment,
-        transport: TransportConfig::Http {
+    DiscoveredServer::new(
+        name.to_string(),
+        format!("{name} server"),
+        DiscoverySource::Environment,
+        TransportConfig::Http {
             http_url: url.to_string(),
             streamable_http: false,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: None,
             pid: None,
             port: None,
             command: None,
             working_dir: None,
         },
-    }
+    )
 }
 
 #[test]

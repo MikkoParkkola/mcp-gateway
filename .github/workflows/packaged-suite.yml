@@ -33,6 +33,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # No build cache: the release calls this, and a restored cache is input
+      # nobody reviewed at the tag.
       - name: Run the tests from the packaged crate
         run: scripts/ci/packaged-tests.sh run
