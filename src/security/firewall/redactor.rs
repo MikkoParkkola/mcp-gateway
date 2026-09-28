@@ -531,4 +531,33 @@ mod tests {
             findings[0].matched
         );
     }
+
+    // ── #2210: token shapes inside an opaque base64url run ──────────────────
+
+    /// A token-shaped run with envelope characters on both sides is ciphertext,
+    /// not a credential. Split with `concat!` so no literal token sits here.
+    #[test]
+    fn a_token_shape_inside_a_base64url_run_is_not_a_credential() {
+        for inner in [
+            concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789"),
+            concat!("gh", "r_abcdefghijklmnopqrstuvwxyz0123456789"),
+            concat!("xo", "xb-1234567890abcdef"),
+        ] {
+            let text = format!("q7Zx-_9Kd2{inner}Wm3-Qe_8rT1vLp0aB9");
+            let mut v = json!({ "requestState": text, text.clone(): 1 });
+            let findings = redactor().scan_and_redact(&mut v);
+            assert!(findings.is_empty(), "{inner}: {findings:?}");
+            assert_eq!(v["requestState"], text);
+        }
+    }
+
+    /// Two real tokens sharing one space are both still redacted.
+    #[test]
+    fn delimited_tokens_sharing_a_separator_are_both_redacted() {
+        let a = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
+        let b = concat!("gh", "o_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        let mut v = json!({ "t": format!("{a} {b}") });
+        redactor().scan_and_redact(&mut v);
+        assert_eq!(v["t"], "[REDACTED:credential] [REDACTED:credential]");
+    }
 }
