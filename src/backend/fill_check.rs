@@ -274,6 +274,7 @@ pub(crate) fn is_transport_failure(error: &Error) -> bool {
             | Error::Http(_)
             | Error::Io(_)
             | Error::Tls(_)
+            | Error::JsonRpc { .. }
             // The handshake failed (initialize refused, a framing fault): a
             // dispatch would get the same error.
             | Error::Protocol(_)
