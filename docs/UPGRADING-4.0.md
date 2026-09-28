@@ -15,8 +15,8 @@ the binary could know whether a given deployment is affected; item 8 refuses the
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
-the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule, and again
-when that rule changes. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
+the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
+`role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70 and 72 print no notice: read them here
 before upgrading.
 

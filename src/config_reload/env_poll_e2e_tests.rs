@@ -128,15 +128,17 @@ fn p3_a_failing_env_file_is_retried_warned_once_and_recovers() {
         .enable_all()
         .build()
         .expect("runtime");
-    let mut first_failure_warnings = 0;
-    let logs = records(|| {
-        runtime.block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("a.env");
-            write_owner_only(&path, "MCP_GW_T1286_P3=good\n").unwrap();
-            let g = start(root.path(), vec![path.clone()]);
-            let counts = g.watcher.env_reloads();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("a.env");
+    write_owner_only(&path, "MCP_GW_T1286_P3=good\n").unwrap();
+    // Built inside the runtime; its tasks run whenever the runtime is driven.
+    let g = runtime.block_on(async { start(root.path(), vec![path.clone()]) });
 
+    // Phase 1: an unchanged malformed file is retried and warned about once.
+    let mut limiter_warnings = 0;
+    let first = records(|| {
+        runtime.block_on(async {
+            let counts = g.watcher.env_reloads();
             write_owner_only(&path, "MCP_GW_T1286_P3=\"unterminated\n").unwrap();
             tokio::time::sleep(Duration::from_secs(5)).await;
             let attempts = counts.attempts.load(Ordering::SeqCst);
@@ -149,25 +151,33 @@ fn p3_a_failing_env_file_is_retried_warned_once_and_recovers() {
                 Some("good"),
                 "a failed reload keeps the overlay"
             );
-            first_failure_warnings = counts.warns.load(Ordering::SeqCst);
+            limiter_warnings = counts.warns.load(Ordering::SeqCst);
+        });
+    });
+    assert!(
+        limiter_warnings <= 1,
+        "the limiter warned {limiter_warnings} times for one unchanged error"
+    );
+    assert_eq!(
+        count(&first, "WARN", "Config reload:"),
+        1,
+        "one warning for one unchanged failure"
+    );
 
+    // Phase 2: fixed with no config edit, then the same failure again within
+    // the minute. The success reset the limiter, so it warns again, once.
+    let second = records(|| {
+        runtime.block_on(async {
             write_owner_only(&path, "MCP_GW_T1286_P3=fixed\n").unwrap();
             reaches(&g.env, "MCP_GW_T1286_P3", "fixed", 3).await;
-
-            // The same failure again within the minute: the success reset
-            // the limiter, so it is warned about again.
             write_owner_only(&path, "MCP_GW_T1286_P3=\"unterminated\n").unwrap();
             tokio::time::sleep(Duration::from_secs(3)).await;
         });
     });
-    assert!(
-        first_failure_warnings <= 1,
-        "the limiter warned {first_failure_warnings} times for one unchanged error"
-    );
     assert_eq!(
-        count(&logs, "WARN", "Config reload:"),
-        2,
-        "one warning for the unchanged failure, one after it recurs past a success"
+        count(&second, "WARN", "Config reload:"),
+        1,
+        "the same failure after a successful reload warns again, once"
     );
 }
 
