@@ -399,11 +399,27 @@ async fn t3cd_failed_snapshot_append_serves_nothing() {
         flaky.fail_from.store(fail_at, Ordering::SeqCst);
         let store: Arc<dyn ControlPlaneStore> = flaky.clone();
         std::fs::create_dir_all(store_dir(dir.path())).unwrap();
-        start_identity_grant_audit(&config, &meta, Some(&store), &store_dir(dir.path()))
+        let sink = start_identity_grant_audit(&config, &meta, Some(&store), &store_dir(dir.path()))
             .await
             .unwrap();
         let (live, _) = meta.identity_grant_sink();
         assert!(live.read().values().next().is_none(), "fail_at={fail_at}");
+        // The refusal holds for the whole run: a later reload must not serve
+        // rows that no snapshot recorded, even once the store works again.
+        flaky.fail_from.store(0, Ordering::SeqCst);
+        let ctx = crate::config_reload::ReloadContext::new(
+            grants_path(dir.path()),
+            Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(300),
+        )
+        .with_identity_grant_sink_opt(sink);
+        let _ = ctx.reload_identity_grants().await;
+        assert!(
+            live.read().values().next().is_none(),
+            "a reload after the failed snapshot served grants, fail_at={fail_at}"
+        );
         assert!(
             !flaky.events().iter().any(|e| e
                 .grant_change
