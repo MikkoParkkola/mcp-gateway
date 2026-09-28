@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! Pre-invocation:  InputScanner → AnomalyDetector → TenantGuard → resolve_action → AuditLogger
-//! Post-invocation: ResponseScanner → Redactor → per-target policy reduction → AuditLogger
+//! Post-invocation: Redactor → ResponseScanner → per-target policy reduction → AuditLogger
 //! ```
 //!
 //! # Feature gate
