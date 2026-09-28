@@ -535,8 +535,8 @@ async fn backend_503_32005_is_recorded_as_error() {
 }
 
 /// F20 on the direct route (added by #1092 after the F20 design): a stalled
-/// audit disk withholds the result with 503 within the bound, instead of
-/// pinning a runtime worker.
+/// audit disk withholds the result with 503 while the write is still held
+/// (only the bound can do that), instead of pinning a runtime worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_append_on_a_stalled_disk_is_bounded() {
     let fx = fixture(Setup {

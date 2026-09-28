@@ -55,8 +55,8 @@ async fn mint_write_success_is_ok() {
 }
 
 // F20 T6: the mint audit goes through the bounded append, so a
-// stalled disk refuses the mint within the bound (no durable record,
-// no credential) instead of pinning a runtime worker.
+// stalled disk refuses the mint while the write is still held (no durable
+// record, no credential) instead of pinning a runtime worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
     let (_file, logger) = open_logger();
