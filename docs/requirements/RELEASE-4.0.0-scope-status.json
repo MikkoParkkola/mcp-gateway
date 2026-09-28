@@ -429,7 +429,7 @@
         "scripts/release/test_scope_acceptance.py",
         "scripts/release/test_scope_contract_interface.py"
       ],
-      "note": "Integrated by PR497 at424f997eb06f0590d31dc604c52c5dbe536db318. All18 applicable pre-merge checks and post-merge CI34187040999/Docker34187040990 passed.44 scope tests,100% native checker line coverage and90.21% mutation score; publishing paths enforce complete baseline/supplemental acceptance and decisions. This closes the tooling criterion only. CI EVIDENCE 2026-09-26 at 137ab7acf: green CI run 36233669662 (merge ref onto 137ab7acf; Tests job 108381420722, cargo test --all-features); every test named in this note passed in the test binary of its defining file. Clause read: VERIFIED by unit tests. Gate logic scripts/release/check_scope_acceptance.py:468-516, publishing context :69, duplicate fields refused :59. scripts/release/test_scope_acceptance.py (82 tests OK in the Release criteria ledger job of this run): pending passes --check and fails --release (:130), baseline blocker (:135), unanswered decision (:140), missing, duplicate or undeclared rows (:145, :183, :189), missing evidence (:195), dispatch INPUT_TAG (:790). Wiring: release.yml:124, docker.yml:68, ci.yml:527. The ci.yml job is advisory off a tag; tag-time enforcement is proven by the unit tests. test_scope_contract_interface.py is not run by any workflow."
+      "note": "Integrated by PR497 at424f997eb06f0590d31dc604c52c5dbe536db318. All18 applicable pre-merge checks and post-merge CI34187040999/Docker34187040990 passed.44 scope tests,100% native checker line coverage and90.21% mutation score; publishing paths enforce complete baseline/supplemental acceptance and decisions. This closes the tooling criterion only. CI EVIDENCE 2026-09-26 at 137ab7acf: green CI run 36233669662 (merge ref onto 137ab7acf; Tests job 108381420722, cargo test --all-features); every test named in this note passed in the test binary of its defining file. Clause read: VERIFIED by unit tests. Gate logic scripts/release/check_scope_acceptance.py:468-516, publishing context :69, duplicate fields refused :59. scripts/release/test_scope_acceptance.py (82 tests OK in the Release criteria ledger job of this run): pending passes --check and fails --release (:130), baseline blocker (:135), unanswered decision (:140), missing, duplicate or undeclared rows (:145, :183, :189), missing evidence (:195), dispatch INPUT_TAG (:790). Wiring: release.yml:124, docker.yml:68, ci.yml:527. The ci.yml job is advisory off a tag; tag-time enforcement is proven by the unit tests. test_scope_contract_interface.py is not run by any workflow. SUPPLEMENTARY EVIDENCE 2026-09-28 (#1846, merged 772641d58; closes #1813): the release-tooling tests now block the run. Red-first: wiring test fails in 36359923867 (report-only job, run passed = the defect); fixed behaviour: 36360225906 turns the run red; green CI 36362732033."
     },
     {
       "id": "NFR.DEMO.1",
@@ -989,11 +989,19 @@
     },
     {
       "id": "MIK-7570.DOCS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "docs/runbooks/backup-restore-and-keys.md",
+        "docs/TEAM_DEPLOYMENT.md",
+        "docs/UPGRADING-4.0.md",
+        "docs/CLIENTS.md",
+        "tests/team_deployment_guide_claims.rs",
+        "tests/upgrading_summary_rows.rs",
+        "tests/client_matrix_claims.rs"
+      ],
+      "note": "MET 2026-09-28. All four parts are on the release line: backup/restore and key runbook (#1388), team deployment guide (#1567, 6ea4c0902), reconciled upgrade guide (#1624, 2863510ae), client matrix (#1768, f62e63c12). Each later part carries doc-claim tests that fail when the text drifts from the code: tests/team_deployment_guide_claims.rs, tests/upgrading_summary_rows.rs, tests/client_matrix_claims.rs. Green dispatch CI run 36380385470 on release-line 2f743e582 (Tests job 108794768746): relative_links_and_anchors_resolve, gateway_config_block_loads, helm_mode_tables_match_the_chart, cleartext_table_lists_every_variant, defaults_table_matches_the_code, every_number_has_a_row_and_every_gap_is_explained, intro_lists_cover_every_item, superseded_items_point_at_their_successor, walkthrough_commands_and_checks_are_real, every_export_target_has_a_row_and_parses, each_row_matches_the_exporter_for_that_client, every_row_is_backed_by_a_recorded_run_or_unverified and verified_rows_agree_with_the_supported_matrix all ok. Doc-claim mutants each reddened their named test: #1567 8 of 8 (throwaway PRs #1595-#1602, e.g. anchor run 36336470184, cleartext-row run 36336474546); #1624 4 of 4 (#1701-#1704, e.g. gap-row 36343313498, intro-list 36343317938, superseded 36343322388); #1768 (#1848-#1851, e.g. target 36360155579, key 36360094074). Each part's final head had two independent reviews: SHIP, SHIP. The runbook part (#1388) is prose with claims checked at source and has no doc-claim test."
     },
     {
       "id": "MIK-7596.OWNER.1",
