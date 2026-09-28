@@ -144,12 +144,7 @@ fn s03_fifo_authority_refuses_promptly_and_preserves_original() {
     let original = std::fs::read(&path).unwrap();
     let backup = root.path().join("saved-authority.json");
     std::fs::rename(&path, &backup).unwrap();
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &path,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .expect("create actual FIFO in private fixture root");
+    crate::test_fifo::make_fifo(&path);
     assert!(
         std::fs::symlink_metadata(&path)
             .unwrap()
