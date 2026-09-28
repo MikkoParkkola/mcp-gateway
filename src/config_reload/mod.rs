@@ -1431,6 +1431,29 @@ pub struct ReloadContext {
     /// that never wrote one — the reload step then reports nothing rather
     /// than inventing an empty store and revoking everything.
     identity_grants: Option<Arc<IdentityGrantSink>>,
+    /// The reload's file load: config parse plus env-file reads.
+    load: LoadPatch,
+    /// Starts `load` on a thread of its own.
+    #[allow(dead_code, reason = "red-first stub")]
+    spawn: SpawnLoad,
+    /// One load thread at a time, held until that thread exits.
+    #[allow(dead_code, reason = "red-first stub")]
+    load_slot: Arc<tokio::sync::Semaphore>,
+}
+
+/// The reload's file load; a field so a test can stall or fail it.
+type LoadPatch = fn(
+    &std::path::Path,
+    &Arc<LiveConfig>,
+    &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String>;
+
+/// How a reload starts its load off the async workers.
+type SpawnLoad = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+#[allow(clippy::unnecessary_wraps, reason = "red-first stub")]
+fn spawn_load_thread(_load: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    Ok(())
 }
 
 impl ReloadContext {
@@ -1457,7 +1480,26 @@ impl ReloadContext {
                 ResolvedEnvFiles::default(),
             )),
             identity_grants: None,
+            load: load_config_patch,
+            spawn: spawn_load_thread,
+            load_slot: Arc::new(tokio::sync::Semaphore::new(1)),
         }
+    }
+
+    /// Replace the file load, so a test can stall, fail or observe it.
+    #[cfg(test)]
+    #[must_use]
+    fn with_load(mut self, load: LoadPatch) -> Self {
+        self.load = load;
+        self
+    }
+
+    /// Replace how the load thread starts, so a test can refuse it.
+    #[cfg(test)]
+    #[must_use]
+    fn with_spawn(mut self, spawn: SpawnLoad) -> Self {
+        self.spawn = spawn;
+        self
     }
 
     /// Attach the grant sink a reload publishes into.
@@ -1689,7 +1731,7 @@ impl ReloadContext {
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        let evaluated = load_config_patch(&self.config_path, &self.live_config, &self.env)?;
+        let evaluated = (self.load)(&self.config_path, &self.live_config, &self.env)?;
         if let Some(field) = self
             .live_config
             .running()
@@ -2098,6 +2140,9 @@ mod grant_change_trigger_tests;
 
 #[cfg(test)]
 mod grant_reload_trigger_tests;
+
+#[cfg(test)]
+mod reload_load_tests;
 
 #[cfg(test)]
 mod tests;
