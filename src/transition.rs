@@ -106,6 +106,7 @@ impl TransitionTracker {
     /// `false`, recording nothing, when `to` would be a new pair and the
     /// tracker already holds `max_pairs` distinct pairs; an existing pair is
     /// always counted.
+    #[allow(dead_code, reason = "red-first stub: the fix commit uses it")]
     pub(crate) fn record_pair(&self, _from: &str, _to: &str, _max_pairs: usize) -> bool {
         true
     }

@@ -52,6 +52,7 @@ pub struct AnomalyDetector {
     /// Key: `session_id`, Value: last tool key (`"server:tool"`).
     last_tool: DashMap<String, String>,
     /// Per-identity scoring locks, striped by a hash of the identity.
+    #[allow(dead_code, reason = "red-first stub: the fix commit uses it")]
     stripes: Box<[parking_lot::Mutex<()>]>,
 }
 
@@ -203,11 +204,13 @@ impl AnomalyDetector {
     }
 
     /// Calls answered [`Observation::WarmingUp`] since start.
+    #[allow(dead_code, reason = "red-first stub: the fix commit uses it")]
     pub(crate) fn warming_up_count(&self) -> u64 {
         0
     }
 
     /// New transitions not learned because the learned-pair map was full.
+    #[allow(dead_code, reason = "red-first stub: the fix commit uses it")]
     pub(crate) fn pairs_dropped_count(&self) -> u64 {
         0
     }
