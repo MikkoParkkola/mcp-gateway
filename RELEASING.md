@@ -68,7 +68,10 @@ First land the changelog. Pull requests add `changelog.d/<number>.<type>.md` rat
 than editing the shared section, so the release folds them in: on a branch cut from
 the release line, run the commands below, rename `## [Unreleased]` to the release
 heading, add a new empty `## [Unreleased]` above it, and merge that as a pull request. The *Changelog fragment* check accepts a
-`CHANGELOG.md` edit only in a pull request that also deletes fragments.
+`CHANGELOG.md` edit only in a pull request that deletes fragments and leaves none, and
+a fragment may be deleted only in such a pull request. A release with no pending
+fragments needs no fold; if its heading rename still edits `CHANGELOG.md`, apply the
+`no-changelog` label.
 
 ```sh
 python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # review

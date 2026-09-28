@@ -77,10 +77,25 @@ def check(
         and FRAGMENT.match(path.split("/", 1)[1])
         for status, path in changes
     )
-    if any(path == "CHANGELOG.md" for _, path in changes) and not folds:
+    edits_changelog = any(path == "CHANGELOG.md" for _, path in changes)
+    if edits_changelog and not folds:
         errors.append(
             f"this PR edits CHANGELOG.md; put the entry in {FRAGMENT_DIR}/<number>.<type>.md "
             f"instead, or apply the '{SKIP_LABEL}' label"
+        )
+    # A fragment leaves only by being folded into CHANGELOG.md; deleting one
+    # any other way loses another PR's entry.
+    deleted = [
+        path
+        for status, path in changes
+        if status.startswith("D")
+        and path.startswith(f"{FRAGMENT_DIR}/")
+        and FRAGMENT.match(path.split("/", 1)[1])
+    ]
+    if deleted and not (edits_changelog and folds):
+        errors.append(
+            f"this PR deletes {', '.join(deleted)} without folding every fragment into "
+            f"CHANGELOG.md (scripts/release/changelog_fragments.py assemble)"
         )
     return errors
 

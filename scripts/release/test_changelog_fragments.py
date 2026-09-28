@@ -6,7 +6,9 @@
 import contextlib
 import importlib.util
 import io
+import os
 import pathlib
+import subprocess
 import tempfile
 import unittest
 
@@ -144,7 +146,9 @@ class Check(unittest.TestCase):
 
     def test_a_partial_fold_may_not_edit_the_changelog(self):
         changes = [("M", "CHANGELOG.md"), ("D", "changelog.d/5.fixed.md")]
-        self.assertEqual(len(cf.check(changes, set(), ["6.added.md", ".gitkeep"])), 1)
+        errors = cf.check(changes, set(), ["6.added.md", ".gitkeep"])
+        self.assertTrue(any("edits CHANGELOG.md" in e for e in errors), errors)
+        self.assertTrue(any("without folding" in e for e in errors), errors)
 
     def test_deleting_the_placeholder_is_not_a_release_fold(self):
         self.assertEqual(len(cf.check([("M", "CHANGELOG.md"), ("D", "changelog.d/.gitkeep")], set())), 1)
@@ -153,7 +157,69 @@ class Check(unittest.TestCase):
         self.assertEqual(len(cf.check([("M", "src/a.rs"), ("M", "changelog.d/1.fixed.md")], set())), 1)
 
     def test_deleting_a_fragment_does_not_count_as_adding_one(self):
-        self.assertEqual(len(cf.check([("M", "src/a.rs"), ("D", "changelog.d/1.fixed.md")], set())), 1)
+        errors = cf.check([("M", "src/a.rs"), ("D", "changelog.d/1.fixed.md")], set())
+        self.assertTrue(any("adds no changelog.d" in e for e in errors))
+
+    def test_deleting_a_fragment_outside_a_fold_fails(self):
+        errors = cf.check([("D", "changelog.d/1.fixed.md")], set())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("without folding", errors[0])
+
+
+class CheckAgainstGit(unittest.TestCase):
+    """`check` end to end: the git diff, the fragment listing and labels."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.tmp.name)
+        self.saved = cf.ROOT
+        cf.ROOT = self.root
+        self.git("init", "-q", "-b", "base")
+        (self.root / "src").mkdir()
+        (self.root / "changelog.d").mkdir()
+        (self.root / "src/lib.rs").write_text("fn a() {}\n", encoding="utf-8")
+        (self.root / "changelog.d/.gitkeep").write_text("", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "base")
+        self.git("switch", "-qc", "pr")
+
+    def tearDown(self):
+        cf.ROOT = self.saved
+        self.tmp.cleanup()
+
+    def git(self, *args):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+            cwd=self.root, check=True, capture_output=True,
+        )
+
+    def run_check(self, labels=""):
+        os.environ["PR_LABELS"] = labels
+        try:
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                code = cf.main(["check", "--base", "base", "--head", "HEAD"])
+        finally:
+            del os.environ["PR_LABELS"]
+        return code, err.getvalue()
+
+    def test_a_src_commit_without_a_fragment_fails(self):
+        (self.root / "src/lib.rs").write_text("fn b() {}\n", encoding="utf-8")
+        self.git("commit", "-qam", "change")
+        code, err = self.run_check()
+        self.assertEqual(code, 1)
+        self.assertIn("adds no changelog.d", err)
+
+    def test_the_label_waives_it(self):
+        (self.root / "src/lib.rs").write_text("fn b() {}\n", encoding="utf-8")
+        self.git("commit", "-qam", "change")
+        self.assertEqual(self.run_check("docs, no-changelog")[0], 0)
+
+    def test_a_committed_fragment_passes(self):
+        (self.root / "src/lib.rs").write_text("fn b() {}\n", encoding="utf-8")
+        (self.root / "changelog.d/7.fixed.md").write_text("- b (#7)\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "change")
+        self.assertEqual(self.run_check()[0], 0)
 
 
 class Cli(unittest.TestCase):
