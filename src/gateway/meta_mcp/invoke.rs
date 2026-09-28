@@ -2254,7 +2254,6 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
 
         // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
         // being handed a continuation envelope it has no vocabulary for. The
