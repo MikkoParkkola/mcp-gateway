@@ -2373,7 +2373,7 @@ impl MetaMcp {
                 Err(crate::gateway::input_bridge::BridgeError::Delivery {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
-                }) => {}
+                }) => return Err(Error::json_rpc(-32003, "no session")),
                 // Out of rounds, not out of options: the backend is parked on
                 // its last question, so the caller is handed that round to
                 // resume, sealed like any other (#569). The LAST round's body,
