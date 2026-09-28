@@ -40,20 +40,19 @@ pub struct MigratedCredential {
 /// gateway always serves its local operator; an HTTP gateway only when this
 /// configuration asserts one user. Both answers come from the predicate the
 /// gateway itself installs under, never from a second copy of its terms.
-/// Both name the limit: the MCP-backend mint still requires a verified
-/// identity, so the sole operator reaches the grant only through a REST
-/// capability bound to the account.
+/// Both name the limit: the direct `/mcp/{name}` route still requires a
+/// verified identity; REST capabilities and `gateway_invoke` on an MCP
+/// backend bound to the account serve the sole operator (#1961).
 fn reachability(config: &crate::config::Config) -> &'static str {
     use crate::gateway::{ServeMode, sole_operator_asserted};
     debug_assert!(sole_operator_asserted(config, ServeMode::Stdio));
     if sole_operator_asserted(config, ServeMode::Http) {
         "reachable over stdio, and over HTTP by callers this gateway authenticates, \
-         through a REST capability bound to this account; an MCP backend bound to it \
-         still needs a verified end-user identity"
+         through a REST capability or an MCP backend bound to this account; the direct \
+         /mcp/{name} route still needs a verified end-user identity"
     } else {
         "reachable over stdio only; this configuration does not expose it over HTTP. \
-         That covers a REST capability bound to this account; an MCP backend bound to it \
-         still needs a verified end-user identity"
+         That covers a REST capability or an MCP backend bound to this account"
     }
 }
 

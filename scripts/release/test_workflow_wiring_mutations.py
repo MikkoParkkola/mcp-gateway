@@ -1472,6 +1472,136 @@ CASES += [
      '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "release commit: $GITHUB_SHA"\n', CAUGHT),
 ]
 
+# Every installed cosign stays past the verification advisories.
+CASES += [
+    ("cosign-pin-downgraded", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     CAUGHT),
+    ("cosign-pin-quoted-and-downgraded", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: 'v2.5.2'\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-left-to-the-installer-default", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-quoted-at-the-floor", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", TOLERATED),
+    # Any workflow file counts, not only the ones that install cosign today.
+    ("cosign-installed-unpinned-in-another-workflow", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n"
+     "      - name: Run the full-burst ledger\n", CAUGHT),
+    # A quoted action reference is still the installer and still needs the pin.
+    ("cosign-installed-unpinned-with-a-quoted-uses", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n"
+     "      - name: Run the full-burst ledger\n", CAUGHT),
+    ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml",
+     "        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n        with:\n          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    # The push-guard inventory must still see a quoted installer: a second,
+    # unnamed one with no tag guard is found only by what it uses.
+    ("cosign-installer-quoted-and-unguarded", "ci.yml",
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n",
+     "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n", CAUGHT),
+    # A quoted key is the same key.
+    ("cosign-installed-unpinned-under-a-quoted-uses-key", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      - \"uses\": sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n"
+     "      - name: Run the full-burst ledger\n", CAUGHT),
+    # Any run of spaces after the list dash is the same step.
+    ("cosign-installed-below-the-floor-after-a-wide-dash", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      -   uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n          with:\n            cosign-release: v2.6.4\n"
+     "      - name: Run the full-burst ledger\n", CAUGHT),
+    # A flow-style step still installs cosign; its pin cannot be read.
+    ("cosign-installed-below-the-floor-as-a-flow-mapping", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      - { uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6, with: { cosign-release: v2.6.4 } }\n"
+     "      - name: Run the full-burst ledger\n", CAUGHT),
+    # An alias installs what its anchor names under a name no check reads.
+    ("cosign-installer-reused-through-an-alias", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: &cosign_installer sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - name: Install cosign again\n        uses: *cosign_installer\n        with:\n          cosign-release: v2.5.2\n", CAUGHT),
+    ("cosign-installer-reused-through-a-flow-style-alias", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: &cosign_installer sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - { uses: *cosign_installer, with: { cosign-release: v2.5.2 } }\n", CAUGHT),
+    ("cosign-installer-reused-through-a-numeric-alias", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: &1 sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - uses: *1\n        with:\n          cosign-release: v2.5.2\n", CAUGHT),
+    # GitHub matches an action's owner and repository in any case.
+    ("cosign-installed-below-the-floor-in-another-case", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    ("cosign-installer-in-another-case-and-unguarded", "ci.yml",
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n",
+     "      - uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n"
+     "      - name: Install cosign\n        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))\n", CAUGHT),
+    ("cosign-installer-in-another-case-keeps-its-exemption", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n", TOLERATED),
+    # A pin inside another input's block scalar is text the action never reads.
+    ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          ignored-input: |\n            cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    # A shell redirection or a comment is not a YAML anchor.
+    ("shell-redirection-and-a-comment-are-not-anchors", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      # see &notes\n      - run: true &>/dev/null\n      - name: Run the full-burst ledger\n", TOLERATED),
+    # A double-quoted reference continued after `\\` is one reference to YAML.
+    ("cosign-installer-reference-continued-onto-a-second-line", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - uses: \"sigstore/cosign-\\\n          installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    ("cosign-installer-reference-spelled-with-an-escape", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - uses: \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    # The floor reads the parsed workflow: spellings a text scan misses.
+    ("cosign-installer-with-escaped-key-and-value-below-the-floor", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    ("cosign-installer-flow-step-with-a-quoted-hash-below-the-floor", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - { name: \"Install #1\", uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6, with: { cosign-release: v2.5.2 } }\n      - name: Run the full-burst ledger\n", CAUGHT),
+    # At the floor, only the recogniser check sees it: the inventory and the
+    # rehearsal exemption would read past this installer.
+    ("cosign-installer-with-escaped-key-at-the-floor", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.6.5\n      - name: Run the full-burst ledger\n", CAUGHT),
+    # PyYAML keeps the last of two keys and flattens `<<`; the strict
+    # loader refuses both.
+    ("cosign-pin-given-twice", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          cosign-release: v2.5.2\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-through-a-merge-key", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          <<: { cosign-release: v2.6.5 }\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("release-runs-the-floor-without-its-parser", "release.yml",
+     "      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != \"6.0.2\")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'\n",
+     "", CAUGHT),
+    # The installer's rehearsal exemption applies to it quoted as well.
+    ("cosign-installer-quoted-keeps-its-exemption", "ci.yml",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
+     "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n", TOLERATED),
+    # Under env: the input never reaches the action, which installs its default.
+    ("cosign-pin-moved-under-env", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        env:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-moved-up-a-major", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v3.1.3\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     CAUGHT),
+]
+
 # Release jobs restore no cache: one case per way one comes back.
 CASES += [
     ("release-verify-restores-the-rust-cache", "release.yml",
@@ -1509,6 +1639,8 @@ _HOSTED_PY_STEP = _HOSTED_PY + (
     '      # but which that job skips here. Without this, a throwaway meant to show\n'
     '      # a workflow-wiring or release-script test going red passes on cargo\n'
     '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
+    '      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n'
+    '        run: python3 -c \'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")\' 2>/dev/null || python3 -m pip install --user --quiet \'pyyaml==6.0.2\'\n'
     '      - name: Release tooling Python suites\n'
     '        run: |\n'
     '          set -uo pipefail\n'

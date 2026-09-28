@@ -65,7 +65,7 @@ fn cached_meta(failsafe: &FailsafeConfig, script: Vec<Value>) -> (MetaMcp, Arc<A
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "srv",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         failsafe,
         Duration::from_secs(300),
     ));
