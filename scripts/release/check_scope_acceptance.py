@@ -367,6 +367,10 @@ def inspect_contract(root, document, data, baseline):
             # Nothing is still held by someone once it is finished, and a row
             # claiming both would keep a closed criterion on the held list.
             errors.append(f"{ident}: a met criterion cannot still be blocked")
+        elif row["blocked_on"] != "none" and row["status"] == "waived":
+            # A waiver is a final ruling too. Left blocked, the row would ship
+            # as waived while the burnup still lists it as held.
+            errors.append(f"{ident}: a waived criterion cannot still be blocked")
         if not isinstance(row["note"], str) or not row["note"].strip():
             errors.append(f"{ident}: a verdict needs a nonempty explanatory note")
         errors.extend(
@@ -382,6 +386,10 @@ def inspect_contract(root, document, data, baseline):
     # governs, so the approved set cannot keep holding permission for a waiver
     # nobody is taking; dropping the row instead is caught just above as a
     # missing verdict, since the requirements document still declares it.
+    # Dropping it from the document as well leaves nothing here to see, and
+    # the scope is needed because test fixtures run their own ledgers; the
+    # unscoped half is pinned against the live ledger by
+    # test_the_approved_set_is_exactly_the_live_ledgers_waivers.
     for ident in sorted((APPROVED_WAIVERS & seen) - waived_ids):
         errors.append(
             f"{ident}: approved as a waiver but no longer waived; remove it"
