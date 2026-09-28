@@ -81,7 +81,7 @@ pub enum ExportTarget {
     Windsurf,
     /// Cline (`.cline/mcp_servers.json`, workspace-relative)
     Cline,
-    /// Zed (`~/.config/zed/settings.json`)
+    /// Zed (platform-specific: Zed's own config directory)
     Zed,
     /// Generic: write to stdout
     Generic,

@@ -85,5 +85,4 @@
 838 src/tool_registry.rs
 836 src/gateway/meta_mcp_helpers_chain_tests.rs
 817 tests/gh462_config_preservation.rs
-811 src/capability/executor/mod.rs
 804 src/cli/subcommands.rs

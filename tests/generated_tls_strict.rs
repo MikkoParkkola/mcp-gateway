@@ -173,3 +173,91 @@ fn external_ca_server_leaf_reuses_prespecified_issuer_ski() {
 fn external_ca_client_leaf_reuses_prespecified_issuer_ski() {
     check_leaf(&external_ca(), false);
 }
+
+/// The SANs of a server leaf issued with `san_dns`, in order, as text.
+fn issued_sans(san_dns: &[&str]) -> Vec<String> {
+    let ca = generated_ca();
+    let params = LeafCertParams {
+        cn: "gateway",
+        ou: None,
+        san_dns: san_dns.iter().map(ToString::to_string).collect(),
+        san_uris: vec![],
+        validity_days: 1,
+    };
+    let leaf = CertGenerator::issue_leaf(&params, &ca.cert_pem, &ca.key_pem).unwrap();
+    inspect(&leaf.cert_pem, |cert| {
+        let san = cert
+            .subject_alternative_name()
+            .unwrap()
+            .expect("a SAN extension");
+        san.value
+            .general_names
+            .iter()
+            .map(|name| match name {
+                GeneralName::DNSName(dns) => format!("dns:{dns}"),
+                GeneralName::IPAddress(bytes) => match bytes.len() {
+                    4 => format!(
+                        "ip:{}",
+                        std::net::Ipv4Addr::from(<[u8; 4]>::try_from(*bytes).unwrap())
+                    ),
+                    16 => format!(
+                        "ip:{}",
+                        std::net::Ipv6Addr::from(<[u8; 16]>::try_from(*bytes).unwrap())
+                    ),
+                    n => format!("ip:<{n} bytes>"),
+                },
+                other => format!("other:{other:?}"),
+            })
+            .collect()
+    })
+}
+
+/// #1955: a TLS client dialling an address matches IP SANs only, so an IP
+/// literal given as a "DNS" entry must be written as an IP SAN.
+#[test]
+fn an_ip_literal_in_san_dns_becomes_an_ip_san() {
+    assert_eq!(
+        issued_sans(&[
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+            "10.1.2.3",
+            "fd00::1"
+        ]),
+        [
+            "dns:localhost",
+            "ip:127.0.0.1",
+            "ip:::1",
+            "ip:::1",
+            "ip:10.1.2.3",
+            "ip:fd00::1"
+        ]
+    );
+}
+
+/// Names stay DNS SANs, and so does anything that is not a plain IP literal:
+/// brackets are an IPv6 spelling, `127.1` is not a dotted quad, and a zone id
+/// has no IP SAN form.
+#[test]
+fn a_name_or_bracketed_v4_stays_a_dns_san() {
+    assert_eq!(
+        issued_sans(&["gateway.test", "[127.0.0.1]", "127.1", "fe80::1%eth0"]),
+        [
+            "dns:gateway.test",
+            "dns:[127.0.0.1]",
+            "dns:127.1",
+            "dns:fe80::1%eth0"
+        ]
+    );
+}
+
+/// `--san-dns "localhost, 127.0.0.1"` is a natural way to type a list; the
+/// space is not part of either entry.
+#[test]
+fn spaces_around_san_entries_are_ignored() {
+    assert_eq!(
+        issued_sans(&[" localhost", " 127.0.0.1 "]),
+        ["dns:localhost", "ip:127.0.0.1"]
+    );
+}
