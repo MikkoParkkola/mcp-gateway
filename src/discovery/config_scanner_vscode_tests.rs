@@ -27,7 +27,7 @@ async fn servers_under_mcp_servers_are_discovered() {
             "inputs": [],
             "servers": {
               "files": {"type": "stdio", "command": "npx", "args": ["-y", "fs-server"], "env": {"K": "v"}},
-              "remote": {"type": "http", "url": "https://mcp.example.test/mcp"}
+              "remote": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer t"}}
             }
           }
         }"#,
@@ -41,10 +41,29 @@ async fn servers_under_mcp_servers_are_discovered() {
         "only the entries under mcp.servers"
     );
     assert!(servers.iter().all(|s| s.source == DiscoverySource::VsCode));
-    assert!(
-        matches!(&servers[0].transport, TransportConfig::Stdio { command, .. } if command.starts_with("npx")),
-        "stdio entry keeps its command: {:?}",
-        servers[0].transport
+    match &servers[0].transport {
+        TransportConfig::Stdio { command, .. } => assert_eq!(
+            crate::transport::split_command(command),
+            Some(vec![
+                "npx".to_string(),
+                "-y".to_string(),
+                "fs-server".to_string()
+            ]),
+            "stdio entry keeps its command and args"
+        ),
+        other => panic!("expected stdio, got {other:?}"),
+    }
+    assert_eq!(
+        servers[0].env.expose().get("K").map(String::as_str),
+        Some("v")
+    );
+    assert_eq!(
+        servers[1]
+            .headers
+            .expose()
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer t")
     );
     match &servers[1].transport {
         TransportConfig::Http { http_url, .. } => {
@@ -59,4 +78,22 @@ async fn keys_directly_under_mcp_are_not_servers() {
     // `mcp.<name>` was never a VS Code shape; an entry there is not imported.
     let servers = parse(r#"{"mcp": {"stray": {"command": "npx"}}}"#).await;
     assert!(servers.is_empty(), "got {servers:?}");
+}
+
+#[tokio::test]
+async fn a_settings_file_with_comments_and_trailing_commas_is_read() {
+    let servers = parse(
+        r#"{
+          // VS Code writes settings.json as JSONC.
+          "mcp": {
+            /* user servers */
+            "servers": {
+              "files": {"command": "npx", "args": ["-y", "fs-server",],},
+            },
+          },
+        }"#,
+    )
+    .await;
+    let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["files"]);
 }
