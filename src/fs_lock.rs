@@ -27,13 +27,46 @@ pub(crate) struct ExclusiveFileLock {
     // nothing reads the field; holding it open for the guard's lifetime IS
     // the lock.
     #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "on non-unix the open handle is the lock")
+        not(any(unix, windows)),
+        expect(dead_code, reason = "only the unix and Windows paths read the handle")
     )]
     file: File,
+    #[cfg(windows)]
+    pins: Vec<DirPin>,
 }
 
+/// A judged store directory. On Windows its handle, held without delete
+/// sharing for exactly the custody lifetime, so neither the directory nor any
+/// ancestor can be renamed or swapped for a junction while the store is open
+/// (design §2.2, R2-1). Empty elsewhere: a mode check holds nothing.
+pub(crate) struct DirPin(
+    #[cfg(windows)]
+    #[expect(dead_code, reason = "held open, never read")]
+    pub(crate) File,
+);
+
 impl ExclusiveFileLock {
+    fn held(file: File) -> Self {
+        Self {
+            file,
+            #[cfg(windows)]
+            pins: Vec::new(),
+        }
+    }
+
+    /// Keep a judged directory open for as long as this custody lasts.
+    #[cfg_attr(not(windows), expect(clippy::needless_pass_by_value))]
+    pub(crate) fn pinning(
+        #[cfg_attr(not(windows), allow(unused_mut))] mut self,
+        pin: DirPin,
+    ) -> Self {
+        #[cfg(windows)]
+        self.pins.push(pin);
+        #[cfg(not(windows))]
+        let DirPin() = pin;
+        self
+    }
+
     /// Acquire a lifetime custody lock without waiting for another process.
     ///
     /// Unlike the legacy blocking helper, unsupported platforms refuse custody.
@@ -51,10 +84,55 @@ impl ExclusiveFileLock {
         }
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(|error| io::Error::from_raw_os_error(error.raw_os_error()))?;
-        Ok(Self { file })
+        Ok(Self::held(file))
     }
 
-    #[cfg(not(unix))]
+    /// Windows: an owner-only sidecar shared for read and write (never
+    /// delete), so a contender can open it and meet the lock itself.
+    #[cfg(windows)]
+    pub(crate) fn try_acquire(lock_path: &Path) -> io::Result<Self> {
+        use crate::private_fs::{Share, create_file_private, judge_file};
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+        };
+        let file = match create_file_private(lock_path, Share::LockSidecar) {
+            // An existing sidecar is judged before it is trusted, exactly as a
+            // unix sidecar with a foreign mode would be refused.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let file = OpenOptions::new()
+                    .access_mode(GENERIC_READ | GENERIC_WRITE | READ_CONTROL)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                    .open(lock_path)
+                    .map_err(|error| {
+                        // A holder that shares less than read/write is still a
+                        // holder (design R8): the store is owned, not broken.
+                        if error.raw_os_error() == Some(32) {
+                            io::Error::from(io::ErrorKind::WouldBlock)
+                        } else {
+                            error
+                        }
+                    })?;
+                judge_file(&file).map_err(|reason| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("custody lock is not private: {reason:?}"),
+                    )
+                })?;
+                file
+            }
+            other => other?,
+        };
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
+            std::fs::TryLockError::Error(error) => error,
+        })?;
+        Ok(Self::held(file))
+    }
+
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn try_acquire(_lock_path: &Path) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -66,7 +144,8 @@ impl ExclusiveFileLock {
     /// every platform: `Ok(None)` when another handle holds it, `Err` for any
     /// other failure (a directory in the way, a read-only volume, locking
     /// unsupported). A separate constructor from [`Self::try_acquire`], which
-    /// must stay unavailable off unix: the task store relies on that refusal.
+    /// judges its sidecar's privacy on Windows and refuses on any platform
+    /// with neither unix nor Windows custody.
     pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Option<Self>> {
         #[cfg(test)]
         count_attempt(lock_path);
@@ -75,7 +154,7 @@ impl ExclusiveFileLock {
         set_owner_only(&mut opts);
         let file = opts.open(lock_path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Some(Self { file })),
+            Ok(()) => Ok(Some(Self::held(file))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => Err(e),
         }
@@ -91,7 +170,7 @@ impl ExclusiveFileLock {
         set_owner_only(&mut opts);
         let file = opts.open(lock_path)?;
         lock_exclusive(&file)?;
-        Ok(Self { file })
+        Ok(Self::held(file))
     }
 }
 
@@ -101,6 +180,16 @@ impl Drop for ExclusiveFileLock {
         // File close alone leaves a fork/dup reference holding the same lock.
         // Drop cannot return an unlock error; File still closes without panic.
         let _ = rustix::fs::flock(&self.file, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
+/// Windows releases a closed handle's byte-range locks "when resources allow",
+/// not at close, so a reopen right after a drop can still meet the old lock.
+/// Unlocking first makes the release synchronous.
+#[cfg(windows)]
+impl Drop for ExclusiveFileLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
     }
 }
 
