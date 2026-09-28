@@ -81,6 +81,20 @@ python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # rev
 python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
 ```
 
+For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
+section, so that the release leaves exactly one `[4.0.0]` heading:
+
+1. Rename `## [Unreleased]` to `## [4.0.0] - <date>`.
+2. Move every bullet of `## [4.0.0] - Unreleased`, and its upgrading and performance-numbers
+   notes, into the matching subsection of the new heading. Copy (don't move) into the new heading every
+   bullet that appears only in `[4.0.0-beta.1]` or `[4.0.0-beta.2]`. The beta sections keep their bullets as
+   history. Create a missing subsection in the order Added, Changed, Removed, Fixed, Security.
+3. Delete the old heading and its "Not tagged yet" note.
+4. Reword the beta prefaces so each one says what that beta was, in the past tense, and points to
+   the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
+   criteria open or lists known gaps.
+5. Add a new empty `## [Unreleased]` above.
+
 Then, once that pull request has merged:
 
 ```sh
