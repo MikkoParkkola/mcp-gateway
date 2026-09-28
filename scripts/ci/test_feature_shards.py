@@ -21,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def shard_combos(workflow: dict) -> dict[str, list[str]]:
     include = workflow["jobs"]["feature-combos"]["strategy"]["matrix"].get("include") or []
-    include = [e for e in include if "shard" in e and "combos" in e]
+    incomplete = [e for e in include if not (isinstance(e, dict) and e.get("shard") and e.get("combos"))]
+    if incomplete:
+        # Actions still launches such a row, and its loop checks nothing.
+        raise SystemExit(f"feature-shards: matrix rows without a shard name or combos: {incomplete}")
     names = [e["shard"] for e in include]
     dup = sorted({n for n in names if names.count(n) > 1})
     if dup:
