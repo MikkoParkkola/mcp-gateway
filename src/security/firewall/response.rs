@@ -88,8 +88,8 @@ impl Firewall {
                 .prompt_scans
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // Detection always reads what the client receives. With redaction
-            // on that is already redacted text; with it off, only the quote is
-            // masked (a token cut by the 200-char quote can stay partial).
+            // on that is already redacted text; with it off the raw quote is
+            // withheld, since masking a 200-char cut can miss a split token.
             let matches = self.response_scanner.scan_response(
                 correlation.external_server,
                 correlation.external_tool,
@@ -102,21 +102,17 @@ impl Firewall {
                 matched: if self.config.credential_redaction {
                     matched.matched_fragment
                 } else {
-                    self.mask_credentials(matched.matched_fragment)
+                    QUOTE_WITHHELD.to_owned()
                 },
                 location: FindingLocation::ResponseContent,
             }));
         }
         findings
     }
-
-    /// Mask credential spans in an audit quote; the findings are discarded.
-    fn mask_credentials(&self, fragment: String) -> String {
-        let mut text = Value::String(fragment);
-        self.redactor.scan_and_redact(&mut text);
-        text.as_str().unwrap_or_default().to_owned()
-    }
 }
+
+/// Audit text for an injection finding while credential redaction is off.
+const QUOTE_WITHHELD: &str = "[quote withheld: credential redaction is off]";
 
 fn strongest_action(left: FirewallAction, right: FirewallAction) -> FirewallAction {
     match (left, right) {

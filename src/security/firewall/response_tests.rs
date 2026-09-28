@@ -746,7 +746,7 @@ fn firewall_response_credential_in_object_key() {
 /// #2114: an injection finding quotes backend text; a credential beside the
 /// marker (in a key, or in a value where the 200-char quote cuts the token)
 /// must not reach the audit log through that finding. With redaction off the
-/// payload is untouched, only the quote is masked, and detection reads raw text.
+/// payload is untouched, the quote is withheld, and detection reads raw text.
 #[test]
 fn firewall_response_injection_finding_masks_a_credential() {
     let straddle = format!("{INJECTION} {} {CANARY}", "x".repeat(160));
@@ -780,7 +780,7 @@ fn firewall_response_injection_finding_masks_a_credential() {
         let log = std::fs::read_to_string(&path).unwrap();
         assert!(log.contains("prompt_injection"), "{log}");
         assert!(
-            !log.contains("ghp_"),
+            !log.contains("ghp_") && !log.contains("redis://"),
             "credential reached the audit log: {log}"
         );
         if !credential_redaction {

@@ -1943,7 +1943,7 @@ credential or prompt injection placed in an object key reached the client unchan
 - A key finding's description ends in `(object key)`, and its matched text is the redacted
   key, never the credential. A prompt-injection finding's matched text, from a key or a
   value, has credentials masked too. With `credential_redaction` off the payload is left
-  as it is and only that quoted text is masked.
+  as it is and the finding carries no quote at all.
 
 **Action:** none for most deployments. If a backend uses credential-shaped strings as
 object keys, expect those keys to be renamed; use other key names.
