@@ -2241,17 +2241,17 @@ class WorkflowWiring(unittest.TestCase):
 
     def test_no_workflow_reuses_yaml_through_an_alias(self):
         # Actions resolves YAML aliases, and these checks read the text: a step
-        # `uses: *installer` (or a whole step or job reused as `*name`) installs
-        # cosign under a name no check sees. None is used today, so any alias
-        # in a value position fails here rather than escaping the floor.
-        alias = re.compile(r"""^\s*(?:-\s+)?(?:["']?[\w-]+["']?\s*:\s*)?\*[\w-]+\s*(?:#.*)?$""")
+        # `uses: *installer`, flow-style or not, installs cosign under a name
+        # no check sees. An alias needs an anchor in the same file, so no
+        # anchor anywhere means no alias can resolve. None is used today.
+        anchor = re.compile(r"(?:^|[\s:\[{,])&[A-Za-z_][\w-]*(?=\s|$|[,\]}])")
         found = [
             f"{path.name}:{number}: {line.strip()}"
             for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-            if alias.match(line)
+            if anchor.search(line)
         ]
-        self.assertEqual(found, [], "a YAML alias hides what a step installs from these checks")
+        self.assertEqual(found, [], "a YAML anchor lets an alias hide what a step installs from these checks")
 
     def test_throwaway_runs_carry_the_release_tooling_python_suites(self):
         # A throwaway pull request skips `release-script-tests`, so without its
