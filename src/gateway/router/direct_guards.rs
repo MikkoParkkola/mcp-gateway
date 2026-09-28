@@ -71,7 +71,10 @@ impl DirectRouteGuards {
         if response_blocked(state, call.server, params, client, &mut response) {
             response = refusal(response.id.clone(), &Error::ResponseFirewallRefused);
         }
-        if !response.excludes_client_accounting()
+        // Success only on an answered result, as on meta (`handlers.rs`): a
+        // gate refusal must not reset a breaker the caller had tripped.
+        if response.error.is_none()
+            && !response.excludes_client_accounting()
             && let Some(client) = client
         {
             state.auth_config.record_client_success(&client.name);
