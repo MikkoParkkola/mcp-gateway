@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 # The reserved name the fixture capability calls (scripts/dev/smoke-fixture-capability.sh).
 FIXTURE_HOST = "first-run-fixture.example"
 # The value the smoke asserts; no live API answers with this marker.
-PINNED_TEMPERATURE = 21.25
+PINNED_TEMPERATURE = 20.0
 PAYLOAD = {
     "latitude": 60.17,
     "longitude": 24.94,
