@@ -113,15 +113,58 @@ pub(crate) struct Inspection {
 
 /// UTF-16, NUL-terminated; refuses an interior NUL (ADR-016 contract 5).
 fn wide(path: &Path) -> io::Result<Vec<u16>> {
-    let mut w: Vec<u16> = OsStr::new(path).encode_wide().collect();
+    let w: Vec<u16> = OsStr::new(path).encode_wide().collect();
     if w.contains(&0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "path contains NUL",
         ));
     }
+    let mut w = long_form(path, w)?;
     w.push(0);
     Ok(w)
+}
+
+/// std's `get_long_path` rule, so these calls reach every path `std::fs`
+/// does without the long-path opt-in: at or past `CreateDirectoryW`'s 248-unit
+/// limit the absolute path gets the verbatim prefix (`\\?\`, UNC as
+/// `\\?\UNC\`); a verbatim or shorter path reaches Win32 unchanged, and
+/// one long only as written (`..`) reaches it resolved.
+fn long_form(path: &Path, w: Vec<u16>) -> io::Result<Vec<u16>> {
+    const LEGACY_MAX_PATH: usize = 248;
+    let starts = |w: &[u16], p: &str| {
+        p.encode_utf16()
+            .enumerate()
+            .all(|(i, c)| w.get(i) == Some(&c))
+    };
+    if w.is_empty() || starts(&w, r"\\?\") || starts(&w, r"\??\") {
+        return Ok(w);
+    }
+    // GetFullPathNameW: absolute, `/` → `\`, `..` resolved (verbatim skips that).
+    let abs: Vec<u16> = std::path::absolute(path)?
+        .as_os_str()
+        .encode_wide()
+        .collect();
+    if abs.len() + 1 < LEGACY_MAX_PATH {
+        // Short once resolved: the written form unless that is the long one.
+        return Ok(if w.len() + 1 < LEGACY_MAX_PATH {
+            w
+        } else {
+            abs
+        });
+    }
+    let (prefix, rest) = if starts(&abs, r"\\?\") || starts(&abs, r"\??\") {
+        ("", &abs[..])
+    } else if starts(&abs, r"\\.\") {
+        (r"\\?\", &abs[4..])
+    } else if starts(&abs, r"\\") {
+        (r"\\?\UNC\", &abs[2..])
+    } else if abs.get(1) == Some(&u16::from(b':')) {
+        (r"\\?\", &abs[..])
+    } else {
+        ("", &abs[..])
+    };
+    Ok(prefix.encode_utf16().chain(rest.iter().copied()).collect())
 }
 
 /// A zeroed, 8-byte-aligned buffer of at least `bytes` bytes (contract 2).
