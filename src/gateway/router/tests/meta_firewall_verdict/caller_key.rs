@@ -188,8 +188,13 @@ fn call_with(
             "io.modelcontextprotocol/protocolVersion": MODERN,
             "io.modelcontextprotocol/clientCapabilities": {},
             "io.modelcontextprotocol/clientInfo": { "name": "caller-key", "version": "1.0.0" },
-            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: format!("caller-key-{n}"),
         });
+        // No idempotency key: a keyed call is admitted only for an OIDC or
+        // API-key principal (`meta_mcp/admission.rs`), which would stop an
+        // agent- or certificate-only caller AFTER the firewall for a reason
+        // unrelated to its firewall key. Unkeyed calls are admitted under the
+        // default `server.idempotency_key: optional`. That admission gap is
+        // #2207, not this file's subject.
         builder = builder
             .header("mcp-protocol-version", MODERN)
             .header("mcp-method", "tools/call")
