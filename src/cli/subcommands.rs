@@ -731,7 +731,7 @@ pub enum TlsCommand {
         #[arg(long)]
         cn: String,
 
-        /// Comma-separated SAN DNS names (e.g. "gateway.company.com,localhost")
+        /// Comma-separated SANs; an IP literal becomes an IP SAN (e.g. `gw.example,localhost,127.0.0.1,::1`)
         #[arg(long, default_value = "")]
         san_dns: String,
 
