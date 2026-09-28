@@ -139,7 +139,10 @@ impl MetaMcp {
 
     /// S2 spend: budget admission immediately before an actual dispatch.
     /// Returns the warnings to attach to the result.
-    #[cfg_attr(not(feature = "cost-governance"), allow(clippy::unused_self))]
+    #[cfg_attr(
+        not(feature = "cost-governance"),
+        allow(clippy::unused_self, clippy::unnecessary_wraps)
+    )]
     pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Vec<String>> {
         #[cfg(feature = "cost-governance")]
         return self.admit_spend(call.tool, call.api_key_name);

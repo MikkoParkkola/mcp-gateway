@@ -2172,8 +2172,8 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // Still record the error budget failure (already done above via
-                // `record_error_budget`).  The idempotency reservation is left
+                // The error budget already counted this failure (the shared
+                // accounting stage).  The idempotency reservation is left
                 // for the commit below unless the refusal was pre-dispatch.
                 dispatch_error_result(&e, tool, server)
             }
