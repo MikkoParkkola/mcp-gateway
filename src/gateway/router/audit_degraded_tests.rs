@@ -269,19 +269,16 @@ async fn readyz_body(fx: &Fixture) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-/// F20 T1 + `/readyz`. `FailClosed`: the stuck append answers 503 within the
-/// bound, and `/readyz` names the stall.
+/// F20 T1 + `/readyz`. `FailClosed`: the stuck append answers 503 while its
+/// write is still held (only the bound can do that), and `/readyz` names the
+/// stall.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stalled_append_times_out_with_503_and_readyz_reports_stalled() {
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let release = fx.log.stall_next_write_for_test(F20_BOUND);
-    let start = std::time::Instant::now();
+    // A 503 with the write still held is the bound: an unbounded append
+    // would wait for the write and succeed.
     let first = invoke(&fx, 1).await;
-    assert!(
-        start.elapsed() < F20_BOUND * 5,
-        "bounded: {:?}",
-        start.elapsed()
-    );
     assert_audit_unavailable(&first, "stalled call");
     assert!(fx.log.is_stalled());
     let (status, body) = readyz_body(&fx).await;
@@ -299,16 +296,21 @@ async fn best_effort_stall_delivers_result_and_stays_ready() {
     let first = invoke(&fx, 1).await;
     assert!(first.error.is_none(), "{:?}", first.error);
     assert!(fx.log.is_stalled());
-    let start = std::time::Instant::now();
+    // Past the gate's hang guard: a call that queued on the permit would
+    // outlast the held write and clear the stall.
+    fx.log.lift_append_bound_for_test();
     let second = invoke(&fx, 2).await;
     assert!(second.error.is_none(), "{:?}", second.error);
-    assert!(start.elapsed() < F20_BOUND, "no wait while stalled");
+    assert!(
+        fx.log.is_stalled(),
+        "the second call waited for the held write"
+    );
     assert_eq!(readyz(&fx).await, StatusCode::OK);
     release.release();
 }
 
 /// F20 T6. The delivery-attempt append is bounded too: a stall answers 503
-/// within the bound instead of pinning a worker (`FailClosed`).
+/// while its write is still held instead of pinning a worker (`FailClosed`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delivery_attempt_append_is_bounded() {
     use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
@@ -317,7 +319,6 @@ async fn delivery_attempt_append_is_bounded() {
     };
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let release = fx.log.stall_next_write_for_test(F20_BOUND);
-    let start = std::time::Instant::now();
     let response = fx
         .state
         .meta_mcp
@@ -340,11 +341,7 @@ async fn delivery_attempt_append_is_bounded() {
             },
         )
         .await;
-    assert!(
-        start.elapsed() < F20_BOUND * 5,
-        "bounded: {:?}",
-        start.elapsed()
-    );
+    // A 503 with the write still held is the bound.
     assert_audit_unavailable(&response, "stalled delivery");
     assert!(fx.log.is_stalled());
     release.release();
@@ -363,13 +360,13 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
     };
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let release = fx.log.stall_next_write_for_test(F20_BOUND);
-    let start = std::time::Instant::now();
     let withheld = invoke(&fx, 1).await;
     assert_audit_unavailable(&withheld, "stalled call");
     assert!(fx.log.is_stalled());
-    // Refused at once: a delivery append that queued for the permit instead
-    // would take a full bound before failing, and write nothing either way.
-    let delivering = std::time::Instant::now();
+    // Refused at once: past the gate's hang guard, a delivery append that
+    // queued on the permit would outlast the held write, clear the stall
+    // and write a delivery row.
+    fx.log.lift_append_bound_for_test();
     let delivered = fx
         .state
         .meta_mcp
@@ -394,14 +391,8 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
         .await;
     assert_audit_unavailable(&delivered, "delivering the withheld call");
     assert!(
-        delivering.elapsed() < F20_BOUND,
-        "the delivery append waited: {:?}",
-        delivering.elapsed()
-    );
-    assert!(
-        start.elapsed() < F20_BOUND * 5,
-        "bounded: {:?}",
-        start.elapsed()
+        fx.log.is_stalled(),
+        "the delivery append waited for the held write"
     );
     release.release();
     let rows = || -> Vec<Value> {
@@ -411,20 +402,17 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
     };
-    for _ in 0..200 {
-        if rows().iter().any(|r| r.get("request_hash").is_some()) {
-            break;
-        }
+    // The delivery append was refused at once, so the released write is the
+    // only one in flight: once it is out of the kernel, the log is final.
+    // Real time here is only a hang guard.
+    let guard = std::time::Instant::now();
+    while fx.log.write_in_flight_for_test() {
+        assert!(
+            guard.elapsed() < Duration::from_secs(60),
+            "the released write never landed"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    // Let anything queued behind the released write land before reading.
-    for _ in 0..200 {
-        if !fx.log.is_stalled() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    tokio::time::sleep(F20_BOUND * 2).await;
     let rows = rows();
     assert!(
         rows.iter().any(|r| r.get("request_hash").is_some()),

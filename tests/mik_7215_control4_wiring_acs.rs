@@ -31,6 +31,8 @@ fn trained_firewall() -> Arc<Firewall> {
     let cfg = FirewallConfig {
         enabled: true,
         anomaly_detection: true,
+        // One trained transition is the whole fixture, so one is enough.
+        anomaly_min_observations: 1,
         ..FirewallConfig::default()
     };
     Arc::new(Firewall::from_config(cfg, Some(tracker)))
@@ -43,9 +45,9 @@ fn score(firewall: &Firewall, identity: &str, tool: &str) -> Option<f64> {
         .anomaly_score
 }
 
-/// The value a call scores when the identity has no predecessor on record —
-/// `anomaly.rs:156`, the vacant-slot branch.
-const NO_PREDECESSOR: f64 = 0.5;
+/// What a call scores when the identity has no predecessor on record: nothing.
+/// It is warming up (#1756), which is not a score.
+const NO_PREDECESSOR: Option<f64> = None;
 /// The value `srv:tool-b` scores when `srv:tool-a` IS on record, given the
 /// trained edge — `1.0 - confidence`, and the fixture trains confidence 1.0.
 const AFTER_TRAINED_PREDECESSOR: f64 = 0.0;
@@ -71,7 +73,7 @@ fn a_sweep_reclaims_the_anomaly_detectors_state_for_that_identity() {
     // Its second call MUST score against the predecessor, or the fixture is
     // inert and the swept identity's assertion below proves nothing.
     let kept = "identity-kept";
-    assert_eq!(score(&firewall, kept, "tool-a"), Some(NO_PREDECESSOR));
+    assert_eq!(score(&firewall, kept, "tool-a"), NO_PREDECESSOR);
     assert_eq!(
         score(&firewall, kept, "tool-b"),
         Some(AFTER_TRAINED_PREDECESSOR),
@@ -82,7 +84,7 @@ fn a_sweep_reclaims_the_anomaly_detectors_state_for_that_identity() {
 
     // GIVEN the same first call for an identity whose deadline has passed
     let swept = "identity-under-sweep";
-    assert_eq!(score(&firewall, swept, "tool-a"), Some(NO_PREDECESSOR));
+    assert_eq!(score(&firewall, swept, "tool-a"), NO_PREDECESSOR);
     lifecycle.track(swept, now_unix().saturating_sub(1));
 
     // WHEN the sweep runs
@@ -93,7 +95,7 @@ fn a_sweep_reclaims_the_anomaly_detectors_state_for_that_identity() {
     assert_eq!(reclaimed, 1, "the sweep must report the key it removed");
     assert_eq!(
         score(&firewall, swept, "tool-b"),
-        Some(NO_PREDECESSOR),
+        NO_PREDECESSOR,
         "the sweep reported a reclaim but the detector still scored against a \
          predecessor — the handler never fired, or its Weak capture was dead"
     );
