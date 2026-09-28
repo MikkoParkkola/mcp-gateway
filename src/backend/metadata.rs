@@ -348,10 +348,10 @@ impl Backend {
         self.get_tools_for_binding(None, &[]).await
     }
 
-    /// Startup warm-up's fill (#1300).
-    #[allow(dead_code, clippy::unused_async_trait_impl, reason = "red-first stub")]
+    /// Startup warm-up's fill: recorded on the breaker, never admitted or
+    /// charged a token (#1300). Warm-start is its only caller.
     pub(crate) async fn warm_tools(&self) -> Result<Arc<Vec<Tool>>> {
-        Ok(Arc::new(Vec::new()))
+        self.tools_fill(None, &[], FillBound::Warmup, false).await
     }
 
     /// The tool catalogue THIS CALLER's pool slot serves.

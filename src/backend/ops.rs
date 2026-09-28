@@ -408,6 +408,9 @@ impl Backend {
         let rate_limited = entry
             .failsafe
             .record_dispatch_failure(&error.to_string(), latency);
+        if !rate_limited {
+            super::fill_check::note_request_failure(entry);
+        }
         if rate_limited {
             tracing::warn!(
                 error = %error,
@@ -469,7 +472,7 @@ impl Backend {
                     tracing::warn!(latency_ms = latency.as_millis(), "Request rate limited");
                     entry.failsafe.record_rate_limited("rate limited", latency);
                 } else {
-                    entry.failsafe.record_success(latency);
+                    super::fill_check::record_request_success(entry, latency);
                 }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",

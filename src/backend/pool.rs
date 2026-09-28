@@ -116,6 +116,10 @@ pub(crate) struct PooledEntry {
     /// `LIST_FILL_COOLDOWN` of it a stale hit is judged from the held schema
     /// without listing, whatever the failure's class. Stale hits only.
     pub(crate) tools_refresh_failed_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    /// A non-throttle request or request-triggered fill failure was recorded
+    /// since the breaker last ended a success Closed (#1300). While set, a
+    /// warm-up success may not reset an Open breaker: it did not trip it alone.
+    pub(crate) request_failed_since_close: AtomicBool,
 
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
@@ -205,6 +209,7 @@ impl PooledEntry {
             tools_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
+            request_failed_since_close: AtomicBool::new(false),
 
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
