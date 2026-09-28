@@ -128,7 +128,7 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>
         // Growth leaves the file list as it was; only a rotation changes it.
         let stable = seqs(&files) == seqs(&log_files(path)?);
         match read {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e),
             Ok(found) if stable => return Ok(found),
             Ok(_) => {}
