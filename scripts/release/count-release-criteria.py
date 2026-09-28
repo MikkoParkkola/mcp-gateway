@@ -487,6 +487,76 @@ def copied_counts(rollup_text, board_text, ledger):
     return problems
 
 
+# Prose that retires a cluster letter, in every phrasing the rollup uses:
+# "Cluster P left the table", "Cluster B is not in the table", "Cluster E is
+# gone from the table", "Clusters A, C and N have cleared", "K and O have
+# cleared too", "letters P and Q were already used".
+RETIRED_ONE = re.compile(
+    r"\bCluster ([A-Z]) (?:left the table|is not in the table|is gone from the table|closed|cleared)\b"
+)
+RETIRED_MANY = re.compile(
+    r"\b((?:[A-Z], )*[A-Z],? and [A-Z]) have cleared\b"
+    r"|\bClusters ([A-Z]) have cleared\b"
+    r"|\bletters ((?:[A-Z], )*[A-Z](?:,? and [A-Z])?) were already used\b"
+)
+
+
+def reused_cluster_letters(rollup_text, board_text):
+    """A cluster letter names one cluster for the life of the release.
+
+    Row counts cannot see a reused letter: a new cluster that happens to hold
+    as many rows as the closed one it overwrote agrees with every copy of the
+    count. So each letter may head at most one row in the rollup table and one
+    row on the readiness board, and a letter the rollup's own prose retired
+    ("Cluster P left the table", "Clusters A, C ... have cleared") may not come
+    back with open rows in the rollup table. (The board's `rows` column still
+    carries historical counts for closed clusters, so it is not held to this.)
+    """
+    problems = []
+    for label, text in (("rollup", rollup_text), ("readiness board", board_text)):
+        letters = [m.group(1) for m in re.finditer(r"^\|\s*([A-Z])\s*\|", text, re.MULTILINE)]
+        for letter in sorted({x for x in letters if letters.count(x) > 1}):
+            problems.append(f"{label} names cluster {letter} on more than one row")
+    retired = set(RETIRED_ONE.findall(rollup_text))
+    for groups in RETIRED_MANY.findall(rollup_text):
+        retired |= set(re.findall(r"\b[A-Z]\b", " ".join(groups)))
+    # Prose can be edited away, so the retirement rule alone forgets history.
+    # The board keeps a row for every cluster, open or closed, and each row
+    # names what it tracks; a rollup cluster whose same-letter board row names
+    # none of its criteria is a different cluster wearing a used letter.
+    board_rows = {}
+    for line in board_text.splitlines():
+        found = re.match(r"^\|\s*([A-Z])\s*\|", line)
+        if found:
+            board_rows[found.group(1)] = board_rows.get(found.group(1), "") + line
+    for line in rollup_text.splitlines():
+        match = CLUSTER.match(line)
+        if not match:
+            continue
+        cells = line.split("|")
+        letter = cells[1].strip()
+        board_row = board_rows.get(letter)
+        ids = named_criteria(cells[3])[0]
+        # Whole ids only (`MRTR.1` must not match inside `MRTR.12`), and a
+        # short form names its qualified id in either direction, as `_names`
+        # already allows for rollup membership.
+        # A backticked range (`MRTR.1-3`) names every row in it.
+        tokens = re.findall(r"[\w-]+(?:\.[\w-]+)+", board_row or "")
+        tokens += named_criteria(board_row or "")[0]
+        names = (_names(t, i) or _names(i, t) for i in ids for t in tokens)
+        if board_row is not None and ids and not any(names):
+            problems.append(
+                f"cluster {letter}'s readiness board row names none of its criteria "
+                f"({', '.join(ids)}); the letter belongs to another cluster"
+            )
+        if letter in retired and int(match.group(1)) > 0:
+            problems.append(
+                f"cluster {letter} was retired in the rollup's prose but heads a row with "
+                f"{match.group(1)} open row(s); a new cluster needs an unused letter"
+            )
+    return problems
+
+
 def _names(key, name):
     return key == name or key.endswith("." + name)
 
@@ -597,15 +667,17 @@ def main():
     stale_sections = section_counts(text)
     rollup_text = ROLLUP.read_text()
     membership = rollup_membership(criteria, rollup_text)
+    board_text = BOARD.read_text()
     membership += copied_counts(
         rollup_text,
-        BOARD.read_text(),
+        board_text,
         # Both spellings of every blocking row. A rollup line may name the
         # parent (`HEADER.9`, whose only rows are `.9a` and `.9b`) or the
         # suffixed row itself (`IDENT.1a`), and either is a real criterion.
         {p for p, b, _s in criteria if b == "yes"}
         | {s for _p, b, s in criteria if b == "yes"},
     )
+    membership += reused_cluster_letters(rollup_text, board_text)
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
