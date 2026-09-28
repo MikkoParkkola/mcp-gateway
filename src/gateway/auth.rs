@@ -561,7 +561,7 @@ pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> boo
 /// security check, the startup-banner link refusal and the OIDC
 /// issuer/`jwks_uri` checks, so one fix covers all of them.
 pub(crate) fn is_https_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| u.scheme() == "https")
+    url.starts_with("https://")
 }
 
 /// Whether a session cookie set or cleared now must be `Secure`: the listener
