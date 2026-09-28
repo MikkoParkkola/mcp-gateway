@@ -449,15 +449,15 @@ unsafe fn read_aces(acl: *const ACL, avail: usize) -> io::Result<Vec<Ace>> {
         if unsafe { GetAce(acl, index, &raw mut ace) } == 0 {
             return Err(last());
         }
-        let start = ace as usize;
-        if ace.is_null()
-            || start < acl as usize
-            || start + std::mem::size_of::<ACE_HEADER>() > acl_end
-        {
+        let Some(ace) = std::ptr::NonNull::new(ace) else {
+            return Err(bad());
+        };
+        let start = ace.as_ptr() as usize;
+        if start < acl as usize || start + std::mem::size_of::<ACE_HEADER>() > acl_end {
             return Err(bad());
         }
-        // SAFETY: contract 3 — the header lies inside the ACL.
-        let h = unsafe { *ace.cast::<ACE_HEADER>() };
+        // SAFETY: contract 3 — non-null, and the header lies inside the ACL.
+        let h = unsafe { ace.cast::<ACE_HEADER>().as_ptr().read_unaligned() };
         let size = usize::from(h.AceSize);
         if start + size > acl_end {
             return Err(bad());

@@ -436,3 +436,10 @@ Found by the final code review and the first mutation runs:
   colliding name).
 - A8, bounds. Owner SID and DACL reads in `win_acl::inspect` are bounded by the descriptor's
   own length (`GetSecurityDescriptorLength`), not by the maximum SID size.
+- A9, 3.x repair text. The printed repair is for PowerShell, not cmd: single quotes keep
+  the path literal (cmd expands a `%NAME%` inside double quotes). It names the gateway
+  account by its SID, so it stays right in an elevated prompt run as another account, and
+  it runs `icacls '<f>' /reset` before `/inheritance:r /grant:r '*<sid>:F'`: `/reset` drops
+  every explicit entry whatever its type (a callback ACE, a user deny, a foreign grant),
+  which the per-SID `/remove:g` lines of §2.4 did not. W-T10b, W-T10d and W-T10e run the
+  printed lines and require the file accepted afterwards.

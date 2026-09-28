@@ -92,6 +92,11 @@ fn user() -> io::Result<&'static Sid> {
     Ok(USER.get_or_init(|| sid))
 }
 
+/// The gateway account's SID in `S-1-...` form, for messages that must name it.
+pub(crate) fn user_sid_string() -> Option<String> {
+    user().ok().map(Sid::to_sddl)
+}
+
 /// `FILE_READ_DATA | FILE_WRITE_DATA`, or `GENERIC_ALL`: what P3 requires.
 const READ_WRITE: u32 = 0x1 | 0x2;
 const GENERIC_ALL: u32 = 0x1000_0000;

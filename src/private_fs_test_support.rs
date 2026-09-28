@@ -29,6 +29,23 @@ pub(crate) fn fixture_fail(row: &str, detail: &str) -> ! {
     panic!("WT-FIXTURE {row}: {detail}")
 }
 
+/// Run every `icacls` line a refusal printed, verbatim, in Windows
+/// PowerShell, as a user pastes them. Returns how many ran; a failing line is
+/// a fixture error.
+pub(crate) fn run_printed_repair(row: &str, text: &str) -> usize {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("icacls "))
+        .collect();
+    for line in &lines {
+        if let Err(error) = powershell(&format!("{line}; exit $LASTEXITCODE")) {
+            fixture_fail(row, &format!("remediation command failed: {line}: {error}"));
+        }
+    }
+    lines.len()
+}
+
 fn powershell(script: &str) -> Result<String, String> {
     // Windows PowerShell must not inherit a PowerShell 7 module path (the CI
     // shell is pwsh), or it cannot load its own security module.

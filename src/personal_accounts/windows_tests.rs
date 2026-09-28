@@ -423,27 +423,10 @@ fn wt10b_legacy_token_remediation_works() {
         text.contains("S-1-1-0") && text.contains("S-1-5-32-544"),
         "WT-ASSERT W-T10b/message: {text}"
     );
-    let commands: Vec<&str> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("icacls "))
-        .collect();
     assert!(
-        !commands.is_empty(),
+        crate::private_fs::test_support::run_printed_repair("W-T10b", &text) > 0,
         "WT-ASSERT W-T10b: the refusal printed no icacls commands: {text}"
     );
-    for command in commands {
-        // Verbatim, as a user pastes it: cmd does not parse the escaped
-        // quotes `Command::args` would add around the embedded `"`s.
-        use std::os::windows::process::CommandExt as _;
-        let ran = std::process::Command::new("cmd")
-            .arg("/C")
-            .raw_arg(command)
-            .status();
-        if !ran.is_ok_and(|s| s.success()) {
-            fixture_fail("W-T10b", &format!("remediation command failed: {command}"));
-        }
-    }
     assert!(
         read_legacy_source(&path).is_ok(),
         "WT-ASSERT W-T10b: still refused after remediation"
@@ -667,7 +650,6 @@ fn wt10c_legacy_token_swapped_for_a_link_refuses() {
 // W-T10d: a deny naming the user is removed by the printed repair.
 #[test]
 fn wt10d_remediation_removes_a_user_deny() {
-    use std::os::windows::process::CommandExt as _;
     let (_root, path) = legacy_token("W-T10d");
     let user = crate::private_fs::test_support::user_sid();
     crate::private_fs::test_support::plant_owner_only("W-T10d", &path);
@@ -680,22 +662,33 @@ fn wt10d_remediation_removes_a_user_deny() {
         text.contains("NoReadWrite"),
         "WT-FIXTURE W-T10d: the planted deny did not fail P3: {text}"
     );
-    for command in text
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("icacls "))
-    {
-        let ran = std::process::Command::new("cmd")
-            .arg("/C")
-            .raw_arg(command)
-            .status();
-        if !ran.is_ok_and(|s| s.success()) {
-            fixture_fail("W-T10d", &format!("remediation command failed: {command}"));
-        }
-    }
+    crate::private_fs::test_support::run_printed_repair("W-T10d", &text);
     let after = read_legacy_source(&path);
     assert!(
         after.is_ok(),
         "WT-ASSERT W-T10d: still refused after the printed repair: {after:?}"
+    );
+}
+
+// W-T10e: an ACE type the judge refuses (a conditional callback ACE) is
+// removed by the printed repair too.
+#[test]
+fn wt10e_remediation_removes_an_unsupported_ace() {
+    let (_root, path) = legacy_token("W-T10e");
+    let user = crate::private_fs::test_support::user_sid();
+    let sddl = format!("O:{user}D:P(A;;FA;;;{user})(XA;;FR;;;WD;(Member_of {{SID(BA)}}))");
+    let back = crate::private_fs::test_support::plant_any("W-T10e", &path, &sddl);
+    let text = read_legacy_source(&path)
+        .err()
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    if !text.contains("OtherAceType") {
+        fixture_fail("W-T10e", &format!("planted {back}; refusal was {text}"));
+    }
+    crate::private_fs::test_support::run_printed_repair("W-T10e", &text);
+    let after = read_legacy_source(&path);
+    assert!(
+        after.is_ok(),
+        "WT-ASSERT W-T10e: still refused after the printed repair: {after:?}"
     );
 }

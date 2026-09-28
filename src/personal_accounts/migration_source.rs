@@ -189,28 +189,30 @@ fn not_private(path: String, detail: &str) -> SourceRefusal {
 }
 
 /// Which rules failed, and the `icacls` sequence that repairs them, one
-/// command per line. Taking ownership needs an elevated prompt.
+/// command per line, for PowerShell: single quotes keep the path literal (cmd
+/// would expand a `%NAME%` inside it), and the gateway account is named by its
+/// SID, which stays right in an elevated prompt run as another account.
+/// `/reset` drops every explicit entry, whatever its type; `/inheritance:r
+/// /grant:r` then leaves the one grant to the gateway account.
 #[cfg(windows)]
 fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) -> String {
     use crate::private_fs::PrivacyRefusal as P;
     use std::fmt::Write as _;
-    let me = r"%USERDOMAIN%\%USERNAME%";
-    let mut out = format!(" ({found:?}). To repair it, run from a command prompt");
-    if found.iter().any(|r| matches!(r, P::ForeignOwner(_))) {
-        out.push_str(", elevated because the file has another owner");
+    let Some(me) = crate::private_fs::user_sid_string() else {
+        return format!(" ({found:?})");
+    };
+    let path = path.replace('\'', "''");
+    let foreign_owner = found.iter().any(|r| matches!(r, P::ForeignOwner(_)));
+    let mut out = format!(" ({found:?}). To repair it, run in PowerShell");
+    if foreign_owner {
+        out.push_str(" as an administrator, because the file has another owner");
     }
     out.push_str(":\n");
-    if found.iter().any(|r| matches!(r, P::ForeignOwner(_))) {
-        let _ = writeln!(out, "icacls \"{path}\" /setowner \"{me}\"");
+    if foreign_owner {
+        let _ = writeln!(out, "icacls '{path}' /setowner '*{me}'");
     }
-    // `/grant:r` replaces every explicit entry for the user, a deny included
-    // (W-T10d runs these lines against a planted user deny).
-    let _ = writeln!(out, "icacls \"{path}\" /inheritance:r /grant:r \"{me}:F\"");
-    for refusal in found {
-        if let P::ForeignSid(sid) = refusal {
-            let _ = writeln!(out, "icacls \"{path}\" /remove:g \"*{sid}\"");
-        }
-    }
+    let _ = writeln!(out, "icacls '{path}' /reset");
+    let _ = writeln!(out, "icacls '{path}' /inheritance:r /grant:r '*{me}:F'");
     out
 }
 
