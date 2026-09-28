@@ -662,6 +662,10 @@ impl crate::transport::Transport for CapturingTransport {
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
 pub(super) use gateway::{
-    Bind, Descriptors, execute, execute_bridged, execute_bridged_keyed, external_cfg, gateway,
-    slots,
+    Bind, Descriptors, execute, execute_as, execute_bridged, execute_bridged_keyed, external_cfg,
+    gateway, gateway_in, slots,
 };
+
+// #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
+#[path = "account_sole_operator_mcp_tests.rs"]
+mod sole_operator_mcp_tests;
