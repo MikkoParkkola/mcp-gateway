@@ -33,10 +33,10 @@ the items below, then stamps the new version. The notice is printed rather than 
 - Item 49
 - Item 55
 - Item 58
-- Item 88
-- Item 89
 - Item 90
 - Item 91
+- Item 92
+- Item 93
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -197,10 +197,12 @@ without it.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
-| 88 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
-| 89 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
-| 90 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
-| 91 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
+| 88 | Reserved: lands with #2183 | None yet |
+| 89 | Reserved: lands with #2195 | None yet |
+| 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
+| 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -240,7 +242,7 @@ exactly, and no conforming client can request a revision that does not exist.
 Nothing is rejected at `initialize`. A client naming `2024-10-07` there gets `2025-11-25` back —
 the same fallback any unrecognized version string gets, before and after this release
 (`tests/integration.rs:37`). There is no error and no refused session. A request that names
-`2024-10-07` in its `MCP-Protocol-Version` header is refused; see item 88.
+`2024-10-07` in its `MCP-Protocol-Version` header is refused; see item 90.
 
 `2024-11-05` and every later revision negotiate exactly as before. The startup notice advises
 upgrading a client that speaks only `2024-10-07`; in practice such a client would have been
@@ -2186,7 +2188,7 @@ by URL already do:
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
 
-## 88. A request header naming an unserved protocol version is refused
+## 90. A request header naming an unserved protocol version is refused
 
 3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
 4.0.0 reads it. A header that names a revision the gateway does not serve gets HTTP 400 with
@@ -2197,7 +2199,7 @@ answered as before.
 
 **Action:** a client that sends this header must send a revision the gateway serves, or omit it.
 
-## 89. Agent identity rests on proof, not on a label the caller sends
+## 91. Agent identity rests on proof, not on a label the caller sends
 
 In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
 query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
@@ -2216,7 +2218,7 @@ satisfy `require_id` and `known_agents` again, set
 `security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
 their source (item 27). Nothing changes with agent identity disabled.
 
-## 90. Six meta-tools leave the default tool list
+## 92. Six meta-tools leave the default tool list
 
 `gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
 `gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list` unconditionally.
@@ -2231,7 +2233,7 @@ tool".
 **Action:** a client that calls only what `tools/list` shows reaches these six once the feature
 behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gateway_get_stats`.
 
-## 91. The key server refuses a token request that misses the policy
+## 93. The key server refuses a token request that misses the policy
 
 In 3.x, a token request to the key server whose requested backends or tools did not overlap the
 matching policy rule got an empty scope list, and an empty list means "all": the token reached

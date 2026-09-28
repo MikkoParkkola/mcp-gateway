@@ -150,10 +150,10 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (49, "audit_segment_expired"),
     (58, "minted by the gateway"),
     (55, "without the `requeststate`"),
-    (88, "-32022"),
-    (89, "proven principal"),
-    (90, "expose_stats_tool"),
-    (91, "refuses (403)"),
+    (90, "-32022"),
+    (91, "proven principal"),
+    (92, "expose_stats_tool"),
+    (93, "refuses (403)"),
 ];
 
 /// The item numbers the guide says the first start prints: the `- Item N`
