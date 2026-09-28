@@ -313,8 +313,9 @@ impl ConfigScanner {
 
         let mut servers = Vec::new();
 
-        // VS Code might have MCP config under various keys
-        if let Some(mcp_config) = config.get("mcp").and_then(|v| v.as_object()) {
+        // VS Code user settings: { "mcp": { "servers": { "<name>": {...} } } }.
+        // Siblings such as `mcp.inputs` are not servers.
+        if let Some(mcp_config) = config.pointer("/mcp/servers").and_then(Value::as_object) {
             for (name, server_config) in mcp_config {
                 if let Some(server) = Self::parse_server_config(name, server_config, &source, path)
                 {

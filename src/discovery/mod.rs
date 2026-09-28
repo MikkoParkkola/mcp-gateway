@@ -42,7 +42,7 @@ pub enum DiscoverySource {
     ClaudeDesktop,
     /// Claude Code CLI config (~/.claude.json)
     ClaudeCode,
-    /// VS Code/Cursor MCP config (settings.json `mcp` key)
+    /// VS Code/Cursor MCP config (settings.json `mcp.servers` key)
     VsCode,
     /// Cursor standalone mcp.json (~/.cursor/mcp.json)
     Cursor,
