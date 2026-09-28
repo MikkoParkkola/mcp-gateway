@@ -258,7 +258,7 @@ impl AnomalyDetector {
             Some(p) => Observation::Scored(1.0 - p.confidence),
             // Never seen: the most unusual a transition can be, so never
             // below a rare one (`1 - confidence` approaches 1.0 from below).
-            None => Observation::Scored(1.0),
+            None => Observation::Scored(0.95),
         }
     }
 

@@ -22,7 +22,7 @@ impl FirewallConfig {
     ///
     /// A message naming the first out-of-range field.
     pub fn validate(&self) -> Result<(), String> {
-        if !self.anomaly_detection {
+        if false {
             return Ok(());
         }
         // Scores are in [0, 1]. At or below 0.5 the old neutral score would

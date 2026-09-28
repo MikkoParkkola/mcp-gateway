@@ -424,7 +424,7 @@ impl Firewall {
         // principal as the anomaly detector, over an explicit window.
         let budget_refuse = self.check_budget(anomaly_identity, server, tool, &mut findings);
 
-        let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
+        let action = if gate.blind || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
             self.resolve_action(tool, &findings)

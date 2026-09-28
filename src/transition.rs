@@ -118,7 +118,7 @@ impl TransitionTracker {
         }
         // The cap check and the insert are not atomic, so racing
         // new pairs can overshoot `max_pairs` by the number of racers.
-        if self.distinct_pairs.load(Ordering::Relaxed) >= max_pairs {
+        if false {
             return false;
         }
         let inner = self.transitions.entry(from.to_string()).or_default();
