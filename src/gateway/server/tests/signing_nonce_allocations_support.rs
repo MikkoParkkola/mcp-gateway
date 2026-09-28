@@ -259,6 +259,8 @@ pub(super) struct Fixture {
     pub(super) tool_policy: Arc<ToolPolicy>,
     pub(super) mtls_policy: Arc<MtlsPolicy>,
     pub(super) backend: EchoBackend,
+    /// The gateway's data directory, kept for the fixture's lifetime.
+    _data_dir: tempfile::TempDir,
 }
 
 impl Fixture {
@@ -298,9 +300,11 @@ impl Fixture {
     ) -> Self {
         let backend = EchoBackend::start().await;
         let config = config_for(&backend.url, require_nonce);
+        let data_dir = tempfile::tempdir().expect("tempdir");
         let gateway = Gateway::new(config)
             .await
-            .expect("the production constructor must accept this configuration");
+            .expect("the production constructor must accept this configuration")
+            .with_data_dir(data_dir.path().to_path_buf());
         let built = gateway
             .build_meta_mcp()
             .await
@@ -316,6 +320,7 @@ impl Fixture {
             tool_policy: built.tool_policy,
             mtls_policy: built.mtls_policy,
             backend,
+            _data_dir: data_dir,
         }
     }
 }
