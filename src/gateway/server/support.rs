@@ -439,6 +439,17 @@ mod tests {
             ready(Ok(request.extensions().get::<CertIdentity>().cloned()))
         }
     }
+
+    /// The banner refuses the plain-HTTP link for an HTTPS `public_url` in any
+    /// letter case, matching the cookie's `Secure` decision.
+    #[test]
+    fn an_uppercase_https_public_url_refuses_the_banner_link() {
+        let mut config = Config::default();
+        config.server.public_url = Some("HTTPS://Gateway.Example".to_string());
+        assert!(dashboard_link_refusal(&config).is_some());
+        config.server.public_url = Some("http://gateway.example".to_string());
+        assert!(dashboard_link_refusal(&config).is_none());
+    }
 }
 
 /// The route that carries tool-invocation authority (`router::create_router_with`).
