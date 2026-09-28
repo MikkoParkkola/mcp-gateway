@@ -375,7 +375,7 @@ def write_outputs(out: Path, platform: str, meta: dict, results: list[dict]) -> 
 # batches. Both read their inputs from GitHub-provided SHAs in the
 # environment, never from the tree's own claims, and both fail closed.
 
-FILTER_RE = re.compile(r"^[A-Za-z0-9_:-]+$")
+FILTER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_:-]*$")  # no leading "-": never a flag
 MAX_FILTERS = 20
 
 
@@ -395,7 +395,7 @@ def parse_filters(value: str) -> list[str]:
         raise Abort(f"the Red-first: trailer names {len(items)} tests; at most {MAX_FILTERS}")
     bad = [v for v in items if not FILTER_RE.match(v)]
     if bad:
-        raise Abort(f"Red-first: test names may use only [A-Za-z0-9_:-]; rejected {bad}")
+        raise Abort(f"Red-first: test names use [A-Za-z0-9_:-] and cannot start with '-'; rejected {bad}")
     return items
 
 
@@ -430,12 +430,18 @@ def judge_green(run: Outcome) -> Verdict:
 def redfirst(out: Path) -> int:
     base, head = env_sha("BASE_SHA"), env_sha("HEAD_SHA")
     red, filters = find_red_first(base, head)
+    if red == head:
+        raise Abort("the Red-first: commit is the PR head; the fix must come in a later commit")
     changed = git("diff", "--name-only", f"{red}^", red).splitlines()
     logs = out / "logs"
     cargo = ["cargo", "test", "--all-features"]
     results = []
     for phase, commit, judge_fn in (("red", red, judge_red), ("head", head, judge_green)):
         git("checkout", "--quiet", "--detach", commit)
+        # Nothing the red phase wrote (outside target/ and the output dir) may
+        # carry into the head phase.
+        git("reset", "--quiet", "--hard", commit)
+        git("clean", "-fdxq", "-e", "target", "-e", str(out))
         build = run_cmd([*cargo, "--no-run"], COMPILE_LIMIT, logs / f"{phase}-compile.log")
         for name in filters:
             if build.timed_out or build.exit != 0:
@@ -500,9 +506,10 @@ def read_expect(folder: Path) -> dict[str, str] | None:
 
 
 def pr_batch_errors(results: list[dict], expect: dict[str, str] | None) -> list[str]:
-    """PR mode fails on any ERROR, on a batch with no RED row, and (when an
-    expect file is present) on a SURVIVED row not declared SURVIVED."""
-    errors = [f"{r['id']}: ERROR ({r['detail']})" for r in results if r["result"] == "ERROR"]
+    """PR mode fails on any ERROR or VOID row (a mutant that never ran proves
+    nothing), on a batch with no RED row, and (when an expect file is present)
+    on a SURVIVED row not declared SURVIVED."""
+    errors = [f"{r['id']}: {r['result']} ({r['detail']})" for r in results if r["result"] in ("ERROR", "VOID")]
     if not any(r["result"] == "RED" for r in results):
         errors.append("no mutant was killed (zero RED rows)")
     if expect is not None:
@@ -516,7 +523,7 @@ def evidence_self_test() -> list[str]:
     trailer walk over a real temporary repository, PR-mode planning and the
     PR batch verdict."""
     errs: list[str] = []
-    for value, ok in (("a::b", True), ("a::b, c-d::e_f", True), ("", False), ("a b", False),
+    for value, ok in (("a::b", True), ("a::b, c-d::e_f", True), ("", False), ("a b", False), ("--ignored", False),
                       ("x;rm", False), ("$(id)", False), (",".join(["t"] * 21), False)):
         try:
             parse_filters(value)
@@ -539,6 +546,7 @@ def evidence_self_test() -> list[str]:
         ("head: passes", judge_green(Outcome(0, one_ok, False)), "PASS"),
         ("head: still fails", judge_green(Outcome(101, one_red, False)), "FAIL"),
         ("head: selects nothing", judge_green(Outcome(0, none, False)), "FAIL"),
+        ("red: same name in lib and an integration binary", judge_red(Outcome(101, one_red + one_red, False)), "FAIL"),
         ("head: two tests selected", judge_green(Outcome(0, one_ok.replace("1 passed", "2 passed"), False)), "FAIL"),
     ):
         if got.result != want:
@@ -550,10 +558,67 @@ def evidence_self_test() -> list[str]:
         ("undeclared survivor", rows, {"k": "RED"}, True),
         ("nothing killed", rows[1:], None, True),
         ("an ERROR row", rows + [{"id": "e", "result": "ERROR", "detail": "crash"}], None, True),
+        ("a VOID row (patch did not apply)", rows + [{"id": "v", "result": "VOID", "detail": "apply"}], None, True),
     ):
         if bool(pr_batch_errors(results, expect)) != want_fail:
             errs.append(f"PR batch {name}: failed={not want_fail}, expected {want_fail}")
     errs += walk_check()
+    return errs
+
+
+def redfirst_check(g, commit, base: str) -> list[str]:
+    """redfirst end to end over the temp repo, with run_cmd replaced by canned
+    cargo output keyed on the checked-out commit: the phase order, `-- --exact`,
+    compile-never-red and the exit code are all observable."""
+    errs: list[str] = []
+    one_red = ("running 1 test\ntest t ... FAILED\n\n---- t stdout ----\nassertion `left == right` failed\n\n"
+               "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out\n")
+    one_ok = "running 1 test\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
+    g("checkout", "-q", "-b", "rf", base)
+    red = commit("tests\n\nRed-first: a::t1")
+    head = commit("fix")
+    calls: list[tuple[str, tuple]] = []
+    script: dict = {}
+
+    def fake(cmd, limit, log):
+        sha = g("rev-parse", "HEAD")
+        calls.append((sha, tuple(cmd)))
+        if "--no-run" in cmd:
+            return Outcome(script.get((sha, "build"), 0), "", False)
+        return Outcome(*script[(sha, "test")], False)
+
+    global run_cmd
+    real = run_cmd
+    run_cmd = fake
+    out = Path(tempfile.mkdtemp())
+    try:
+        os.environ.update(BASE_SHA=base, HEAD_SHA=head)
+        for name, plan, want in (
+            ("proven", {(red, "test"): (101, one_red), (head, "test"): (0, one_ok)}, 0),
+            ("passes before the fix", {(red, "test"): (0, one_ok), (head, "test"): (0, one_ok)}, 1),
+            ("still red at the head", {(red, "test"): (101, one_red), (head, "test"): (101, one_red)}, 1),
+            ("red commit does not compile", {(red, "build"): 101, (red, "test"): (101, one_red),
+                                             (head, "test"): (0, one_ok)}, 1),
+        ):
+            script.clear()
+            script.update(plan)
+            calls.clear()
+            got = redfirst(out)
+            if got != want:
+                errs.append(f"redfirst {name}: exit {got}, expected {want}")
+        tests = [c for _, c in calls if "--no-run" not in c]
+        if not tests or any(c[-3:] != ("a::t1", "--", "--exact") for c in tests):
+            errs.append(f"redfirst: test runs are not `<name> -- --exact`: {tests}")
+        if [sha for sha, c in calls if "--no-run" in c] != [red, head]:
+            errs.append("redfirst: phases do not build red, then head")
+        os.environ["HEAD_SHA"] = red
+        try:
+            redfirst(out)
+            errs.append("redfirst: a trailer on the head commit passed")
+        except Abort:
+            pass
+    finally:
+        run_cmd = real
     return errs
 
 
@@ -641,6 +706,37 @@ def walk_check() -> list[str]:
                 errs.append("plan_pr: a missing .mutants/<number>/ manifest passed")
             except Abort:
                 pass
+            # A non-number PR_NUMBER must be refused even when the path exists.
+            (repo / MUTANTS_DIR / "x").mkdir()
+            (repo / MUTANTS_DIR / "x" / "manifest.tsv").write_text(f"head_sha\t{p1}\nk\tlinux\tm.patch\ta::t1\n")
+            (repo / MUTANTS_DIR / "x" / "m.patch").write_text("x\n")
+            g("add", "-A")
+            os.environ.update(PR_NUMBER="x", HEAD_SHA=commit("non-number dir"))
+            try:
+                plan_pr()
+                errs.append("plan_pr: a non-number PR_NUMBER passed")
+            except Abort:
+                pass
+            # A real sibling commit (not an ancestor) and a checkout that is not HEAD_SHA.
+            fork = g("rev-parse", "HEAD")
+            g("checkout", "-q", "-b", "sibling", b1)
+            sibling = commit("sibling")
+            g("checkout", "-q", "pr")
+            (folder / "manifest.tsv").write_text(f"head_sha\t{sibling}\nk\tlinux\tm.patch\ta::t1\n")
+            g("add", "-A")
+            os.environ.update(PR_NUMBER="7", HEAD_SHA=commit("sibling head_sha"))
+            try:
+                plan_pr()
+                errs.append("plan_pr: a manifest naming a sibling commit passed")
+            except Abort:
+                pass
+            os.environ["HEAD_SHA"] = fork
+            try:
+                plan_pr()
+                errs.append("plan_pr: a checkout other than HEAD_SHA passed")
+            except Abort:
+                pass
+            errs += redfirst_check(g, commit, b2)
         except Abort as exc:
             errs.append(str(exc))
         finally:
