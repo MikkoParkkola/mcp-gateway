@@ -147,9 +147,10 @@ impl DashboardBootstrap {
         SessionCheck::Valid
     }
 
-    /// End the session `handle`; `true` when it existed.
+    /// End the session `handle`; `true` only when it was live at `now`. An
+    /// expired entry is removed too, but it ended at its limit, not here.
     #[cfg(any(test, feature = "webui"))]
-    pub(crate) fn revoke(&self, handle: &str) -> bool {
+    pub(crate) fn revoke(&self, handle: &str, _now: Now, _limits: &SessionLimits) -> bool {
         self.sessions
             .lock()
             .is_ok_and(|mut sessions| sessions.remove(handle).is_some())

@@ -18,8 +18,8 @@ use serde_json::json;
 
 use super::errors::{admin_auth_required, flat_error};
 use crate::gateway::auth::{
-    AuthenticatedClient, cookies_are_secure, dashboard_session_who, session_cookie,
-    session_cookie_value,
+    AuthenticatedClient, Now, SessionLimits, cookies_are_secure, dashboard_session_who,
+    session_cookie, session_cookie_value,
 };
 use crate::gateway::router::AppState;
 use crate::security::audit::{AuditEnvelope, CredentialKind};
@@ -38,8 +38,12 @@ pub fn logout_router() -> Router<Arc<AppState>> {
 /// browser to `/ui`. Idempotent: an unknown, expired or absent handle gets the
 /// same answer.
 async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    let ended = session_cookie_value(&headers)
-        .is_some_and(|handle| state.dashboard_bootstrap.revoke(&handle));
+    let limits = SessionLimits::from(&state.live_config.get().auth.dashboard_session);
+    let ended = session_cookie_value(&headers).is_some_and(|handle| {
+        state
+            .dashboard_bootstrap
+            .revoke(&handle, Now::read(), &limits)
+    });
     // The one audit write that does not fail closed: refusing to revoke a
     // session because the log is down is worse than a missing record. Written
     // only when a live session actually ended: the route is unauthenticated,

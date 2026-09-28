@@ -267,6 +267,50 @@ async fn logout_revokes_server_side() {
     );
 }
 
+/// E5-T20: a stuck audit write never holds a logout: the record is written
+/// through the bounded append, and the 303 comes back within the bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn logout_is_not_held_by_a_stalled_audit_write() {
+    let (mut state, _dir) = fixture().await;
+    let (log, _log_dir) = with_audit(&mut state);
+    let bound = Duration::from_millis(200);
+    let h = issue(&state);
+    let release = log.stall_next_write_for_test(bound);
+    let start = std::time::Instant::now();
+    let out = send(&state, logout(Some(&h))).await;
+    let took = start.elapsed();
+    release.release();
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    assert!(
+        took < bound * 5,
+        "logout waited on the audit write: {took:?}"
+    );
+    assert_eq!(
+        check(&state, &h),
+        SessionCheck::Unknown,
+        "and still revoked"
+    );
+}
+
+/// E5-T19 (route): logging out with a cookie already past its limit writes
+/// no logout record: that session ended at its limit.
+#[tokio::test]
+async fn logout_of_an_expired_session_writes_no_record() {
+    let (mut state, _dir) = fixture().await;
+    let (log, _log_dir) = with_audit(&mut state);
+    let h = issue(&state);
+    age(&state, &h, IDLE + MIN);
+    assert_eq!(
+        send(&state, logout(Some(&h))).await.status,
+        StatusCode::SEE_OTHER
+    );
+    let raw = std::fs::read_to_string(log.path()).unwrap_or_default();
+    assert!(
+        !raw.contains(LOGOUT),
+        "no logout record for an expired session: {raw}"
+    );
+}
+
 /// E5-T5: an audit outage never blocks logout, and neither does an expired
 /// session: logout sits outside the auth and audit layers.
 #[tokio::test]

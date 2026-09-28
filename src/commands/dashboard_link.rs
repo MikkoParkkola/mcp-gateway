@@ -63,6 +63,19 @@ pub fn dashboard_link_base(
     })
 }
 
+/// Refuse a target the admin credential must not be sent to: plain `http://`
+/// to anything but a loopback address would put the bearer on the network.
+///
+/// # Errors
+///
+/// A message naming the target and asking for `https://` or a loopback URL.
+// Red commit only: the stub has no caller yet.
+#[cfg_attr(not(test), allow(dead_code))]
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn check_target(_base: &str) -> Result<(), String> {
+    Ok(())
+}
+
 /// Ask the gateway at `base` for a fresh link.
 ///
 /// # Errors
@@ -137,6 +150,42 @@ mod tests {
         config.mtls.enabled = true;
         let tls = dashboard_link_base(None, || Ok(config.clone()), Some(4200), None);
         assert_eq!(tls.as_deref(), Ok("https://127.0.0.1:4200"));
+    }
+
+    /// E5-T21: the credential never goes out in cleartext to the network.
+    #[test]
+    fn cleartext_is_refused_off_loopback() {
+        use super::check_target;
+        for refused in [
+            "http://10.0.0.5:39400",
+            "http://gateway.example",
+            "HTTP://192.0.2.1:1",
+        ] {
+            let err = check_target(refused).expect_err(refused);
+            assert!(err.contains("cleartext"), "{refused}: {err}");
+        }
+        for allowed in [
+            "http://127.0.0.1:39400",
+            "http://localhost:39400/",
+            "http://[::1]:39400",
+            "https://gateway.example",
+        ] {
+            assert_eq!(check_target(allowed), Ok(()), "{allowed}");
+        }
+    }
+
+    /// E5-T21b: `fetch_link` refuses before sending anything: 192.0.2.1 is a
+    /// documentation address, so a request would hang, not answer.
+    #[tokio::test]
+    async fn fetch_link_refuses_cleartext_before_sending() {
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            fetch_link("http://192.0.2.1:9", "tok"),
+        )
+        .await
+        .expect("refused at once, no connection attempted");
+        let err = out.expect_err("cleartext target");
+        assert!(err.contains("cleartext"), "{err}");
     }
 
     #[test]

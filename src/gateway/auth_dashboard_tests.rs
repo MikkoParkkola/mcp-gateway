@@ -292,11 +292,30 @@ fn a_backward_wall_step_does_not_extend() {
 #[test]
 fn revoke_ends_a_session_once() {
     let (b, h, t0) = issued();
-    assert!(b.revoke(&h), "an issued handle is revoked");
-    assert!(!b.revoke(&h), "and only once");
+    assert!(
+        b.revoke(&h, at(t0, SEC), &LIMITS),
+        "an issued handle is revoked"
+    );
+    assert!(!b.revoke(&h, at(t0, SEC), &LIMITS), "and only once");
     assert_eq!(
         b.check_session(&h, at(t0, SEC), &LIMITS, Touch::Yes),
         SessionCheck::Unknown
+    );
+}
+
+/// E5-T19: revoking an entry already past its limit is not a live logout: it
+/// reports `false` (so nothing is audited as a logout) and still removes it.
+#[test]
+fn revoking_an_expired_entry_is_not_a_live_logout() {
+    let (b, h, t0) = issued();
+    assert!(
+        !b.revoke(&h, at(t0, IDLE + SEC), &LIMITS),
+        "a session past its idle limit had already ended"
+    );
+    assert_eq!(
+        b.check_session(&h, at(t0, SEC), &LIMITS, Touch::No),
+        SessionCheck::Unknown,
+        "and the entry is gone"
     );
 }
 
