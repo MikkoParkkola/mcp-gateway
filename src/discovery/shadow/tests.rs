@@ -392,7 +392,11 @@ fn a_dns_name_beginning_127_is_reported_network_exposed() {
 fn executable_name_parses_a_quoted_program_path() {
     let argv = ["/opt/My Tools/srv".to_string(), "--flag".to_string()];
     let command = crate::transport::join_command(&argv).expect("joinable");
-    assert_eq!(executable_name(&command).as_deref(), Some("srv"), "{command}");
+    assert_eq!(
+        executable_name(&command).as_deref(),
+        Some("srv"),
+        "{command}"
+    );
 }
 
 #[test]
