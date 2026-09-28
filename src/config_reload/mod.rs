@@ -1434,10 +1434,14 @@ pub struct ReloadContext {
     /// The reload's file load: config parse plus env-file reads.
     load: LoadPatch,
     /// Starts `load` on a thread of its own.
-    #[allow(dead_code, reason = "red-first stub")]
     spawn: SpawnLoad,
     /// One load thread at a time, held until that thread exits.
-    #[allow(dead_code, reason = "red-first stub")]
+    ///
+    /// The reload lock alone does not bound threads: a reload whose future is
+    /// dropped (a client that disconnects, a caller's timeout) releases the
+    /// lock while its read is still stalled, and the next reload would start
+    /// another. The permit travels into the thread and is released only when
+    /// that read returns.
     load_slot: Arc<tokio::sync::Semaphore>,
 }
 
@@ -1451,9 +1455,14 @@ type LoadPatch = fn(
 /// How a reload starts its load off the async workers.
 type SpawnLoad = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
 
-#[allow(clippy::unnecessary_wraps, reason = "red-first stub")]
-fn spawn_load_thread(_load: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
-    Ok(())
+/// A detached thread, not `spawn_blocking`: dropping a Tokio runtime waits for
+/// its blocking tasks, so a read stalled on NFS or FUSE would hold shutdown
+/// for as long as the mount stalls (#1808).
+fn spawn_load_thread(load: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("config-reload".into())
+        .spawn(load)
+        .map(drop)
 }
 
 impl ReloadContext {
@@ -1728,10 +1737,42 @@ impl ReloadContext {
             .map_err(|_| ConfigWriteError::Busy)
     }
 
+    /// Run the file load on its own thread and wait for it without holding a
+    /// runtime worker (#1808).
+    ///
+    /// The load reads the config file and every env file; on a stalled NFS or
+    /// FUSE mount that read blocks for as long as the mount does. Awaiting it
+    /// here keeps the workers free and lets shutdown drop this future; nothing
+    /// the thread computes is published unless this future is still waiting.
+    /// Both failure arms refuse the reload, as a failed load always has.
+    async fn load_off_worker(&self) -> std::result::Result<EvaluatedReload, String> {
+        let slot = Arc::clone(&self.load_slot)
+            .acquire_owned()
+            .await
+            .map_err(|_| "config reload load slot closed".to_owned())?;
+        let (done, result) = tokio::sync::oneshot::channel();
+        let (load, path, live, env) = (
+            self.load,
+            self.config_path.clone(),
+            Arc::clone(&self.live_config),
+            Arc::clone(&self.env),
+        );
+        (self.spawn)(Box::new(move || {
+            // Released when the read returns, not when the reload that asked
+            // for it gives up (see `load_slot`).
+            let _slot = slot;
+            drop(done.send(load(&path, &live, &env)));
+        }))
+        .map_err(|e| format!("config reload could not start its file read: {e}"))?;
+        result
+            .await
+            .map_err(|_| "config reload file read ended without a result".to_owned())?
+    }
+
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        let evaluated = (self.load)(&self.config_path, &self.live_config, &self.env)?;
+        let evaluated = self.load_off_worker().await?;
         if let Some(field) = self
             .live_config
             .running()
