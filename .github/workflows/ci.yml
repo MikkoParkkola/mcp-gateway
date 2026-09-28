@@ -561,6 +561,8 @@ jobs:
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
+        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -604,6 +606,8 @@ jobs:
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
+        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -725,6 +729,8 @@ jobs:
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
+        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Test the counter (fail on parser regression)
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Test supplemental acceptance checks

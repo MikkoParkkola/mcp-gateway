@@ -1565,6 +1565,29 @@ CASES += [
     ("cosign-installer-reference-spelled-with-an-escape", "mrtr7b-full-burst.yml",
      "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
      "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - uses: \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    # The floor reads the parsed workflow: spellings a text scan misses.
+    ("cosign-installer-with-escaped-key-and-value-below-the-floor", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.5.2\n      - name: Run the full-burst ledger\n", CAUGHT),
+    ("cosign-installer-flow-step-with-a-quoted-hash-below-the-floor", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - { name: \"Install #1\", uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6, with: { cosign-release: v2.5.2 } }\n      - name: Run the full-burst ledger\n", CAUGHT),
+    # At the floor, only the recogniser check sees it: the inventory and the
+    # rehearsal exemption would read past this installer.
+    ("cosign-installer-with-escaped-key-at-the-floor", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.6.5\n      - name: Run the full-burst ledger\n", CAUGHT),
+    # PyYAML keeps the last of two keys and flattens `<<`; the strict
+    # loader refuses both.
+    ("cosign-pin-given-twice", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          cosign-release: v2.5.2\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-through-a-merge-key", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          <<: { cosign-release: v2.6.5 }\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("release-runs-the-floor-without-its-parser", "release.yml",
+     "      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != \"6.0.2\")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'\n",
+     "", CAUGHT),
     # The installer's rehearsal exemption applies to it quoted as well.
     ("cosign-installer-quoted-keeps-its-exemption", "ci.yml",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
@@ -1616,6 +1639,8 @@ _HOSTED_PY_STEP = _HOSTED_PY + (
     '      # but which that job skips here. Without this, a throwaway meant to show\n'
     '      # a workflow-wiring or release-script test going red passes on cargo\n'
     '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
+    '      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n'
+    '        run: python3 -c \'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")\' 2>/dev/null || python3 -m pip install --user --quiet \'pyyaml==6.0.2\'\n'
     '      - name: Release tooling Python suites\n'
     '        run: |\n'
     '          set -uo pipefail\n'

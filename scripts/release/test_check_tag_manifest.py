@@ -16,6 +16,8 @@ import textwrap
 import unittest
 from unittest import mock
 
+import yaml
+
 spec = importlib.util.spec_from_file_location(
     "check_tag_manifest", pathlib.Path(__file__).with_name("check_tag_manifest.py")
 )
@@ -756,9 +758,44 @@ COSIGN_FLOOR = (2, 6, 5)
 # step is the installer (push-guard inventory, rehearsal exemption): YAML
 # allows the key and the action reference bare, single- or double-quoted,
 # GitHub matches the owner and repository in any case, and a check that knows
-# fewer forms than the others lets a step escape it. The pin floor is broader
-# still and fails closed on any mention.
+# fewer forms than the others lets a step escape it. The parser decides which
+# steps are installers; test_the_text_recogniser_finds_every_parsed_installer
+# holds this recogniser to the same steps.
 COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?(?i:sigstore/cosign-installer)@""")
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses what Actions may resolve differently.
+
+    PyYAML keeps the last of two equal keys and flattens `<<` merge keys; a
+    floor that read either could pass a pin the runner never applies.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(None, None, "a `<<` merge key", key_node.start_mark)
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def installer_steps(path):
+    """(job, index, step) for every cosign-installer step of a parsed workflow."""
+    # A workflow the parser refuses fails the check that asked (a failure,
+    # not an error): its installers cannot be read, so none can be trusted.
+    try:
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+    except yaml.YAMLError as error:
+        raise AssertionError(f"{path.name} does not parse as a workflow: {error}") from None
+    jobs_ = doc.get("jobs") if isinstance(doc, dict) else None
+    for job, body in (jobs_ or {}).items():
+        for index, step in enumerate((body.get("steps") if isinstance(body, dict) else None) or []):
+            if isinstance(step, dict) and str(step.get("uses", "")).lower().startswith("sigstore/cosign-installer@"):
+                yield job, index, step
 
 
 def artifact_keys(block, keys):
@@ -2262,75 +2299,59 @@ class WorkflowWiring(unittest.TestCase):
     def test_every_installed_cosign_is_past_the_verification_advisory(self):
         # Every cosign the workflows install signs or verifies the images and
         # charts users trust, and a verify step on a vulnerable pin can pass
-        # on what it should refuse (see COSIGN_FLOOR).
-        # Read per installer step, so a step that sets no version (and gets
-        # the installer's default) or quotes it, or quotes the action
-        # reference, is not skipped.
-        # Every workflow file, not a named list: an installer added to another
-        # workflow must meet the same floor. Only the action's own `with:`
-        # input counts; a `cosign-release` under `env:` never reaches it.
+        # on what it should refuse (see COSIGN_FLOOR). Read from the parsed
+        # workflow, not its text: YAML spells one step many ways (quoting and
+        # escapes in keys and values, flow style, anchors, continuations), and
+        # a text scan misses whichever spelling it was not written for.
         found = []
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
-            wf = path.name
-            for block in steps(wf):
-                # Any mention outside a comment counts, not only the block
-                # form: a flow-style or anchored step the recogniser does not
-                # parse still installs cosign, and its pin then cannot be read,
-                # so it fails here rather than escaping the floor.
-                if not any("sigstore/cosign-installer@" in line.split("#", 1)[0].lower() for line in block):
-                    continue
-                pins = artifact_keys(block, ("cosign-release",))
-                # Only a direct input of `with:` reaches the action; a
-                # `cosign-release:` line inside another input's block scalar
-                # is text, and the installer then uses its default.
-                width = next((len(l) - len(l.lstrip()) + (2 if l.lstrip().startswith("- ") else 0)
-                              for l in block if re.match(r"^\s*(- )?with:\s*$", l)), None)
-                direct = [l for l in block
-                          if width is not None and re.match(r"^\s*cosign-release:", l)
-                          and len(l) - len(l.lstrip()) == width + 2]
-                self.assertEqual(len(direct), len(pins), f"{wf}: {block[0].strip()} pins cosign-release inside another input")
-                self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
-                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pins[0])
-                self.assertIsNotNone(m, f"{wf}: cosign-release {pins[0]!r} is not vX.Y.Z")
-                found.append((wf, tuple(int(x) for x in m.groups())))
-        self.assertTrue(found, "no cosign-release pin found")
+            for job, index, step in installer_steps(path):
+                where = f"{path.name}: job {job} step {index + 1}"
+                inputs = step.get("with")
+                pin = inputs.get("cosign-release") if isinstance(inputs, dict) else None
+                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pin) if isinstance(pin, str) else None
+                self.assertIsNotNone(m, f"{where}: cosign-release must be a vX.Y.Z string under with:, got {pin!r}")
+                found.append((where, tuple(int(x) for x in m.groups())))
+        self.assertTrue(found, "no cosign installer found")
         # The floor is for the v2 line the workflows use. A v3 pin needs its
         # own floor added here first, or any v3.0.x would compare above it.
         self.assertEqual({v[0] for _, v in found}, {COSIGN_FLOOR[0]}, "cosign pin outside the v2 line")
-        below = [f"{wf}: cosign v{'.'.join(map(str, v))}" for wf, v in found if v < COSIGN_FLOOR]
+        below = [f"{w}: cosign v{'.'.join(map(str, v))}" for w, v in found if v < COSIGN_FLOOR]
         self.assertEqual(below, [], f"cosign pins below the patched floor v{'.'.join(map(str, COSIGN_FLOOR))}")
 
-    def test_no_workflow_reuses_yaml_through_an_alias(self):
-        # Actions resolves YAML aliases, and these checks read the text: a step
-        # `uses: *installer`, flow-style or not, installs cosign under a name
-        # no check sees. An alias needs an anchor in the same file, so no
-        # anchor anywhere means no alias can resolve. None is used today.
-        # Any anchor name YAML allows (digits too); `&&` is a shell operator.
-        # Comments are dropped first; `&>` is a shell redirection.
-        anchor = re.compile(r"(?:^|[\s:\[{,])&(?![&>])[^\s,\[\]{}]+")
-        found = [
-            f"{path.name}:{number}: {line.strip()}"
-            for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
-            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-            if anchor.search(line.split(" #", 1)[0] if not line.lstrip().startswith("#") else "")
-        ]
-        self.assertEqual(found, [], "a YAML anchor lets an alias hide what a step installs from these checks")
-
-    def test_every_action_reference_is_written_on_one_line(self):
-        # These checks read an action reference from its `uses:` line. A
-        # double-quoted value may continue onto the next line after a `\`,
-        # and YAML joins the pieces into one reference no line contains, so
-        # a `uses:` value that does not close its quote on its own line fails.
-        # An escape (`\x2d` for `-`) spells a reference no text check reads,
-        # so a double-quoted `uses:` value may hold no backslash at all.
-        opened = re.compile(r"""(?:^|[\s{,])(["']?)uses\1\s*:\s*"(?P<rest>.*)$""")
-        found = []
+    def test_every_job_running_the_floor_installs_its_parser_first(self):
+        # The floor imports yaml; a job that runs these suites without the
+        # pinned PyYAML fails at import on a runner that lacks it, or parses
+        # with whatever version the image ships.
+        missing = []
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
-            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                m = opened.search(line)
-                if m and ("\\" in m.group("rest") or not re.search(r'"', m.group("rest"))):
-                    found.append(f"{path.name}:{number}: {line.strip()}")
-        self.assertEqual(found, [], "a `uses:` value continues onto another line or spells itself with an escape")
+            for job in jobs(path.name):
+                installed = False
+                for block in steps(path.name, job):
+                    text = "\n".join(block)
+                    if "pyyaml==6.0.2" in text:
+                        installed = True
+                    elif not installed and any(
+                        suite in text for suite in ("test_check_tag_manifest.py", "test_workflow_wiring_mutations.py", "scripts/release/test_*.py")
+                    ):
+                        missing.append(f"{path.name}: {job}")
+                        break
+        self.assertEqual(missing, [], "a job runs the release suites before installing PyYAML 6.0.2")
+
+    def test_the_text_recogniser_finds_every_parsed_installer(self):
+        # The push-guard inventory and the rehearsal exemption read step text
+        # through COSIGN_INSTALLER. The parser is the authority on which steps
+        # install cosign, so the two must name the same steps (job and
+        # position), not merely the same number of them.
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            parsed = {(job, index) for job, index, _ in installer_steps(path)}
+            text = {
+                (job, index)
+                for job in {j for j, _ in parsed} | set(jobs(path.name))
+                for index, block in enumerate(steps(path.name, job))
+                if any(COSIGN_INSTALLER.match(line) for line in block)
+            }
+            self.assertEqual(text, parsed, f"{path.name}: the text recogniser and the parser disagree on the installer steps")
 
     def test_the_release_builds_tests_and_publishes_the_event_commit(self):
         # The release commit is GITHUB_SHA, which a re-run keeps, and it is what
