@@ -349,6 +349,26 @@ async fn keyless_first_page_keeps_later_pages() {
     assert_eq!(names(&backend), ["t1"]);
 }
 
+/// A continuation page that omits the `tools` key (or answers a non-array)
+/// says nothing about entries an earlier page already served: silently
+/// merging it as empty must not commit the fill as a complete listing, or a
+/// withheld name on a page the drain never re-read reads as removed (#1441,
+/// mirrors `direct_list.rs`'s `unreadable` handling for the cached route).
+#[tokio::test]
+async fn keyless_continuation_page_marks_truncated() {
+    let pager = Pager::tools(vec![(vec!["t0"], Some("c1")), (vec![], None)]);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    backend.get_tools_shared().await.expect("fill");
+    assert_eq!(pager.request_count(), 2);
+    assert_eq!(names(&backend), ["t0"]);
+    assert!(
+        truncated(&backend),
+        "an unreadable continuation page was folded in as a complete listing"
+    );
+}
+
 /// #8
 #[tokio::test]
 async fn single_page_backend_request_is_unchanged() {
