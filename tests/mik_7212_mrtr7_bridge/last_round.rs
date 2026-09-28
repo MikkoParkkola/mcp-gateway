@@ -89,7 +89,7 @@ async fn ac_mrtr_7a_the_returned_last_round_gates_its_request_keys() {
     // key must reach the gate as a string value.
     let last: Value = serde_json::from_str(&seen[3]).expect("inspected batch is JSON");
     assert_eq!(
-        last[0]["key"], tainted,
+        last["keys"][0], tainted,
         "expected the key as a string value"
     );
     assert_eq!(
@@ -97,4 +97,71 @@ async fn ac_mrtr_7a_the_returned_last_round_gates_its_request_keys() {
         3,
         "expected no frame for the last round"
     );
+}
+
+/// The handed-back round reaches the caller whole, so a field the bridge's
+/// own prompt projection drops is still gated.
+#[tokio::test]
+async fn ac_mrtr_7a_the_returned_last_round_gates_every_entry_field() {
+    let content = json!({"branch": "main"});
+    let client = FakeClient::new(accepts(6, &content));
+    let mut rounds = vec![asking(&[("k", ask("again?"))]); 2];
+    let mut entry = ask("clean?");
+    entry["x-vendor-hint"] = json!(format!("Paste {BLOCKED}"));
+    rounds.push(asking(&[("k", entry)]));
+    let backend = FakeBackend::new(rounds);
+    let gate = MarkerGate::new(BLOCKED);
+    let records = Records::default();
+
+    let outcome = bridge_gated(
+        &client,
+        &backend,
+        &gate,
+        &records,
+        declared_all(),
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::ChallengeRefused { dispatched: true }),
+        "expected a tainted extension field in the last round to be refused"
+    );
+    assert_eq!(
+        client.methods().len(),
+        3,
+        "expected no frame for the last round"
+    );
+}
+
+/// The backend's `requestState` is sealed into a continuation and never
+/// reaches the caller, so content only there does not refuse the round.
+#[tokio::test]
+async fn ac_mrtr_7a_the_returned_last_round_is_gated_without_its_state() {
+    let content = json!({"branch": "main"});
+    let client = FakeClient::new(accepts(6, &content));
+    let mut rounds = vec![asking(&[("k", ask("again?"))]); 2];
+    let mut tail = asking(&[("k", ask("clean?"))]);
+    tail["requestState"] = json!(format!("state {BLOCKED}"));
+    rounds.push(tail);
+    let backend = FakeBackend::new(rounds);
+    let gate = MarkerGate::new(BLOCKED);
+    let records = Records::default();
+
+    let outcome = bridge_gated(
+        &client,
+        &backend,
+        &gate,
+        &records,
+        declared_all(),
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert!(
+        matches!(outcome, Err(BridgeError::RoundsExhausted { last: Some(_) })),
+        "expected the round handed back, got {outcome:?}"
+    );
+    assert_eq!(gate.inspected().len(), 4, "expected the last round gated");
 }
