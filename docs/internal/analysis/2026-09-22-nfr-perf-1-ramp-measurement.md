@@ -4,10 +4,11 @@
 
 **Headline:** a P50 regression is reproduced against **v3.5.0**, the baseline
 `NFR.PERF.1` actually names, at **1.1237 [1.1010, 1.1521]** (k=4, 96.5% coverage,
-n=15) — excluding both 1.0 and the 5% budget. The rise is a **step in a
-42-commit window**, not a ramp. **All numbers are provisional**: the
-pre-registered settledness rule returned DRIFTING. Per-commit attribution
-costs n≈195 against n≈7 for the endpoint and is retired on this host.
+n=15) — excluding both 1.0 and the 5% budget. The largest rise sits in a
+**42-commit window** (idx27→69); the only other segment whose paired ratio excludes 1.0
+(idx69→92) cannot be separated from position bias and is not a finding (Finding 2). **All numbers are provisional**: the
+pre-registered settledness rule returned DRIFTING. Resolving ~1.7% per-segment
+differences costs n≈195 against n≈7 for the endpoint.
 
 Supersedes the attribution attempt in
 `2026-09-21-nfr-perf-1-bisect-resolution.md`. That bisect's verdict is an
@@ -160,10 +161,12 @@ rest followed.
 **What to do about it, and these are not two constraints but two eras:**
 
 - **This run used rotation**, with `Aprime` at cyclic distance `NARM/2` from `A`
-  (3 of 6), giving a constant 3-slot separation. Because each test arm's
-  separation alternates between `d` and `NARM−d`, every test arm averages
-  exactly 3 too — so the control matched the *mean* separation of the arms it
-  bounds. That is the best rotation can do.
+  (3 of 6), giving a constant 3-slot separation. A test arm at cyclic distance
+  `d` sits `d` slots from `A` in `6−d` of the six rotation phases and, after
+  wrap-around, `6−d` slots away in the other `d`, so it averages
+  `(d(6−d) + (6−d)d)/6 = 2d(6−d)/6`: 1.67 for `B` and `REL` (d = 1, 5), 2.67 for `P3` and `P4`
+  (d = 2, 4). Only `Aprime` (d = 3) averages 3, so the control's separation
+  matches no test arm; the test arms' mean is 2.17.
 - **Future runs should use `RANDOMIZE=1`**, which draws a fresh permutation per
   cycle. This **subsumes and replaces** the constant-distance rule; the two are
   mutually exclusive, because under a fresh permutation the `Aprime`-to-`A`
@@ -301,10 +304,11 @@ test arms.** That is a genuine hole in the gate.
 **But the effect is not measurable on this host at this `n`.** The load-bearing
 evidence is a direct measurement with a clear scale:
 
-- **Median and geometric mean agree to ≤0.24pp on live data** for every test arm
-  (largest: `REL`, −0.0024), against the **±1.7%** the noiseless model predicts
-  for the measured profile. The two estimators differ by a factor of ~7 less
-  than the effect would require. This is the number to cite.
+- **At n = 6, median and geometric mean agreed to ≤0.24pp on live data** for every
+  test arm (largest: `REL`, −0.0024), against the **±1.7%** the noiseless model
+  predicts for the measured profile, a factor of ~7 below what the effect would require.
+- **Withdrawn at final `n`:** the gaps reach 1.67pp (§4.6), so the n = 6 agreement is
+  no longer evidence against position bias.
 
 Supporting, and weaker than it first appears:
 
@@ -318,15 +322,21 @@ Supporting, and weaker than it first appears:
   it beyond that.
 
 So no correction is applied. What ships instead is a **cross-check**:
-geometric-mean pooling runs always, on the pre-registered balance-exact subset,
+geometric-mean pooling runs always, on the pre-registered secondary subset,
 reported **alongside** the median and never instead of it, with **no interval
-claimed for it** rather than fabricating one. If the two agree, position bias is
-not driving the result — and the check is informative precisely because it could
-have disagreed and did not.
+claimed for it** rather than fabricating one. At n = 6 the two agreed; at final
+`n` they do not (gaps up to 1.67pp, §4.6), so the check is withdrawn and does not
+rule position bias out.
 
-The geometric-mean cancellation requires *complete* rotations, which is exactly
-what the pre-registered secondary window provides. That window therefore has a
-second, independent justification it did not have when it was registered.
+The geometric-mean cancellation requires *complete* rotations. The pre-registered
+secondary window was meant to provide them, but it does not: excluded cycles 7 and
+15 fall inside it, so rotation phases appear 1 to 3 times each and the window is
+not slot-balanced. The committed `analysis.txt` (lines 69, 87-88) and `analysis.json`
+(`kept_balanced`) still label this subset "balance-exact" and say geometric pooling
+cancels the position term; those labels are the analyzer's own and are wrong for this
+window, which the rotation-phase count above shows (the `UNEVEN … CONFOUNDED` line in
+`analysis.txt` belongs to the 15-cycle slot table). The cross-check therefore does not
+cancel a position term.
 
 Two methodological lessons, both recorded against this measurement rather than
 explained away:
@@ -374,7 +384,10 @@ against synthetic data before shipping.
 **A disclosed defect in that rule, left uncorrected on purpose.** It computes
 the slope over *all observed* cycles, including cycle 1 — which rule (c) already
 excludes for drift. A drift-trend statistic therefore counts a cycle rejected
-for drift. On kept cycles only, the slope is −0.0144 rather than −0.0031. The
+for drift. On kept cycles only, the slope at final `n` is +0.00316 (inside ±0.005)
+rather than the registered +0.00646 (DRIFTING); with the kept final-six mean at
+1.0247, that sensitivity reading is BIASED, not SETTLED. (The interim values were
+−0.0144 and −0.0031.) The
 registered version is the one reported; the kept-only figure is a labelled
 sensitivity check and **not** a substitute. Switching after seeing which answer
 each version gives is exactly what pre-registration exists to prevent. Fix it in
@@ -382,9 +395,9 @@ the next pre-registration, not this one.
 
 **The shape survives the denominator being under suspicion — but it is not a
 clean ramp.** `Aprime` is byte-identical to `A`, so it is an independent second
-baseline measured in the same cycles. Swapping the denominator shifts every arm
-up and leaves the ordering unchanged. Interim values at 5 kept cycles, to be
-recomputed at final `n` in §4:
+baseline measured in the same cycles. At 5 kept cycles, swapping the denominator
+shifted every arm up and left the ordering unchanged; at final `n` it does not (see
+below). Interim values at 5 kept cycles:
 
 | arm | X/`A` | X/`Aprime` | delta |
 |---|---|---|---|
@@ -400,11 +413,13 @@ effect and is most likely scatter — but it is stated rather than smoothed,
 because a reader given "`B` lowest, 4.0.0-era arms 8–17% above" will infer a
 monotone rise the numbers do not show.
 
-What *is* robust is the **ordering under either denominator**: `B` lowest, the
-4.0.0-era arms well above it. That is a statement about invariance to a design
-choice, and it does **not** depend on G1 passing — a bias common to both
-denominators cannot reorder the arms. It therefore gets its own verdict line in
-§5, separate from the gate outcome.
+What *is* robust is the **coarse ordering under either denominator**: `B` lowest
+(1.0166 over `A`, 1.0076 over `Aprime`), the three 4.0.0-era arms 10–16% above `A`. The
+fine order is not invariant: at final `n`, `P3` and `REL` swap (over `A`: 1.1007 <
+1.1237; over `Aprime`: 1.1141 > 1.1136), because pooling per-cycle medians with a
+cycle-varying denominator can reorder arms whose medians are close. The coarse
+ordering does not depend on G1 passing, so it gets its own verdict line in §5,
+separate from the gate outcome.
 
 Note a mechanical point that looks like an inconsistency and is not:
 `(B/A)/(Aprime/A)` = 1.0130/0.9660 = 1.0487, while the directly-pooled
@@ -571,15 +586,18 @@ printed with a CONFOUNDED warning rather than silently.
 
 - **Primary: the full kept set.** No choice is made, so no choice can be
   second-guessed.
-- **Secondary, for the balance property only: the most recent multiple of
-  `NARM` kept cycles.** A *suffix*, deliberately. Recency is clock-determined
+- **Secondary: the most recent multiple of `NARM` kept cycles (12 at final `n`).**
+  Because excluded cycles 7 and 15 fall inside it, this window is not slot-balanced:
+  rotation phases appear 1 to 3 times each, so it does not cancel a position term.
+
+  A *suffix*, deliberately. Recency is clock-determined
   and outcome-independent, whereas taking the *earliest* cycles would select
   precisely the transient-contaminated ones and therefore correlate with
   `Aprime/A` — the quantity under test. The choice looks arbitrary and is not.
 
-The secondary window's justification **strengthened mid-run**, once slot 0 was
-identified as the largest position effect: a complete-slot-coverage window is
-better motivated than it was when registered. That is exactly why it is **not**
+The secondary window's justification **seemed to strengthen mid-run**, when slot 0
+was taken for the largest position effect; that reading was later retracted (§1.3.2,
+§1.3.3), and the window is not slot-balanced anyway. That is exactly why it is **not**
 promoted to primary. Switching the headline after the data supplies a reason is
 selection however good the reason reads. Both are reported; if they disagree
 materially, the disagreement is the finding.
@@ -591,7 +609,7 @@ observed exclusion rate.
 
 ### 1.6 Two validity gates, read before any shape claim
 
-- **G1 — self versus self, at maximum slot separation.** `Aprime/A` must
+- **G1 — self versus self, at the largest constant slot separation (3; test arms reach 5 in one phase).** `Aprime/A` must
   bracket 1.0 with a tight interval.
 
   The placement matters more than the comparison. Rotating the start arm moves
@@ -600,9 +618,11 @@ observed exclusion rate.
   `A`, it would have measured drift across ~60 seconds while `REL` pairs across
   ~6 minutes of CI-burst drift, and G1 would have certified the tightest pair
   in the run while saying nothing about the pair that carries the verdict. At
-  the far end, `Aprime` suffers the same separation as `REL`, so **G1 is an
-  upper bound on the pairing penalty every arm pays.** Pass there, pass
-  everywhere.
+  the far end, `Aprime` sits at the largest *constant* separation, 3 slots. *(Superseded: this
+  paragraph originally called G1 an upper bound on every arm's pairing penalty. It is not.
+  `B` and `REL` are 5 slots from `A` in one rotation phase in six, farther than `Aprime` ever
+  is, and each arm's mean separation is `2d(6−d)/6` (§1.3), so a transient can hit a test ratio
+  harder than it hits G1. `Aprime`'s 3 slots is at least every test arm's mean separation (at most 2.67), but not its worst phase.)*
 
   Every other number in this report is meaningless if the noise floor exceeds
   the decision band; that is precisely how the bisect produced a confident
@@ -714,7 +734,8 @@ Everything below was verified, not assumed:
 
 **18 cycles observed, 15 kept, 108 reps.** Raw data is committed alongside this
 report at `docs/internal/evidence/nfr-perf-1-ramp-2026-09-22/`:
-`reps.csv` (per-rep), `analysis.json`, `analysis.txt` (full analyzer output),
+`reps.csv` (per-rep), `analysis.json`, `analysis.txt` (full analyzer output, kept as
+generated; its "balance-exact" subset label is corrected in §1.3.3, not in the file),
 and `reps-v1-slotbug.csv` (the killed first attempt, retained as evidence for
 §1.3). Source paths on the measurement host: `<bench-dir>/results/ramp-v2/`
 and `<bench-dir>/results/ramp-v1-slotbug/`.
@@ -789,7 +810,9 @@ seen directly in the denominator.
 ### 4.5 The ladder, against the noise floor
 
 **Resolvable effect at n=15: 6.13%** (`2 · 1.96 · CV · 1.2533 / √n`, CV 4.83%).
-Nothing smaller is distinguishable from noise.
+This floor applies to differences of pooled medians, the reading in the table below;
+nothing smaller is distinguishable from noise on that reading. Paired per-cycle segment
+ratios have their own order-statistic intervals and can resolve less (Finding 2).
 
 | point | idx | `X/A` | segment | delta | clears 6.13% floor? |
 |---|---|---|---|---|---|
@@ -818,15 +841,17 @@ place. Every correlation in this report names the set it is computed over — se
 This is **not** the load correlation of §6.3, and the two must not be confused —
 §6.3 records that near-miss.
 
-**Exactly one segment is resolvable: idx27→69, at +8.42pp, carrying 68% of the
-total +12.37pp rise.** Everything else is inside the floor, including the
+**Read as differences of pooled medians, one segment is resolvable: idx27→69, at
++8.42pp, carrying 68% of the total +12.37pp rise.** Paired per-cycle segment ratios do not add a second finding (Finding 2). On the
+pooled-median reading everything else is inside the floor, including the
 negative idx92→115 segment — so the non-monotonicity (`P4` above `REL`) is
 **not** a resolvable finding and needs no explanation beyond noise.
 
 ### 4.6 Position cross-check
 
-Median against geometric mean on the pre-registered balance-exact subset
-(n=12, most recent multiple of 6):
+Median against geometric mean on the pre-registered secondary subset
+(n=12, most recent multiple of 6; not slot-balanced, because excluded cycles 7
+and 15 fall inside it):
 
 | arm | median | geo-mean | delta |
 |---|---|---|---|
@@ -907,12 +932,14 @@ cell `A` unpaired relative half-width 0.091 against paired `C/A` 0.1057 — whil
 buying roughly 30× on p99. The difference between the two harnesses is the one
 this report is about: **that harness runs its cells in fixed order** (`for rep:
 for cell in A B C D E`), so `C` sits two slots after `A` in every rep and each
-ratio carries an uncancelled position term. This design rotates, so the term
-averages out and the pairing gain survives.
+ratio carries an uncancelled position term. This design rotates, which spreads the
+per-cycle position term across slots and keeps the pairing gain; it does not remove the
+deterministic median-pooling term, which survives rotation (§1.3.3) and which no part of
+this run covers (§5.1).
 
 So the sharper form of the lesson: pairing buys a great deal on tail statistics
 in any design, and buys something on medians **only if the ordering is
-randomised or rotated**. Under fixed ordering, a paired median can be worse
+randomised or rotated**, and even then a rotated median keeps a deterministic position term. Under fixed ordering, a paired median can be worse
 than an unpaired one — the ratio carries two noise sources and gains nothing
 back.
 
@@ -938,22 +965,24 @@ order.
    survived by being invariant now averages out, and `Aprime` samples the same
    separation distribution as the arms it bounds rather than one privileged
    point of it. Already implemented and syntax-checked in `run_ramp.sh`.
-2. **One discarded warm-up rep at the head of each cycle.** Slot 0 is slow for
-   *whichever* arm lands there, because it follows the previous cycle's tail
-   with no settling gap — measured at 0.7886 for `A` in cycle 1 and 0.7195 for
-   `Aprime` in cycle 4, each arm's single worst reading. A leading throwaway rep
-   gives slot 0 the settling gap every other slot gets from its predecessor.
-   This **eliminates** the largest identified position effect rather than
-   cancelling it in expectation: averaging requires `n` to be an exact multiple
-   of `NARM` and still leaves slot 0's variance in every ratio. Cost is one rep
-   per cycle — ~17% at six arms — against a term contributing up to 12%.
-4. **An arm at first-parent index 39 — this answers question 3 at achievable
-   `n`.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈141 and is out of
+2. **One discarded warm-up rep at the head of each cycle — a precaution, not a
+   measured fix.** The two single-arm readings that first suggested slot 0 is
+   slow (0.7886 for `A` in cycle 1, 0.7195 for `Aprime` in cycle 4) were
+   retracted (§1.3.2, §1.3.3); over kept cycles slot 0 sits at −1.1%. A leading
+   throwaway rep costs ~17% at six arms and removes any carry-over from the
+   previous cycle's tail; whether that carry-over exists is untested.
+4. **An arm at first-parent index 38 (`37ddab1e`, the last 3.5.1 commit) — this
+   can answer question 3 at achievable `n` if the rise is one persistent step.** Narrowing `B/A` to resolve a ~1.6% effect needs n≈220 (Finding 3's formula) and is out of
    reach. But **locating a step does not require resolving small differences**:
-   the idx27→69 step is ~10.5pp, which already clears the noise floor. `4.0.0`
-   opens at **index 39, inside that window**, so one arm there splits it exactly
-   at the version boundary — a step in idx27→39 predates 4.0.0, a step in
-   idx39→69 belongs to it. That is question 3, answered rather than retired.
+   the idx27→69 rise is 8.42pp as a difference of pooled `X/A` medians (`P3/A` − `B/A`),
+   or +10.96% as the pooled paired per-cycle ratio `P3/B` = 1.1096; the two are
+   different aggregations of the same segment, and both clear the noise floor. `4.0.0`
+   opens at **index 39 (`0f04a179`), inside that window**, and that commit changes
+   code itself, so the arm goes at index 38: it splits the window exactly at the
+   version boundary — a single step in idx27→38 predates 4.0.0, a single step in
+   idx38→69 belongs to it. If the rise is instead several smaller changes on both sides
+   (say ~4pp each), both halves fall below the 6.13% floor and the arm does not answer
+   question 3; the follow-up must then be sized to resolve each half (Finding 3).
 
    A seventh arm was expensive under rotation because it forced `n` to a
    multiple of 7. **Randomisation removes that constraint** — slot balance then
@@ -1013,14 +1042,15 @@ order.
 breath:**
 
 > **G1 passed — and G1 is structurally blind to median position bias in the
-> test arms. The geometric-mean cross-check (§1.3.3) is what covers that
-> class.**
+> test arms. The geometric-mean cross-check (§1.3.3) was meant to cover that
+> class; it is withdrawn at final `n` and its window is not slot-balanced, so
+> nothing in this run covers it.**
 
 The reason is geometric, not statistical. `Aprime` sits at cyclic distance
 `k = NARM/2 = 3` from `A`, and that is the **unique** geometry whose
 median-pooling position bias is ~0 (+0.01% against ±1.7% for every test arm).
-Distance 3 was chosen so the control's separation would match the arms it
-bounds (§1.3); that it is also the one position immune to this particular bias
+Distance 3 was chosen in the belief that it matched the arms' mean separation
+(§1.3; it does not); that it is also the one position immune to this particular bias
 is coincidence, and an unlucky one.
 
 So a `G1` pass cannot see a failure mode that afflicts every arm it is meant to
@@ -1140,32 +1170,50 @@ excludes the **1.05 budget, by 5.1pp**. A budget breach against the named
 baseline, with the budget outside a falsifiable interval, is what this row has
 never had.
 
-**Finding 2 — the rise is a step localised to a 42-commit window, not a ramp.**
+**Finding 2 — the largest rise sits in a 42-commit window; the rise is not a smooth ramp.**
 
-Exactly one segment clears the 6.13% noise floor: **idx27→69, at +8.42pp,
-carrying 68% of the total +12.37pp**. The other three segments (+1.66, +5.84,
-−3.55pp) are all inside the floor and carry no claim.
+Read as differences of the pooled `X/A` medians, one segment exceeds the 6.13%
+resolvable effect: **idx27→69, at +8.42pp, carrying 68% of the total +12.37pp**.
+Read as paired per-cycle segment ratios (k = 4, coverage 96.5%), two segments exclude
+1.0: `P3/B` = 1.1096 [1.0700, 1.1224] and `P4/P3` = 1.0382 [1.0174, 1.0514]. `B/A` =
+1.0166 [0.9602, 1.0330] and `REL/P4` = 0.9927 [0.9603, 1.0281] include 1.0. The
+largest rise is idx27→69. The same systematic position bias applies to it, and neither
+the interval nor the 6.13% floor bounds that bias; the difference is the size and sign of
+the modelled term. idx27→69 is a difference of pooled `X/A` medians, the quantity the
+§1.3.3 model describes, and there the position-only term for `B`→`P3` is −3.32pp
+(`B` 1.0168, `P3` 0.9836): opposite in sign to the observed +8.42pp. Under the measured
+slot profile, position cannot produce this rise. That profile is itself a one-run
+estimate, so this is conditional on the model, not a bound, and a follow-up bisect
+should randomise order. It is the only segment this run supports: `P4/P3` = 1.0382 [1.0174, 1.0514] excludes 1.0, but this fixed-order rotated run carries an uncontrolled systematic position bias (§1.3.3; G1 cannot see it, §5.1, and the geometric-mean cross-check is withdrawn), and the interval covers sampling error only, so idx69→92 cannot be attributed to code.
 
 That window is 42 commits, is the heaviest in the run (107,746 `src` lines
 added, §1.2), and **straddles the 4.0.0 version boundary at index 39**. It is
-not a culprit commit and this design cannot produce one.
+not a culprit commit, and this design cannot produce one; a follow-up bisect confined
+to that window can, if the rise there is one persistent step (Finding 3).
 
-**Finding 3 — per-commit attribution is retired on this host, and that is the
-answer to the question that prompted the exercise.**
+**Finding 3 — attributing small per-segment differences is out of reach on this
+host; locating one large step is cheaper but still needs exact sizing.**
 
 From realised scatter (CV 4.83%), using the prior analysis's own formula
 `n = (1.96·CV·k/(effect/2))²` with the asymptotic `k = 1.2533`:
 
 | effect to resolve | required n |
 |---|---|
-| 8.7% (endpoint) | **7** |
+| 8.7% (pre-registered endpoint estimate) | **7** |
 | 1.7% (per segment) | **195** |
 | 1.0% (prior analysis's target) | **564** |
 
-**The endpoint costs 7 cycles; per-segment attribution costs 195.** A factor of
-~28 in cost, on a host that yields ~6 cycles an hour under contention. This is
-why the 2026-09-21 bisect could not have worked at any threshold, and why it
-should not be re-attempted here rather than merely not re-attempted now.
+**The endpoint costs 7 cycles; resolving ~1.7% per-segment differences costs 195.**
+A factor of ~28 in cost, on a host that yields ~6 cycles an hour under contention,
+so per-commit attribution of small differences is out of reach here. Locating the
+one large step is cheaper, though not free: the asymptotic formula gives n≈8 per
+comparison for an 8.42pp step, but that is a lower bound. At n≤8 the only ≥95%
+order-statistic interval is the full min–max range (§1.4), and about 6 sequential
+bisect decisions compound their error, so a bisect confined to idx27→69 must be sized
+against the exact small-sample interval and a sequence-wide confidence before it can
+attribute anything. It is plausible if the rise there is one persistent step; if it is several smaller changes, each needs its
+own resolution and the cost climbs back toward the per-segment figure. The
+2026-09-21 bisect targeted effects near 1.0%, which needs n≈564 here.
 
 **Question 3 — does the regression predate 4.0.0? INCONCLUSIVE.**
 
@@ -1198,9 +1246,9 @@ that the discipline is real rather than decorative.
 
 | # | Defect in the pre-registered method | Disposition |
 |---|---|---|
-| 1 | The settledness statistic regresses over *all observed* cycles, including those rule (c) rejected for drift — a drift-trend statistic counting cycles rejected for drift (§1.3.1) | Registered version reported. Sensitivity: kept-cycles-only slope −0.0144 against the registered −0.0031. Fix registered for the next run. |
+| 1 | The settledness statistic regresses over *all observed* cycles, including those rule (c) rejected for drift — a drift-trend statistic counting cycles rejected for drift (§1.3.1) | Registered version reported. Sensitivity at final `n`: kept-cycles-only slope +0.00316 against the registered +0.00646. Fix registered for the next run. |
 | 2 | Rule (b) is one-sided (`A > 1.25 × median`), so an anomalously *fast* denominator is not excluded (§4a.6) | Registered version reported. Sensitivity: two-sided rule drops no kept cycle. Impact separately measured and negligible — cycle 10's shift was common-mode, all arms 12–18% fast, inter-arm spread 7.8%. |
-| 3 | G1 is structurally blind to median position bias, because `Aprime` sits at `k = NARM/2`, the one distance where that bias vanishes (§5.1) | Stated as a **verdict-level** caveat, not an appendix note. Covered by the geometric-mean cross-check, which reads clean (≤0.24pp). |
+| 3 | G1 is structurally blind to median position bias, because `Aprime` sits at `k = NARM/2`, the one distance where that bias vanishes (§5.1) | Stated as a **verdict-level** caveat, not an appendix note. Not covered in this run: the geometric-mean cross-check read clean at n = 6 (≤0.24pp) but is withdrawn at final `n` (gaps up to 1.67pp, §4.6), and its window is not slot-balanced. |
 
 Three further errors were made and corrected *during* the exercise, and are
 recorded in place rather than tidied away:
@@ -1228,17 +1276,17 @@ its facts are checked.**
 
 ### 6.2 What the sample size can and cannot exclude
 
-**Resolvable effect at n=15: 6.13%.** Anything smaller is INCONCLUSIVE, never
-absent. A wide interval excludes nothing.
+**Resolvable effect at n=15: 6.13%** for differences of pooled medians. Anything
+smaller is INCONCLUSIVE on that reading, never absent. A wide interval excludes nothing.
 
 | question | effect needed | resolved? |
 |---|---|---|
 | self-versus-self control | — | yes, it *is* G1 |
 | is `REL` slower than v3.5.0 at all | ~12% | **yes** |
 | does `REL` breach the 5% budget | ~5% | **yes**, budget excluded by 5.1pp |
-| which segment carries the rise | ~6% | **one** segment only (idx27→69) |
+| which segment carries the rise | ~6% | **one** (idx27→69); `P4/P3` excludes 1.0 but cannot be separated from position bias (Finding 2) |
 | does the regression predate 4.0.0 | ~1.6% | **no** — INCONCLUSIVE |
-| which commit | ~1.7% | **no**, and not reachable at n≤195 |
+| which commit | ~1.7% | **no** for small per-segment differences (needs n≈195); a single persistent step in idx27→69 is cheaper to bisect (n≈8 per comparison is an asymptotic lower bound; size against the exact interval, Finding 3) |
 
 ### 6.3 Two of this report's own claims did not survive final `n`
 
@@ -1253,7 +1301,8 @@ at all.**
 The provenance was checked rather than assumed, because a plausible alternative
 explanation existed: that 0.850 had been the `spearman_rho` field of
 `analysis.json`, which is **ladder monotonicity** — `rho(first-parent index,
-median ratio)` across the arms, +0.9276 at final `n` — quoted as though it were
+median ratio)` across the five measured arms, +0.900 at final `n` (0.9276 with
+`Aprime` included as a sixth point) — quoted as though it were
 the load statistic. **It was not.** Recomputed from the committed `reps.csv`,
 the load correlation over the first 9 observed cycles reproduces at **exactly
 +0.850**, and its decay is a genuine statistic collapsing as `n` grows:
@@ -1323,7 +1372,9 @@ wrong, and confidence at n=6 or n=9 is not evidence about n=18.** Three
 separate claims in this exercise were overturned by more data from the same
 run.
 
-*(interval values pending; the framing below was fixed before results existed)*
+*(Pre-results framing, kept as the pre-registration record and superseded by
+Findings 1–3 above: 4 measured segments, not 5; the largest rise sits in a 42-commit
+window, not ~23; the endpoint is +12.37pp, not ~8.7%.)*
 
 A wide G1 does **not** make this run uniformly worthless — it degrades the
 questions unevenly, because they differ by an order of magnitude in effect
