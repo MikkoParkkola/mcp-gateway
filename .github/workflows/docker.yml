@@ -79,7 +79,7 @@ jobs:
           fi
           # A here-string, not a pipe: `grep -q` exiting early would make the
           # producer's SIGPIPE fail the pipeline under pipefail.
-          if grep -Eq '^(Dockerfile|\.dockerignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|scripts/ci/smoke-[^/]*\.sh|deploy/helm/)' <<<"$files"; then
+          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
             decide true "image inputs changed"
           else
             decide false "no image inputs changed; the image builds after merge"

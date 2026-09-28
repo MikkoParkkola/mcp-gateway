@@ -270,12 +270,12 @@ def plan() -> list[Row]:
     stray = [p for p in changed if not p.startswith(MUTANTS_DIR + "/") and p not in HARNESS]
     if stray:
         raise Abort(f"the batch commit may only add {MUTANTS_DIR}/ (and the harness); it also changes {stray}")
-    carried = [p for p in changed if p in HARNESS]
-    if carried:
-        git("fetch", "--quiet", "--depth=1", "origin", RELEASE_LINE)
-        for path in carried:
-            if git("rev-parse", f"HEAD:{path}") != git("rev-parse", f"FETCH_HEAD:{path}", check=False):
-                raise Abort(f"{path} differs from the reviewed copy on {RELEASE_LINE}")
+    # The harness that runs must be the reviewed one, whichever commit brought
+    # it: the batch commit, or the source head itself (which may have edited it).
+    git("fetch", "--quiet", "--depth=1", "origin", RELEASE_LINE)
+    for path in HARNESS:
+        if git("rev-parse", f"HEAD:{path}") != git("rev-parse", f"FETCH_HEAD:{path}", check=False):
+            raise Abort(f"{path} differs from the reviewed copy on {RELEASE_LINE}")
     for row in rows:
         if not Path(MUTANTS_DIR, row.patch).is_file():
             raise Abort(f"row {row.id}: patch {row.patch} is missing")
