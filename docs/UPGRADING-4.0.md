@@ -1810,14 +1810,15 @@ each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONF
 ## 78. A stdio gateway serves its local operator's personal accounts
 
 A `personal_managed` account served a stdio gateway's caller only when HTTP auth was on with
-`auth.single_user: true`, one API key, no OIDC issuer and no identity adapter. A stdio gateway
+`auth.single_user: true`, at most one API key, no OIDC issuer and no identity adapter. A stdio gateway
 with the default `auth.enabled: false` refused every account-bound call with "the request
 carries no verified end-user identity".
 
 In 4.0 a stdio gateway serves its managed accounts to its one caller, the local process that
 started it, whatever the `auth` block says. `auth` configures the HTTP listener only. An HTTP
 gateway is unchanged: it serves the sole-operator account only under the single-user settings
-above.
+above. This covers a REST capability bound with `auth.account`; an account bound to an MCP
+backend still needs a verified end-user identity on either transport (#1961).
 
 Anyone who can start the gateway as the same OS user already holds its data directory, where the
 account store lives, so this grants no one new access. Several stdio gateways sharing one data
@@ -1832,8 +1833,8 @@ when the configuration asserts a single user. For library users, the report type
 `MigratedCredential` gains a public `reachability: String` field and is marked
 `#[non_exhaustive]`.
 
-**Action:** library users only. Code that builds `MigratedCredential` with a struct literal no
-longer compiles; read the fields of the value `migrate_legacy_credential_offline` returns instead.
+**Action:** library users only. Code that builds `MigratedCredential` with a struct literal, or
+destructures it without a trailing `..`, no longer compiles; read the fields of the value `migrate_legacy_credential_offline` returns instead.
 
 ## Upgrading from 3.5.x: a walkthrough
 
