@@ -48,6 +48,7 @@ pub mod access_control;
 pub mod cert_manager;
 pub mod config;
 pub mod identity;
+mod san;
 
 #[cfg(test)]
 mod ip_san_tests;
