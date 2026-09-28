@@ -29,6 +29,20 @@ pub struct MigratedCredential {
     /// False when the account already held a grant, so the guarded commit
     /// fenced without writing. A re-run reports this rather than failing.
     pub written: bool,
+    /// Operator-facing sentence naming which transport(s) can reach the
+    /// migrated grant. RED (`rt-i3` T4): always empty; no listener's
+    /// sole-operator assertion is consulted yet.
+    reachability: String,
+}
+
+impl MigratedCredential {
+    /// The [`Self::reachability`] sentence for an operator report.
+    ///
+    /// RED (`rt-i3` T4): always `""`.
+    #[allow(dead_code, reason = "red-first stub")]
+    pub(crate) fn reachability(&self) -> &str {
+        &self.reachability
+    }
 }
 
 /// Why an offline migration was refused.
@@ -222,6 +236,7 @@ fn migrate_from(
             descriptor_id: descriptor_id.to_owned(),
             source,
             written: outcome == storage::migration_entry::MigrationOutcome::Migrated,
+            reachability: String::new(),
         }),
         Err(refusal) => Err(OfflineMigrationError::Refused(refusal.to_string())),
     }
