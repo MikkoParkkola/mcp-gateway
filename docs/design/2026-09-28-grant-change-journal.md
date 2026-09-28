@@ -1,6 +1,6 @@
 # Grant-change journal and governance records (MIK-7570.AUDIT.4, #1869)
 
-Status: design for review. Base: `docs/ranking-1-release-line` at `59465ca76`.
+Status: accepted; implemented by #2069 (CLI journal) and #2090 (gateway ingestion). Base: `docs/ranking-1-release-line` at `59465ca76`.
 Binding inputs: requirement `MIK-7570.AUDIT.4` (`docs/requirements/RELEASE-4.0.0-scope-update.md:104`),
 its acceptance row (`docs/requirements/RELEASE-4.0.0-scope-tests.md:63`), maintainer decision 22
 (`docs/requirements/RELEASE-4.0.0-operator-decisions.md`), and #1869 criteria AUDIT4.1-4.8.

@@ -183,6 +183,21 @@ pub(crate) async fn apply_change_with(
     // Held until this function returns: from before the read to after the
     // append, so a gateway reload never sees the file without its entry.
     let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
+    // Refuse before the grant file is touched: a journal other users can
+    // write to never takes an entry (append_line re-checks), so the change
+    // would land unjournalled.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let journal = journal_path(grants);
+        // A link reports 0777 whatever it points at; append_line refuses links.
+        if let Ok(meta) = tokio::fs::symlink_metadata(&journal).await
+            && meta.is_file()
+            && meta.permissions().mode() & 0o022 != 0
+        {
+            return Err(ChangeError::Refused(writable_journal(&journal)));
+        }
+    }
 
     let mut file = match super::read_identity_grants_file(grants).await {
         Ok(file) => file,
@@ -221,8 +236,18 @@ pub(crate) async fn apply_change_with(
     super::write_identity_grants_file(grants, &file)
         .await
         .map_err(ChangeError::Refused)?;
-    if let Some(hook) = &hooks.after_grant_write {
-        hook();
+    // The rename above lands the new grant file, but a rename is not durable
+    // until its directory entry is fsynced: without this, a crash can revert
+    // to the old grant file while the journal entry below still describes
+    // the new one. The journal's own append syncs its directory on creation
+    // (below); the grant file needs the same treatment on every change.
+    #[cfg(unix)]
+    {
+        let dir_path = grants.to_path_buf();
+        tokio::task::spawn_blocking(move || sync_dir(&dir_path))
+            .await
+            .map_err(|e| ChangeError::Unjournalled(e.to_string()))?
+            .map_err(|e| ChangeError::Unjournalled(format!("grant directory sync: {e}")))?;
     }
 
     let entry = JournalEntry {
@@ -246,6 +271,11 @@ pub(crate) async fn apply_change_with(
         serde_json::to_vec(&entry).map_err(|e| ChangeError::Unjournalled(e.to_string()))?;
     line.push(b'\n');
     let journal = journal_path(grants);
+    // Last step before the append, so a probe here sees the lock state the
+    // append itself runs under.
+    if let Some(hook) = &hooks.after_grant_write {
+        hook();
+    }
     tokio::task::spawn_blocking(move || append_line(&journal, &line))
         .await
         .map_err(|e| ChangeError::Unjournalled(e.to_string()))?
@@ -265,6 +295,28 @@ async fn acquire_lock(grants: &Path) -> Result<crate::fs_lock::ExclusiveFileLock
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("could not lock the grant journal: {e}"))
+}
+
+/// The directory to fsync for `path`'s durability: its parent, or "." for a
+/// bare file name (an empty parent is the current directory).
+#[cfg(unix)]
+fn sync_dir(path: &Path) -> std::io::Result<()> {
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::File::open(dir)?.sync_all()
+}
+
+/// Refusal text for a journal other users can write to.
+#[cfg(unix)]
+fn writable_journal(journal: &Path) -> String {
+    format!(
+        "grant journal {} is writable by group or other; refusing to use an \
+         untrusted file (check its entries against the grant file or restore a \
+         trusted copy, then chmod go-w it)",
+        journal.display()
+    )
 }
 
 /// Append one line, owner-only, and flush it to disk. A journal whose last
@@ -296,6 +348,15 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
+        let mode = file.metadata()?.permissions().mode();
+        // A journal another local account can write to may already hold
+        // entries this process never wrote. Repairing its mode to 0600 would
+        // launder that history: the next read sees only "owner-only" and
+        // trusts bytes it should refuse. Only tighten read exposure (e.g.
+        // 0644); refuse when the write bits themselves are open.
+        if mode & 0o022 != 0 {
+            return Err(std::io::Error::other(writable_journal(journal)));
+        }
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     if file.metadata()?.len() > 0 {
@@ -310,12 +371,7 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
     file.sync_data()?;
     #[cfg(unix)]
     if created {
-        // A bare file name has an empty parent: that is the current directory.
-        let dir = journal
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        std::fs::File::open(dir)?.sync_all()?;
+        sync_dir(journal)?;
     }
     #[cfg(not(unix))]
     let _ = created;
