@@ -279,7 +279,7 @@ impl WarnLimiter {
             self.last
                 .insert(path.to_path_buf(), (error.to_owned(), now));
         }
-        warn
+        true
     }
 }
 
