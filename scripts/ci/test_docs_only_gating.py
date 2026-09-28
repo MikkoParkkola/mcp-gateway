@@ -15,6 +15,7 @@ until someone decides which side of the line it belongs on.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -27,12 +28,12 @@ SKIPPED = {
     "check", "feature-combos", "kani", "fmt", "audit",
     "helm-chart-smoke", "helm-oci-roundtrip", "helm-supply-chain", "helm-airgap",
     "k8s-kind-rollback", "upgrade-rehearsal", "service-template-smoke",
-    "usability-smoke", "orphan-test-modules",
+    "usability-smoke",
 }
 # Every job that runs tests stays on docs-only PRs: tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
-    "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "public-claims", "release-script-tests",
+    "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "orphan-test-modules", "public-claims", "release-script-tests",
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes",
 }
@@ -54,13 +55,19 @@ def ctx(event: str, scope_result: str, docs_only: str | None) -> dict:
 
 
 def runs(job: dict, c: dict) -> bool:
-    cond = job.get("if")
-    if cond is None:
-        # Without an `if:`, a job whose need did not succeed is skipped.
-        needs = job.get("needs") or []
-        needs = [needs] if isinstance(needs, str) else needs
-        return all(c["needs"].get(n, {"result": "success"})["result"] == "success" for n in needs)
-    return evaluate(str(cond), c)
+    """GitHub's rule: the `needs` context holds only declared dependencies, and
+    an `if:` that calls no status function is implicitly `success() && ...`,
+    so the job is skipped when any dependency did not succeed."""
+    needs = job.get("needs") or []
+    needs = [needs] if isinstance(needs, str) else needs
+    declared = {n: c["needs"][n] for n in needs if n in c["needs"]}
+    all_ok = all(declared.get(n, {"result": "success"})["result"] == "success" for n in needs)
+    local = dict(c, needs=declared)
+    local["_status"] = dict(c["_status"], success=all_ok, failure=not all_ok)
+    cond = str(job.get("if", ""))
+    if not re.search(r"\b(cancelled|always|success|failure)\(", cond) and not all_ok:
+        return False
+    return evaluate(cond, local) if cond else all_ok
 
 
 def main() -> int:

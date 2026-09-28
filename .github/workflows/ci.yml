@@ -739,8 +739,7 @@ jobs:
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
-    needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     # A `*_tests.rs` that no module declares is in no compilation unit: never
     # built, never run, and invisible to `cargo test`, which reports zero
     # failures and exits zero for a file it cannot see. One such file was cited
