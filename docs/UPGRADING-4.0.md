@@ -1941,7 +1941,8 @@ keys too.
 - Detection is pattern-based. A key that only looks like a credential, such as a public
   `0x`-prefixed 64-digit hex hash, is renamed too.
 - A key finding's description ends in `(object key)`, and its matched text is the redacted
-  key, never the credential.
+  key, never the credential. A prompt-injection finding's matched text, from a key or a
+  value, now has any credential in it masked the same way.
 
 **Action:** none for most deployments. If a backend uses credential-shaped strings as
 object keys, expect those keys to be renamed; use other key names.

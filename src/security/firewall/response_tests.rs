@@ -748,3 +748,29 @@ fn firewall_response_credential_in_object_key() {
         assert_eq!(events[0]["findings"][0]["scan_type"], "credentials");
     }
 }
+
+/// #2114: an injection fragment is raw backend text; a credential beside the
+/// marker (here in a key) must not reach the audit log through that finding.
+#[test]
+fn firewall_response_injection_finding_masks_a_credential() {
+    let (firewall, _dir, path) = response_fixture(FirewallConfig {
+        rules: vec![response_rule("inspect_me", FirewallAction::Allow)],
+        ..FirewallConfig::default()
+    });
+    let mut response = json!({ "content": { format!("{INJECTION} {CANARY}"): 1 } });
+    firewall
+        .check_response_artifact(
+            &mut response,
+            &[target("backend-a", "inspect_me")],
+            &correlation(),
+            ResponseArtifactKind::FinalResponse,
+            ResponseMutationPolicy::Redact,
+        )
+        .expect("nonempty server-bound targets");
+    let log = std::fs::read_to_string(&path).unwrap();
+    assert!(log.contains("prompt_injection"), "{log}");
+    assert!(
+        !log.contains(CANARY),
+        "credential reached the audit log: {log}"
+    );
+}

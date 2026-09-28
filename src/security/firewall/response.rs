@@ -86,7 +86,7 @@ impl Firewall {
                 scan_type: ScanType::PromptInjection,
                 severity: Severity::Medium,
                 description: matched.pattern_description,
-                matched: matched.matched_fragment,
+                matched: self.mask_credentials(matched.matched_fragment),
                 location: FindingLocation::ResponseContent,
             }));
         }
@@ -98,6 +98,14 @@ impl Firewall {
             findings.extend(self.redactor.scan_and_redact(response));
         }
         findings
+    }
+
+    /// An injection fragment is raw backend text (a value or, since #2114, a
+    /// key) and may carry a credential; the finding records the masked form.
+    fn mask_credentials(&self, fragment: String) -> String {
+        let mut text = Value::String(fragment);
+        self.redactor.scan_and_redact(&mut text);
+        text.as_str().unwrap_or_default().to_owned()
     }
 }
 
