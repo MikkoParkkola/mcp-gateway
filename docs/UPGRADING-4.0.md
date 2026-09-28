@@ -102,6 +102,7 @@ upgrading a running deployment.
 | 72 | Reserved: lands with a pending change | None yet |
 | 73 | Reserved: lands with a pending change | None yet |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
+| 75 | A backend tool whose description fails the tool-poisoning check is withheld from every tool list and refused by name; `allow_flagged_tools` serves one explicitly; `BackendConfig` gains a field; `security::scope_collision::detect_collisions` is removed | Read the `Tool withheld` warnings; pin a tool you trust; add `allow_flagged_tools` to any `BackendConfig` struct literal; drop calls to `detect_collisions` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1797,6 +1798,49 @@ holds whichever saved last.
 
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## 75. Tools with a poisoned description are withheld
+
+A backend tool's description goes to the model as instructions. 4.0 checks every tool a backend
+lists against the tool-poisoning rule (AX-010: hidden instructions, secret-file paths,
+exfiltration patterns). A tool that fails it at blocking severity:
+
+- is left out of every tool list the gateway serves: `tools/list` on `/mcp` and `/mcp/{name}`,
+  `gateway_list_tools`, `gateway_search_tools` and surfaced tools;
+- is refused by name, for every caller of that backend, on both routes, once any listing has
+  shown it. The refusal names the tool and the rule, and the backend never receives the call;
+- is logged once per distinct description, as a `Tool withheld` warning naming the backend, the
+  tool, the rule, the findings and a digest of the description.
+
+A warn-level finding (long whitespace runs, control characters, an oversized description) is
+served as before.
+
+A tool name that no listing has ever returned is still forwarded when called by name, because the
+gateway has shown its description to no one. This narrows the original goal ("cannot be invoked by
+name") to "cannot be invoked by name once the gateway has observed its descriptor", by maintainer
+decision. The alternative, refusing every name the caller has not listed first, was rejected
+because it breaks every client that calls a remembered tool name without listing.
+
+To serve a withheld tool you trust, pin its current description:
+
+```yaml
+backends:
+  my-backend:
+    allow_flagged_tools:
+      tool_name: "<64-hex digest from the warning>"
+```
+
+A changed description has a new digest and is withheld again. A pin that is not 64 lower-case hex
+characters is refused at load.
+
+For code that embeds the crate: `BackendConfig` has a new public field, `allow_flagged_tools`, so a
+struct literal that lists every field needs it (`Default::default()` works).
+`security::scope_collision::detect_collisions` and `ScopeCollision` are removed. Nothing in the
+gateway called them, and a tool is always addressed as backend plus name, so two backends sharing a
+name do not collide.
+
+**Action:** after upgrading, look for `Tool withheld` warnings. Pin any tool you have reviewed and
+trust. If you build `BackendConfig` with a full struct literal, add `allow_flagged_tools`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
