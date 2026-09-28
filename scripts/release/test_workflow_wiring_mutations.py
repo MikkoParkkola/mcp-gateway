@@ -1351,7 +1351,10 @@ MUTATIONS_STEP = (
     "        run: python3 scripts/release/test_workflow_wiring_mutations.py\n"
 )
 _CI_TEXT = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-_RC_FIRST = "      - name: Check the release-criteria ledger header against its rows\n"
+_RC_FIRST = (
+    "      - name: Check the release-criteria ledger header against its rows\n"
+    "        run: python3 scripts/release/count-release-criteria.py --check\n"
+)
 _RELEASE_CRITERIA_SPAN = _CI_TEXT[
     _CI_TEXT.index(MUTATIONS_STEP) : _CI_TEXT.index(_RC_FIRST) + len(_RC_FIRST)
 ]
