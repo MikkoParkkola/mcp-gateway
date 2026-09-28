@@ -417,6 +417,7 @@ fn audit_event_from_entry(entry: &serde_json::Value) -> Option<ControlPlaneAudit
             summary: string("rollback_summary")?,
             step: string("rollback_step")?,
         },
+        grant_change: None,
     })
 }
 

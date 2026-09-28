@@ -354,3 +354,36 @@ pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
     }
     parsed
 }
+
+/// The rows active at `now` by `IdentityGrant::is_active_at`: what a startup
+/// snapshot records as `loaded`.
+#[allow(dead_code, reason = "red-first stub")]
+#[must_use]
+pub(crate) fn active_rows(rows: &[IdentityGrant], now: DateTime<Utc>) -> Vec<&IdentityGrant> {
+    let _ = now;
+    rows.iter().collect()
+}
+
+/// What a gateway reload reads under the journal lock: the grant file, parsed
+/// or refused, and the journal.
+#[allow(dead_code, reason = "red-first stub")]
+pub(crate) struct LockedRead {
+    /// Held until dropped; the caller keeps it across publish and record.
+    pub(crate) guard: crate::fs_lock::ExclusiveFileLock,
+    /// The grant file, or the reason it was refused.
+    pub(crate) grants: Result<IdentityGrantFile, String>,
+    /// The journal beside it.
+    pub(crate) journal: crate::config_reload::grant_audit::JournalRead,
+}
+
+/// Take the journal lock, polling [`crate::fs_lock::ExclusiveFileLock::try_lease`]
+/// for at most `wait`, then read the grant file and the journal under it.
+///
+/// # Errors
+///
+/// `None` when the lock stayed busy for `wait`.
+#[allow(dead_code, reason = "red-first stub")]
+pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
+    let _ = (grants, wait);
+    None
+}
