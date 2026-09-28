@@ -2291,13 +2291,23 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
 /// falsifier above would still be green.
 #[tokio::test]
 async fn an_unredirected_connect_failure_is_pre_dispatch_end_to_end() {
-    // Bound and never listening for the whole test: the connect is refused,
-    // and no other process's ephemeral allocation can take the port and
-    // answer it, the way it could with a dropped listener's port (#1754).
-    let closed = tokio::net::TcpSocket::new_v4().unwrap();
-    closed.set_reuseaddr(false).unwrap();
-    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let addr = closed.local_addr().unwrap();
+    // The client end of a live loopback connection owns this port without
+    // listening, for the whole test: the connect is refused on every platform,
+    // and no other process can bind the port and answer it, the way it could
+    // a dropped listener's port (#1754). The client is bound explicitly,
+    // without address reuse, so no later connect can be handed its port.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(false).unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let client = socket
+        .connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    // Declared after `client`, so dropped first: the server end's port, not
+    // the explicitly bound one, takes the TIME_WAIT.
+    let _server = listener.accept().await.unwrap().0;
+    let addr = client.local_addr().unwrap();
 
     let base = format!("http://{addr}/mcp");
     let transport =
