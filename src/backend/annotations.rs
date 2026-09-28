@@ -171,6 +171,7 @@ pub(crate) fn prepare_tool_metadata(
     let verdicts = match judging {
         super::descriptor_gate::Judging::Judge => super::descriptor_gate::judge(tools, pins),
         super::descriptor_gate::Judging::AlreadyJudged => {
+            let _ = super::descriptor_gate::judge(tools, pins);
             super::descriptor_gate::Verdicts::default()
         }
     };
