@@ -43,23 +43,16 @@ struct BackendAuthContext<'a> {
     client: Option<&'a AuthenticatedClient>,
     oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     cert_identity: Option<&'a CertIdentity>,
-    /// The caller as a grant subject, already resolved for this request. It is
-    /// the only carrier of an OIDC or trusted-header subject on this route, so
-    /// the firewall key needs it to match the meta route's.
+    /// The caller as a grant subject, resolved for this request: the only
+    /// carrier of an OIDC or trusted-header subject on this route.
     #[cfg(feature = "firewall")]
     grant_subject: Option<&'a crate::identity_grants::GrantSubject>,
 }
 
-/// The key the direct route's per-caller firewall controls score on.
-///
-/// The caller's `CallerKey`, the same key the meta route uses, so one caller
-/// has one budget, tenant breadth and anomaly history on both routes. Only a
-/// caller with no key at all (authentication off) falls back to the shared
-/// per-backend bucket, as before.
-///
-/// A keyed caller holds per-identity state, so its reclaim deadline is renewed
-/// like the meta route's (CONTROL.4). The per-backend fallback is shared, not a
-/// caller's, and is never tracked.
+/// The key the direct route's per-caller firewall controls score on: the
+/// caller's `CallerKey`, as on the meta route, so one caller has one budget on
+/// both. With no key (authentication off) it is the shared per-backend bucket,
+/// never tracked; a keyed caller's reclaim deadline is renewed (CONTROL.4).
 #[cfg(feature = "firewall")]
 fn direct_control_identity(
     state: &AppState,

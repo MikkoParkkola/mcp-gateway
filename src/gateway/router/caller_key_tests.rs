@@ -37,6 +37,7 @@ fn u1_the_encoding_is_length_prefixed_and_tagged() {
         "subject:3:a:b:1:x"
     );
     let client = AuthenticatedClient {
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
         principal: "d1".to_string(),
         ..credential("unused")
     };
@@ -65,6 +66,7 @@ fn u2_no_two_distinct_callers_share_a_key() {
     }
     for digest in ["d1", "2:d1", "subject:1:a:1:b", ""] {
         let client = AuthenticatedClient {
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
             principal: digest.to_string(),
             ..credential("unused")
         };

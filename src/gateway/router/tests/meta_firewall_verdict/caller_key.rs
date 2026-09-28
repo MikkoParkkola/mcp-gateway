@@ -677,3 +677,37 @@ async fn h12_a_credential_and_the_subject_behind_it_are_different_keys() {
         "a subject shared its credential's key"
     );
 }
+
+// ── /mcp/{name} keys a subject-only caller on its subject ────────────────────
+
+#[tokio::test]
+async fn h20_mcp_name_keys_an_agent_only_caller_on_its_subject() {
+    // No API key: only the resolved grant subject can key this caller. If
+    // /mcp/{name} stopped receiving it, both agents would fall back to the
+    // shared per-backend bucket and agent-b's first call would be refused.
+    let fw = firewall(false);
+    let (state, _store) =
+        state_with_firewalls_and_auth(Arc::clone(&fw), fw, &AuthConfig::default()).await;
+    let router = create_router(state);
+    let per_backend_as = |id: &str, n: usize| {
+        let body = json!({
+            "jsonrpc": "2.0", "id": n, "method": "tools/call",
+            "params": { "name": TOOL, "arguments": {} }
+        });
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp/demo")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        request.extensions_mut().insert(agent(id));
+        request
+    };
+    let mut got = Vec::new();
+    for (n, id) in ["agent-a", "agent-a", "agent-b"].into_iter().enumerate() {
+        let (outcome, _, body) = send(&router, per_backend_as(id, n)).await;
+        eprintln!("call {n}: {outcome:?} {body}");
+        got.push(outcome);
+    }
+    assert_eq!(got, [Delivered, BudgetSpent, Delivered]);
+}
