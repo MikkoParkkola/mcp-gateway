@@ -650,6 +650,22 @@ pub struct SecurityConfig {
     pub claim_capture: ClaimCaptureConfig,
 }
 
+impl SecurityConfig {
+    /// Load-time checks of the security sections that have them.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::ConfigValidation`] naming the first violation.
+    pub(crate) fn validate_sections(&self, auth_enabled: bool) -> crate::Result<()> {
+        self.transparency_log.validate(auth_enabled)?;
+        #[cfg(feature = "firewall")]
+        self.firewall
+            .validate()
+            .map_err(crate::Error::ConfigValidation)?;
+        Ok(())
+    }
+}
+
 const fn default_trust_configured_backends() -> bool {
     true
 }
