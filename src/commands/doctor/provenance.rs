@@ -9,9 +9,21 @@ use mcp_gateway::config::Config;
 use super::CheckResult;
 
 /// One warning row when a remote backend runs unverified; none otherwise.
-#[allow(dead_code, reason = "red-first stub")]
-pub(super) fn check_remote_provenance(_config: &Config) -> Vec<CheckResult> {
-    Vec::new()
+pub(super) fn check_remote_provenance(config: &Config) -> Vec<CheckResult> {
+    config
+        .remote_provenance_warning()
+        .map(|warning| {
+            CheckResult::warn("Remote provenance", warning)
+                .with_category("remote_provenance")
+                .with_hint(
+                    "Set security.remote_server_signing.require_for_remote_backends: true and \
+                     add signed metadata for each remote backend under \
+                     security.remote_server_signing.backends",
+                )
+                .with_risk("unverified_remote_backend")
+        })
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]

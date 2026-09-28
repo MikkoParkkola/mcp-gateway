@@ -589,6 +589,9 @@ impl Gateway {
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
         }
+        if let Some(warning) = config.remote_provenance_warning() {
+            warn!("{warning}");
+        }
 
         Ok(Self {
             #[cfg(test)]
