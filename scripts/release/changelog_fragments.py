@@ -47,8 +47,14 @@ def fragment_name_errors(names: list[str]) -> list[str]:
     ]
 
 
-def check(changes: list[tuple[str, str]], labels: set[str]) -> list[str]:
-    """Errors for a PR's `git diff --name-status` rows (status, path)."""
+def check(
+    changes: list[tuple[str, str]], labels: set[str], remaining: list[str] = ()
+) -> list[str]:
+    """Errors for a PR's `git diff --name-status` rows (status, path).
+
+    `remaining` lists the fragments left in the PR's tree: a release fold
+    folds them all, so it leaves none.
+    """
     added = [
         path.split("/", 1)[1]
         for status, path in changes
@@ -63,9 +69,9 @@ def check(changes: list[tuple[str, str]], labels: set[str]) -> list[str]:
             f"this PR changes source but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
             f"add one (see CONTRIBUTING.md) or apply the '{SKIP_LABEL}' label"
         )
-    # Only the release fold, which deletes the fragments it folds in, edits
+    # Only the release fold, which deletes every fragment it folds in, edits
     # CHANGELOG.md; a hand edit brings back the conflicts fragments remove.
-    folds = any(
+    folds = not any(FRAGMENT.match(n) for n in remaining) and any(
         status.startswith("D")
         and path.startswith(f"{FRAGMENT_DIR}/")
         and FRAGMENT.match(path.split("/", 1)[1])
@@ -146,6 +152,11 @@ def _changes(base: str, head: str) -> list[tuple[str, str]]:
     return [tuple(row.split("\t", 1)) for row in out.splitlines() if row]
 
 
+def _fragment_names() -> list[str]:
+    frag_dir = ROOT / FRAGMENT_DIR
+    return sorted(p.name for p in frag_dir.iterdir()) if frag_dir.is_dir() else []
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -157,15 +168,20 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "check":
-        labels = {x.strip() for x in os.environ.get("PR_LABELS", "").split(",")}
-        errors = check(_changes(args.base, args.head), labels)
+        labels = {x.strip() for x in os.environ.get("PR_LABELS", "").split(",") if x.strip()}
+        errors = check(_changes(args.base, args.head), labels, _fragment_names())
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 1 if errors else 0
 
     frag_dir = ROOT / FRAGMENT_DIR
-    names = sorted(p.name for p in frag_dir.iterdir()) if frag_dir.is_dir() else []
+    names = _fragment_names()
     errors = fragment_name_errors(names)
+    errors += [f"{FRAGMENT_DIR}/{n}: not a regular file" for n in names if not (frag_dir / n).is_file()]
+    if errors:
+        for e in errors:
+            print(f"error: {e}", file=sys.stderr)
+        return 1
     errors += [
         f"{FRAGMENT_DIR}/{n}: empty fragment"
         for n in names

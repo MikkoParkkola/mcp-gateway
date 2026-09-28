@@ -142,6 +142,10 @@ class Check(unittest.TestCase):
     def test_the_release_fold_may_edit_the_changelog(self):
         self.assertEqual(cf.check([("M", "CHANGELOG.md"), ("D", "changelog.d/5.fixed.md")], set()), [])
 
+    def test_a_partial_fold_may_not_edit_the_changelog(self):
+        changes = [("M", "CHANGELOG.md"), ("D", "changelog.d/5.fixed.md")]
+        self.assertEqual(len(cf.check(changes, set(), ["6.added.md", ".gitkeep"])), 1)
+
     def test_deleting_the_placeholder_is_not_a_release_fold(self):
         self.assertEqual(len(cf.check([("M", "CHANGELOG.md"), ("D", "changelog.d/.gitkeep")], set())), 1)
 
@@ -179,6 +183,12 @@ class Cli(unittest.TestCase):
             self.assertEqual(cf.main(["assemble"]), 0)
         self.assertIn("- n (#9)", (self.root / "CHANGELOG.md").read_text(encoding="utf-8"))
         self.assertFalse((self.root / "changelog.d/9.added.md").exists())
+
+    def test_a_directory_named_like_a_fragment_fails_cleanly(self):
+        (self.root / "changelog.d/9.added.md").mkdir()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cf.main(["assemble"]), 1)
+        self.assertIn("not a regular file", err.getvalue())
 
     def test_an_empty_fragment_fails_and_changes_nothing(self):
         (self.root / "changelog.d/9.added.md").write_text("\n", encoding="utf-8")
