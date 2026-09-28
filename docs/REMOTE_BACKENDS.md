@@ -207,8 +207,9 @@ and `passthrough` mode.
 A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at any
 depth, is refused with `isError: true` before it reaches the backend. That applies on `/mcp` and on
 the direct `/mcp/{name}` route, `passthrough` backends included. The schema is the one the
-caller's own `tools/list` returned. A tool the gateway has not listed for that caller yet is
-forwarded unchecked.
+caller's own `tools/list` returned. For a tool the gateway has not listed for that caller yet, it
+lists the backend's tools once, as that caller, before judging the call (see
+[UPGRADING-4.0.md §59](UPGRADING-4.0.md#59-a-tool-call-on-a-cold-catalogue-lists-the-backend-first)).
 
 `input_schema_enforcement` sets the rule per backend:
 

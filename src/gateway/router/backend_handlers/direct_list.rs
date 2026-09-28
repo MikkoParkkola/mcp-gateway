@@ -45,6 +45,11 @@ pub(super) async fn drain(
     backend_name: &str,
 ) -> crate::Result<JsonRpcResponse> {
     let mut tools = Vec::new();
+    // An unreadable list (see `readable_page`), or a page without a tools
+    // array, says nothing about which tools exist: it is answered, judged as a
+    // truncated listing (it clears no block on a name it did not show, #1441)
+    // and never cached, since as a complete empty list it would refuse every
+    // `tools/call` as absent.
     let mut unreadable = false;
     let mut cursor: Option<Value> = None;
     for _ in 0..DIRECT_LIST_MAX_PAGES {
@@ -73,14 +78,11 @@ pub(super) async fn drain(
             page.result = None;
             return Ok(page);
         }
+        let readable = readable_page(page.result.as_ref());
         let result = page.result.unwrap_or(Value::Null);
-        match result.get("tools").and_then(Value::as_array) {
-            Some(items) => tools.extend(items.iter().cloned()),
-            // A page without a tools array says nothing about which tools
-            // exist, so this drain must not be judged as a complete listing:
-            // it could clear blocks on names it never showed (#1441).
-            None => unreadable = true,
-        }
+        let items = result.get("tools").and_then(Value::as_array);
+        unreadable |= !readable || items.is_none();
+        tools.extend(items.into_iter().flatten().cloned());
         match result.get("nextCursor") {
             Some(next) if !next.is_null() => cursor = Some(next.clone()),
             _ => {
@@ -121,6 +123,20 @@ pub(super) async fn drain(
     ))
 }
 
+/// A page the metadata fill could read: a string `nextCursor` or none, and
+/// `tools` an array, or absent on a page with a cursor. So the last page
+/// carries the array.
+fn readable_page(result: Option<&Value>) -> bool {
+    result.is_some_and(|r| {
+        let cursor = r.get("nextCursor").filter(|c| !c.is_null());
+        cursor.is_none_or(Value::is_string)
+            && match r.get("tools") {
+                Some(tools) => tools.is_array(),
+                None => r.is_object() && cursor.is_some(),
+            }
+    })
+}
+
 /// Keep only the tools the direct `tools/call` predicate would admit for this
 /// caller, decided silently: listing writes no invocation audit record.
 pub(super) fn retain_invocable(
@@ -153,4 +169,36 @@ pub(super) fn retain_invocable(
             .emit(crate::gateway::authz::Emit::Silent)
             .is_ok()
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable_page;
+    use serde_json::json;
+
+    /// Review fold: each page shape the direct list may cache from. Mutants
+    /// M38 (accept a non-array `tools`), M39 (accept a page with neither list
+    /// nor cursor) and M44 (accept a mistyped cursor) redden it.
+    #[test]
+    fn only_a_result_object_with_an_array_or_no_tools_is_readable() {
+        let rows = [
+            (Some(json!({"tools": []})), true),
+            (Some(json!({"tools": [{"name": "edit"}]})), true),
+            (Some(json!({"nextCursor": "2"})), true),
+            (Some(json!({})), false),
+            (Some(json!({"nextCursor": null})), false),
+            (Some(json!({"nextCursor": 2})), false),
+            (Some(json!({"tools": [], "nextCursor": 2})), false),
+            (Some(json!({"tools": [], "nextCursor": null})), true),
+            (Some(json!({"tools": null, "nextCursor": "2"})), false),
+            (Some(json!({"tools": null})), false),
+            (Some(json!({"tools": "edit"})), false),
+            (Some(json!("tools")), false),
+            (Some(serde_json::Value::Null), false),
+            (None, false),
+        ];
+        for (result, readable) in rows {
+            assert_eq!(readable_page(result.as_ref()), readable, "{result:?}");
+        }
+    }
 }

@@ -69,7 +69,7 @@ grep -q '"spdxVersion"' sbom.spdx.json \
   || { echo "FAIL: SBOM lacks an spdxVersion marker (not valid SPDX)" >&2; exit 1; }
 
 echo "== cosign attest the SBOM to the signed digest, then verify the attestation =="
-# cosign-release is pinned to v2.5.2, which supports --tlog-upload on attest;
+# cosign-release is pinned to v2.6.5, which supports --tlog-upload on attest;
 # keep the transparency-log upload off so the smoke needs no Rekor egress.
 "$COSIGN" attest --yes --key cosign.key --tlog-upload=false --predicate sbom.spdx.json \
   --type spdxjson --allow-insecure-registry "$SIGNED_REF"

@@ -109,7 +109,7 @@ fn per_user_backend_serving(a: &'static str, b: &'static str) -> Arc<Backend> {
 
 fn refused(backend: &Backend, caller: &str, name: &str) -> bool {
     backend
-        .undeclared_key_refusal(Some(caller), name, &json!({ "q": "x" }))
+        .blocked_tool_refusal(Some(caller), name)
         .is_some_and(|text| text.contains("withheld"))
 }
 
@@ -157,7 +157,7 @@ async fn x2_a_name_no_listing_returned_is_forwarded() {
         .expect("caller a lists");
     assert!(
         backend
-            .undeclared_key_refusal(Some("b"), "never_listed", &json!({ "q": "x" }))
+            .blocked_tool_refusal(Some("b"), "never_listed")
             .is_none(),
         "an unobserved name must be forwarded, as before"
     );
@@ -299,7 +299,7 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
     let _ = backend.remember_listed_tools(Some("a"), false, &listing);
     assert!(
         backend
-            .undeclared_key_refusal(Some("a"), "p4096", &json!({}))
+            .blocked_tool_refusal(Some("a"), "p4096")
             .is_some(),
         "the name past the cap is callable"
     );
@@ -307,7 +307,7 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
     // copy of any of them cannot be told apart, so every call is refused.
     assert!(
         backend
-            .undeclared_key_refusal(Some("a"), "clean_tool", &json!({}))
+            .blocked_tool_refusal(Some("a"), "clean_tool")
             .is_some(),
         "a saturated backend still forwarded a call"
     );
@@ -321,7 +321,7 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
     for caller in ["a", "b"] {
         assert!(
             backend
-                .undeclared_key_refusal(Some(caller), "p4096", &json!({}))
+                .blocked_tool_refusal(Some(caller), "p4096")
                 .is_some(),
             "a clean listing reopened the name past the cap for {caller}"
         );
@@ -336,7 +336,7 @@ async fn x12_past_the_cap_a_clean_cached_copy_does_not_reopen_a_name() {
     let _ = backend.remember_listed_tools(Some("a"), false, &catalogue_with("Reads a file."));
     assert!(
         backend
-            .undeclared_key_refusal(Some("a"), POISONED, &json!({}))
+            .blocked_tool_refusal(Some("a"), POISONED)
             .is_none(),
         "premise: caller a holds a clean copy"
     );
@@ -355,7 +355,7 @@ async fn x12_past_the_cap_a_clean_cached_copy_does_not_reopen_a_name() {
     let _ = backend.remember_listed_tools(Some("b"), false, &listing);
     assert!(
         backend
-            .undeclared_key_refusal(Some("a"), POISONED, &json!({}))
+            .blocked_tool_refusal(Some("a"), POISONED)
             .is_some(),
         "a clean cached copy reopened a poisoned name the cap could not record"
     );
@@ -375,24 +375,23 @@ async fn x10_an_unreadable_drain_does_not_clear_a_block() {
     );
 }
 
-/// X10b: the shared slot records an unreadable drain's catalogue as truncated.
+/// X10b: an unreadable drain is judged, so its withheld name is recorded, but
+/// the shared slot stays cold: a partial catalogue is never stored (F13).
 #[tokio::test]
-async fn x10b_an_unreadable_drain_is_stored_as_truncated() {
+async fn x10b_an_unreadable_drain_is_judged_but_not_stored() {
     let backend = Arc::new(Backend::new(
         "evil",
         BackendConfig::default(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    let _ = backend.remember_listed_tools_as(
-        None,
-        false,
-        &catalogue_with("Reads a file."),
-        crate::backend::Listing::Truncated,
-    );
+    let withheld =
+        backend.remember_listed_tools_as(None, false, &catalogue(), crate::backend::Listing::Truncated);
+    assert!(withheld.contains(POISONED), "the drain was not judged");
+    assert!(backend.is_blocked_tool(POISONED), "the verdict was dropped");
     assert!(
-        backend.cached_tools_snapshot_and_truncated().1,
-        "a partial catalogue was stored as complete"
+        !backend.cached_tools_known(),
+        "a partial catalogue was stored"
     );
 }
 

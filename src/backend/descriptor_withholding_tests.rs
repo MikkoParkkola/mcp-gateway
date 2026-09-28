@@ -125,7 +125,7 @@ fn backend(config: BackendConfig, tools: Vec<Value>) -> (Arc<Backend>, Arc<Upstr
 
 fn refused(backend: &Backend, name: &str) -> bool {
     backend
-        .undeclared_key_refusal(None, name, &json!({ "q": "x" }))
+        .blocked_tool_refusal(None, name)
         .is_some_and(|text| text.contains("withheld"))
 }
 

@@ -81,6 +81,24 @@ python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # rev
 python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
 ```
 
+For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
+section, so that the release leaves exactly one `[4.0.0]` heading. Before the fold,
+every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
+or its mention removed from the draft.
+
+1. Rename `## [Unreleased]` to `## [4.0.0] - <date>`.
+2. Move every bullet of `## [4.0.0] - Unreleased`, and its upgrading and performance-numbers
+   notes, into the matching subsection of the new heading. Copy (don't move) into the new heading every
+   bullet that appears only in `[4.0.0-beta.1]` or `[4.0.0-beta.2]`. The beta sections keep their bullets as
+   history. Create a missing subsection in the order Added, Changed, Removed, Fixed, Security.
+3. Delete the old heading and its "Not tagged yet" note.
+4. Reword the beta prefaces so each one says what that beta was, in the past tense, and points to
+   the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
+   criteria open or lists known gaps.
+5. Give every Security entry in the new heading the versions it affects and what an operator
+   has to do, or "no action" when there is nothing to do.
+6. Add a new empty `## [Unreleased]` above.
+
 Then, once that pull request has merged:
 
 ```sh
@@ -194,7 +212,9 @@ scripts/ci/smoke-full-image.sh ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-full
 
 A host only pulls its own architecture. Run it on both an amd64 and an arm64 host, or
 cite the per-architecture CI legs (`Docker (amd64)`, `Docker (arm64)`) for the
-architecture you did not run. Also confirm the stable pointers moved and are signed:
+architecture you did not run. Also confirm the stable pointers moved and are signed, with
+cosign 2.6.5 or later on 2.x, or 3.1.3 or later on 3.x (earlier versions accept signatures they should refuse:
+GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m):
 
 ```sh
 for t in 4.0.0 4.0 latest; do crane digest ghcr.io/mikkoparkkola/mcp-gateway:$t; done   # all three equal

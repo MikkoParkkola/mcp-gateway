@@ -27,6 +27,7 @@ mod annotations;
 mod cached_metadata;
 mod descriptor_gate;
 mod era;
+mod fill_check;
 mod input_keys;
 mod lifecycle;
 mod metadata;
@@ -45,6 +46,7 @@ pub(crate) use annotations::prepare_tool_metadata;
 #[cfg(test)]
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
+pub(crate) use fill_check::text_absent;
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
@@ -259,6 +261,9 @@ pub(crate) struct CleanupState {
     pub(crate) handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+// The cells read counters from a local Prometheus render.
+#[cfg(all(test, feature = "metrics"))]
+mod f13_fill_tests;
 #[cfg(test)]
 #[path = "blocked_names_tests.rs"]
 mod blocked_names_tests;
