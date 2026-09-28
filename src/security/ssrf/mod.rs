@@ -124,7 +124,6 @@ pub(crate) use redirect::MAX_REDIRECT_HOPS;
 /// is ignored, since a proxy would resolve the name instead of the pin.
 pub(crate) fn pinned_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
-        .no_proxy()
         .dns_resolver(PinningResolver::new(SystemResolver))
 }
 
