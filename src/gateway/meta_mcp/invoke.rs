@@ -6049,6 +6049,9 @@ mod suggestion_authz_tests;
 mod f13_bridge_tests;
 
 #[cfg(test)]
+mod cancel_settles_tests;
+
+#[cfg(test)]
 mod f13_hint_scope_tests;
 
 #[cfg(test)]
