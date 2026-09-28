@@ -169,11 +169,35 @@ fn every_machine_readable_format_writes_one_document_to_stdout() {
         env!("CARGO_MANIFEST_DIR"),
         "/capabilities/automation/agent_search.yaml"
     );
-    let others: [(&str, &[&str]); 4] = [
+    let resources = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+    );
+    let capabilities = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+    // `tool`, `import`, `ranking eval`, `trust inspect|validate|lab` and
+    // `identity grants` need a running gateway or input fixtures; each prints
+    // its document through one `println!` and nothing else to stdout.
+    let others: [(&str, &[&str]); 8] = [
         ("json", &["list", "--json"]),
         ("json", &["doctor", "--format", "json"]),
         ("yaml", &["doctor", "--shadow", "--shadow-format", "yaml"]),
         ("json", &["validate", capability, "--format", "json"]),
+        (
+            "json",
+            &["kubernetes", "plan", resources, "--format", "json"],
+        ),
+        (
+            "json",
+            &["kubernetes", "controller", resources, "--format", "json"],
+        ),
+        (
+            "json",
+            &["kubernetes", "apply-plan", resources, "--format", "json"],
+        ),
+        (
+            "json",
+            &["trust", "generate", "-C", capabilities, "--format", "json"],
+        ),
     ];
     for (format, args) in others {
         let home = Home::new();
