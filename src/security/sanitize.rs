@@ -630,9 +630,20 @@ pub(crate) fn redact_url_keep_path(raw: &str) -> String {
     // from the authority's start up to its last `@`, which is where userinfo
     // sits. A `scheme://` or scheme-relative `//` prefix is kept.
     let text = raw.split(['?', '#']).next().unwrap_or_default();
-    let start = text
-        .find("://")
-        .map_or_else(|| if text.starts_with("//") { 2 } else { 0 }, |i| i + 3);
+    // The authority starts after a leading `//`, or after `scheme://` when what
+    // precedes the `://` is a scheme; a `://` later in the text is not one.
+    let is_scheme = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    };
+    let start = if text.starts_with("//") {
+        2
+    } else {
+        text.find("://")
+            .filter(|&i| is_scheme(&text[..i]))
+            .map_or(0, |i| i + 3)
+    };
     let rest = &text[start..];
     let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
     match authority.rfind('@') {
@@ -655,21 +666,17 @@ mod redact_url_keep_path_tests {
     fn hostless_and_unparseable_inputs_drop_userinfo_query_and_fragment() {
         // `user:PW2@host/p` parses as scheme `user` with no host; `bob@h/p`
         // does not parse at all. Neither may keep what precedes the `@`.
-        for (raw, kept) in [
+        for (raw, want) in [
             ("user:PW2@idp.invalid/p?t=Q2", "idp.invalid/p"),
             ("bob@idp.invalid/p?t=Q3#F3", "idp.invalid/p"),
             ("//carol:PW5@idp.invalid/token", "//idp.invalid/token"),
+            ("//carol:PW6@idp.invalid/x://y", "//idp.invalid/x://y"),
+            ("http://u:PW7@[bad/path", "http://[bad/path"),
             ("/rpc?token=Q4", "/rpc"),
             ("search_flights", "search_flights"),
             ("localhost:8080/mcp", "localhost:8080/mcp"),
         ] {
-            let out = redact(raw);
-            for secret in [
-                "PW2", "PW5", "user:", "bob@", "carol", "Q2", "Q3", "F3", "Q4",
-            ] {
-                assert!(!out.contains(secret), "{raw:?} kept {secret:?}: {out:?}");
-            }
-            assert!(out.contains(kept), "{raw:?} lost {kept:?}: {out:?}");
+            assert_eq!(redact(raw), want, "{raw:?}");
         }
     }
 }
