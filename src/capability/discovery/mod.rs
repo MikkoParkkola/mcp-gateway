@@ -302,18 +302,30 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A loopback listener that only counts the connections it accepts.
+    /// A loopback listener that only counts the connections it accepts, on
+    /// 127.0.0.1 and (where the host has IPv6) on ::1 at the same port, since
+    /// `localhost` may resolve to either.
     async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let v4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = v4.local_addr().unwrap().port();
+        let v6 = tokio::net::TcpListener::bind(("::1", port)).await.ok();
         let accepted = Arc::new(AtomicUsize::new(0));
-        let count = Arc::clone(&accepted);
-        tokio::spawn(async move {
-            while listener.accept().await.is_ok() {
-                count.fetch_add(1, Ordering::SeqCst);
-            }
-        });
+        for listener in std::iter::once(v4).chain(v6) {
+            let count = Arc::clone(&accepted);
+            tokio::spawn(async move {
+                while listener.accept().await.is_ok() {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
         (port, accepted)
+    }
+
+    fn engine() -> DiscoveryEngine {
+        DiscoveryEngine::new(DiscoveryOptions {
+            timeout: std::time::Duration::from_secs(2),
+            ..DiscoveryOptions::default()
+        })
     }
 
     /// The error and every source in its chain, joined.
@@ -331,12 +343,15 @@ mod tests {
     #[tokio::test]
     async fn discover_refuses_a_base_name_resolving_to_loopback() {
         let (port, accepted) = counting_listener().await;
-        let engine = DiscoveryEngine::new(DiscoveryOptions::default());
-        let error = engine
+        let error = engine()
             .discover(&format!("http://localhost:{port}"))
             .await
             .expect_err("a name resolving to loopback must be refused");
-        assert!(error.to_string().contains("SSRF"), "{error}");
+        let text = error.to_string();
+        assert!(
+            text.contains("SSRF") && text.contains("'localhost'"),
+            "{text}"
+        );
         assert_eq!(
             accepted.load(Ordering::SeqCst),
             0,
@@ -344,13 +359,12 @@ mod tests {
         );
     }
 
-    /// The client also fetches HTML-found spec links and redirect targets,
-    /// which the base-URL check never sees: it must pin every name itself.
+    /// The client also follows redirects, whose targets the base-URL check
+    /// never sees: it must pin every name itself.
     #[tokio::test]
     async fn discovery_client_pins_names_on_every_request() {
         let (port, accepted) = counting_listener().await;
-        let engine = DiscoveryEngine::new(DiscoveryOptions::default());
-        let error = engine
+        let error = engine()
             .client
             .get(format!("http://localhost:{port}/openapi.json"))
             .send()
