@@ -81,7 +81,7 @@ pub(crate) fn judge(tools: &mut Vec<Tool>, allow: &BTreeMap<String, String>) -> 
     tools.retain(|tool| {
         // A rule that cannot judge a descriptor fails closed.
         let blocking = match ToolPoisoningRule.check(tool) {
-            Ok(result) if result.severity == Severity::Fail => Some(result.issues),
+            Ok(result) if matches!(result.severity, Severity::Fail | Severity::Warn) => Some(result.issues),
             Ok(_) => None,
             Err(error) => Some(vec![format!("the check could not run: {error}")]),
         };
