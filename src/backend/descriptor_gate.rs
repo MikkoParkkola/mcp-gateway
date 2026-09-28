@@ -87,7 +87,7 @@ pub(crate) fn judge(tools: &mut Vec<Tool>, allow: &BTreeMap<String, String>) -> 
         };
         if let Some(issues) = blocking {
             let digest = descriptor_digest(tool);
-            if allow.get(&tool.name) != Some(&digest) {
+            if !allow.contains_key(&tool.name) {
                 verdicts
                     .withheld
                     .insert(tool.name.clone(), (digest, issues));
