@@ -22,6 +22,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def shard_combos(workflow: dict) -> dict[str, list[str]]:
     include = workflow["jobs"]["feature-combos"]["strategy"]["matrix"].get("include") or []
     include = [e for e in include if "shard" in e and "combos" in e]
+    names = [e["shard"] for e in include]
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        # A dict keyed by name would silently drop the repeated shard.
+        raise SystemExit(f"feature-shards: duplicate shard names: {dup}")
     return {e["shard"]: [c.strip() for c in e["combos"].splitlines() if c.strip()] for e in include}
 
 

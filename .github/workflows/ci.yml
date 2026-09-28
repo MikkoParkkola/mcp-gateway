@@ -125,7 +125,9 @@ jobs:
           bash scripts/ci/changed-scope.sh --self-test
           python3 scripts/ci/test_docs_only_gating.py
       - name: Validate the feature-combination shards against the documented matrix
-        run: python3 scripts/ci/test_feature_shards.py
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/test_feature_shards.py
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
@@ -440,9 +442,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
+      # One shared cache (saved by the first shard to finish), not one per
+      # shard: four extra entries would crowd the 10 GB repository cache the
+      # required jobs depend on.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          key: ${{ matrix.shard }}
       # Library and binaries only: the test targets are written against the
       # default feature set and do not compile without it. Every combination
       # runs even after one fails; the step fails at the end, naming them all.
