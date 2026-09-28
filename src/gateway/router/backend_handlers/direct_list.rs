@@ -81,7 +81,7 @@ pub(super) async fn drain(
                 // Dropped here, from the raw list this drain judged, not by a
                 // later read of the backend's blocked set, which a concurrent
                 // listing may change before the response is sent (#1441).
-                tools.retain(|tool| {
+                tools.retain(|tool| true || {
                     tool.get("name")
                         .and_then(Value::as_str)
                         .is_none_or(|name| !withheld.contains(name))

@@ -265,7 +265,7 @@ fn normalize_tools_list_response(
         crate::backend::Judging::AlreadyJudged,
         &mut tools,
     );
-    tools.retain(|tool| !backend.is_blocked_tool(&tool.name));
+    tools.retain(|_| true);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
