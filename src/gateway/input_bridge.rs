@@ -14,6 +14,8 @@
 //! request the gateway cannot classify is one the client was never given the
 //! chance to withhold consent for.
 
+mod debug;
+
 use serde_json::Value;
 
 use crate::protocol::{ElicitationCreateParams, SamplingCreateMessageParams};
@@ -186,7 +188,10 @@ pub enum DeliveryError {
 }
 
 /// Why the whole bridged call failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand (module `debug`): the last round carries the
+/// backend's raw `requestState`.
+#[derive(Clone, PartialEq, Eq)]
 pub enum BridgeError {
     /// An entry could not be put to this client at all, and nothing was sent.
     Refused {
@@ -503,11 +508,14 @@ impl InputBridge<'_> {
         }
         // The last round is handed back to the caller rather than asked
         // in-band, but it is still a question the backend composed after an
-        // answer, so it passes the same immutable gate every asked round did
-        // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+        // answer, so it passes the same checks every asked round did (#569).
+        // An undeclared round is left to the caller's MRTR.9 gate, which
+        // names the missing capability; the slice is not visible there, so a
+        // round outside it is refused here as it would be in-band.
         if let Some(body) = last.as_deref()
-            && Self::plan(&interim, declared, slice).is_ok()
+            && interim.undeclared(declared).is_none()
         {
+            Self::plan(&interim, declared, slice)?;
             self.gate
                 .admit(&Self::handed_back(body, &interim))
                 .map_err(|error| match error {
