@@ -390,7 +390,7 @@ Loaded via Figment (`config.rs`): YAML file + environment variable overrides. Ke
 5. Drain in-flight requests: acquire all 10,000 semaphore permits (with timeout from `config.server.shutdown_timeout`)
 6. Stop all backends (`BackendRegistry::stop_all()`)
 
-Implemented in `gateway/server.rs:441-491`.
+Implemented in `gateway/server/mod.rs` (`Gateway::run`) and `gateway/server/listener.rs`.
 
 ## Dependencies
 

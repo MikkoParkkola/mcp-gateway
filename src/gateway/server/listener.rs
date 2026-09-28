@@ -14,9 +14,9 @@ use crate::{Error, Result};
 ///
 /// Both transports stop the same way (#2147): after the signal the listener
 /// refuses new connections and gives open requests `server.shutdown_timeout`.
-/// At the deadline `axum_server` cancels what is still running, which also
-/// releases each request's in-flight permit, so the drain that follows in
-/// `run` does not wait for them a second time.
+/// At the deadline `axum_server` returns and signals every open connection to
+/// drop; each drops its request, and the request's in-flight permit, shortly
+/// after, so the drain that follows in `run` does not wait a second timeout.
 pub(super) async fn serve(
     app: Router,
     listener: std::net::TcpListener,
@@ -34,7 +34,11 @@ pub(super) async fn serve(
     if config.mtls.enabled {
         return super::support::serve_tls(app, listener, addr, &config.mtls, handle).await;
     }
-    axum_server::from_tcp(listener)?
+    // Unlike `axum::serve`, this does not enable HTTP/2 extended CONNECT
+    // (RFC 8441). Nothing here serves WebSockets; a WebSocket route would need
+    // `http_builder().http2().enable_connect_protocol()`.
+    axum_server::from_tcp(listener)
+        .map_err(|e| Error::Tls(format!("listener setup failed: {e}")))?
         .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await

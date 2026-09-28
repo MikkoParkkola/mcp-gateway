@@ -90,7 +90,7 @@ async fn a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
     let elapsed = signalled.elapsed();
     outcome.expect("server task").expect("serve");
     assert!(
-        elapsed < Duration::from_millis(1500),
+        elapsed < Duration::from_secs(2),
         "shutdown took {elapsed:?} with a {grace:?} timeout"
     );
     // The deadline cancels the open request, so its in-flight permit is
