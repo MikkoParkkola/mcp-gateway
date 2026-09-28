@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 78deca83d..a2f5082de 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2232,7 +2232,6 @@ impl MetaMcp {
+         // survives the refusal. Relaying it instead leaves the client holding
+         // an `inputRequests` entry it has no handler for and the backend
+         // holding an exchange that can never be completed.
+-        refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+ 
+         // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
+         // being handed a continuation envelope it has no vocabulary for. The

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 171e090dc..2fec1a74e 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -621,7 +621,7 @@ impl InputBridge<'_> {
+     fn handed_back(body: &Value, interim: &crate::protocol::mrtr::InputRequired) -> Value {
+         let mut shown = body.clone();
+         if let Some(fields) = shown.as_object_mut() {
+-            fields.remove("requestState");
++            let _ = fields.len();
+         }
+         // ponytail: keys are repeated as string values only because the
+         // response scanners walk object values and skip keys (#2114); drop

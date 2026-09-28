@@ -1,0 +1,83 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 171e090dc..a0632f45b 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -14,8 +14,6 @@
+ //! request the gateway cannot classify is one the client was never given the
+ //! chance to withhold consent for.
+ 
+-mod debug;
+-
+ use serde_json::Value;
+ 
+ use crate::protocol::{ElicitationCreateParams, SamplingCreateMessageParams};
+@@ -188,10 +186,7 @@ pub enum DeliveryError {
+ }
+ 
+ /// Why the whole bridged call failed.
+-///
+-/// `Debug` is written by hand (module `debug`): the last round carries the
+-/// backend's raw `requestState`.
+-#[derive(Clone, PartialEq, Eq)]
++#[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum BridgeError {
+     /// An entry could not be put to this client at all, and nothing was sent.
+     Refused {
+@@ -506,25 +501,6 @@ impl InputBridge<'_> {
+             }
+             last = Some(Box::new(result));
+         }
+-        // The last round is handed back to the caller rather than asked
+-        // in-band, but it is still a question the backend composed after an
+-        // answer, so it passes the same checks every asked round did (#569).
+-        // An undeclared round is left to the caller's MRTR.9 gate, which
+-        // names the missing capability; the slice is not visible there, so a
+-        // round outside it is refused here as it would be in-band.
+-        if let Some(body) = last.as_deref()
+-            && interim.undeclared(declared).is_none()
+-        {
+-            Self::plan(&interim, declared, slice)?;
+-            self.gate
+-                .admit(&Self::handed_back(body, &interim))
+-                .map_err(|error| match error {
+-                    BridgeError::ChallengeRefused { .. } => {
+-                        BridgeError::ChallengeRefused { dispatched }
+-                    }
+-                    other => other,
+-                })?;
+-        }
+         Err(BridgeError::RoundsExhausted { last })
+     }
+ 
+@@ -609,31 +585,6 @@ impl InputBridge<'_> {
+         )
+     }
+ 
+-    /// The last round as the caller receives it.
+-    ///
+-    /// An asked round is rebuilt from its prompts because only that
+-    /// projection goes on the wire. A handed-back round is not rebuilt: the
+-    /// caller gets the backend's result whole, every field of every request
+-    /// entry included, with only `requestState` swapped for a sealed
+-    /// continuation. So the gate sees that result without `requestState`, and
+-    /// the request keys again as string values, because the caller echoes
+-    /// each key and a scanner that walks object values would pass over it.
+-    fn handed_back(body: &Value, interim: &crate::protocol::mrtr::InputRequired) -> Value {
+-        let mut shown = body.clone();
+-        if let Some(fields) = shown.as_object_mut() {
+-            fields.remove("requestState");
+-        }
+-        // ponytail: keys are repeated as string values only because the
+-        // response scanners walk object values and skip keys (#2114); drop
+-        // `keys` once they read keys too.
+-        let keys: Vec<&str> = interim
+-            .requests
+-            .iter()
+-            .map(|(key, _)| key.as_str())
+-            .collect();
+-        serde_json::json!({ "result": shown, "keys": keys })
+-    }
+-
+     /// Put one round's prompts to the client and collect what came back.
+     ///
+     /// A prompt that outlives its wait ends the call, and WHICH bound ended the

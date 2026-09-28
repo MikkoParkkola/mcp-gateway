@@ -1,0 +1,96 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 171e090dc..1255cd11b 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -14,8 +14,6 @@
+ //! request the gateway cannot classify is one the client was never given the
+ //! chance to withhold consent for.
+ 
+-mod debug;
+-
+ use serde_json::Value;
+ 
+ use crate::protocol::{ElicitationCreateParams, SamplingCreateMessageParams};
+@@ -188,10 +186,7 @@ pub enum DeliveryError {
+ }
+ 
+ /// Why the whole bridged call failed.
+-///
+-/// `Debug` is written by hand (module `debug`): the last round carries the
+-/// backend's raw `requestState`.
+-#[derive(Clone, PartialEq, Eq)]
++#[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum BridgeError {
+     /// An entry could not be put to this client at all, and nothing was sent.
+     Refused {
+@@ -508,14 +503,11 @@ impl InputBridge<'_> {
+         }
+         // The last round is handed back to the caller rather than asked
+         // in-band, but it is still a question the backend composed after an
+-        // answer, so it passes the same checks every asked round did (#569).
+-        // An undeclared round is left to the caller's MRTR.9 gate, which
+-        // names the missing capability; the slice is not visible there, so a
+-        // round outside it is refused here as it would be in-band.
++        // answer, so it passes the same immutable gate every asked round did
++        // (#569). A round `plan` refuses is left to the caller's MRTR.9 gate.
+         if let Some(body) = last.as_deref()
+-            && interim.undeclared(declared).is_none()
++            && Self::plan(&interim, declared, slice).is_ok()
+         {
+-            Self::plan(&interim, declared, slice)?;
+             self.gate
+                 .admit(&Self::handed_back(body, &interim))
+                 .map_err(|error| match error {
+diff --git a/src/gateway/input_bridge/debug.rs b/src/gateway/input_bridge/debug.rs
+deleted file mode 100644
+index 89ee82712..000000000
+--- a/src/gateway/input_bridge/debug.rs
++++ /dev/null
+@@ -1,47 +0,0 @@
+-// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+-//! `Debug` for [`BridgeError`], by hand.
+-//!
+-//! `RoundsExhausted` carries the backend's last interim result whole, and that
+-//! holds the backend's raw `requestState`: opaque, possibly an authorization,
+-//! and never shown to the caller (MRTR.2). A derived `Debug` would print it
+-//! into any log or panic that formats the error, so the body is shown only by
+-//! its presence, as the continuation `Payload` shows its state.
+-
+-use super::BridgeError;
+-
+-impl std::fmt::Debug for BridgeError {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        match self {
+-            Self::Refused { key, reason } => f
+-                .debug_struct("Refused")
+-                .field("key", key)
+-                .field("reason", reason)
+-                .finish(),
+-            Self::Delivery { key, error } => f
+-                .debug_struct("Delivery")
+-                .field("key", key)
+-                .field("error", error)
+-                .finish(),
+-            Self::RoundsExhausted { last } => f
+-                .debug_struct("RoundsExhausted")
+-                .field("last", &last.as_ref().map(|_| "<redacted>"))
+-                .finish(),
+-            Self::RequestBudgetExhausted => f.write_str("RequestBudgetExhausted"),
+-            Self::Deadline => f.write_str("Deadline"),
+-            Self::NotAdmitted { message } => f
+-                .debug_struct("NotAdmitted")
+-                .field("message", message)
+-                .finish(),
+-            Self::ChallengeRefused { dispatched } => f
+-                .debug_struct("ChallengeRefused")
+-                .field("dispatched", dispatched)
+-                .finish(),
+-            Self::BackendFailed { message, dispatch } => f
+-                .debug_struct("BackendFailed")
+-                .field("message", message)
+-                .field("dispatch", dispatch)
+-                .finish(),
+-        }
+-    }
+-}

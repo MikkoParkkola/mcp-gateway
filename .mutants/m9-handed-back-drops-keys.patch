@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 171e090dc..f557bbc8d 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -631,7 +631,7 @@ impl InputBridge<'_> {
+             .iter()
+             .map(|(key, _)| key.as_str())
+             .collect();
+-        serde_json::json!({ "result": shown, "keys": keys })
++        serde_json::json!({ "result": shown, "keys": Vec::<&str>::new(), "_n": keys.len() })
+     }
+ 
+     /// Put one round's prompts to the client and collect what came back.
