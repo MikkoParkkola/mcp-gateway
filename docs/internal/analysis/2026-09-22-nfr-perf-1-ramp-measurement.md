@@ -1178,7 +1178,7 @@ not a culprit commit, and this design cannot produce one; a follow-up bisect con
 to that window can, if the rise there is one persistent step (Finding 3).
 
 **Finding 3 — attributing small per-segment differences is out of reach on this
-host; locating one large step is not.**
+host; locating one large step is cheaper but still needs exact sizing.**
 
 From realised scatter (CV 4.83%), using the prior analysis's own formula
 `n = (1.96·CV·k/(effect/2))²` with the asymptotic `k = 1.2533`:
@@ -1192,9 +1192,12 @@ From realised scatter (CV 4.83%), using the prior analysis's own formula
 **The endpoint costs 7 cycles; resolving ~1.7% per-segment differences costs 195.**
 A factor of ~28 in cost, on a host that yields ~6 cycles an hour under contention,
 so per-commit attribution of small differences is out of reach here. Locating the
-one large step is not: by the same formula an 8.42pp step resolves at n≈8 per
-comparison, so a bisect confined to idx27→69 (about 6 halvings) is feasible if the
-rise there is one persistent step; if it is several smaller changes, each needs its
+one large step is cheaper, though not free: the asymptotic formula gives n≈8 per
+comparison for an 8.42pp step, but that is a lower bound. At n≤8 the only ≥95%
+order-statistic interval is the full min–max range (§1.4), and about 6 sequential
+bisect decisions compound their error, so a bisect confined to idx27→69 must be sized
+against the exact small-sample interval and a sequence-wide confidence before it can
+attribute anything. It is plausible if the rise there is one persistent step; if it is several smaller changes, each needs its
 own resolution and the cost climbs back toward the per-segment figure. The
 2026-09-21 bisect targeted effects near 1.0%, which needs n≈564 here.
 
@@ -1269,7 +1272,7 @@ smaller is INCONCLUSIVE on that reading, never absent. A wide interval excludes 
 | does `REL` breach the 5% budget | ~5% | **yes**, budget excluded by 5.1pp |
 | which segment carries the rise | ~6% | **one** (idx27→69); `P4/P3` excludes 1.0 but cannot be separated from position bias (Finding 2) |
 | does the regression predate 4.0.0 | ~1.6% | **no** — INCONCLUSIVE |
-| which commit | ~1.7% | **no** for small per-segment differences (needs n≈195); a single persistent step in idx27→69 could be bisected at n≈8 per comparison |
+| which commit | ~1.7% | **no** for small per-segment differences (needs n≈195); a single persistent step in idx27→69 is cheaper to bisect (n≈8 per comparison is an asymptotic lower bound; size against the exact interval, Finding 3) |
 
 ### 6.3 Two of this report's own claims did not survive final `n`
 
