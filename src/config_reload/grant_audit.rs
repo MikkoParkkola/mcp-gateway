@@ -346,6 +346,38 @@ impl GrantAuditor {
         }
     }
 
+    /// A startup that could not read the grant file serves, and records, the
+    /// empty set: make that the baseline when there is none yet, so a file
+    /// later written directly reads as `out_of_band` rather than unseen.
+    ///
+    /// # Errors
+    ///
+    /// The state file cannot be read or written.
+    pub(crate) fn seed_empty_baseline(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock();
+        if inner.state.is_none() {
+            inner.state = Some(State::load(&self.state_path, &self.grants_path)?);
+        }
+        let Some(state) = inner.state.take() else {
+            return Ok(());
+        };
+        if state.pending.is_some() || inner.commit_owed {
+            // A recovery barrier stays as it is; the next reload finishes it.
+            inner.state = Some(state);
+            return Ok(());
+        }
+        // State kept for another grant file is no baseline for this one.
+        let mut state = state.for_path(&self.grants_path);
+        if state.grants.is_none() {
+            state.grants = Some(std::collections::BTreeMap::new());
+            let saved = state.save(&self.state_path);
+            inner.state = Some(state);
+            return saved;
+        }
+        inner.state = Some(state);
+        Ok(())
+    }
+
     /// Startup snapshot (design section 6 step 5): one `loaded` record per
     /// active grant, then `loaded_complete` with the count, under a fresh
     /// run id.

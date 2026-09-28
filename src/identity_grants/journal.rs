@@ -431,11 +431,31 @@ pub(crate) fn active_rows(rows: &[IdentityGrant], now: DateTime<Utc>) -> Vec<&Id
 /// or refused, and the journal.
 pub(crate) struct LockedRead {
     /// Held until dropped; the caller keeps it across publish and record.
-    pub(crate) guard: crate::fs_lock::ExclusiveFileLock,
+    /// `None` when the grant file's directory is not writable, so the lock
+    /// file cannot exist there (see [`read_locked`]).
+    pub(crate) guard: Option<crate::fs_lock::ExclusiveFileLock>,
     /// The grant file, or the reason it was refused.
     pub(crate) grants: Result<IdentityGrantFile, String>,
     /// The journal beside it.
     pub(crate) journal: crate::config_reload::grant_audit::JournalRead,
+}
+
+/// Whether `error`, from creating the lock file, means the directory itself
+/// cannot be written: the only case where reading without the lock is safe.
+/// A lock file another account made unreadable is not that case.
+fn lock_dir_is_unwritable(lock: &Path, error: &std::io::Error) -> bool {
+    match error.kind() {
+        std::io::ErrorKind::ReadOnlyFilesystem => true,
+        #[cfg(unix)]
+        std::io::ErrorKind::PermissionDenied => {
+            let dir = lock
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            !lock.exists() && rustix::fs::access(dir, rustix::fs::Access::WRITE_OK).is_err()
+        }
+        _ => false,
+    }
 }
 
 /// Take the journal lock, polling [`crate::fs_lock::ExclusiveFileLock::try_lease`]
@@ -458,11 +478,22 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
         .await
         .ok()?;
         match attempt {
-            Ok(Some(guard)) => break guard,
+            Ok(Some(guard)) => break Some(guard),
             Ok(None) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
             Ok(None) => return None,
+            // A read never needs write access. A directory this process
+            // cannot write (a read-only mount, a Kubernetes Secret or
+            // ConfigMap) has no writer this gateway runs, and such mounts
+            // update by an atomic symlink swap: read without the lock.
+            Err(error) if lock_dir_is_unwritable(&lock, &error) => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    tracing::warn!(%error, path = %lock.display(), "grant journal lock cannot be created; reading the grant file without it");
+                });
+                break None;
+            }
             Err(error) => {
                 tracing::error!(%error, path = %lock.display(), "grant journal lock unavailable");
                 return None;

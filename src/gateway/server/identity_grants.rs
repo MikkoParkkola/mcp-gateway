@@ -68,7 +68,8 @@ const STARTUP_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5)
 ///
 /// # Errors
 ///
-/// None today; the `Result` keeps the startup call sites uniform.
+/// [`Error::Config`] when `fail_on_error` is set and the grant file cannot be
+/// read under the journal lock: the same refusal the first load gives.
 pub(super) async fn start_identity_grant_audit(
     config: &crate::config::Config,
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
@@ -87,7 +88,17 @@ pub(super) async fn start_identity_grant_audit(
         store_dir,
         &path,
     ));
-    let outcome = audit_startup(&auditor, &path).await;
+    let outcome = audit_startup(
+        &auditor,
+        &path,
+        config.security.identity_grants.fail_on_error,
+    )
+    .await;
+    if let Err(StartupFailure::Unreadable(reason)) = &outcome
+        && config.security.identity_grants.fail_on_error
+    {
+        return Err(Error::Config(reason.clone()));
+    }
     let (live, epoch) = meta_mcp.identity_grant_sink();
     let publish = |rows| {
         crate::gateway::publish_identity_grants(
@@ -104,7 +115,16 @@ pub(super) async fn start_identity_grant_audit(
                 .with_auditor(auditor);
             Ok(Some(Arc::new(sink)))
         }
-        Err(reason) => {
+        Err(StartupFailure::Unreadable(_)) => {
+            // Tolerated (`fail_on_error: false`): the empty set was recorded
+            // and is the baseline, and the sink stays for the next reload.
+            publish(Vec::new());
+            let sink = Arc::into_inner(sink)
+                .expect("the sink was just built")
+                .with_auditor(auditor);
+            Ok(Some(Arc::new(sink)))
+        }
+        Err(StartupFailure::Unrecorded(reason)) => {
             error!(%reason, path = %path.display(), "identity grant changes could not be recorded at startup; serving no grants until restart");
             publish(Vec::new());
             // No sink: every reload this run leaves grants empty. The next
@@ -114,32 +134,51 @@ pub(super) async fn start_identity_grant_audit(
     }
 }
 
+/// Why the startup audit served no grants.
+enum StartupFailure {
+    /// The grant file could not be read; the empty set is recorded.
+    Unreadable(String),
+    /// Something could not be recorded; the run serves no grants.
+    Unrecorded(String),
+}
+
+impl From<String> for StartupFailure {
+    fn from(reason: String) -> Self {
+        Self::Unrecorded(reason)
+    }
+}
+
 /// Reconcile, record and snapshot under the journal lock; the rows returned
 /// are the rows recorded.
 async fn audit_startup(
     auditor: &crate::config_reload::grant_audit::GrantAuditor,
     path: &std::path::Path,
-) -> std::result::Result<Vec<crate::identity_grants::IdentityGrant>, String> {
+    fail_on_error: bool,
+) -> std::result::Result<Vec<crate::identity_grants::IdentityGrant>, StartupFailure> {
     use crate::config_reload::grant_audit::Recorded;
     let read = crate::identity_grants::journal::read_locked(path, STARTUP_LOCK_WAIT)
         .await
         .ok_or_else(|| "the grant journal lock stayed busy".to_string())?;
     let rows = match read.grants {
         Ok(file) => file.grants,
-        // Startup already tolerated this read (`fail_on_error: false`), or
-        // refused to start. Serve and record the empty set, but do not
-        // reconcile: an unreadable file is not a removal. The sink stays, so
-        // a fixed file is picked up by the next reload.
+        // Serve and record the empty set, but do not reconcile: an
+        // unreadable file is not a removal. The recorded empty set becomes
+        // the baseline, so a file later written directly reads as
+        // `out_of_band`. The caller refuses the start instead when
+        // `fail_on_error` is set.
+        // Refusing the start writes nothing: no baseline, no snapshot.
+        Err(reason) if fail_on_error => return Err(StartupFailure::Unreadable(reason)),
         Err(reason) => {
             warn!(%reason, path = %path.display(), "identity grants unreadable at startup; serving none until a reload reads them");
+            auditor.seed_empty_baseline()?;
             auditor.snapshot(&[], chrono::Utc::now())?;
             drop(read.guard);
-            return Ok(Vec::new());
+            return Err(StartupFailure::Unreadable(reason));
         }
     };
     let prepared = auditor.prepare(&rows, &read.journal).map_err(|r| r.0)?;
     if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
-        return Err(reason);
+        return Err(reason.into());
     }
     auditor.snapshot(&rows, chrono::Utc::now())?;
     drop(read.guard);

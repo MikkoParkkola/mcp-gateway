@@ -58,8 +58,28 @@ impl State {
     /// Any other read or parse failure is an error, never a fresh state: a
     /// lost pending plan would append its records a second time.
     pub(super) fn load(path: &Path, grants: &Path) -> Result<Self, String> {
-        match std::fs::read_to_string(path) {
+        // Trust-bearing like the other control-plane files: it decides which
+        // journal entries are already recorded. The shared check refuses a
+        // group- or world-writable file; one another account owns is refused
+        // below (`save` creates it owner-only, 0600).
+        match crate::config::read_checked_file(
+            path,
+            crate::config::CheckedFile::ControlPlaneCollection,
+        ) {
             Ok(text) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt as _;
+                    let owner = std::fs::metadata(path)
+                        .map_err(|e| format!("{}: {e}", path.display()))?
+                        .uid();
+                    if owner != rustix::process::geteuid().as_raw() {
+                        return Err(format!(
+                            "{}: grant audit state is owned by uid {owner}, not this process; refusing to trust it",
+                            path.display()
+                        ));
+                    }
+                }
                 let state: Self =
                     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
                 // A later format may mean something else: refuse, never guess.
