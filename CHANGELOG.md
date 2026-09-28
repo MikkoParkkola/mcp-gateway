@@ -59,7 +59,6 @@ HTTP on a network bind. The Helm chart now installs and serves with its defaults
 
 ### Changed
 
-- CI: the container image build and CodeQL scanning run once per merge to the release branch instead of on every pull-request push (image inputs still build on the pull request; pull requests into `main` are unchanged). Maintainer `throwaway/` test runs use a dedicated self-hosted arm64 runner that admits only same-repository branches. Mutation proofs run as one batched workflow per pull request, with a per-mutant RED / SURVIVED / VOID result.
 - **One gateway writes an audit log path.** The transparency log takes a writer lease on
   `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
   error naming the path, whatever the auth setting. A restart overlap waits up to
