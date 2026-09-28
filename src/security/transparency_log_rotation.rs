@@ -546,8 +546,7 @@ pub(crate) enum WriteFault {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct StallGate {
-    /// (entered, open)
-    state: std::sync::Mutex<(bool, bool)>,
+    state: std::sync::Mutex<GateState>,
     cv: std::sync::Condvar,
 }
 
@@ -558,11 +557,11 @@ impl StallGate {
     /// Record entry, then block the writer until opened or the deadline.
     pub(crate) fn hold(&self) {
         let mut s = self.state.lock().expect("gate lock");
-        s.0 = true;
+        s.entered = true;
         self.cv.notify_all();
         let _ = self
             .cv
-            .wait_timeout_while(s, Self::DEADLINE, |s| !s.1)
+            .wait_timeout_while(s, Self::DEADLINE, |s| !s.open)
             .expect("gate lock");
     }
 
@@ -571,21 +570,31 @@ impl StallGate {
     pub(crate) fn wait_entered(&self) -> bool {
         let s = self.state.lock().expect("gate lock");
         self.cv
-            .wait_timeout_while(s, Self::DEADLINE, |s| !s.0)
+            .wait_timeout_while(s, Self::DEADLINE, |s| !s.entered)
             .expect("gate lock")
             .0
-            .0
+            .entered
     }
 
     /// Let the held write finish.
     pub(crate) fn release(&self) {
-        self.state.lock().expect("gate lock").1 = true;
+        self.state.lock().expect("gate lock").open = true;
         self.cv.notify_all();
     }
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct GateState {
+    /// A write has reached `hold`.
+    entered: bool,
+    /// The test let the write go.
+    open: bool,
+}
+
 /// Opens its gate on drop, so a failed assertion never leaves a write held.
 #[cfg(test)]
+#[must_use = "dropping the guard releases the stalled write at once"]
 pub(crate) struct StallRelease(pub(crate) std::sync::Arc<StallGate>);
 
 #[cfg(test)]

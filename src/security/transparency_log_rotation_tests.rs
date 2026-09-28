@@ -17,22 +17,26 @@ use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 /// the total time of a loop of fsyncs.
 pub(super) fn with_progress(work: impl FnOnce(&mut dyn FnMut()) + Send + 'static) {
     use std::sync::mpsc::RecvTimeoutError;
-    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    enum Progress {
+        Step,
+        Done,
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Progress>();
     let worker = std::thread::spawn(move || {
         let step_tx = tx.clone();
         work(&mut || {
-            let _ = step_tx.send(false);
+            let _ = step_tx.send(Progress::Step);
         });
-        let _ = tx.send(true);
+        let _ = tx.send(Progress::Done);
     });
     let mut steps = 0_usize;
     loop {
         match rx.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(false) => steps += 1,
+            Ok(Progress::Step) => steps += 1,
             // Done, or the worker ended early: its panic is re-raised below.
-            Ok(true) | Err(RecvTimeoutError::Disconnected) => break,
+            Ok(Progress::Done) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {
-                panic!("no progress for 10 s after {steps} appends: a deadlock")
+                panic!("no progress for 10 s after {steps} appends: a suspected deadlock")
             }
         }
     }
