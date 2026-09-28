@@ -82,7 +82,9 @@ python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md,
 ```
 
 For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
-section, so that the release leaves exactly one `[4.0.0]` heading:
+section, so that the release leaves exactly one `[4.0.0]` heading. Before the fold,
+every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
+or its mention removed from the draft.
 
 1. Rename `## [Unreleased]` to `## [4.0.0] - <date>`.
 2. Move every bullet of `## [4.0.0] - Unreleased`, and its upgrading and performance-numbers
@@ -93,7 +95,9 @@ section, so that the release leaves exactly one `[4.0.0]` heading:
 4. Reword the beta prefaces so each one says what that beta was, in the past tense, and points to
    the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
    criteria open or lists known gaps.
-5. Add a new empty `## [Unreleased]` above.
+5. Give every Security entry in the new heading the versions it affects and what an operator
+   has to do, or "no action" when there is nothing to do.
+6. Add a new empty `## [Unreleased]` above.
 
 Then, once that pull request has merged:
 
