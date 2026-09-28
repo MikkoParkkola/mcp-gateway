@@ -2326,6 +2326,108 @@ class WorkflowWiring(unittest.TestCase):
             self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
             self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
 
+    def test_release_binaries_are_signed_and_verified_before_they_are_public(self):
+        # OWASP ASI04: every release binary ships with an SBOM and a keyless
+        # signature, verified before and after upload, and the release stays a
+        # draft until what it serves has been verified.
+        build = [c for b in steps("release.yml", "build") for c in joined(b)]
+        self.assertTrue(any(re.search(r"\bcargo auditable build\b", c) for c in build), "W1: build without cargo auditable")
+        self.assertFalse(any(re.search(r"\bcargo build\b", c) for c in build), "W1: a plain cargo build ships no crate list")
+
+        blocks = steps("release.yml", "release")
+        names = [b[0].strip() for b in blocks]
+
+        def index(pattern):
+            found = [i for i, b in enumerate(blocks) if any(re.search(pattern, c) for c in joined(b)) or re.search(pattern, b[0])]
+            self.assertTrue(found, f"release job has no step matching {pattern}")
+            return found[0]
+
+        sign = index(r"scripts/release/sign-release-assets\.sh\b")
+        create = index(r"Create Release")
+        check = index(r"scripts/release/verify-release-assets\.sh\s+published\b")
+        publish = index(r"gh release edit .*--draft=false")
+        guard = index(r"Refuse to upload onto a published release")
+        self.assertLess(guard, create, "an upload onto a published release must be refused first")
+        self.assertTrue(
+            any(re.search(r"(^|\s)scripts/release/refuse-published-release\.sh\b", c) for c in joined(blocks[guard])),
+            "the published-release guard must run the fail-closed script",
+        )
+        self.assertRegex(
+            jobs("release.yml")["release"],
+            r"(?m)^    concurrency:\n      group: release-\$\{\{ needs\.verify\.outputs\.tag \}\}\n      cancel-in-progress: false$",
+            "release jobs for one tag must run one at a time and never be cancelled",
+        )
+        self.assertLess(sign, create, "W2: signing must come before the release exists")
+        self.assertLess(create, check, "W3: the draft must be verified after it is created")
+        self.assertLess(check, publish, "W3: publish only after the draft is verified")
+        self.assertIn("draft: true", "\n".join(blocks[create]), "W3: the release must be created as a draft")
+        for i in (sign, check, publish):
+            text = "\n".join(blocks[i])
+            self.assertNotRegex(text, r"continue-on-error|if:\s*always\(\)", f"W3: {names[i]} must not be skipped past")
+        for i in (sign, check):
+            self.assertIn("set -euo pipefail", "\n".join(blocks[i]), f"W2: {names[i]} must stop on the first failure")
+        # W7: nothing after signing rewrites the signed checksum file.
+        for block in blocks[sign + 1 :]:
+            self.assertNotRegex("\n".join(joined(block)), r"SHA256SUMS\.txt\s*$|>\s*SHA256SUMS", "W7: SHA256SUMS.txt rewritten after signing")
+
+        # W4: identity is the OIDC subject GitHub actually issues.
+        release = jobs("release.yml")["release"]
+        self.assertRegex(release, r"IDENTITY: https://github\.com/\$\{\{ github\.workflow_ref \}\}")
+        # W5: OIDC is granted where it is used and nowhere else. The image
+        # and registry jobs held it before release signing; the two new
+        # holders are the release job and its rehearsal.
+        oidc = sorted(
+            f"{wf}:{job}" for wf in ("release.yml", "ci.yml", "docker.yml")
+            for job, body in jobs(wf).items() if re.search(r"(?m)^\s+id-token:\s*write\b", body)
+        )
+        self.assertEqual(
+            oidc,
+            sorted([
+                "release.yml:release", "release.yml:npm-publish",
+                "ci.yml:binary-signing-rehearsal", "ci.yml:docker-manifest", "ci.yml:publish-mcp-registry",
+            ]),
+            "W5: id-token: write outside its allow-list",
+        )
+        # W6: a dispatch runs at the tag it releases.
+        verify = "\n".join("\n".join(b) for b in steps("release.yml", "verify"))
+        self.assertIn('"$GITHUB_REF" != "refs/tags/$TAG"', verify, "W6: a branch dispatch would sign as the branch")
+
+        # The rehearsal: dispatch only, draft only, always cleaned up.
+        self.assertEqual(
+            conjuncts(job_if("ci.yml", "binary-signing-rehearsal"))[0],
+            "github.event_name == 'workflow_dispatch'",
+        )
+        rehearsal = jobs("ci.yml")["binary-signing-rehearsal"]
+        self.assertRegex(rehearsal, r"gh release create .*--draft")
+        self.assertRegex(rehearsal, r"DRAFT: rehearsal-binary-signing-\$\{\{ github\.run_id \}\}")
+        self.assertRegex(rehearsal, r"(?s)if: always\(\)\s+env:.*?gh release delete \"\$DRAFT\"")
+        # Every release target is rehearsed with cargo auditable before a tag:
+        # the rehearsal matrix is the release matrix, and each leg checks that
+        # its SBOM lists crates.
+        def matrix(workflow, job):
+            body = jobs(workflow)[job]
+            m = re.search(r"(?ms)^ +include:\n(.*?)(?=^ {4}\S)", body)
+            self.assertIsNotNone(m, f"{workflow} {job} has no matrix include")
+            return [l.strip() for l in m.group(1).splitlines() if l.strip()]
+        self.assertEqual(
+            matrix("ci.yml", "binary-sbom-rehearsal"), matrix("release.yml", "build"),
+            "the SBOM rehearsal must build exactly the release targets",
+        )
+        legs = "\n".join(c for b in steps("ci.yml", "binary-sbom-rehearsal") for c in joined(b))
+        self.assertRegex(legs, r"\bcargo auditable build --release --target\b")
+        self.assertRegex(legs, r"check_release_assets\.py\b.*--sbom-only")
+        self.assertEqual(
+            conjuncts(job_if("ci.yml", "binary-sbom-rehearsal"))[0],
+            "github.event_name == 'workflow_dispatch'",
+        )
+        # The fail-closed tests block on every ref.
+        checks = jobs("ci.yml").get("release-signing-checks")
+        self.assertIsNotNone(checks, "ci.yml has no release-signing-checks job")
+        self.assertNotRegex(checks, r"(?m)^ {4}(if|continue-on-error):")
+        for script in ("test_check_release_assets.py", "test_sign_release_assets.py", "test_refuse_published_release.py"):
+            self.assertIn(f"scripts/release/{script}", checks)
+        self.assertIn("release-signing-checks", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
         # input. Once it expires, re-running that job publishes nothing
