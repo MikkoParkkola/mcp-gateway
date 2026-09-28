@@ -2353,15 +2353,26 @@ impl MetaMcp {
                     ..
                 }) => {}
                 // Out of rounds: hand back the LAST round, questions and state
-                // together, sealed like any other (#569). It reaches the client
-                // for the first time here, so MRTR.9 runs here; the key keeps
-                // its release default, since a backend that asked has not acted.
+                // together, sealed like any other (#569). The bridge has held it
+                // to MRTR.9 already, refusing it as `Undeclared` below; the key
+                // keeps its release default, since a backend that asked has not acted.
                 Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
                     if let Some(last) = last {
                         result = *last;
                         interim = crate::protocol::mrtr::InputRequired::from_result(&result);
                     }
-                    refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+                }
+                Err(crate::gateway::input_bridge::BridgeError::Undeclared {
+                    key,
+                    method,
+                    reason,
+                }) => {
+                    let refused = crate::protocol::mrtr::Undeclared {
+                        key: &key,
+                        method: &method,
+                        reason,
+                    };
+                    return Err(undeclared_gate::refusal(&refused, server, tool, trace_id));
                 }
                 // A policy refusal keeps its type across the bridge boundary.
                 // `error_response_preserving_status` carries a dedicated

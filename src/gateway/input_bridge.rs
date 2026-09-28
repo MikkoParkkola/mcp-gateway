@@ -192,6 +192,7 @@ pub enum DeliveryError {
 /// `Debug` is written by hand (module `debug`): the last round carries the
 /// backend's raw `requestState`.
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BridgeError {
     /// An entry could not be put to this client at all, and nothing was sent.
     Refused {
@@ -214,13 +215,26 @@ pub enum BridgeError {
     /// first round's would replay prompts already answered (#569). `None` when
     /// no round ran, so there is nothing newer than the interim the caller holds.
     ///
-    /// The round is not held to the session declaration. A declared round has
-    /// passed the per-request slice and the challenge gate; an undeclared one
-    /// has passed neither. The caller must apply MRTR.9 before showing it, as
-    /// `invoke.rs` does (#2173).
+    /// The round has passed the session declaration, the per-request slice
+    /// and the challenge gate; an undeclared one is [`BridgeError::Undeclared`]
+    /// instead (#2173).
     RoundsExhausted {
         /// The last interim result the backend returned, whole.
         last: Option<Box<Value>>,
+    },
+    /// The last round asks for input the session never declared.
+    ///
+    /// Raised instead of [`BridgeError::RoundsExhausted`], so the round is
+    /// never handed to a caller that would have to check it (#2173). The
+    /// fields are what an MRTR.9 refusal names.
+    #[non_exhaustive]
+    Undeclared {
+        /// The backend's own key for the entry.
+        key: String,
+        /// The method the entry asked with; empty when it carried none.
+        method: String,
+        /// Which refusal this is.
+        reason: crate::protocol::mrtr::Refusal,
     },
     /// The backend asked for more requests in total than the bound allows.
     RequestBudgetExhausted,
@@ -469,10 +483,6 @@ impl InputBridge<'_> {
     /// Returns the reason the bridged call failed: a refused entry, a delivery
     /// that produced no answer, or a bound the call ran past.
     ///
-    /// [`BridgeError::RoundsExhausted`] hands back a round that is not held to
-    /// the session declaration. A declared round has passed the slice and the
-    /// challenge gate; an undeclared one has passed neither. A caller must
-    /// apply MRTR.9 to it before showing it, as `invoke.rs` does (#2173).
     pub async fn run(
         &self,
         session_id: &str,
@@ -519,12 +529,16 @@ impl InputBridge<'_> {
         // The last round is handed back to the caller rather than asked
         // in-band, but it is still a question the backend composed after an
         // answer, so it passes the same checks every asked round did (#569).
-        // An undeclared round is left to the caller's MRTR.9 gate, which
-        // names the missing capability; the slice is not visible there, so a
-        // round outside it is refused here as it would be in-band.
-        if let Some(body) = last.as_deref()
-            && interim.undeclared(declared).is_none()
-        {
+        // An undeclared one is refused here with what MRTR.9 names, so no
+        // caller ever holds a round it would have to check itself (#2173).
+        if let Some(body) = last.as_deref() {
+            if let Some(refused) = interim.undeclared(declared) {
+                return Err(BridgeError::Undeclared {
+                    key: refused.key.to_string(),
+                    method: refused.method.to_string(),
+                    reason: refused.reason,
+                });
+            }
             Self::plan(&interim, declared, slice)?;
             self.gate
                 .admit(&Self::handed_back(body))

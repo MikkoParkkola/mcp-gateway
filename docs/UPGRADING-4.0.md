@@ -1688,13 +1688,20 @@ Now the call returns the backend's **last** interim result: its `inputRequests`,
 `requestState` holding a gateway-sealed continuation of that round. Resending `tools/call`
 with the answers in `inputResponses` and that `requestState` resumes the exchange where the
 backend stopped. The continuation is bound to the caller like any other (MRTR.2). The last
-round's questions are held to the client's declared capabilities first, so an undeclared one
-is still refused. The idempotency key is not settled, as before: a backend that stopped to
-ask has not acted.
+round is held to the client's declared capabilities, its per-request capability list and the
+response firewall first, so an undeclared question is still refused with the capability it
+needs. The idempotency key is not settled, as before: a backend that stopped to ask has not
+acted.
+
+For code that uses the library's `mcp_gateway::gateway::input_bridge` module directly:
+`BridgeError` is now `#[non_exhaustive]`; `RoundsExhausted` carries the last round
+(`last`); and a new `Undeclared` variant, itself `#[non_exhaustive]`, reports a last round
+that asks for a capability, mode or method the session never declared. `InputBridge::run`
+never hands back such a round.
 
 Action: a client that treated `-32003` from a bridged call as final now gets a result it can
 answer. If it cannot answer, it can treat the result as unfinished, the same as any
-`input_required` result.
+`input_required` result. Library code that matches on `BridgeError` needs a wildcard arm.
 
 ## 63. Error results are never served from a response cache
 

@@ -27,6 +27,16 @@ impl std::fmt::Debug for BridgeError {
                 .debug_struct("RoundsExhausted")
                 .field("last", &last.as_ref().map(|_| "<redacted>"))
                 .finish(),
+            Self::Undeclared {
+                key,
+                method,
+                reason,
+            } => f
+                .debug_struct("Undeclared")
+                .field("key", key)
+                .field("method", method)
+                .field("reason", reason)
+                .finish(),
             Self::RequestBudgetExhausted => f.write_str("RequestBudgetExhausted"),
             Self::Deadline => f.write_str("Deadline"),
             Self::NotAdmitted { message } => f

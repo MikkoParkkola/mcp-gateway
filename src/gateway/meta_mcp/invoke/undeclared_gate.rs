@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! The MRTR.9 gate on a backend's interim result, shared by the dispatch and a
-//! bridged exchange's last round.
+//! The MRTR.9 gate on a backend's interim result, shared by the dispatch and the
+//! bridge's refusal of an undeclared last round.
 
 use tracing::warn;
 
@@ -22,6 +22,17 @@ pub(super) fn refuse_undeclared(
     let Some(refused) = interim.and_then(|i| i.undeclared(caller.input_capabilities)) else {
         return Ok(());
     };
+    Err(refusal(&refused, server, tool, trace_id))
+}
+
+/// MRTR.9's refusal of one entry, logged once. Shared with the bridge's own
+/// refusal of an undeclared last round, so both answer the client alike.
+pub(super) fn refusal(
+    refused: &crate::protocol::mrtr::Undeclared<'_>,
+    server: &str,
+    tool: &str,
+    trace_id: &str,
+) -> crate::Error {
     warn!(
         server,
         tool,
@@ -30,5 +41,5 @@ pub(super) fn refuse_undeclared(
         method = refused.method,
         "Backend asked for input of a type the client did not declare"
     );
-    Err(undeclared_input_request(server, tool, &refused))
+    undeclared_input_request(server, tool, refused)
 }
