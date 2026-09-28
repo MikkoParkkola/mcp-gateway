@@ -73,8 +73,8 @@ Path: the grant file path plus `.journal.jsonl` (for `grants.yaml`, `grants.yaml
 One JSON object per line:
 
 ```json
-{"v":1,"entry_id":"<uuid v4>","verb":"add|replace|revoke","grant_id":"...","digest":"sha256:<hex>",
- "expires_at":"<rfc3339>|null","at":"<rfc3339>","actor":"unknown","os_account":"<$USER|$USERNAME>|null"}
+{"v":1,"entry_id":"<uuid v4>","verb":"add|replace|revoke","grant_id":"...","prev_digest":"sha256:<hex>|null",
+ "digest":"sha256:<hex>","expires_at":"<rfc3339>|null","at":"<rfc3339>","actor":"unknown","os_account":"<$USER|$USERNAME>|null"}
 ```
 
 - `verb`: `add` for a new id; `replace` when `--replace` overwrote an existing id; `revoke`.
@@ -124,40 +124,68 @@ State file: `<control-plane store dir>/grant-journal-state.json`, written with
 `config_persistence::write_text_atomic`, mode 0600:
 
 ```json
-{"v":1,"grants_path":"...","offset":1234,"grants":{"<grant id>":"sha256:<hex>"},"gap":false}
+{"v":1,"grants_path":"...","generation":7,"consumed":["<entry_id>","torn:<sha256>"],
+ "grants":{"<grant id>":"sha256:<hex>"},"gap":false,"pending":null}
 ```
 
-- `offset`: bytes of the journal already ingested (always at a line end).
-- `grants`: grant id to digest, as of the last completed reconciliation (the baseline).
-- `gap`: a record could not be written since the last complete reconciliation.
-- A state file for a different `grants_path`, or none at all, means "no baseline".
+- `consumed`: journal entry ids already recorded, plus `torn:<sha256 of line>` for unparseable lines
+  already reported. It grows by one short string per CLI change (`ponytail:` ceiling: prune ids older
+  than the journal when a journal rotation feature exists).
+- `grants`: grant id to digest at the last committed reconciliation (the baseline).
+- `generation`: incremented by each committed reconciliation; it makes non-journal event ids unique.
+- `gap`: some applied change was not recorded when it happened (AUDIT4.7).
+- `pending`: the write-ahead plan of 5.2, or `null`.
+- A state file for a different `grants_path`, or none at all, means "no baseline" (5.2 step 3).
+
+No byte offset: the journal is re-parsed in full each run and `consumed` decides what is new. That makes a
+truncated or replaced journal visible (a consumed id is missing) without losing entries a replacement adds.
+The journal grows by one line per CLI change, so a full parse stays small.
 
 The state lives in the store directory, which the one-writer lease covers (#1570). Two gateways that share
-a grant file but use different stores each keep their own offset and record into their own log.
+a grant file but use different stores each keep their own state and record into their own log.
 
 ### 5.2 One reconciliation
 
-`reconcile` runs after publish, with the sink lock and the journal lock (5.4) held:
+The journal entry of section 3 also carries `prev_digest`: the row's digest before the change (`null` for
+`add`). It lets the gateway see a direct edit that a later CLI change overwrote.
 
-1. Tail: parse newline-terminated lines from `offset`. An unterminated line at end of file waits for the
-   next run (a CLI mid-append). An unparseable line, including a torn line that later bytes followed,
-   yields one `indeterminate` record and is skipped.
-   A journal shorter than `offset` (truncated or replaced) yields one `indeterminate` record; `offset`
-   moves to the journal's end and those bytes are not ingested.
-2. Crash check (startup only, 5.3): drop tail entries whose event id is already in the log.
-3. For each remaining entry, in order: append a record with the entry's verb, grant id, digest, expiry,
-   `occurred_at` and `os_account_hint`; event id `grant-journal:<entry_id>`. After each success, advance
-   the in-memory offset past that line. On the first failure, stop; later entries stay pending.
-4. Expected set: the baseline with every tail entry applied (`grant_id -> digest`; entries set, never
-   delete). Actual set: digests of the file rows.
-5. For each grant id where expected and actual differ (changed, added, or missing from the file, which
-   covers row deletion and an empty `grants` list), append `out_of_band` (`indeterminate` when `gap` is
-   set) with the actual digest and expiry, `None` for a missing row. Event id:
-   `grant-oob:<sha256 of grant id, expected digest, actual digest>`. With no baseline, step 5 is skipped
-   and the current rows become the baseline.
-6. All appends succeeded: state = `{offset, grants: actual, gap: false}`. Otherwise: `offset` advanced only
-   past recorded entries, baseline unchanged, `gap: true`. Write the state file; a failed state write is
-   logged at `error!` and named in the outcome.
+`reconcile` runs with the sink lock and the journal lock (5.4) held. Order: finish any old plan, plan,
+persist the plan, publish, append, commit.
+
+1. Finish an old plan. If `pending` is set (a crash or a failed append in an earlier run), append the
+   plan's records that are not yet in the log (5.3), then commit it (step 7). If that still fails, stop:
+   publish the new rows (5.2 never blocks a publish), keep `gap: true`, and report UNRECORDED.
+2. Parse the journal. A newline-terminated line that does not parse, or an unterminated line followed
+   by more bytes (a torn append), is a torn line. An unterminated line at end of file waits (a CLI
+   mid-append). New entries are those whose id is not in `consumed`. A consumed id missing from the journal
+   means it was truncated or replaced: one `indeterminate` record for the discontinuity.
+3. Expected set: the baseline, then each new entry in journal order. If the expected digest for the entry's
+   grant differs from its `prev_digest`, first plan an `out_of_band` record for that grant (the
+   intervening direct edit), then plan the entry's own record and set expected to its `digest`.
+   No baseline (first start with this feature, or a changed `grants_path`): expected starts empty and
+   every journal entry is new, so grants the journal never mentions are not compared (they predate it and
+   appear in the snapshot as `loaded`), while a journalled grant whose file row differs is still caught.
+4. Actual set: digests of the rows just read. For each grant id where expected and actual differ
+   (changed, added outside the CLI, or missing, which covers row deletion and an empty `grants` list),
+   plan `out_of_band` with the actual digest and expiry (`None` for a missing row).
+5. If `gap` is set: plan one `indeterminate` record for the gap itself, and plan every step-3/4 mismatch as
+   `indeterminate` instead of `out_of_band`. A torn line or journal discontinuity also plans `indeterminate`.
+6. Persist the plan: `pending = {records, next_state}` with `next_state = {generation + 1, consumed +
+   new ids + torn hashes, grants: actual, gap: false}`. Then publish (reload) and append each record
+   in order. Event ids: `grant-journal:<entry_id>`; every other record
+   `grant-<verb>:<next generation>:<grant id or cause>`, so a repeated transition in a later reconciliation
+   gets a fresh id and a recovered plan reuses its own.
+7. Commit: all appends succeeded, so state = `next_state`, `pending = null`. On the first failed append,
+   stop, keep `pending`, set `gap: true` in the state file and report UNRECORDED. Step 1 retries.
+
+A failed plan write (step 6) still publishes: the change is applied, the outcome says UNRECORDED and
+`gap` is set in memory. Recovering the gap durably is then impossible for that run, because the state
+file sits in the same directory as the audit log and neither can be written; the outcome says so. A failed
+commit write keeps the committed state in memory, so the running process does not repeat records, and the
+next reconcile retries the write. A persistently unreadable journal plans its `indeterminate` record once
+per cause per process (cause kept in memory). While the journal is unreadable (missing is not
+unreadable: a missing journal is an empty one), steps 3-4 are skipped and the baseline is kept, so CLI
+changes are not misreported as `out_of_band`; they are recorded once the journal is readable again.
 
 The reload outcome gains one clause: `grant records: N written`, or `grant change UNRECORDED: <reason>`.
 A failed append never unpublishes, never reverts the epoch, and never turns an applied reload into a
@@ -172,14 +200,14 @@ Paths through `reload_identity_grants` (`config_reload/mod.rs:1809`):
 
 ### 5.3 Exactly once across a crash (AUDIT4.8)
 
-A record and the offset that consumes it are two durable writes: the record first, then the offset.
-At startup the crash check reads the newest audit page (`read_audit`, `actor_id = "unknown"`,
-`action = MutateGrant`, limit 256) and drops every tail entry whose `grant-journal:` id it finds. The same
-id set suppresses a repeated `grant-oob:` record.
-
-Ceiling: an entry recorded and then buried under more than 256 later grant records before its offset was
-persisted would be recorded twice. Only a crash between steps 3 and 6 leaves an offset unpersisted, and
-nothing but that run's own records is written in between. A `ponytail:` comment names the ceiling.
+The plan is written before its first record and cleared after its last, so after any crash the state file
+says exactly which records might already be in the log: the pending plan's. Nothing else writes
+`actor_id = "unknown"` records between persisting a plan and committing it (the lease excludes other
+gateways; the auditor mutex serialises this gateway). So step 1 pages `read_audit`
+(`actor_id = "unknown"`, `action = MutateGrant`, following `next_cursor` across segments) newest-first
+until it has examined as many records as the plan holds, or reached the start of the log, and appends
+only the plan records whose event ids it did not see, in plan order. The scan is bounded by the plan's size,
+not by a fixed page, so a large backlog has no window.
 
 ### 5.4 The CLI/gateway race
 
@@ -187,8 +215,11 @@ Without a shared lock, a reload between the CLI's file write and its journal app
 file with no entry, record `out_of_band`, then record the entry on the next reload: two records for one
 change. So the reload takes the journal lock around reading the grant file and the journal, waiting at
 most `RELOAD_LOCK_WAIT`. A timeout is the existing busy refusal, which publishes nothing (existing cell
-T10b). The CLI holds the lock for one file write and one append. The gateway takes it off the runtime
-(`spawn_blocking`, `try_acquire` polled until the deadline).
+T10b). The CLI holds the lock for one file write and one append. The gateway polls
+`ExclusiveFileLock::try_lease` (cross-platform, `Ok(None)` on contention; `try_acquire` is unix-only,
+`src/fs_lock.rs:57-63`) off the runtime until the deadline. The CLI uses the blocking `acquire`.
+The lock and the two reads sit in one `journal` helper, so no grant-file reader in the gateway can take
+one without the other.
 
 ## 6. Startup sequence (AUDIT4.3, AUDIT4.5)
 
@@ -200,8 +231,8 @@ auth on, `serve --stdio` obeys the same audit rule as HTTP (`docs/UPGRADING-4.0.
    enabled and no store (the `:104` degrade), startup fails with "identity grants need the governance
    audit log when auth is on" (UPGRADING item 79). With auth off there is no store and no auditor.
 3. Build the auditor and load the state file.
-4. Take the journal lock, read the grant file and journal, and reconcile in startup mode (5.2, crash check on).
-   Publish the rows just read, so the recorded set and the served set are the same bytes.
+4. Take the journal lock, read the grant file and journal, and reconcile (5.2; step 1 finishes any plan a
+   crash left). Publish the rows just read, so the recorded set and the served set are the same bytes.
 5. Snapshot under a fresh run id (uuid v4): one `loaded` record per grant active by
    `IdentityGrant::is_active_at(now)` (grant id, digest, expiry; event id `grant-loaded:<run>:<grant>`),
    then one `loaded_complete` record (target and run id, `count`, zero included; event id `grant-loaded:<run>`).
@@ -218,12 +249,16 @@ One row for each boundary between durable writes. "Recovery" is the next startup
 | # | Crash point | Durable state left behind | Recovery result |
 |---|---|---|---|
 | C1 | CLI: after the grant file write, before the journal append | file changed, no entry | `out_of_band` for that grant (correct: no entry exists; the CLI also exited non-zero) |
-| C2 | CLI: mid-append (partial line) | unterminated last line; file already changed | the torn line waits while at end of file; once later bytes follow it, it is unparseable: one `indeterminate`, and the file change it described is also `out_of_band` |
-| C3 | Gateway: before a journal record's append | offset before entry | entry ingested once |
-| C4 | Gateway: after the record, before the offset write | record in log, offset before entry | crash check finds `grant-journal:<id>`; entry skipped; once |
-| C5 | Gateway: after the offset write | both | nothing pending; once |
-| C6 | Gateway: after an `out_of_band` append, before the state write | record in log, old baseline | same mismatch recomputed; `grant-oob:` id found; not repeated |
-| C7 | Gateway: during the startup snapshot | some `loaded`, no `loaded_complete` | run served nothing (it never bound); next run writes a full snapshot under a new run id. An auditor reads a run without `loaded_complete` as incomplete |
+| C2 | CLI: mid-append (partial line) | unterminated last line; file already changed | the torn line waits while at end of file; once later bytes follow it, one `indeterminate` (torn line), and the change it described is `out_of_band` |
+| C3 | Gateway: before the plan write | old state, no records | recomputed from scratch; once |
+| C4 | Gateway: after the plan write, before the first append | `pending`, no records | step 1 finds none of the plan's ids; appends all; once |
+| C5 | Gateway: after k of n appends | `pending`, k records | step 1 scans n newest grant records, finds k ids, appends the other n-k in order; once |
+| C6 | Gateway: after the last append, before the commit write | `pending`, n records | step 1 finds all n; appends none; commits; once |
+| C7 | Gateway: after the commit write | committed state | nothing pending; once |
+| C8 | Gateway: during the startup snapshot | some `loaded`, no `loaded_complete` | that run never bound a listener; next run writes a full snapshot under a new run id. A run without `loaded_complete` reads as incomplete |
+
+Test crash points are fault hooks inside the auditor at C4, C5 and C6 (a test-only `GrantAuditFault`),
+not the store's `FaultPoint`, which covers collection-file replacement only.
 
 ## 8. Outcome rules
 
@@ -231,9 +266,9 @@ One row for each boundary between durable writes. "Recovery" is the next startup
 |---|---|---|
 | Auth on, grants on, store cannot open | refuse to start (HTTP and stdio) | 4.5 |
 | Auth off | no store, no auditor, tracing event only | 4.5 control |
-| Reload append fails | change stays in force; outcome says UNRECORDED; `gap` persisted | 4.6, 4.7 |
-| State write fails after appends | outcome names it; next startup's crash check prevents duplicates | 4.8 |
-| `gap` set at startup | mismatches recorded as `indeterminate`, not `out_of_band`; `gap` cleared after a full success | 4.7 |
+| Reload append fails | change stays in force; outcome says UNRECORDED; plan kept, `gap` persisted | 4.6, 4.7 |
+| Commit write fails after appends | committed in memory; outcome names it; next reconcile retries; after a crash, step 1 finds every record | 4.8 |
+| `gap` set | one `indeterminate` gap record, mismatches as `indeterminate`; `gap` cleared only by a committed plan | 4.7 |
 | Snapshot append fails | this run serves no grants | 4.3 |
 | Reload parse refusal | prior grant set unchanged; journal stays pending | acceptance row positive control |
 
@@ -277,22 +312,31 @@ Each cell names the failure it goes red on. The test plan document expands these
 | T4a | 4.4 | direct file edit, then reload | no `out_of_band` record |
 | T4b | 4.4 | row deleted; `grants: []` | no record per missing id |
 | T4c | 4.4 | edit while stopped, then startup | no record at startup |
-| T5a | 4.5 | auth on, grants on, unopenable default store | gateway starts today; expects startup error |
+| T4d | 4.4 | direct edit of a row, then CLI revoke of it, one reload | journal absorbs the edit; expects `out_of_band` then `revoke` |
+| T4e | 4.4 | A-to-B direct edit, reload, B-to-A, reload, A-to-B again, reload | expects three `out_of_band` records (fresh id per generation) |
+| T4f | 4.4 | first start, journal says digest D, file row differs | expects `out_of_band` with no baseline |
+| T4g | 4.4 | torn journal line followed by a later entry; unreadable (mode-refused) journal | expects one `indeterminate` each, repeated reloads add none, no CLI change reported `out_of_band` |
+| T4h | 4.4 | journal replaced by a shorter one with a new entry | expects one `indeterminate` and the new entry recorded |
+| T5a | 4.5 | auth on, grants on, unopenable default store; HTTP and stdio | gateway starts today; expects startup error |
 | T5b | 4.5 | auth off, grants on | (control) no store file is created |
 | T6 | 4.6 | append fails after publish | expects change in force and UNRECORDED in outcome |
-| T7 | 4.7 | reload append fails, then restart with a further direct edit | expects `indeterminate`, not `out_of_band` |
-| T8a | 4.8 | fault after record append, before offset write; restart | expects exactly one record per entry |
-| T8b | 4.8 | fault before record append; restart | expects exactly one record per entry |
-| T9 | wiring | through `identity_grant_sink_for` + real startup helper | a sink built without the auditor passes every other cell |
+| T7a | 4.7 | reload append fails, then restart with a further direct edit | expects a gap record and `indeterminate`, not `out_of_band` |
+| T7b | 4.7 | reload append fails, restart with the file unchanged | expects the gap record even with no mismatch |
+| T8 | 4.8 | auditor fault at C4, C5 (k=1 of 3 and k=300 of 301), C6; restart | expects exactly one record per planned id, in order |
+| T9 | wiring | through `identity_grant_sink_for` and the real startup helpers | a sink built without the auditor passes every other cell |
+| T10 | race | CLI holds the journal lock between its file write and append; reload runs | expects busy or one `add` record, never `out_of_band` |
+| T11 | R1 | durable write and readback of every `grant_change` field through `FileControlPlaneStore` | `audit_fields` drops the field |
+| T3d | 4.3 | injected failure on the `loaded_complete` append | expects empty served set |
 
-Fault injection reuses the store's `FaultPoint` seam (`control_plane/store.rs:1089-1146`) and a test-only
-failing `ControlPlaneStore` wrapper for append failures.
+Fault injection: the auditor's test-only `GrantAuditFault` hooks (section 7) and a test-only
+`ControlPlaneStore` wrapper whose `append_audit` fails on the Nth call.
 
 ## 11. Mutation targets
 
-M1 skip the journal append (T1a). M2 drop the crash check (T8a). M3 unchanged path returns early again (T2d).
-M4 drop the `out_of_band` step (T4a). M5 serve grants after a failed snapshot append (T3c).
-M6 keep the `:104` degrade with grants on (T5a). M7 report `out_of_band` when `gap` is set (T7).
+M1 skip the journal append (T1a). M2 step 1 appends the whole plan without the log scan (T8). M3 unchanged
+path returns early again (T2d). M4 drop the `out_of_band` step (T4a). M5 serve grants after a failed
+snapshot append (T3c). M6 keep the `:104` degrade with grants on (T5a). M7 report `out_of_band` when `gap`
+is set (T7a). M8 drop the `prev_digest` check (T4d). M9 content-only event ids (T4e).
 
 ## 12. Out of scope
 
