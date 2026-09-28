@@ -325,7 +325,7 @@ pub enum KubernetesCommand {
         #[arg(long, default_value_t = 1)]
         cycles: usize,
 
-        /// Keep reconciling until the process is stopped.
+        /// Keep reconciling until stopped; `--format json` prints one JSON line per cycle.
         #[arg(long)]
         watch: bool,
 
