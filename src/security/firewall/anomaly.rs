@@ -132,9 +132,10 @@ impl AnomalyDetector {
     ///
     /// `identity` is the stable per-caller key. `None` means the caller could
     /// not be identified, and the honest answer is then
-    /// [`Observation::Unobservable`] rather than a passing score. Per caller,
-    /// never globally: one caller's ordinary sequence must not make another's
-    /// unusual one look ordinary. Scores and learns in one step; the firewall
+    /// [`Observation::Unobservable`] rather than a passing score. The
+    /// predecessor is per caller, so one caller's calls never stand in for
+    /// another's previous step. What counts as usual is learned from every
+    /// admitted call, all callers pooled: a shared model of normal traffic. Scores and learns in one step; the firewall
     /// uses [`Self::begin`] and [`Self::commit`] so a refused call is not
     /// learned.
     pub fn observe(&self, identity: Option<&str>, server: &str, tool: &str) -> Observation {
@@ -289,14 +290,14 @@ impl AnomalyDetector {
         self.warming_up.load(Ordering::Relaxed)
     }
 
-    /// Hold `identity`'s scoring lock, so a test can prove a concurrent call
-    /// for the same identity waits for it.
     /// The tracker this detector learns into.
     #[cfg(test)]
     pub(crate) fn tracker_for_test(&self) -> &TransitionTracker {
         &self.tracker
     }
 
+    /// Hold `identity`'s scoring lock, so a test can prove a concurrent call
+    /// for the same identity waits for it.
     #[cfg(test)]
     pub(crate) fn hold_stripe(&self, identity: &str) -> parking_lot::MutexGuard<'_, ()> {
         self.stripe(identity).lock()

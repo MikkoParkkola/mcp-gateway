@@ -20,7 +20,7 @@ load. Items 60 and 64 are decided per capability file, and a file they affect is
 that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70 and 74 print no notice: read them here
 before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51, 54 and 76 refuse the gateway's start (item 76 only with `anomaly_detection` on and an out-of-range anomaly threshold; item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51, 54 and 76 refuse the gateway's start (item 76 only with `anomaly_detection` on and an out-of-range anomaly threshold; item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -1805,7 +1805,9 @@ each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONF
 `security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
 against a transition record that nothing wrote to, so every call scored a neutral 0.5 and no
 threshold above 0.5 ever flagged or blocked anything. The detector now learns from the calls the
-firewall admits, per caller, on both the meta route and the per-backend `/mcp/{name}` route.
+firewall admits, on both the meta route and the per-backend `/mcp/{name}` route. Each call is
+scored against its caller's own previous call; what counts as usual is learned from all admitted
+calls together.
 
 - A caller's first call, or a call after a tool with fewer than
   `security.firewall.anomaly_min_observations` recorded transitions (new, default 20), is
@@ -1821,6 +1823,8 @@ firewall admits, per caller, on both the meta route and the per-backend `/mcp/{n
   at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
 - The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
   are off by default.
+- Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
+  transitions) any admitted caller's calls shape what counts as usual after it.
 
 **Action:** if you set `anomaly_detection: true`, expect real scores and, with a block threshold,
 real refusals once each tool has 20 recorded transitions. Check that `anomaly_threshold` is above
