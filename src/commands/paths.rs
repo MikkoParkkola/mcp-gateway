@@ -25,12 +25,26 @@ pub fn claude_desktop_path() -> PathBuf {
     return home_path("AppData/Roaming/Claude/claude_desktop_config.json");
 }
 
-/// Platform-specific path for Zed's shared settings file.
+/// Join `rel` to the OS config directory (`$XDG_CONFIG_HOME` or
+/// `~/.config` on Linux, `%APPDATA%` on Windows).
+#[cfg(not(target_os = "macos"))]
+pub fn config_dir_path(rel: &str) -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| home_path(".config"))
+        .join(rel)
+}
+
+/// Zed's settings file: Zed's own `config_dir()` joined with `settings.json`
+/// (zed-industries/zed @ 1a28cff4, `crates/paths/src/paths.rs:133-152`).
+/// ponytail: Zed's Flatpak override (`FLATPAK_XDG_CONFIG_HOME`) is not
+/// followed; add it if a Flatpak user reports a miss.
 pub fn zed_settings_path() -> PathBuf {
     #[cfg(target_os = "macos")]
-    return home_path("Library/Application Support/Zed/settings.json");
-    #[cfg(not(target_os = "macos"))]
     return home_path(".config/zed/settings.json");
+    #[cfg(target_os = "linux")]
+    return config_dir_path("zed/settings.json");
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return config_dir_path("Zed/settings.json");
 }
 
 /// Platform-specific path for Windsurf's MCP config file.
