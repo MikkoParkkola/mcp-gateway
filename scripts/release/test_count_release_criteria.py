@@ -506,6 +506,23 @@ def test_a_letter_on_two_rows_of_one_table_is_flagged():
     assert problems == ["readiness board names cluster A on more than one row"], problems
 
 
+def test_every_retirement_phrasing_in_the_rollup_is_recognised():
+    for prose in (
+        "Cluster A is not in the table because it has nothing left to block on.",
+        "Cluster A is gone from the table for the same reason.",
+        "**2026-09-24: A and O have cleared too**",
+        "(letters A and Q were already used by earlier, closed clusters)",
+    ):
+        problems = counter.reused_cluster_letters(ROLLUP + "\n\n" + prose + "\n", BOARD_OK)
+        assert any("cluster A was retired" in p for p in problems), (prose, problems)
+
+
+def test_a_letter_on_two_rows_of_the_rollup_table_is_flagged():
+    row = next(line for line in ROLLUP.splitlines() if line.startswith("| A |"))
+    problems = counter.reused_cluster_letters(ROLLUP + "\n" + row, BOARD_OK)
+    assert "rollup names cluster A on more than one row" in problems, problems
+
+
 def test_unique_letters_with_no_retirement_pass():
     assert counter.reused_cluster_letters(ROLLUP, BOARD_OK) == []
 

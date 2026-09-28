@@ -487,10 +487,18 @@ def copied_counts(rollup_text, board_text, ledger):
     return problems
 
 
-# Prose that retires a cluster letter: "Cluster P left the table ..." and
-# "Clusters A, C and N have cleared".
-RETIRED_ONE = re.compile(r"\bCluster ([A-Z]) (?:left the table|closed|cleared)\b")
-RETIRED_MANY = re.compile(r"\bClusters ((?:[A-Z], )*[A-Z](?:,? and [A-Z])?) have cleared\b")
+# Prose that retires a cluster letter, in every phrasing the rollup uses:
+# "Cluster P left the table", "Cluster B is not in the table", "Cluster E is
+# gone from the table", "Clusters A, C and N have cleared", "K and O have
+# cleared too", "letters P and Q were already used".
+RETIRED_ONE = re.compile(
+    r"\bCluster ([A-Z]) (?:left the table|is not in the table|is gone from the table|closed|cleared)\b"
+)
+RETIRED_MANY = re.compile(
+    r"\b((?:[A-Z], )*[A-Z],? and [A-Z]) have cleared\b"
+    r"|\bClusters ([A-Z]) have cleared\b"
+    r"|\bletters ((?:[A-Z], )*[A-Z](?:,? and [A-Z])?) were already used\b"
+)
 
 
 def reused_cluster_letters(rollup_text, board_text):
@@ -510,8 +518,8 @@ def reused_cluster_letters(rollup_text, board_text):
         for letter in sorted({x for x in letters if letters.count(x) > 1}):
             problems.append(f"{label} names cluster {letter} on more than one row")
     retired = set(RETIRED_ONE.findall(rollup_text))
-    for group in RETIRED_MANY.findall(rollup_text):
-        retired |= set(re.findall(r"[A-Z]", group))
+    for groups in RETIRED_MANY.findall(rollup_text):
+        retired |= set(re.findall(r"\b[A-Z]\b", " ".join(groups)))
     for line in rollup_text.splitlines():
         match = CLUSTER.match(line)
         if not match:
