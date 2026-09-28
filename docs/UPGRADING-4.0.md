@@ -1972,8 +1972,9 @@ These need no action and have no startup notice.
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
   drain that stops early keeps what was read, reports its tool count as "at least", and
   increments `mcp_backend_list_truncated_total{backend,reason}`, where `reason` is
-  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
-  `fill_budget` (120 s spent).
+  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`),
+  `fill_budget` (120 s spent) or `unreadable_page` (a page had no `tools` array; the
+  drain reads on, but the catalogue is never treated as complete).
 
 ## Rolling back
 

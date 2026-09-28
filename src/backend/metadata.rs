@@ -610,6 +610,11 @@ async fn drain_list_pages(
     let mut cursor: Option<String> = None;
     let mut sent: HashSet<String> = HashSet::new();
     let mut stop: Option<&'static str> = None;
+    // A page whose list key is missing or not an array says nothing about
+    // which entries exist (mirrors the direct route, `direct_list.rs`): the
+    // drain keeps going, but the result must never be judged as a complete
+    // listing, or an earlier page's withheld name reads as removed (#1441).
+    let mut unreadable = false;
     let mut kept = 0usize;
     for page in 0.. {
         if page == LIST_MAX_PAGES {
@@ -648,12 +653,17 @@ async fn drain_list_pages(
             .and_then(|m| m.remove("nextCursor"))
             .and_then(|v| v.as_str().map(str::to_owned));
         if let Some(acc) = merged.as_mut() {
-            let items = result
+            let items = if let Some(items) = result
                 .get_mut(family.list_key)
                 .and_then(Value::as_array_mut)
-                .map(std::mem::take)
-                .unwrap_or_default();
-            // Page 1 may omit the key and still carry `nextCursor`; create
+            {
+                std::mem::take(items)
+            } else {
+                unreadable = true;
+                Vec::new()
+            };
+            // A continuation page may still legitimately omit the key (an
+            // upstream that answers `{nextCursor}` alone); either way create
             // the array so later pages' items are not dropped.
             if let Some(list) = acc
                 .as_object_mut()
@@ -663,6 +673,9 @@ async fn drain_list_pages(
                 list.extend(items);
             }
         } else {
+            if !result.get(family.list_key).is_some_and(Value::is_array) {
+                unreadable = true;
+            }
             merged = Some(result);
         }
         kept += 1;
@@ -673,7 +686,7 @@ async fn drain_list_pages(
         }
         cursor = Some(next);
     }
-    if let Some(reason) = stop {
+    if let Some(reason) = stop.or(unreadable.then_some("unreadable_page")) {
         telemetry_metrics::counter!(
             "mcp_backend_list_truncated_total",
             "backend" => backend.to_owned(),
@@ -688,7 +701,7 @@ async fn drain_list_pages(
             "Backend list drain stopped early; catalogue truncated"
         );
     }
-    Ok((merged, stop.is_some()))
+    Ok((merged, stop.is_some() || unreadable))
 }
 
 /// The tools family's truncated flag; the other three families keep their
