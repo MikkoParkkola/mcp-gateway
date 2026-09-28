@@ -178,6 +178,13 @@ pub struct BackendRegistry {
     /// A `tokio` mutex, not `parking_lot`: the critical section awaits
     /// `Backend::stop`.
     reload: tokio::sync::Mutex<()>,
+    /// One config-reload file read at a time, across every reload context.
+    ///
+    /// Beside `reload` because every reload context shares this registry: the
+    /// watcher, the admin API and the meta-tool each build their own context,
+    /// so a slot on the context would bound only one of them. A read outlives
+    /// a cancelled reload (#1808), so this is held by the read, not the lock.
+    reload_read: Arc<tokio::sync::Semaphore>,
 }
 
 impl BackendRegistry {
@@ -189,7 +196,13 @@ impl BackendRegistry {
             change_feed: std::sync::OnceLock::new(),
             stopping: parking_lot::Mutex::new(false),
             reload: tokio::sync::Mutex::new(()),
+            reload_read: Arc::new(tokio::sync::Semaphore::new(1)),
         }
+    }
+
+    /// The slot a config-reload file read holds until it returns (#1808).
+    pub(crate) fn reload_read_slot(&self) -> Arc<tokio::sync::Semaphore> {
+        Arc::clone(&self.reload_read)
     }
 
     /// Take the reload lock, so one config-reload transaction runs at a time.
