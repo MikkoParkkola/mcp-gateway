@@ -167,27 +167,6 @@ impl DiscoveryEngine {
         Self { client, options }
     }
 
-    /// Refuse a base URL whose host name resolves to a blocked address.
-    async fn check_base_name(base_url: &str) -> crate::Result<()> {
-        let host = url::Url::parse(base_url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned));
-        if let Some(host) = host.filter(|host| {
-            host.trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_err()
-        }) {
-            crate::security::ssrf::resolve_and_validate_host(
-                &host,
-                &crate::security::ssrf::SystemResolver,
-            )
-            .await
-            .map_err(|e| crate::Error::Protocol(format!("SSRF check failed for base URL: {e}")))?;
-        }
-        Ok(())
-    }
-
     /// Discover API specifications from a base URL.
     ///
     /// Pipeline:
@@ -207,16 +186,18 @@ impl DiscoveryEngine {
         // 1. SSRF gate on base URL
         validate_url_not_ssrf(base_url)
             .map_err(|e| crate::Error::Protocol(format!("SSRF check failed for base URL: {e}")))?;
-        // The pin refuses an internal name at connect, but the probe chain
-        // swallows that as "no spec found"; resolve the base name up front so
-        // the operator sees the real reason (#2027).
-        Self::check_base_name(base_url).await?;
 
         info!(url = %base_url, "Starting capability discovery");
 
         // 2. Parallel probe chain
         let chain = DiscoveryChain::new(&self.client, self.options.auth.as_deref());
         let Some(result) = chain.probe(base_url).await else {
+            // The pin refused the name at connect: say so, not "no spec" (#2027).
+            if let Some(refusal) = chain.ssrf_refusal() {
+                return Err(crate::Error::Protocol(format!(
+                    "SSRF check failed for base URL: {refusal}"
+                )));
+            }
             return Err(crate::Error::Config(format!(
                 "No API spec found at {base_url} — tried well-known paths, HTML scanning"
             )));
