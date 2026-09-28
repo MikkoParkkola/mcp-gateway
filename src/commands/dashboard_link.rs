@@ -71,8 +71,14 @@ pub fn dashboard_link_base(
 /// A message naming the target and asking for `https://` or a loopback URL.
 pub(crate) fn check_target(base: &str) -> Result<(), String> {
     let url = reqwest::Url::parse(base).map_err(|e| format!("not a URL: {base} ({e})"))?;
-    if url.scheme() != "http" {
-        return Ok(());
+    match url.scheme() {
+        "https" => return Ok(()),
+        "http" => {}
+        other => {
+            return Err(format!(
+                "unsupported scheme {other}: in {base}; use https:// or http://"
+            ));
+        }
     }
     let loopback = match url.host() {
         Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
@@ -98,7 +104,13 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String> {
     check_target(base)?;
     let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    // Direct, never through an environment proxy: an HTTP_PROXY would carry the
+    // credential off this machine even to a loopback URL.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("could not build the HTTP client: {e}"))?;
+    let response = client
         .post(&endpoint)
         .timeout(std::time::Duration::from_secs(30))
         .bearer_auth(token)
@@ -187,6 +199,8 @@ mod tests {
         ] {
             assert_eq!(check_target(allowed), Ok(()), "{allowed}");
         }
+        let odd = check_target("ftp://127.0.0.1:1").expect_err("an unknown scheme");
+        assert!(odd.contains("unsupported scheme"), "{odd}");
     }
 
     /// E5-T21b: `fetch_link` refuses before sending anything: 192.0.2.1 is a

@@ -9,8 +9,7 @@ use axum::response::Response;
 use tracing::warn;
 
 use super::{
-    AuthState, Now, bearer_unauthorized_response, cookie_secure, cookies_are_secure,
-    session_cookie, session_limits,
+    AuthState, Now, bearer_unauthorized_response, cookie_secure, session_cookie, session_limits,
 };
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
@@ -111,7 +110,12 @@ pub(super) fn try_dashboard_bootstrap(
         // an HTTPS `public_url` added by reload makes the session cookie
         // `Secure`, and a browser on this plain-HTTP listener would drop it,
         // wasting the only link. The same refusal the link endpoint gives.
-        if cookies_are_secure(&state.live_config) && !state.tls_enabled {
+        // One reading, used for both this refusal and the cookie below, so a
+        // reload in between cannot split them. Only a caller holding the right
+        // value learns about the deployment; any other gets the plain 401.
+        let secure = cookie_secure(state);
+        let holds_value = state.dashboard_bootstrap.peek().as_deref() == Some(candidate.as_str());
+        if secure && !state.tls_enabled && holds_value {
             warn!("Dashboard bootstrap refused: HTTPS public_url on a plain-HTTP listener");
             return Some(axum::response::IntoResponse::into_response((
                 axum::http::StatusCode::CONFLICT,
@@ -143,7 +147,7 @@ pub(super) fn try_dashboard_bootstrap(
                 (axum::http::header::LOCATION, "/dashboard".to_string()),
                 (
                     axum::http::header::SET_COOKIE,
-                    session_cookie(&handle, max_age, cookie_secure(state)),
+                    session_cookie(&handle, max_age, secure),
                 ),
             ],
         )))

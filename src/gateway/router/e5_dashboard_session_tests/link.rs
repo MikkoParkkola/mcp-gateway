@@ -258,4 +258,16 @@ async fn a_stale_http_link_is_refused_before_it_is_spent() {
         Some(value.as_str()),
         "the link was not spent"
     );
+    let wrong = send(&state, redeem("not-the-value", None)).await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{}", wrong.body);
+    assert!(!wrong.body.contains("public_url"), "{}", wrong.body);
+
+    reload(&state, |c| c.server.public_url = None);
+    let out = send(&state, redeem(&value, None)).await;
+    assert_eq!(
+        out.status,
+        StatusCode::SEE_OTHER,
+        "the kept link still opens: {}",
+        out.body
+    );
 }
