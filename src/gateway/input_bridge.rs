@@ -509,7 +509,7 @@ impl InputBridge<'_> {
             && let Ok(prompts) = Self::plan(&interim, declared, slice)
         {
             self.gate
-                .admit(&Self::challenge(&prompts))
+                .admit(&Self::handed_back(&prompts))
                 .map_err(|error| match error {
                     BridgeError::ChallengeRefused { .. } => {
                         BridgeError::ChallengeRefused { dispatched }
@@ -593,6 +593,27 @@ impl InputBridge<'_> {
                 .iter()
                 .map(|prompt| {
                     serde_json::json!({
+                        "method": prompt.kind.method(),
+                        "params": prompt.params,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// The last round as the caller receives it.
+    ///
+    /// [`Self::challenge`] holds `Prompt::key` back because an asked round
+    /// never shows it to the client. A handed-back round does: the caller gets
+    /// the backend's `inputRequests` as composed and echoes each key with its
+    /// answer, so here the key is client-visible and is inspected too.
+    fn handed_back(prompts: &[Prompt]) -> Value {
+        Value::Array(
+            prompts
+                .iter()
+                .map(|prompt| {
+                    serde_json::json!({
+                        "key": prompt.key,
                         "method": prompt.kind.method(),
                         "params": prompt.params,
                     })
