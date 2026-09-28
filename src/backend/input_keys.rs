@@ -107,9 +107,14 @@ impl Backend {
         let fetched = self.tools_for_check(identity_key, headers, cached.is_some());
         let (tools, completeness) = match fetched.await {
             Ok(fetched) => fetched,
-            // A stale hit falls back on any refresh error; the fill stamped
-            // an attempted failure, and a gate refusal records nothing.
-            Err(_) if cached.is_some() => return cached.as_ref().map_or(Ok(None), held),
+            // A stale hit falls back on any refresh error, to what the slot
+            // holds now: its stale list, or a newer one a direct list stored
+            // meanwhile. The clone serves only a slot emptied since. The fill
+            // stamped an attempted failure; a gate refusal records nothing.
+            Err(_) if cached.is_some() => match self.held_tools_for(identity_key) {
+                Some(now) => now,
+                None => return cached.as_ref().map_or(Ok(None), held),
+            },
             // Raised only by the fill's own failsafe gate: no transport
             // constructs either variant.
             Err(e @ (crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_))) => {

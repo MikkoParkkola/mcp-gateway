@@ -262,6 +262,32 @@ async fn a4_t4_a_stored_fill_ends_the_refresh_hold_off() {
     assert_eq!(lister.lists(), before + 1, "the stale hit did not refresh");
 }
 
+/// Review fold: a stale refresh that fails after a direct list replaced the
+/// slot judges the call from that newer list, not the stale clone: a tool it
+/// dropped is text A. Mutant M52 (judge the clone) reddens it.
+#[tokio::test(start_paused = true)]
+async fn a4_t5_a_failed_refresh_judges_a_newer_list() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = short_ttl(&lister);
+    let _ = check(&backend, "edit", &json!({"edits": []})).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    lister.set(Mode::Barrier);
+    let other = json!({"name": "other", "inputSchema": {"type": "object"}});
+    let args = undeclared();
+    let (out, ()) = tokio::join!(check(&backend, "edit", &args), async {
+        lister.started.notified().await;
+        backend.remember_listed_tools(None, false, &[other]).await;
+        *lister.sleep_per_page.lock() = Duration::from_secs(3600);
+        lister.release.notify_one();
+    });
+    let text = super::super::fill_check::text_absent("edit");
+    assert_eq!(
+        out.expect("a result"),
+        Some(text),
+        "judged from the stale clone"
+    );
+}
+
 /// A4-T3 (review fold): concurrent stale hits whose refresh fails with an
 /// error that starts no fill cooldown (`Io`) still list once: waiters inside
 /// the fill honour the stale-refresh stamp at admission. Mutant M30 (drop that
