@@ -2316,6 +2316,20 @@ class WorkflowWiring(unittest.TestCase):
         ]
         self.assertEqual(found, [], "a YAML anchor lets an alias hide what a step installs from these checks")
 
+    def test_every_action_reference_is_written_on_one_line(self):
+        # These checks read an action reference from its `uses:` line. A
+        # double-quoted value may continue onto the next line after a `\`,
+        # and YAML joins the pieces into one reference no line contains, so
+        # a `uses:` value that does not close its quote on its own line fails.
+        opened = re.compile(r"""(?:^|[\s{,])(["']?)uses\1\s*:\s*"(?P<rest>.*)$""")
+        found = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                m = opened.search(line)
+                if m and not re.search(r'(?<!\\)"', m.group("rest")):
+                    found.append(f"{path.name}:{number}: {line.strip()}")
+        self.assertEqual(found, [], "a `uses:` value continues onto another line")
+
     def test_the_release_builds_tests_and_publishes_the_event_commit(self):
         # The release commit is GITHUB_SHA, which a re-run keeps, and it is what
         # actions/checkout and both called workflows use when no ref is named.
