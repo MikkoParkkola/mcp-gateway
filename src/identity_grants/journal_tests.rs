@@ -217,7 +217,10 @@ async fn t1e_write_and_append_failures() {
         panic!("expected Unjournalled, got {r:?}");
     };
     assert!(
-        r.as_ref().unwrap_err().to_string().contains("out-of-band"),
+        r.as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("no journal entry"),
         "{reason}"
     );
     assert!(journal_bytes(&path).is_empty());
@@ -281,10 +284,10 @@ async fn t10a_the_lock_spans_the_write_and_the_append() {
     assert_eq!(entries(&path).len(), 1);
 }
 
-/// A hand-edited file with a duplicate id: revoke edits the first row, so the
-/// entry's `prev_digest` must be that row's, not the last duplicate's.
+/// A hand-edited file with a duplicate id is refused: which row is in force
+/// is ambiguous, so no `prev_digest` could be right.
 #[tokio::test]
-async fn duplicate_ids_report_the_row_that_changed() {
+async fn duplicate_ids_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("grants.yaml");
     let first = row("g1", "first");
@@ -293,11 +296,26 @@ async fn duplicate_ids_report_the_row_that_changed() {
         .await
         .unwrap();
 
-    change(&path, revoke("g1")).await.unwrap();
+    let r = change(&path, revoke("g1")).await;
 
-    let got = entries(&path);
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].prev_digest, Some(grant_digest(&first)));
+    assert!(matches!(r, Err(ChangeError::Refused(_))), "{r:?}");
+    assert!(entries(&path).is_empty());
+    assert_eq!(
+        read_identity_grants_file(&path).await.unwrap().grants[0],
+        first
+    );
+}
+
+/// A change refused because the grant file is absent leaves nothing behind,
+/// not even the lock file.
+#[tokio::test]
+async fn a_refused_change_on_a_missing_file_leaves_no_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    let r = apply_change_with(&path, false, revoke("g1"), None, &Hooks::default()).await;
+    assert!(matches!(r, Err(ChangeError::Refused(_))), "{r:?}");
+    assert!(!lock_path(&path).exists());
+    assert!(!journal_path(&path).exists());
 }
 
 /// A journal path planted as a symlink is refused: the append must not land

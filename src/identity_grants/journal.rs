@@ -76,7 +76,7 @@ impl std::fmt::Display for ChangeError {
             Self::Unjournalled(reason) => write!(
                 f,
                 "grant file changed but the journal append failed ({reason}); \
-                 the gateway will record this change as out-of-band"
+                 this change has no journal entry"
             ),
         }
     }
@@ -109,7 +109,9 @@ pub(crate) fn lock_path(grants: &Path) -> PathBuf {
 /// grant's digest changes and reads as an out-of-band edit.
 #[must_use]
 pub fn grant_digest(grant: &IdentityGrant) -> String {
-    let bytes = serde_json::to_vec(grant).unwrap_or_default();
+    // Plain fields and string-keyed data only, so serialisation cannot fail;
+    // an empty preimage would be a digest that matches nothing real.
+    let bytes = serde_json::to_vec(grant).expect("an identity grant always serialises");
     sha256_tag(&bytes)
 }
 
@@ -172,6 +174,12 @@ pub(crate) async fn apply_change_with(
     os_account: Option<String>,
     hooks: &Hooks,
 ) -> Result<IdentityGrant, ChangeError> {
+    if !create_if_missing && !grants.exists() {
+        return Err(ChangeError::Refused(format!(
+            "identity grants file {} does not exist",
+            grants.display()
+        )));
+    }
     // Held until this function returns: from before the read to after the
     // append, so a gateway reload never sees the file without its entry.
     let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
@@ -181,13 +189,21 @@ pub(crate) async fn apply_change_with(
         Err(_) if create_if_missing && !grants.exists() => IdentityGrantFile::new(Vec::new()),
         Err(error) => return Err(ChangeError::Refused(error)),
     };
-    // The first row per id: the changes below find and edit the first match,
-    // so a file carrying a duplicate id must not report another row's digest.
+    // A hand-edited file can repeat an id. The CLI edits the first match while
+    // the loader keeps the last, so no single "row before" exists: refuse
+    // rather than journal a digest for a row that was not in force.
     let mut before = std::collections::BTreeMap::<String, String>::new();
     for row in &file.grants {
-        before
-            .entry(row.grant_id.clone())
-            .or_insert_with(|| grant_digest(row));
+        if before
+            .insert(row.grant_id.clone(), grant_digest(row))
+            .is_some()
+        {
+            return Err(ChangeError::Refused(format!(
+                "grant id '{}' appears more than once in {}; remove the duplicate by hand first",
+                row.grant_id,
+                grants.display()
+            )));
+        }
     }
     let (verb, grant_id) = change(&mut file).map_err(ChangeError::Refused)?;
     let row = file
@@ -266,6 +282,13 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
         opts.mode(0o600)
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // FILE_FLAG_OPEN_REPARSE_POINT: never follow a link.
+        opts.custom_flags(0x0020_0000);
+    }
+    let created = !journal.exists();
     let mut file = opts.open(journal)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("grant journal is not a regular file"));
@@ -284,7 +307,14 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
         }
     }
     file.write_all(line)?;
-    file.sync_data()
+    file.sync_data()?;
+    #[cfg(unix)]
+    if created && let Some(dir) = journal.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = created;
+    Ok(())
 }
 
 /// The journal read back: entries in file order and the lines that did not parse.
