@@ -108,7 +108,12 @@ fn write_config(home: &Home) -> PathBuf {
         "--config-path",
         out.to_str().unwrap(),
     ]);
-    assert!(output.status.success(), "{}", text(&output));
+    let shown = text(&output);
+    assert!(output.status.success(), "{shown}");
+    assert!(
+        !shown.contains(SENTINEL),
+        "--write-config output leaked: {shown}"
+    );
     out
 }
 
@@ -185,6 +190,30 @@ fn an_unset_variable_in_an_imported_value_is_refused_at_load() {
     assert!(
         error.to_string().contains("backends.local.env.DEMO_VAR"),
         "the refusal names the field: {error}"
+    );
+
+    // With the variable set (through the config's own env file), it expands.
+    let env_file = home.root.join("gateway.env");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &env_file,
+        "DISCOVERY_1876_UNSET=expanded-value\n",
+    )
+    .unwrap();
+    let written = std::fs::read_to_string(&out).unwrap();
+    let env_line = format!("env_files: [\"{}\"]", env_file.display());
+    let with_env = if written.contains("env_files: []") {
+        written.replacen("env_files: []", &env_line, 1)
+    } else {
+        format!("{env_line}\n{written}")
+    };
+    mcp_gateway::gateway::test_helpers::write_owner_only(&out, with_env).unwrap();
+    let loaded = Config::load(Some(&out)).expect("a set reference loads");
+    assert_eq!(
+        loaded.backends["local"]
+            .env
+            .get("DEMO_VAR")
+            .map(String::as_str),
+        Some("expanded-value")
     );
 }
 

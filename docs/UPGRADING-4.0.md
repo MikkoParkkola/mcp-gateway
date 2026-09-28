@@ -1815,7 +1815,7 @@ each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONF
 - Zed's `settings.json`, which allows comments and trailing commas, was skipped when it had any.
 
 In 4.0 all three survive. `cap discover --write-config` writes the `env` and `headers` values
-into the backend it adds; the config file is owner-only (item 35). Those values are usually
+into the backend it adds; on Unix the config file is written owner-only (item 35). Those values are usually
 credentials, so everywhere else they are shown by key only: discover's table, JSON and YAML
 output, `--shadow` reports, logs and `Debug` output print `<redacted>` for every value.
 

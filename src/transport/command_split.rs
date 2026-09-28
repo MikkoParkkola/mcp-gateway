@@ -279,6 +279,9 @@ mod tests {
             v(&["prog", "q\\\"x"]),
             v(&["prog", ""]),
             v(&["prog", "it's"]),
+            v(&["prog", "a b\\"]),
+            v(&["prog", "a \\\"b"]),
+            v(&["prog", "tab\there"]),
         ]
     }
 

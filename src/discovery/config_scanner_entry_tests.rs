@@ -79,4 +79,6 @@ async fn a_commented_zed_settings_file_is_read() {
         names.contains(&"local") && names.contains(&"remote"),
         "{names:?}"
     );
+    let local = servers.iter().find(|s| s.name == "local").unwrap();
+    assert_eq!(local.env.expose().get("K").map(String::as_str), Some("v"));
 }
