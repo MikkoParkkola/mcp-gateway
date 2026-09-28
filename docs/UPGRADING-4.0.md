@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54 and 76 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 80, 83, 84, 85, 86 and 87 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 80, 83, 84, 85, 86, 87 and N print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51, 54 and 76 refuse the gateway's start (item 76 only with `anomaly_detection` on and an out-of-range anomaly threshold; item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -115,6 +115,7 @@ upgrading a running deployment.
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
+| N | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2098,6 +2099,38 @@ by URL already do:
 
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
+
+## N. Per-caller firewall limits key on the caller, on every route
+
+The firewall's per-caller controls (the call budget, the tenant guard and anomaly detection) now
+key on who the caller is, on the meta route and the per-backend `/mcp/{name}` route alike:
+
+- A caller with a resolved identity (an OIDC or key-server login, a trusted-proxy or Access
+  identity, an mTLS certificate, or an OAuth agent) is keyed on that identity. Otherwise an
+  authenticated API key is keyed on the key. The identity wins over the key, so one person keeps
+  one budget across keys and token exchanges.
+- An OAuth-agent or mTLS caller on a modern (2026-07-28) `POST /mcp` was refused by these
+  controls as having no identity. It is now counted and scored.
+- On the per-backend `/mcp/{name}` route every caller of one backend shared one budget, one tenant
+  count and one anomaly history. Each caller now has its own, and it is the same one the caller
+  has on `/mcp`.
+- A legacy session no longer gets a fresh budget or tenant count: an authenticated caller is
+  keyed on its identity, not its session. A caller with no identity at all (authentication off)
+  is keyed on its session, or on the backend on `/mcp/{name}`, as before.
+- The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
+  one session at a time, so that is that session's budget and tenant count.
+- An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
+  certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
+  CA issuing unique CNs. A certificate with neither is not an identity.
+- The default config has no behaviour change: the budget, the tenant guard and anomaly detection
+  are off by default.
+
+What you will observe once, at deploy: every per-caller budget, tenant count and anomaly history
+starts fresh, because the keys they are stored under changed. Limits are counted again from zero,
+and anomaly detection warms up again for each caller.
+
+**Action:** none required. If you issue client certificates without a SAN URI, check that your CA
+issues unique CNs, since two certificates with one CN share their limits.
 
 ## Upgrading from 3.5.x: a walkthrough
 

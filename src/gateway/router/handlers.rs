@@ -126,11 +126,14 @@ fn missing_task_error(id: crate::protocol::RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(Some(id), -32602, "no such task")
 }
 
-/// The stable identity of a caller with no session.
+/// The owner key of a stateless task: the validated API-key credential.
 ///
-/// Empty when the caller is unauthenticated: that is not an identity, and the
-/// controls that key on this refuse rather than pool every anonymous caller
-/// into one bucket.
+/// Only task ownership (`route_task_owner`) reads this. The firewall's
+/// per-caller controls key on `identity::caller_key` instead, which also knows
+/// OAuth-agent, certificate and OIDC subjects. Task owners stay on this
+/// encoding so an upgrade does not orphan tasks already stored under it.
+///
+/// Empty when the caller is unauthenticated: that is not an identity.
 fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
     client.map_or_else(String::new, |c| {
         if c.authenticated && !c.principal.is_empty() {
@@ -1390,8 +1393,12 @@ async fn meta_mcp_dispatch(
                 if let Some(ref fw) = state.firewall {
                     let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                    // The key the per-caller controls are scored on. A session
-                    // when there is one; otherwise the validated credential.
+                    // The key the per-caller controls are scored on: the
+                    // caller's `CallerKey` (subject, else credential) on both
+                    // eras, so one caller has one bucket however it connects.
+                    // The session id is only the fallback for a caller with no
+                    // key at all (authentication off), which keeps an
+                    // anonymous legacy client exactly as it was.
                     //
                     // Never the display name: it is operator-configured, two
                     // API keys may share one, and every unauthenticated caller
@@ -1399,10 +1406,15 @@ async fn meta_mcp_dispatch(
                     // poison another's sequence history or trigger its blocks.
                     // Empty means no identity at all, which the firewall
                     // refuses rather than scores.
-                    let control_identity = if session_id.is_empty() {
-                        session_owner_key(client.as_ref())
-                    } else {
+                    let key = super::identity::caller_key(
+                        grant_subject.as_ref(),
+                        cert_identity.as_ref(),
+                        client.as_ref(),
+                    );
+                    let control_identity = if key.is_empty() {
                         session_id.clone()
+                    } else {
+                        key
                     };
                     // Renew this identity's reclaim deadline on every call, so
                     // a sweep only reclaims state nobody has touched for
