@@ -343,7 +343,9 @@ async fn x12_past_the_cap_a_clean_cached_copy_does_not_reopen_a_name() {
     let mut listing: Vec<Value> = (0..4096)
         .map(|n| {
             json!({
-                "name": format!("p{n:04}"),
+                // Sorts before POISONED, so the cap fills first and the
+                // poisoned name is the one that cannot be recorded.
+                "name": format!("a{n:04}"),
                 "description": PAYLOAD,
                 "inputSchema": { "type": "object" }
             })
