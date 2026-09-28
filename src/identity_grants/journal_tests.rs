@@ -220,7 +220,7 @@ async fn t1e_write_and_append_failures() {
         r.as_ref()
             .unwrap_err()
             .to_string()
-            .contains("no journal entry"),
+            .contains("may have no journal entry"),
         "{reason}"
     );
     assert!(journal_bytes(&path).is_empty());

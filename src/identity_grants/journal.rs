@@ -75,8 +75,8 @@ impl std::fmt::Display for ChangeError {
             Self::Refused(reason) => f.write_str(reason),
             Self::Unjournalled(reason) => write!(
                 f,
-                "grant file changed but the journal append failed ({reason}); \
-                 this change has no journal entry"
+                "grant file changed but the journal append was not confirmed ({reason}); \
+                 this change may have no journal entry"
             ),
         }
     }
@@ -309,7 +309,12 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
     file.write_all(line)?;
     file.sync_data()?;
     #[cfg(unix)]
-    if created && let Some(dir) = journal.parent().filter(|d| !d.as_os_str().is_empty()) {
+    if created {
+        // A bare file name has an empty parent: that is the current directory.
+        let dir = journal
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         std::fs::File::open(dir)?.sync_all()?;
     }
     #[cfg(not(unix))]
