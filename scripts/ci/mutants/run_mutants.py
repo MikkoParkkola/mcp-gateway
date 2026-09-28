@@ -283,8 +283,12 @@ def plan() -> list[Row]:
 
 
 def fetch_release_line() -> None:
-    """Fetches the release-line tip into FETCH_HEAD."""
-    git("fetch", "--quiet", "--depth=1", "origin", RELEASE_LINE)
+    """Fetches the release-line tip into FETCH_HEAD. `--depth=1` only in a
+    checkout that is already shallow (a CI checkout): in a full clone it would
+    make the object store shallow, and a local run shares that store with every
+    worktree of the repository, breaking their merge-bases."""
+    depth = ["--depth=1"] if git("rev-parse", "--is-shallow-repository") == "true" else []
+    git("fetch", "--quiet", *depth, "origin", RELEASE_LINE)
 
 
 def fetch_check() -> list[str]:
