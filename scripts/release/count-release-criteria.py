@@ -520,11 +520,35 @@ def reused_cluster_letters(rollup_text, board_text):
     retired = set(RETIRED_ONE.findall(rollup_text))
     for groups in RETIRED_MANY.findall(rollup_text):
         retired |= set(re.findall(r"\b[A-Z]\b", " ".join(groups)))
+    # Prose can be edited away, so the retirement rule alone forgets history.
+    # The board keeps a row for every cluster, open or closed, and each row
+    # names what it tracks; a rollup cluster whose same-letter board row names
+    # none of its criteria is a different cluster wearing a used letter.
+    board_rows = {}
+    for line in board_text.splitlines():
+        found = re.match(r"^\|\s*([A-Z])\s*\|", line)
+        if found:
+            board_rows[found.group(1)] = board_rows.get(found.group(1), "") + line
     for line in rollup_text.splitlines():
         match = CLUSTER.match(line)
         if not match:
             continue
-        letter = line.split("|")[1].strip()
+        cells = line.split("|")
+        letter = cells[1].strip()
+        board_row = board_rows.get(letter)
+        ids = named_criteria(cells[3])[0]
+        # Whole ids only (`MRTR.1` must not match inside `MRTR.12`), and a
+        # short form names its qualified id in either direction, as `_names`
+        # already allows for rollup membership.
+        # A backticked range (`MRTR.1-3`) names every row in it.
+        tokens = re.findall(r"[\w-]+(?:\.[\w-]+)+", board_row or "")
+        tokens += named_criteria(board_row or "")[0]
+        names = (_names(t, i) or _names(i, t) for i in ids for t in tokens)
+        if board_row is not None and ids and not any(names):
+            problems.append(
+                f"cluster {letter}'s readiness board row names none of its criteria "
+                f"({', '.join(ids)}); the letter belongs to another cluster"
+            )
         if letter in retired and int(match.group(1)) > 0:
             problems.append(
                 f"cluster {letter} was retired in the rollup's prose but heads a row with "

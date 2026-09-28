@@ -483,7 +483,7 @@ BOARD_OK = "\n".join(
     [
         "| # | cluster | rows | design |",
         "|---|---|---|---|",
-        "| A | envelope | 2 | yes |",
+        "| A | envelope (`MRTR.1`, `MRTR.3`) | 2 | yes |",
     ]
 )
 
@@ -521,6 +521,23 @@ def test_a_letter_on_two_rows_of_the_rollup_table_is_flagged():
     row = next(line for line in ROLLUP.splitlines() if line.startswith("| A |"))
     problems = counter.reused_cluster_letters(ROLLUP + "\n" + row, BOARD_OK)
     assert "rollup names cluster A on more than one row" in problems, problems
+
+
+def test_a_letter_whose_board_row_tracks_other_criteria_is_flagged():
+    # No prose retires A here: the board row alone keeps the letter's history.
+    board = BOARD_OK.replace("envelope (`MRTR.1`, `MRTR.3`)", "interim rounds (`MRTR.12`)")
+    problems = counter.reused_cluster_letters(ROLLUP, board)
+    assert any("cluster A's readiness board row names none of its criteria" in p for p in problems), problems
+
+
+def test_a_short_id_on_one_side_matches_its_qualified_form_on_the_other():
+    board = BOARD_OK.replace("envelope (`MRTR.1`, `MRTR.3`)", "envelope (`MIK-7212.MRTR.1`)")
+    assert counter.reused_cluster_letters(ROLLUP, board) == []
+
+
+def test_a_board_range_names_every_row_in_it():
+    board = BOARD_OK.replace("envelope (`MRTR.1`, `MRTR.3`)", "envelope (`MRTR.2-3`)")
+    assert counter.reused_cluster_letters(ROLLUP, board) == []
 
 
 def test_unique_letters_with_no_retirement_pass():
