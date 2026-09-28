@@ -58,6 +58,12 @@ struct Case {
     found: bool,
     /// The document must be exactly this (e.g. `[]` for nothing found).
     expect: Option<serde_json::Value>,
+    /// Text the document must contain, so a row cannot pass on an empty result.
+    stdout_has: Option<&'static str>,
+    /// Human text that must still reach the user, on stderr.
+    stderr_has: &'static str,
+    /// A file the command must have written, relative to the home.
+    writes: Option<&'static str>,
 }
 
 fn cases(format: &'static str) -> Vec<Case> {
@@ -67,12 +73,18 @@ fn cases(format: &'static str) -> Vec<Case> {
             args: vec!["cap", "discover", "--format", format],
             found: true,
             expect: None,
+            stdout_has: Some("probe"),
+            stderr_has: "mcp-gateway cap discover --write-config",
+            writes: None,
         },
         Case {
             label: "cap discover, nothing found",
             args: vec!["cap", "discover", "--format", format],
             found: false,
             expect: Some(serde_json::json!([])),
+            stdout_has: None,
+            stderr_has: "No MCP servers found.",
+            writes: None,
         },
         Case {
             label: "cap discover --write-config",
@@ -87,12 +99,18 @@ fn cases(format: &'static str) -> Vec<Case> {
             ],
             found: true,
             expect: None,
+            stdout_has: Some("probe"),
+            stderr_has: "Config written to",
+            writes: Some("discovered.yaml"),
         },
         Case {
             label: "cap discover --shadow",
             args: vec!["cap", "discover", "--shadow", "--format", format],
             found: true,
             expect: None,
+            stdout_has: None,
+            stderr_has: "",
+            writes: None,
         },
     ]
 }
@@ -105,12 +123,12 @@ fn every_machine_readable_format_writes_one_document_to_stdout() {
             let home = Home::new();
             let out = home.run(&case.args, case.found);
             let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
             let row = format!("{} --format {format}", case.label);
             if !out.status.success() {
                 failures.push(format!(
-                    "{row}: exit {:?}, stderr: {}",
-                    out.status.code(),
-                    String::from_utf8_lossy(&out.stderr)
+                    "{row}: exit {:?}, stderr: {stderr}",
+                    out.status.code()
                 ));
                 continue;
             }
@@ -126,14 +144,57 @@ fn every_machine_readable_format_writes_one_document_to_stdout() {
                     }
                 }
             }
+            if let Some(text) = case.stdout_has
+                && !stdout.contains(text)
+            {
+                failures.push(format!("{row}: stdout lacks {text:?}:\n{stdout}"));
+            }
+            if !stderr.contains(case.stderr_has) {
+                failures.push(format!(
+                    "{row}: stderr lacks {:?}:\n{stderr}",
+                    case.stderr_has
+                ));
+            }
+            if let Some(file) = case.writes
+                && !home.root.join(file).is_file()
+            {
+                failures.push(format!("{row}: did not write {file}"));
+            }
         }
     }
 
-    // `list --json` shares the rule; it has no yaml mode.
-    let home = Home::new();
-    let out = home.run(&["list", "--json"], false);
-    if let Err(e) = parse_whole("json", &String::from_utf8_lossy(&out.stdout)) {
-        failures.push(format!("list --json: stdout is not one document ({e})"));
+    // Other commands with a machine-readable format. Their exit status
+    // reflects what they check, so only stdout's shape is asserted.
+    let capability = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/capabilities/automation/agent_search.yaml"
+    );
+    let others: [(&str, &[&str]); 4] = [
+        ("json", &["list", "--json"]),
+        ("json", &["doctor", "--format", "json"]),
+        ("yaml", &["doctor", "--shadow", "--shadow-format", "yaml"]),
+        ("json", &["validate", capability, "--format", "json"]),
+    ];
+    for (format, args) in others {
+        let home = Home::new();
+        let out = home.run(args, false);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let row = args.join(" ");
+        if stdout.trim().is_empty() {
+            failures.push(format!(
+                "{row}: empty stdout, exit {:?}, stderr: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        } else if let Err(e) = parse_whole(format, &stdout) {
+            failures.push(format!(
+                "{row}: stdout is not one document ({e}):\n{stdout}"
+            ));
+        }
+    }
+    let out = Home::new().run(&["list", "--json"], false);
+    if !out.status.success() {
+        failures.push(format!("list --json: exit {:?}", out.status.code()));
     }
 
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
