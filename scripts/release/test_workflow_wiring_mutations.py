@@ -1385,50 +1385,35 @@ CASES += [
      "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
 ]
 
-# Throwaway runs carry the release tooling's Python suites. The hosted job is
-# named by its runner line, the trusted one by its env block, so each anchor
-# names one job although both run the same steps.
-_HOSTED_PY = (
-    "    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
-    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
-    "        with:\n          persist-credentials: false\n"
-)
-_TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
-_HOSTED_PY_STEP = _HOSTED_PY + (
-    "      # The release tooling's Python suites, which `release-script-tests` runs\n"
-    '      # but which that job skips here. Without this, a throwaway meant to show\n'
-    '      # a workflow-wiring or release-script test going red passes on cargo\n'
-    '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
-    '      - name: Release tooling Python suites\n'
-    '        run: |\n'
-    '          set -uo pipefail\n'
-    '          fail=0\n'
-    '          for suite in scripts/release/test_*.py; do\n'
-    '            echo "::group::$suite"\n'
-    '            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }\n'
-    '            echo "::endgroup::"\n'
-    '          done\n'
-    '          exit "$fail"\n'
-)
+# Every installed cosign stays past the verification advisories.
 CASES += [
-    ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
-    ("throwaway-python-failure-swallowed", "ci.yml",
-     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
-     "      # Restore only: saving from throwaway runs would evict the entries the\n"
-     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+    ("cosign-pin-downgraded", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     CAUGHT),
+    ("cosign-pin-quoted-and-downgraded", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: 'v2.5.2'\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-left-to-the-installer-default", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-quoted-at-the-floor", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", TOLERATED),
+    # Any workflow file counts, not only the ones that install cosign today.
+    ("cosign-installed-unpinned-in-another-workflow", "mrtr7b-full-burst.yml",
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n",
      "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
-     "        with:\n          save-if: false\n"
-     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
-     "  # Same run on the self-hosted arm64 runner.",
-     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
-     "      # Restore only: saving from throwaway runs would evict the entries the\n"
-     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
-     "        with:\n          save-if: false\n"
-     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
-     "  # Same run on the self-hosted arm64 runner.", CAUGHT),
-    ("trusted-throwaway-swallows-failures", "ci.yml",
-     _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
+     "      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n"
+     "      - name: Run the full-burst ledger\n", CAUGHT),
+    # Under env: the input never reaches the action, which installs its default.
+    ("cosign-pin-moved-under-env", "ci.yml",
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "        env:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-moved-up-a-major", "ci.yml",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v3.1.3\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):

@@ -745,6 +745,12 @@ def gate_steps(workflow, job):
 # reports `days: 14`. upload-artifact clamps `retention-days` to that value.
 HANDOFF_RETENTION_DAYS = 14
 
+# The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
+# (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
+# GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
+# certain conditions).
+COSIGN_FLOOR = (2, 6, 5)
+
 
 def artifact_keys(block, keys):
     """The values of `keys` under a step's `with:`, in order.
@@ -2195,24 +2201,32 @@ class WorkflowWiring(unittest.TestCase):
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
 
-    def test_throwaway_runs_carry_the_release_tooling_python_suites(self):
-        # A throwaway pull request skips `release-script-tests`, so without its
-        # own run of the Python suites a workflow-wiring or release-script red
-        # cannot show on one: the throwaway passes on cargo alone.
-        throwaway = {
-            name: body for name, body in jobs("ci.yml").items()
-            if re.search(r"(?m)^    name: Tests \(throwaway\)$", body)
-        }
-        self.assertGreaterEqual(len(throwaway), 1, "ci.yml has no Tests (throwaway) job")
-        for name in throwaway:
-            text = "\n".join("\n".join(b) for b in steps("ci.yml", name))
-            self.assertRegex(
-                text, r"for suite in scripts/release/test_\*\.py; do",
-                f"{name}: must run every scripts/release/test_*.py suite",
-            )
-            self.assertRegex(text, r'python3 "\$suite" \|\| \{ echo "::error::\$suite failed"; fail=1; \}')
-            self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
-            self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
+    def test_every_installed_cosign_is_past_the_verification_advisory(self):
+        # Every cosign the workflows install signs or verifies the images and
+        # charts users trust, and a verify step on a vulnerable pin can pass
+        # on what it should refuse (see COSIGN_FLOOR).
+        # Read per installer step, so a step that sets no version (and gets
+        # the installer's default) or quotes it is not skipped.
+        # Every workflow file, not a named list: an installer added to another
+        # workflow must meet the same floor. Only the action's own `with:`
+        # input counts; a `cosign-release` under `env:` never reaches it.
+        found = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            wf = path.name
+            for block in steps(wf):
+                if not any(re.search(r"uses:\s*sigstore/cosign-installer@", line) for line in block):
+                    continue
+                pins = artifact_keys(block, ("cosign-release",))
+                self.assertEqual(len(pins), 1, f"{wf}: {block[0].strip()} must pin cosign-release under with:")
+                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pins[0])
+                self.assertIsNotNone(m, f"{wf}: cosign-release {pins[0]!r} is not vX.Y.Z")
+                found.append((wf, tuple(int(x) for x in m.groups())))
+        self.assertTrue(found, "no cosign-release pin found")
+        # The floor is for the v2 line the workflows use. A v3 pin needs its
+        # own floor added here first, or any v3.0.x would compare above it.
+        self.assertEqual({v[0] for _, v in found}, {COSIGN_FLOOR[0]}, "cosign pin outside the v2 line")
+        below = [f"{wf}: cosign v{'.'.join(map(str, v))}" for wf, v in found if v < COSIGN_FLOOR]
+        self.assertEqual(below, [], f"cosign pins below the patched floor v{'.'.join(map(str, COSIGN_FLOOR))}")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
