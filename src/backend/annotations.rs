@@ -163,11 +163,17 @@ fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
 pub(crate) fn prepare_tool_metadata(
     server: &str,
     pins: &std::collections::BTreeMap<String, String>,
+    judging: super::descriptor_gate::Judging,
     tools: &mut Vec<Tool>,
 ) -> PreparedTools {
     // First, so a poisoned tool that also breaks a header rule is still
     // recorded as withheld and refused by name (#1441).
-    let verdicts = super::descriptor_gate::judge(tools, pins);
+    let verdicts = match judging {
+        super::descriptor_gate::Judging::Judge => super::descriptor_gate::judge(tools, pins),
+        super::descriptor_gate::Judging::AlreadyJudged => {
+            super::descriptor_gate::Verdicts::default()
+        }
+    };
     exclude_invalid_header_tools(server, tools);
     let resend_permitted = tools
         .iter()

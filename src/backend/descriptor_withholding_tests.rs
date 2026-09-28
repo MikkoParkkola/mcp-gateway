@@ -67,6 +67,9 @@ fn spec_digest(tool: &Value) -> String {
 struct Upstream {
     tools: Mutex<Vec<Value>>,
     hold: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// Answer `tools/list` with neither a result nor an error, which the
+    /// drain reads as an empty catalogue without parsing one.
+    blank: Mutex<bool>,
 }
 
 #[async_trait::async_trait]
@@ -79,6 +82,11 @@ impl crate::transport::Transport for Upstream {
         let id = RequestId::Number(1);
         if method != "tools/list" {
             return Ok(JsonRpcResponse::success(id, json!({})));
+        }
+        if *self.blank.lock().unwrap() {
+            let mut response = JsonRpcResponse::success(id, json!({}));
+            response.result = None;
+            return Ok(response);
         }
         let tools = self.tools.lock().unwrap().clone();
         let hold = self.hold.lock().unwrap().take();
@@ -265,5 +273,14 @@ async fn t9_a_superseded_fill_cannot_clear_a_newer_withholding() {
     assert!(
         refused(&backend, POISONED),
         "the delayed clean fill cleared the newer withholding"
+    );
+    // A later fill that parses nothing must not commit the superseded fill's
+    // verdicts on its behalf.
+    *upstream.blank.lock().unwrap() = true;
+    backend.invalidate_tools_cache();
+    backend.get_tools_shared().await.expect("an empty fill");
+    assert!(
+        refused(&backend, POISONED),
+        "an empty fill applied the superseded fill's verdicts"
     );
 }

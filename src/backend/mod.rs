@@ -42,6 +42,9 @@ use pool::PoolKey;
 use pool::PooledEntry;
 
 pub(crate) use annotations::prepare_tool_metadata;
+pub(crate) use descriptor_gate::Judging;
+#[cfg(test)]
+pub(crate) use descriptor_gate::descriptor_digest;
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,

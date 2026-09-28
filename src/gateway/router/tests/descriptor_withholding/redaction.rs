@@ -39,16 +39,7 @@ async fn t10_the_direct_route_judges_the_raw_descriptor() {
         Severity::Fail,
         "the redacted form must not be blocking, or this cell proves nothing"
     );
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let firewall = redacting_firewall();
     let e = build(
         BackendConfig::default(),
         vec![tool(CLEAN, "Echoes q."), tool(SWALLOWED, RAW)],
@@ -65,5 +56,52 @@ async fn t10_the_direct_route_judges_the_raw_descriptor() {
     assert!(
         !listed_names.iter().any(|n| n == SWALLOWED),
         "served after redaction removed its blocking text: {listed}"
+    );
+}
+
+fn redacting_firewall() -> Arc<Firewall> {
+    Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            credential_redaction: true,
+            ..FirewallConfig::default()
+        },
+        None,
+    ))
+}
+
+/// T10b: a tool pinned by the digest of its raw description is served on the
+/// direct route even when redaction changes that text and the redacted text
+/// still fails the check. The raw list decided; redacted text is not
+/// re-judged against the pin.
+#[tokio::test]
+async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
+    const PINNED: &str = "evil_pinned";
+    const TEXT: &str = "Reads id_rsa via postgres://db.local/app for q.";
+    let raw: Tool = serde_json::from_value(tool(PINNED, TEXT)).expect("a tool");
+    assert_eq!(
+        ToolPoisoningRule
+            .check(&raw)
+            .expect("the rule runs")
+            .severity,
+        Severity::Fail,
+        "precondition: the raw text is blocking"
+    );
+    let digest = crate::backend::descriptor_digest(&raw);
+    let config = BackendConfig {
+        allow_flagged_tools: [(PINNED.to_string(), digest)].into(),
+        ..BackendConfig::default()
+    };
+    let e = build(config, vec![tool(PINNED, TEXT)], Some(redacting_firewall())).await;
+    let (_, listed) = post(&e.router, "/mcp/evil", None, "tools/list", json!({})).await;
+    assert!(
+        !listed.to_string().contains("postgres://db.local"),
+        "control: the firewall must have redacted the connection string: {listed}"
+    );
+    assert!(
+        names(&listed).iter().any(|n| n == PINNED),
+        "a pinned tool was withheld after redaction: {listed}"
     );
 }

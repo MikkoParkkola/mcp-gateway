@@ -258,7 +258,12 @@ fn normalize_tools_list_response(
     // list has been through credential redaction, which can remove the text a
     // finding rests on. The verdict on the raw list, committed when the drain
     // stored it, decides what is withheld (#1441).
-    let _ = prepare_tool_metadata(backend_name, backend.flagged_tool_pins(), &mut tools);
+    let _ = prepare_tool_metadata(
+        backend_name,
+        backend.flagged_tool_pins(),
+        crate::backend::Judging::AlreadyJudged,
+        &mut tools,
+    );
     tools.retain(|tool| !backend.is_blocked_tool(&tool.name));
 
     let server_id = format!("backend:{backend_name}");

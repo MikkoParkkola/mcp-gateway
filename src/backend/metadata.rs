@@ -100,12 +100,13 @@ impl Backend {
     #[must_use]
     pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
         let slot = self.tools_slot(None);
-        slot.tools_cache.with_cached(|tools| {
+        let (tools, truncated) = slot.tools_cache.with_cached(|tools| {
             (
                 tools.map_or_else(|| Arc::new(Vec::new()), Arc::clone),
                 slot.tools_truncated.load(Ordering::SeqCst),
             )
-        })
+        });
+        (self.without_blocked(tools), truncated)
     }
 
     /// Both under one guard; use wherever the two travel together.
@@ -156,10 +157,12 @@ impl Backend {
     /// Snapshot of the tools cached on `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tools_snapshot_for(&self, binding: Option<&str>) -> Arc<Vec<Tool>> {
-        self.tools_slot(binding)
-            .tools_cache
-            .snapshot_shared()
-            .unwrap_or_else(|| Arc::new(Vec::new()))
+        self.without_blocked(
+            self.tools_slot(binding)
+                .tools_cache
+                .snapshot_shared()
+                .unwrap_or_else(|| Arc::new(Vec::new())),
+        )
     }
 
     /// Snapshot of the shared slot's tools.
@@ -201,7 +204,10 @@ impl Backend {
     ) -> Result<Arc<Vec<T>>>
     where
         S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
-        F: Fn(Value, &super::pool::PooledEntry) -> Result<Vec<T>>,
+        F: Fn(
+            Value,
+            &super::pool::PooledEntry,
+        ) -> Result<(Vec<T>, Option<super::descriptor_gate::Verdicts>)>,
     {
         let key = self.pool_key_for(binding);
         let identity_key = match &key {
@@ -243,9 +249,11 @@ impl Backend {
                         identity_key,
                     )
                     .await?;
-                    let items = match merged {
+                    // Verdicts travel with THIS fill's result, so they are
+                    // committed only if this fill's store is accepted (#1441).
+                    let (items, verdicts) = match merged {
                         Some(result) => parse(result, &entry)?,
-                        None => Vec::new(),
+                        None => (Vec::new(), None),
                     };
 
                     debug!(
@@ -256,16 +264,16 @@ impl Backend {
                         "Backend metadata cached"
                     );
 
-                    Ok((items, truncated))
+                    Ok((items, (truncated, verdicts)))
                 },
-                |truncated| {
+                |(truncated, verdicts)| {
                     // Written only once the store is accepted, and on every
                     // accepted store, so a complete fill clears it (design D).
                     if let Some(flag) = family.truncated_flag {
                         flag(&entry).store(truncated, Ordering::SeqCst);
                     }
-                    if let Some(commit) = family.commit {
-                        commit(self, &entry);
+                    if let Some(verdicts) = verdicts {
+                        self.commit_verdicts(verdicts);
                     }
                 },
             )
@@ -301,38 +309,40 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
-        self.get_cached_list_for(
-            binding,
-            |entry| &entry.tools_cache,
-            ListFamily {
-                method: "tools/list",
-                kind: "tools",
-                list_key: "tools",
-                truncated_flag: Some(tools_truncated_flag),
-                commit: Some(commit_pending_verdicts),
-            },
-            extra_headers,
-            |result, entry| {
-                let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
-                // Discovery is where the explicit annotations are still readable,
-                // and it always precedes a `tools/call` (ADR-012 A1). Written
-                // THROUGH THE LEASE THIS FILL ALREADY HOLDS, not through a second
-                // `tools_slot(binding)` lookup: a revocation that removes the slot
-                // mid-fetch would otherwise resurrect the pre-revocation retry set
-                // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
-                // it, and keeps the set on the slot whose catalogue derived it — a
-                // backend-wide one would let one identity's fill decide another
-                // identity's retry policy.
-                let prepared =
-                    prepare_tool_metadata(&self.name, self.flagged_tool_pins(), &mut tools);
-                *entry.resend_permitted.write() = prepared.resend_permitted;
-                // Committed by `commit_pending_verdicts`, only once the store
-                // is accepted: a superseded fill must not unblock a name (#1441).
-                *entry.pending_verdicts.lock() = Some(prepared.verdicts);
-                Ok(tools)
-            },
-        )
-        .await
+        let tools = self
+            .get_cached_list_for(
+                binding,
+                |entry| &entry.tools_cache,
+                ListFamily {
+                    method: "tools/list",
+                    kind: "tools",
+                    list_key: "tools",
+                    truncated_flag: Some(tools_truncated_flag),
+                },
+                extra_headers,
+                |result, entry| {
+                    let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
+                    // Discovery is where the explicit annotations are still readable,
+                    // and it always precedes a `tools/call` (ADR-012 A1). Written
+                    // THROUGH THE LEASE THIS FILL ALREADY HOLDS, not through a second
+                    // `tools_slot(binding)` lookup: a revocation that removes the slot
+                    // mid-fetch would otherwise resurrect the pre-revocation retry set
+                    // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
+                    // it, and keeps the set on the slot whose catalogue derived it — a
+                    // backend-wide one would let one identity's fill decide another
+                    // identity's retry policy.
+                    let prepared = prepare_tool_metadata(
+                        &self.name,
+                        self.flagged_tool_pins(),
+                        super::Judging::Judge,
+                        &mut tools,
+                    );
+                    *entry.resend_permitted.write() = prepared.resend_permitted;
+                    Ok((tools, Some(prepared.verdicts)))
+                },
+            )
+            .await?;
+        Ok(self.without_blocked(tools))
     }
 
     /// Record the tools whose backend-declared annotations grant resend
@@ -418,10 +428,14 @@ impl Backend {
                 kind: "resources",
                 list_key: "resources",
                 truncated_flag: None,
-                commit: None,
             },
             extra_headers,
-            |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+            |result, _| {
+                Ok((
+                    serde_json::from_value::<ResourcesListResult>(result)?.resources,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -464,14 +478,14 @@ impl Backend {
                 kind: "resource_templates",
                 list_key: "resourceTemplates",
                 truncated_flag: None,
-                commit: None,
             },
             extra_headers,
             |result, _| {
-                Ok(
+                Ok((
                     serde_json::from_value::<ResourcesTemplatesListResult>(result)?
                         .resource_templates,
-                )
+                    None,
+                ))
             },
         )
         .await
@@ -515,10 +529,14 @@ impl Backend {
                 kind: "prompts",
                 list_key: "prompts",
                 truncated_flag: None,
-                commit: None,
             },
             extra_headers,
-            |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
+            |result, _| {
+                Ok((
+                    serde_json::from_value::<PromptsListResult>(result)?.prompts,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -544,15 +562,6 @@ struct ListFamily {
     list_key: &'static str,
     /// Only the tools family records truncation (MIK 7570 PAGING.1 design D).
     truncated_flag: Option<fn(&super::pool::PooledEntry) -> &AtomicBool>,
-    /// Run after an accepted store; only the tools family commits verdicts.
-    commit: Option<fn(&Backend, &super::pool::PooledEntry)>,
-}
-
-/// Apply the verdicts a tools fill parked on its slot (#1441).
-fn commit_pending_verdicts(backend: &Backend, entry: &super::pool::PooledEntry) {
-    if let Some(verdicts) = entry.pending_verdicts.lock().take() {
-        backend.commit_verdicts(verdicts);
-    }
 }
 
 /// Drain every `nextCursor` page into one result, then let the caller parse

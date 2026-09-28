@@ -11,6 +11,7 @@
 //! description to no one.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
@@ -71,16 +72,18 @@ pub(crate) fn descriptor_digest(tool: &Tool) -> String {
 pub(crate) fn judge(tools: &mut Vec<Tool>, allow: &BTreeMap<String, String>) -> Verdicts {
     let mut verdicts = Verdicts::default();
     tools.retain(|tool| {
-        let blocking = ToolPoisoningRule
-            .check(tool)
-            .ok()
-            .filter(|result| result.severity == Severity::Fail);
-        if let Some(result) = blocking {
+        // A rule that cannot judge a descriptor fails closed.
+        let blocking = match ToolPoisoningRule.check(tool) {
+            Ok(result) if result.severity == Severity::Fail => Some(result.issues),
+            Ok(_) => None,
+            Err(error) => Some(vec![format!("the check could not run: {error}")]),
+        };
+        if let Some(issues) = blocking {
             let digest = descriptor_digest(tool);
             if allow.get(&tool.name) != Some(&digest) {
                 verdicts
                     .withheld
-                    .insert(tool.name.clone(), (digest, result.issues));
+                    .insert(tool.name.clone(), (digest, issues));
                 return false;
             }
             verdicts.allowed.insert(tool.name.clone(), digest);
@@ -89,6 +92,16 @@ pub(crate) fn judge(tools: &mut Vec<Tool>, allow: &BTreeMap<String, String>) -> 
         true
     });
     verdicts
+}
+
+/// Whether [`super::prepare_tool_metadata`] judges the descriptors it is given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Judging {
+    /// Raw descriptors from the backend: judge them.
+    Judge,
+    /// A list already judged raw and since redacted: re-judging redacted text
+    /// would break a digest pin, so only the backend's blocked set applies.
+    AlreadyJudged,
 }
 
 /// A backend's withheld tools and the log lines already written for them.
@@ -149,6 +162,23 @@ impl Backend {
                  check (AX-010); the gateway log names the finding"
                 )
             })
+    }
+
+    /// `tools` without the names this backend has blocked since they were
+    /// cached: a slot filled before another caller's listing blocked a name
+    /// must not keep serving it. The same `Arc` when nothing is blocked.
+    pub(crate) fn without_blocked(&self, tools: Arc<Vec<Tool>>) -> Arc<Vec<Tool>> {
+        let blocked = self.descriptor_gate.blocked.read();
+        if blocked.is_empty() || !tools.iter().any(|t| blocked.contains_key(&t.name)) {
+            return tools;
+        }
+        Arc::new(
+            tools
+                .iter()
+                .filter(|t| !blocked.contains_key(&t.name))
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Whether a served list may carry `tool`.

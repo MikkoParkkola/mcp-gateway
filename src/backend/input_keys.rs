@@ -82,8 +82,12 @@ impl Backend {
         // returns stays with discovery, so this fill grants no retries. The
         // list is raw here (the direct route redacts only afterwards), so this
         // is where its descriptors are judged (#1441).
-        let prepared =
-            super::prepare_tool_metadata(&self.name, self.flagged_tool_pins(), &mut parsed);
+        let prepared = super::prepare_tool_metadata(
+            &self.name,
+            self.flagged_tool_pins(),
+            super::Judging::Judge,
+            &mut parsed,
+        );
         let verdicts = prepared.verdicts;
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
             // Not stored, but observed: a blocked name is per backend.
