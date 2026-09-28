@@ -393,6 +393,12 @@ fn audit_fields(event: &ControlPlaneAuditEvent) -> serde_json::Map<String, serde
         event.rollback.summary.clone().into(),
     );
     fields.insert("rollback_step".into(), event.rollback.step.clone().into());
+    if let Some(change) = &event.grant_change {
+        fields.insert(
+            "grant_change".into(),
+            serde_json::to_value(change).unwrap_or(serde_json::Value::Null),
+        );
+    }
     fields
 }
 
@@ -417,6 +423,9 @@ fn audit_event_from_entry(entry: &serde_json::Value) -> Option<ControlPlaneAudit
             summary: string("rollback_summary")?,
             step: string("rollback_step")?,
         },
+        grant_change: obj
+            .get("grant_change")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
     })
 }
 

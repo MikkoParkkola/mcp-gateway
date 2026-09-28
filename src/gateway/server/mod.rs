@@ -73,7 +73,7 @@ use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 use control_plane_store::{build_control_plane_store, control_plane_base};
-use identity_grants::{identity_grant_sink_for, load_configured_identity_grants};
+use identity_grants::load_configured_identity_grants;
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
 use support::{log_startup_banner, shutdown_signal};
@@ -1511,16 +1511,18 @@ impl Gateway {
         let export_status =
             spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
 
-        // Wire the config hot-reload *context* into meta_mcp before it moves
-        // into AppState. The file watcher that can mutate `live_config` is
-        // started later (after `create_router`) so the router's startup
-        // bind-origin snapshot reads `live_config` while it still equals the
-        // config the listener binds — no startup reload race (MIK-6750 r4).
-        // ONE sink for the meta-tool context and the watcher: its mutex is what
-        // serializes grant reloads, and a second sink over the same store would
-        // let a watcher reload and a meta-tool reload race to publish.
-        let identity_grant_sink =
-            identity_grant_sink_for(&self.config.security.identity_grants, &meta_mcp);
+        // Reload context into meta_mcp before AppState; the watcher starts after
+        // `create_router`, so the bind-origin snapshot sees the bound config
+        // (MIK-6750 r4). ONE grant sink for meta-tool and watcher (its mutex
+        // serializes grant reloads), built after the store it records into.
+        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
+        let identity_grant_sink = identity_grants::start_identity_grant_audit(
+            &self.config,
+            &meta_mcp,
+            control_plane_store.as_ref(),
+            &control_plane_base.path,
+        )
+        .await?;
         if let Some(ref path) = self.config_path {
             // Ends this context's reload waits on shutdown (#1808): axum's
             // graceful shutdown waits for every handler, and an admin or
@@ -1760,8 +1762,6 @@ impl Gateway {
         // Only the cost-governance shutdown tasks consume this clone.
         #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
-
-        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
 
         // The durable task runtime, opened before any listener exists.
         //
@@ -2237,6 +2237,13 @@ impl Gateway {
             data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        // Held for the whole serve: it owns the governance store's lease.
+        let grant_sink = identity_grants::stdio_identity_grants(
+            &self.config,
+            self.config_path.as_deref(),
+            &meta_mcp,
+        )
+        .await?;
         // Give stdio the same explicit reload context as HTTP.
         if let Some(ref path) = self.config_path {
             let live_config = Arc::new(
@@ -2252,10 +2259,7 @@ impl Gateway {
                     self.config.meta_mcp.cache_ttl,
                 )
                 .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(identity_grant_sink_for(
-                    &self.config.security.identity_grants,
-                    &meta_mcp,
-                )),
+                .with_identity_grant_sink_opt(grant_sink.clone()),
             );
             meta_mcp.set_reload_context(reload_ctx);
         }

@@ -103,7 +103,7 @@ backend" and "fails a capability file" first.**
 | 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
-| 79 | Reserved: lands with a pending change | None yet |
+| 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
@@ -2188,6 +2188,30 @@ account store lives, so this grants no one new access. Several stdio gateways sh
 directory share its accounts.
 
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
+
+## 79. Identity grant changes are recorded in the governance log, and need it
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with auth on, identity grants on and a governance store that cannot open
+
+`identity grants` CLI changes, edits made directly to the grant file, and the grants each
+start serves are now governance audit records (actor `unknown`, action `mutate_grant`).
+
+- With auth on and identity grants on, the gateway refuses to start (HTTP and `serve --stdio`)
+  when the governance store cannot open, instead of starting without it: "identity grants need
+  the governance audit log when auth is on". Set `control_plane.store_dir` to a writable
+  directory. With auth off nothing changes.
+- The CLI writes a journal beside the grant file (`<grant file>.journal.jsonl`, mode 0600). Keep
+  it with the grant file; deleting it makes the next start record the history as indeterminate.
+- A grant change that is applied but cannot be recorded stays applied, and the reload outcome
+  says `UNRECORDED`. If the audit plan cannot be written first, the reload is refused and a start
+  serves no grants until it can.
+- The gateway reads the grant file under a lock file beside it. On a read-only filesystem (for
+  example a Kubernetes Secret or ConfigMap mount) it reads without the lock. When it cannot
+  create the lock because the directory is missing or it may not write there, the grant file
+  counts as unreadable: with `fail_on_error` the start is refused, otherwise no grants are
+  served until a reload can read them.
+- `ControlPlaneAuditEvent` gains a `grant_change` field, so a struct literal of it in code that
+  builds against this crate needs `grant_change: None`. Serialised events without it are unchanged.
 
 ## 80. Discovery keeps env, headers and argument boundaries
 
