@@ -429,7 +429,12 @@ mod tests {
 
     #[test]
     fn redacted_keys_stay_unique() {
-        let mut v = json!({ hex_key(): 1, token_b(): 2, "[REDACTED:credential]": 3 });
+        let mut v = json!({
+            hex_key(): 1,
+            token_b(): 2,
+            "[REDACTED:credential]": 3,
+            "[REDACTED:credential]#2": 4,
+        });
         let findings = redactor().scan_and_redact(&mut v);
         assert_eq!(findings.len(), 2);
         // Clean keys keep their names; redacted keys take suffixes in map order.
@@ -437,18 +442,22 @@ mod tests {
             v,
             json!({
                 "[REDACTED:credential]": 3,
-                "[REDACTED:credential]#2": 1,
-                "[REDACTED:credential]#3": 2,
+                "[REDACTED:credential]#2": 4,
+                "[REDACTED:credential]#3": 1,
+                "[REDACTED:credential]#4": 2,
             })
         );
     }
 
     #[test]
     fn redacts_nested_key_and_keeps_surrounding_text() {
-        let mut v = json!({ "outer": { format!("x-{} y", token_a()): "v" } });
+        let mut v = json!({ "outer": { format!("x-{} y", token_a()): token_b() } });
         let findings = redactor().scan_and_redact(&mut v);
-        assert_eq!(findings.len(), 1);
-        assert_eq!(v, json!({ "outer": { "x-[REDACTED:credential] y": "v" } }));
+        assert_eq!(findings.len(), 2, "one for the key, one for its value");
+        assert_eq!(
+            v,
+            json!({ "outer": { "x-[REDACTED:credential] y": "[REDACTED:credential]" } })
+        );
     }
 
     #[test]
