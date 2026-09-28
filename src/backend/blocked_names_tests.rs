@@ -196,6 +196,11 @@ async fn x3_a_name_blocked_later_leaves_every_cached_catalogue() {
             .any(|t| t.name == POISONED),
         "a's snapshot still serves a blocked name"
     );
+    assert_eq!(
+        backend.cached_tools_count_for(Some("a")),
+        0,
+        "a's tool count still includes a blocked name"
+    );
     assert!(
         backend.get_cached_tool_for(Some("a"), POISONED).is_none(),
         "an exact-name lookup still finds a blocked name"

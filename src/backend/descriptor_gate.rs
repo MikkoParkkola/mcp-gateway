@@ -149,8 +149,9 @@ fn first_time(logged: &mut HashSet<(String, String, bool)>, line: (String, Strin
 
 impl Backend {
     /// Apply an accepted listing from `source` (the slot it was listed on):
-    /// block what it withheld, clear `source`'s own block on what it served,
-    /// and log each distinct descriptor once.
+    /// block what it withheld, clear `source`'s own block on what it served
+    /// (and, for a complete listing, on what it no longer lists), and log
+    /// each distinct descriptor once.
     pub(crate) fn commit_verdicts(&self, source: &str, listing: Listing, verdicts: Verdicts) {
         let mut blocked = self.descriptor_gate.blocked.write();
         // What `source` no longer withholds loses `source`'s block: a name it

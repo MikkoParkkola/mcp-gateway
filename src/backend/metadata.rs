@@ -77,9 +77,14 @@ impl Backend {
     /// design: it never triggers a refresh.
     #[must_use]
     pub fn cached_tools_count_for(&self, binding: Option<&str>) -> usize {
-        self.tools_slot(binding)
-            .tools_cache
-            .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
+        self.tools_slot(binding).tools_cache.with_cached(|tools| {
+            tools.map_or(0, |tools| {
+                tools
+                    .iter()
+                    .filter(|t| !self.is_blocked_tool(&t.name))
+                    .count()
+            })
+        })
     }
 
     /// The shared slot's count.
@@ -115,7 +120,13 @@ impl Backend {
         self.tools_slot(None)
             .tools_cache
             .with_cached_and_populated(|tools, populated| {
-                (tools.map_or(0, |tools| tools.len()), populated)
+                let count = tools.map_or(0, |tools| {
+                    tools
+                        .iter()
+                        .filter(|t| !self.is_blocked_tool(&t.name))
+                        .count()
+                });
+                (count, populated)
             })
     }
 
