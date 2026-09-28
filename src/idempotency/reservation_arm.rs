@@ -10,7 +10,7 @@ impl IdempotencyReservation {
     /// releases the key again. For a backend that answered it stopped to ask,
     /// or a dispatch that provably never left the gateway. No-op once the
     /// reservation is settled.
-    pub fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         if !self.settled {
             self.on_drop = OnDrop::Release;
         }
