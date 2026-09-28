@@ -307,7 +307,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
 - **OWASP Agentic AI Top 10 (self-assessed).** Controls are mapped across all 10 ASI risks at the gateway boundary in-tree. That is not a certification. Hardening follow-ups are tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
-- **MITRE Fight Fraud Framework (F3).** A technique-by-technique mapping of F3 v1.1 at the tool-call boundary, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Physical, card-scheme, payment-rail and victim-device techniques are out of scope for a tool gateway and marked N/A; the rest are rated PARTIAL or GAP against the gateway's own authentication, audit and capability surface. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
+- **MITRE Fight Fraud Framework (F3).** A technique-by-technique mapping of F3 v1.1 at the tool-call boundary, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Physical, card-scheme, payment-rail and victim-device techniques are out of scope for a tool gateway and marked N/A; techniques that target the gateway's own authentication, audit and capability surface are rated PARTIAL or GAP. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
 
 ### Recent additions
 
