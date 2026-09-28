@@ -50,7 +50,7 @@ use crate::config::Config;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::gateway::oauth::GatewayKeyPair;
 use crate::gateway::server::account_bindings::{
-    declare_account_descriptors, install_account_strategies,
+    ServeMode, declare_account_descriptors, install_account_strategies,
 };
 use crate::identity_propagation::AccountStrategyRegistry;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -276,7 +276,7 @@ pub(super) fn installed_gateway(
     meta.enable_transparency_log(leaked_transparency_logger());
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     let config = rest_config(descriptors);
-    install_account_strategies(&config, Some(custody), &gateway_key, &meta)
+    install_account_strategies(&config, Some(custody), &gateway_key, &meta, ServeMode::Http)
         .expect("the shared installer must accept the fixture configuration");
     let registry = meta.account_strategies();
     (Arc::new(meta), registry)

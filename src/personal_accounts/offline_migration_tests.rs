@@ -19,7 +19,7 @@ use std::path::Path;
 use super::{OfflineMigrationError, migrate_from};
 use std::sync::Arc;
 
-use crate::config::{Config, EnvOverlay};
+use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
 use crate::oauth::TokenStorage;
 
 const RESOURCE: &str = "https://mcp.example.test/v1/mcp";
@@ -274,5 +274,81 @@ fn the_override_names_the_file_when_the_backend_was_renamed_since_3_x() {
     assert_eq!(
         harness.stored_access_token().as_deref(),
         Some("renamed-access-token")
+    );
+}
+
+/// A named API key with every other field at its zero value, reused by the
+/// two reachability rows below.
+fn api_key(name: &str) -> ApiKeyConfig {
+    ApiKeyConfig {
+        key: None,
+        key_sha256: None,
+        expires_at: None,
+        name: name.to_string(),
+        rate_limit: 0,
+        backends: Vec::new(),
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+    }
+}
+
+/// A multi-key config is never eligible for the sole-operator
+/// principal, so the migrated grant is reachable over stdio only.
+#[test]
+fn multi_api_key_config_reports_stdio_only_reachability() {
+    let mut harness = Harness::new("");
+    harness.seed("gdrive", "gdrive");
+    harness.config.auth = AuthConfig {
+        enabled: true,
+        single_user: true,
+        api_keys: vec![api_key("a"), api_key("b")],
+        ..AuthConfig::default()
+    };
+
+    let report = harness.migrate(None).expect("must migrate");
+    assert!(
+        report
+            .reachability
+            .contains("reachable over stdio only; this configuration does not expose it over HTTP"),
+        "a multi-key config's reachability must name stdio-only reach, got {:?}",
+        report.reachability
+    );
+    assert!(
+        report
+            .reachability
+            .contains("an MCP backend bound to it still needs a verified end-user identity"),
+        "the reachability must state the MCP-backend limit, got {:?}",
+        report.reachability
+    );
+}
+
+/// an eligible single-user config serves the migrated grant to
+/// any caller this gateway authenticates, over both transports.
+#[test]
+fn eligible_single_user_config_reports_stdio_and_http_reachability() {
+    let mut harness = Harness::new("");
+    harness.seed("gdrive", "gdrive");
+    harness.config.auth = AuthConfig {
+        enabled: true,
+        single_user: true,
+        api_keys: vec![api_key("only")],
+        ..AuthConfig::default()
+    };
+
+    let report = harness.migrate(None).expect("must migrate");
+    assert!(
+        report
+            .reachability
+            .contains("reachable over stdio, and over HTTP by callers this gateway authenticates"),
+        "an eligible single-user config's reachability must name both transports, got {:?}",
+        report.reachability
+    );
+    assert!(
+        report
+            .reachability
+            .contains("an MCP backend bound to it still needs a verified end-user identity"),
+        "the reachability must state the MCP-backend limit, got {:?}",
+        report.reachability
     );
 }
