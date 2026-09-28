@@ -97,7 +97,7 @@ impl Backend {
         {
             return held(cached);
         }
-        if !self.fetch_carries_caller_identity(identity_key) && !headers.is_empty() {
+        if headers.is_empty() && !headers.is_empty() && !self.fetch_carries_caller_identity(identity_key) {
             if let Some(cached) = &cached {
                 return held(cached);
             }
