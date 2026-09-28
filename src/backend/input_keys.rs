@@ -65,12 +65,15 @@ impl Backend {
     /// is the one the caller was shown last, and it was drained in full, so it
     /// also clears the slot's truncated mark. A page fetched under a caller's
     /// own credential never lands in the shared slot, which every caller reads.
-    pub(crate) async fn remember_listed_tools(
+    ///
+    /// Returns the names this list withheld (#1441), so the caller can drop
+    /// them from the very response it judged.
+    pub(crate) fn remember_listed_tools(
         &self,
         identity_key: Option<&str>,
         sent_caller_credential: bool,
         tools: &[Value],
-    ) {
+    ) -> std::collections::BTreeSet<String> {
         let key = self.pool_key_for(identity_key);
         // Entry by entry, as `normalize_tools_list_response` reads them: one
         // malformed tool must not leave the slot cold for every other one.
@@ -89,10 +92,11 @@ impl Backend {
             &mut parsed,
         );
         let verdicts = prepared.verdicts;
+        let withheld = verdicts.withheld_names();
         if matches!(key, PoolKey::Shared) && sent_caller_credential {
             // Not stored, but observed: a blocked name is per backend.
             self.commit_verdicts(verdicts);
-            return;
+            return withheld;
         }
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
@@ -104,6 +108,7 @@ impl Backend {
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);
         });
+        withheld
     }
 }
 
@@ -133,7 +138,7 @@ mod tests {
             json!({"name": "edit", "inputSchema": {"type": "object",
                 "properties": {"a": {"type": "string"}}}}),
         ];
-        backend.remember_listed_tools(None, false, &listed).await;
+        backend.remember_listed_tools(None, false, &listed);
         let refusal = backend.undeclared_key_refusal(None, "edit", &json!({"b": 1}));
         assert!(refusal.is_some(), "the valid tool was not remembered");
     }
@@ -168,9 +173,7 @@ mod tests {
             .expect("the discovery fill");
         lease.entry().tools_truncated.store(true, Ordering::SeqCst);
 
-        backend
-            .remember_listed_tools(None, true, &[edit_declaring("b")])
-            .await;
+        backend.remember_listed_tools(None, true, &[edit_declaring("b")]);
         let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
         assert!(
             judged("a").is_none(),
@@ -178,9 +181,7 @@ mod tests {
         );
         assert!(judged("b").is_some(), "the discovery fill still stands");
 
-        backend
-            .remember_listed_tools(None, false, &[edit_declaring("b")])
-            .await;
+        backend.remember_listed_tools(None, false, &[edit_declaring("b")]);
         assert!(
             judged("b").is_none(),
             "the drained list must replace the fresh discovery fill"
@@ -228,12 +229,8 @@ mod tests {
         });
         started.notified().await;
 
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            backend.remember_listed_tools(None, false, &[edit_declaring("b")]),
-        )
-        .await
-        .expect("the direct list must not wait for an in-flight fill");
+        // Not async: the store cannot wait for the in-flight fill.
+        let _ = backend.remember_listed_tools(None, false, &[edit_declaring("b")]);
         release.notify_one();
         fill.await.expect("join").expect("the discovery fill");
 

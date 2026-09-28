@@ -77,9 +77,15 @@ pub(super) async fn drain(
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
                 let credential = !propagated_headers.is_empty();
-                backend
-                    .remember_listed_tools(identity_key, credential, &tools)
-                    .await;
+                let withheld = backend.remember_listed_tools(identity_key, credential, &tools);
+                // Dropped here, from the raw list this drain judged, not by a
+                // later read of the backend's blocked set, which a concurrent
+                // listing may change before the response is sent (#1441).
+                tools.retain(|tool| {
+                    tool.get("name")
+                        .and_then(Value::as_str)
+                        .is_none_or(|name| !withheld.contains(name))
+                });
                 return Ok(JsonRpcResponse::success(
                     id.clone(),
                     json!({ "tools": tools }),

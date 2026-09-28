@@ -138,9 +138,7 @@ async fn x1_a_name_withheld_for_one_caller_is_refused_to_a_cold_caller() {
 #[tokio::test]
 async fn x1b_a_direct_route_listing_blocks_the_name_for_every_caller() {
     let backend = per_user_backend();
-    backend
-        .remember_listed_tools(Some("a"), false, &catalogue())
-        .await;
+    backend.remember_listed_tools(Some("a"), false, &catalogue());
     assert!(
         refused(&backend, "b", POISONED),
         "a cold caller was forwarded"

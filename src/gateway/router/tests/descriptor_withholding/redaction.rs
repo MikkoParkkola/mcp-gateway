@@ -91,7 +91,7 @@ async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
     );
     let digest = crate::backend::descriptor_digest(&raw);
     let config = BackendConfig {
-        allow_flagged_tools: [(PINNED.to_string(), digest)].into(),
+        allow_flagged_tools: [(PINNED.to_string(), digest.clone())].into(),
         ..BackendConfig::default()
     };
     let e = build(config, vec![tool(PINNED, TEXT)], Some(redacting_firewall())).await;
@@ -100,8 +100,24 @@ async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
         !listed.to_string().contains("postgres://db.local"),
         "control: the firewall must have redacted the connection string: {listed}"
     );
-    assert!(
-        names(&listed).iter().any(|n| n == PINNED),
-        "a pinned tool was withheld after redaction: {listed}"
+    let served = listed["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|t| t["name"] == PINNED))
+        .unwrap_or_else(|| panic!("a pinned tool was withheld after redaction: {listed}"));
+    // The cell only means something if re-judging the served text would
+    // have withheld it: still blocking, and no longer the pinned digest.
+    let redacted: Tool = serde_json::from_value(served.clone()).expect("a tool");
+    assert_eq!(
+        ToolPoisoningRule
+            .check(&redacted)
+            .expect("the rule runs")
+            .severity,
+        Severity::Fail,
+        "precondition: the redacted text still blocks: {served}"
+    );
+    assert_ne!(
+        crate::backend::descriptor_digest(&redacted),
+        digest,
+        "precondition: redaction changed the digested text: {served}"
     );
 }

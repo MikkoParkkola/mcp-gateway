@@ -127,11 +127,15 @@ impl Backend {
     /// back door while the front door is sealed.
     #[must_use]
     pub fn get_cached_tool_names_for(&self, binding: Option<&str>) -> Vec<String> {
-        self.tools_slot(binding).tools_cache.with_cached(|tools| {
+        let names: Vec<String> = self.tools_slot(binding).tools_cache.with_cached(|tools| {
             tools
                 .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
                 .unwrap_or_default()
-        })
+        });
+        names
+            .into_iter()
+            .filter(|name| !self.is_blocked_tool(name))
+            .collect()
     }
 
     /// The shared slot's tool names.
@@ -143,6 +147,9 @@ impl Backend {
     /// One tool by exact name from `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tool_for(&self, binding: Option<&str>, name: &str) -> Option<Tool> {
+        if self.is_blocked_tool(name) {
+            return None;
+        }
         self.tools_slot(binding).tools_cache.with_cached(|tools| {
             tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
         })

@@ -32,6 +32,13 @@ pub(crate) struct Verdicts {
     served: BTreeSet<String>,
 }
 
+impl Verdicts {
+    /// The names this listing withheld.
+    pub(crate) fn withheld_names(&self) -> BTreeSet<String> {
+        self.withheld.keys().cloned().collect()
+    }
+}
+
 /// Hex SHA-256 over exactly what the rule judges, each field prefixed by its
 /// UTF-8 byte length as u64 big-endian: name, description, then every
 /// top-level parameter's name and description, parameters sorted by name. No

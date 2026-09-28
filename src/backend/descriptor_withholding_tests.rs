@@ -179,9 +179,7 @@ async fn t4_a_withheld_descriptor_is_logged_once() {
     backend.get_tools_shared().await.expect("first fill");
     backend.invalidate_tools_cache();
     backend.get_tools_shared().await.expect("refill");
-    backend
-        .remember_listed_tools(None, false, &[tool(POISONED, PAYLOAD)])
-        .await;
+    backend.remember_listed_tools(None, false, &[tool(POISONED, PAYLOAD)]);
     let first = withheld_lines(&buffer);
     assert_eq!(first.len(), 1, "{first:?}");
     assert!(first[0].contains("evil"), "backend named: {first:?}");
@@ -278,9 +276,7 @@ async fn t9_a_superseded_fill_cannot_clear_a_newer_withholding() {
         async move { backend.get_tools_shared().await }
     });
     started.notified().await;
-    backend
-        .remember_listed_tools(None, false, &[tool(POISONED, PAYLOAD)])
-        .await;
+    backend.remember_listed_tools(None, false, &[tool(POISONED, PAYLOAD)]);
     release.notify_one();
     fill.await.expect("fill task").expect("the delayed fill");
     assert!(
