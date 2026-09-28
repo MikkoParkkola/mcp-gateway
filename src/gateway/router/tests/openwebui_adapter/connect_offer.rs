@@ -56,7 +56,7 @@ fn config(env: &std::path::Path, shape: Shape) -> crate::config::Config {
     };
     serde_yaml::from_str(&format!(
         r#"
-env_files: ["{env}"]
+env_files: ['{env}']
 auth:
   enabled: true
   public_paths: []
@@ -101,7 +101,7 @@ accounts:
       issuer: https://issuer.fixture.test
       redirect_uri: https://chat.fixture.test/accounts/v1/callback
 {hosted}"#,
-        env = env.display()
+        env = env.display().to_string().replace('\'', "''")
     ))
     .unwrap()
 }
