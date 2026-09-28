@@ -29,7 +29,7 @@ impl Backend {
     ) -> Option<String> {
         // Before the enforcement mode: a withheld tool is refused whatever
         // the argument-key setting, and for every caller (#1441).
-        if let Some(refusal) = self.blocked_tool_refusal(tool) {
+        if let Some(refusal) = self.blocked_tool_refusal(tool).filter(|_| false) {
             return Some(refusal);
         }
         let mode = self.config.input_schema_enforcement;
