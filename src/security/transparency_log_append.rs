@@ -149,6 +149,7 @@ impl TransparencyLogger {
     fn write_line(&self, inner: &mut Inner, line: &str, sync: bool) -> io::Result<()> {
         let bytes = format!("{line}\n");
         let path = self.path();
+        let _again = crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?;
         let good = inner
             .file
             .metadata()
