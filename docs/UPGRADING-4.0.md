@@ -2226,9 +2226,9 @@ Each is now listed only when it can answer: a cost registry, a non-empty playboo
 configured routing profile, and for statistics `meta_mcp.expose_stats_tool: true`. The default
 HTTP list drops from 17 tools to 11, stdio from 16 to 10.
 
-All seventeen names still dispatch by name. A caller that invokes one it was not shown gets the
-tool's own answer: some succeed, others return that tool's own error, and none answers "no such
-tool".
+Every meta-tool name still dispatches by name, over HTTP and stdio alike. A caller that invokes one
+it was not shown gets the tool's own answer: some succeed, others return that tool's own error, and
+none answers "no such tool".
 
 **Action:** a client that calls only what `tools/list` shows reaches these six once the feature
 behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gateway_get_stats`.
