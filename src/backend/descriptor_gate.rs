@@ -162,7 +162,7 @@ impl Backend {
             let cleared = verdicts.served.contains(name)
                 || (listing == Listing::Complete && !verdicts.withheld.contains_key(name));
             if cleared {
-                sources.remove(source);
+                sources.clear();
             }
             !sources.is_empty()
         });
