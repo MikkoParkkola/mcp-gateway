@@ -397,8 +397,10 @@ pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
     lines.pop();
     for line in lines.into_iter().filter(|line| !line.is_empty()) {
         match serde_json::from_slice::<JournalEntry>(line) {
-            Ok(entry) => parsed.entries.push(entry),
-            Err(_) => parsed.torn.push(sha256_tag(line)),
+            // A later format may change what a line means: refuse it like a
+            // damaged line (reported, never consumed) rather than guess.
+            Ok(entry) if entry.v == JOURNAL_VERSION => parsed.entries.push(entry),
+            Ok(_) | Err(_) => parsed.torn.push(sha256_tag(line)),
         }
     }
     parsed

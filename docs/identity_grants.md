@@ -292,7 +292,7 @@ the CLI's time and the OS account hint.
 - `loaded` and `loaded_complete`: each start records the active grants it
   serves, then a closing record with their count, before it accepts a request.
 - `indeterminate`: history cannot be stated exactly (an earlier record was
-  lost, a journal line is torn, or the journal was truncated, replaced or
+  lost, a journal line is torn or in a later format version, or the journal was truncated, replaced or
   unreadable).
 
 A change that is applied but cannot be recorded stays applied; the reload
