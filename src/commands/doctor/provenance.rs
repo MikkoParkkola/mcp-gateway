@@ -52,10 +52,13 @@ mod tests {
     fn no_row_when_nothing_runs_unverified() {
         let stdio_only = config("backends:\n  local:\n    command: npx some-server\n");
         assert!(check_remote_provenance(&stdio_only).is_empty());
-        let required = config(
-            "security:\n  remote_server_signing:\n    require_for_remote_backends: true\n\
-             backends:\n  api:\n    http_url: https://api.example.test/mcp\n",
+        // A remote backend with a metadata entry is verified when the config
+        // loads, so it is not named here.
+        let verified = config(
+            "security:\n  remote_server_signing:\n    backends:\n      api:\n        \
+             subject: s\n        issuer: i\n        issued_at: t\n        key_id: k\n        \
+             signature: c2ln\nbackends:\n  api:\n    http_url: https://api.example.test/mcp\n",
         );
-        assert!(check_remote_provenance(&required).is_empty());
+        assert!(check_remote_provenance(&verified).is_empty());
     }
 }

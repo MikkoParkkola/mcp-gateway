@@ -14,7 +14,7 @@ impl Config {
     /// Enabled remote backends that run without signed provenance checks,
     /// sorted by name. Empty while `require_for_remote_backends` is set.
     #[must_use]
-    pub(crate) fn unverified_remote_backends(&self) -> Vec<&str> {
+    fn unverified_remote_backends(&self) -> Vec<&str> {
         let policy = &self.security.remote_server_signing;
         if policy.require_for_remote_backends {
             return Vec::new();
