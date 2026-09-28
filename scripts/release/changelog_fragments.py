@@ -66,7 +66,9 @@ def check(changes: list[tuple[str, str]], labels: set[str]) -> list[str]:
     # Only the release fold, which deletes the fragments it folds in, edits
     # CHANGELOG.md; a hand edit brings back the conflicts fragments remove.
     folds = any(
-        status.startswith("D") and path.startswith(f"{FRAGMENT_DIR}/")
+        status.startswith("D")
+        and path.startswith(f"{FRAGMENT_DIR}/")
+        and FRAGMENT.match(path.split("/", 1)[1])
         for status, path in changes
     )
     if any(path == "CHANGELOG.md" for _, path in changes) and not folds:
@@ -82,10 +84,11 @@ def assemble(changelog: str, fragments: dict[str, str]) -> str:
     if not fragments:
         return changelog
     lines = changelog.split("\n")
-    try:
-        start = lines.index("## [Unreleased]")
-    except ValueError:
-        raise SystemExit("CHANGELOG.md has no '## [Unreleased]' heading") from None
+    if "## [Unreleased]" not in lines:
+        # Right after a release: open a new Unreleased section above it.
+        first = next((i for i, x in enumerate(lines) if x.startswith("## ")), len(lines))
+        lines[first:first] = ["## [Unreleased]", ""]
+    start = lines.index("## [Unreleased]")
     end = next(
         (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
         len(lines),

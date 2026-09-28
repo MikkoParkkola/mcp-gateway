@@ -67,7 +67,7 @@ Run from a clean checkout of the release commit (the tip of the release line).
 First land the changelog. Pull requests add `changelog.d/<number>.<type>.md` rather
 than editing the shared section, so the release folds them in: on a branch cut from
 the release line, run the commands below, rename `## [Unreleased]` to the release
-heading, and merge that as a pull request. The *Changelog fragment* check accepts a
+heading, add a new empty `## [Unreleased]` above it, and merge that as a pull request. The *Changelog fragment* check accepts a
 `CHANGELOG.md` edit only in a pull request that also deletes fragments.
 
 ```sh

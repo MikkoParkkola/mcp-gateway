@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Tests for changelog_fragments.py: assembly output and the PR check."""
 
+import contextlib
 import importlib.util
+import io
 import pathlib
+import tempfile
 import unittest
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -97,6 +100,11 @@ class Assemble(unittest.TestCase):
         got = cf.assemble(CHANGELOG, {"4.changed.md": "- c (#4)\n"})
         self.assertIn("- existing added (#1)\n\n### Changed\n\n- c (#4)\n\n### Fixed", got)
 
+    def test_fragments_after_a_release_open_a_new_unreleased_section(self):
+        released = "# Changelog\n\n## [1.1.0] - 2026-02-01\n\n- x\n"
+        got = cf.assemble(released, {"5.fixed.md": "- y (#5)\n"})
+        self.assertEqual(got, "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- y (#5)\n\n## [1.1.0] - 2026-02-01\n\n- x\n")
+
     def test_released_sections_are_untouched(self):
         got = cf.assemble(CHANGELOG, {"9.removed.md": "- gone (#9)\n"})
         self.assertTrue(got.endswith("## [1.0.0] - 2026-01-01\n\n### Added\n\n- old (#0)\n"))
@@ -134,11 +142,50 @@ class Check(unittest.TestCase):
     def test_the_release_fold_may_edit_the_changelog(self):
         self.assertEqual(cf.check([("M", "CHANGELOG.md"), ("D", "changelog.d/5.fixed.md")], set()), [])
 
+    def test_deleting_the_placeholder_is_not_a_release_fold(self):
+        self.assertEqual(len(cf.check([("M", "CHANGELOG.md"), ("D", "changelog.d/.gitkeep")], set())), 1)
+
     def test_editing_an_existing_fragment_does_not_count_as_adding_one(self):
         self.assertEqual(len(cf.check([("M", "src/a.rs"), ("M", "changelog.d/1.fixed.md")], set())), 1)
 
     def test_deleting_a_fragment_does_not_count_as_adding_one(self):
         self.assertEqual(len(cf.check([("M", "src/a.rs"), ("D", "changelog.d/1.fixed.md")], set())), 1)
+
+
+class Cli(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.tmp.name)
+        (root / "changelog.d").mkdir()
+        (root / "CHANGELOG.md").write_text(CHANGELOG, encoding="utf-8")
+        self.root, self.saved = root, cf.ROOT
+        cf.ROOT = root
+
+    def tearDown(self):
+        cf.ROOT = self.saved
+        self.tmp.cleanup()
+
+    def test_dry_run_writes_and_deletes_nothing(self):
+        (self.root / "changelog.d/9.added.md").write_text("- n (#9)\n", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cf.main(["assemble", "--dry-run"]), 0)
+        self.assertIn("- n (#9)", out.getvalue())
+        self.assertEqual((self.root / "CHANGELOG.md").read_text(encoding="utf-8"), CHANGELOG)
+        self.assertTrue((self.root / "changelog.d/9.added.md").exists())
+
+    def test_assemble_writes_and_deletes_the_fragments(self):
+        (self.root / "changelog.d/9.added.md").write_text("- n (#9)\n", encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cf.main(["assemble"]), 0)
+        self.assertIn("- n (#9)", (self.root / "CHANGELOG.md").read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "changelog.d/9.added.md").exists())
+
+    def test_an_empty_fragment_fails_and_changes_nothing(self):
+        (self.root / "changelog.d/9.added.md").write_text("\n", encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cf.main(["assemble"]), 1)
+        self.assertIn("empty fragment", err.getvalue())
+        self.assertEqual((self.root / "CHANGELOG.md").read_text(encoding="utf-8"), CHANGELOG)
 
 
 if __name__ == "__main__":
