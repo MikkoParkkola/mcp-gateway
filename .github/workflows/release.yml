@@ -190,20 +190,6 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: python3 scripts/release/check_tag_manifest.py --tag "$INPUT_TAG"
 
-      # A dispatch must run at the tag it releases. Otherwise it builds the
-      # dispatch branch's code under the tag's name, and the binaries are
-      # signed as `release.yml@<branch>`, which the documented verify command
-      # (identity `release.yml@refs/tags/<tag>`) rejects.
-      - name: A dispatch runs at the tag it releases
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          TAG: ${{ steps.channel.outputs.tag }}
-        run: |
-          if [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
-            echo "::error::dispatch at $GITHUB_REF; run it at the tag: gh workflow run release.yml --ref $TAG -f tag=$TAG"
-            exit 1
-          fi
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:

@@ -2388,9 +2388,9 @@ class WorkflowWiring(unittest.TestCase):
             ]),
             "W5: id-token: write outside its allow-list",
         )
-        # W6: a dispatch runs at the tag it releases.
-        verify = "\n".join("\n".join(b) for b in steps("release.yml", "verify"))
-        self.assertIn('"$GITHUB_REF" != "refs/tags/$TAG"', verify, "W6: a branch dispatch would sign as the branch")
+        # W6: a dispatch runs at the tag it releases; the `resolve` guard,
+        # which every job waits for, refuses any other ref (tested with it).
+        self.assertIn("resolve", jobs("release.yml"), "W6: a branch dispatch would sign as the branch")
 
         # The rehearsal: dispatch only, draft only, always cleaned up.
         self.assertEqual(
