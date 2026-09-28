@@ -18,9 +18,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mcp_gateway::capability::{
-    CapabilityDefinition, CapabilityExecutor, DiscoveryEngine, DiscoveryOptions, OpenApiConverter,
-    parse_capability,
+    CapabilityDefinition, CapabilityExecutor, OpenApiConverter, parse_capability,
 };
+#[cfg(feature = "discovery")]
+use mcp_gateway::capability::{DiscoveryEngine, DiscoveryOptions};
 use mcp_gateway::config::CapabilityConfig;
 
 /// A loopback listener standing in for a proxy: it counts connections and
@@ -119,13 +120,16 @@ async fn an_environment_proxy_carries_no_capability_import_or_discovery_traffic(
     );
 
     // Capability discovery.
-    let discovered = DiscoveryEngine::new(DiscoveryOptions::default())
-        .discover(PROBE)
-        .await;
-    assert!(discovered.is_err(), "the probe host resolves nowhere");
-    assert_eq!(
-        seen.load(Ordering::SeqCst),
-        0,
-        "capability discovery went through the environment proxy"
-    );
+    #[cfg(feature = "discovery")]
+    {
+        let discovered = DiscoveryEngine::new(DiscoveryOptions::default())
+            .discover(PROBE)
+            .await;
+        assert!(discovered.is_err(), "the probe host resolves nowhere");
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            0,
+            "capability discovery went through the environment proxy"
+        );
+    }
 }

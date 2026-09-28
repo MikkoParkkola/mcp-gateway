@@ -134,14 +134,15 @@ impl DiscoveryEngine {
     /// Create a new `DiscoveryEngine` with a configured reqwest client.
     ///
     /// The client enforces:
+    /// - no proxy from `HTTP(S)_PROXY` in the environment (#1881)
     /// - SSRF validation on every redirect hop
     /// - Max 5 redirects
     /// - Configurable timeout from `options.timeout`
     ///
     /// # Panics
     ///
-    /// Panics only if reqwest fails to build the client AND `unwrap_or_default`
-    /// also fails, which is not possible in practice.
+    /// Panics if reqwest fails to build the client (invalid TLS config). A
+    /// default client is no fallback: it would follow environment proxies.
     #[must_use]
     pub fn new(options: DiscoveryOptions) -> Self {
         // Never an environment proxy: it would reach destinations the SSRF
@@ -160,7 +161,7 @@ impl DiscoveryEngine {
             }))
             .user_agent("mcp-gateway/2.5 capability-discovery")
             .build()
-            .unwrap_or_default();
+            .expect("Failed to create HTTP client");
         Self { client, options }
     }
 
