@@ -97,7 +97,7 @@ impl MessageSigner {
     }
 }
 
-fn has_interoperable_numbers(value: &Value) -> bool {
+pub(crate) fn has_interoperable_numbers(value: &Value) -> bool {
     match value {
         Value::Number(number) => {
             if let Some(integer) = number.as_i64() {
