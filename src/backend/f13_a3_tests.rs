@@ -265,13 +265,16 @@ async fn a4_t4_a_stored_fill_ends_the_refresh_hold_off() {
 /// Review fold: a stale refresh that fails after a direct list replaced the
 /// slot judges the call from that newer list, not the stale clone: a tool it
 /// dropped is text A. Mutant M52 (judge the clone) reddens it.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a4_t5_a_failed_refresh_judges_a_newer_list() {
     let lister = Lister::new(Mode::Serve);
     let backend = short_ttl(&lister);
     let _ = check(&backend, "edit", &json!({"edits": []})).await;
     tokio::time::sleep(Duration::from_millis(80)).await;
     lister.set(Mode::Barrier);
+    // The TTL runs on the wall clock; from here the refresh's hour-long page
+    // times out on tokio's, paused so it auto-advances.
+    tokio::time::pause();
     let other = json!({"name": "other", "inputSchema": {"type": "object"}});
     let args = undeclared();
     let (out, ()) = tokio::join!(check(&backend, "edit", &args), async {
