@@ -222,3 +222,29 @@ fn truncated_json_refuses_as_unparseable_not_as_missing() {
          and conflating them is what TokenStorage::load does"
     );
 }
+
+/// W-T10i: with a foreign owner, the printed repair takes ownership first,
+/// writes the DACL while the elevated account owns the file, and only then
+/// gives ownership to the gateway account. Handing ownership over first can
+/// leave an administrator who is not the gateway user unable to write the
+/// DACL; the hosted runner is both, so only the printed order can pin this.
+#[cfg(windows)]
+#[test]
+fn wt10i_foreign_owner_repair_order() {
+    use crate::private_fs::PrivacyRefusal as P;
+    let me = crate::private_fs::user_sid_string().expect("the runner's SID");
+    let text = super::windows_remediation(
+        r"C:\oauth\0123456789abcdef_tokens.json",
+        &[P::ForeignOwner("S-1-5-32-544".to_owned())],
+    );
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle));
+    let take = at("takeown /F ");
+    let dacl = at("SetAccessControl");
+    let give = at(&format!("/setowner '*{me}'"));
+    assert!(
+        matches!((take, dacl, give), (Some(t), Some(d), Some(g)) if t < d && d < g),
+        "WT-ASSERT W-T10i: repair order must be takeown, DACL write, setowner \
+         (found at {take:?}, {dacl:?}, {give:?}): {text}"
+    );
+}
