@@ -610,6 +610,82 @@ pub fn redact_url_for_diagnostics(raw: &str) -> String {
     }
 }
 
+/// A URL with its path kept, for an error that must name the value an operator
+/// mistyped (#2113).
+///
+/// A URL with a host keeps scheme, host, port and path; userinfo, query and
+/// fragment are removed by the parser. Anything else is never cut apart by
+/// hand, because every partial cut of free text found in review left a
+/// password behind. It is echoed whole only when it contains none of `@`, `?`
+/// and `#`: userinfo needs `@`, a query `?`, a fragment `#`, so none can be in
+/// it. Its path is intentionally visible, as in the parsed branch, so an error
+/// still names the value an operator mistyped. Otherwise it is replaced by
+/// [`UNPARSEABLE_URL`].
+#[must_use]
+pub(crate) fn redact_url_keep_path(raw: &str) -> String {
+    if let Ok(mut url) = url::Url::parse(raw)
+        && url.has_host()
+    {
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        return url.to_string();
+    }
+    if raw.contains(['@', '?', '#']) {
+        UNPARSEABLE_URL.to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
+/// What [`redact_url_keep_path`] shows for a value it cannot take apart safely.
+pub(crate) const UNPARSEABLE_URL: &str = "<unparseable URL redacted>";
+
+#[cfg(test)]
+mod redact_url_keep_path_tests {
+    use super::{UNPARSEABLE_URL, redact_url_keep_path as redact};
+
+    #[test]
+    fn a_parsed_url_keeps_its_path_and_drops_the_rest() {
+        let out = redact("https://user:PW1@api.invalid/v1/x?token=Q1#frag=F1");
+        assert_eq!(out, "https://api.invalid/v1/x");
+        assert_eq!(
+            redact("https://:PW11@api.invalid/v1"),
+            "https://api.invalid/v1"
+        );
+        assert_eq!(
+            redact("postgres://u:PW12@db.invalid/app"),
+            "postgres://db.invalid/app"
+        );
+    }
+
+    #[test]
+    fn a_value_without_a_host_is_whole_or_a_placeholder() {
+        // Every shape here once leaked through a hand-written cut.
+        for raw in [
+            "user:PW2@idp.invalid/p?t=Q2",
+            "bob@idp.invalid/p?t=Q3#F3",
+            "//carol:PW5@idp.invalid/token",
+            "//carol:PW6@idp.invalid/x://y",
+            "http://u:PW7@[bad/path",
+            "bob:PW8@idp.invalid/x://y",
+            "u:PW9://p@idp.invalid/x",
+            "u:PW10/p@idp.invalid/x",
+            "/rpc?token=Q4",
+            "/rpc#access_token=F5",
+        ] {
+            assert_eq!(redact(raw), UNPARSEABLE_URL, "{raw:?}");
+        }
+        // Nothing credential-bearing: shown whole, so a mistyped value is named.
+        for raw in ["/rpc", "search_flights", "localhost:8080/mcp"] {
+            assert_eq!(redact(raw), raw);
+        }
+        // The boundary: the same value with userinfo is no longer echoed.
+        assert_eq!(redact("u:p@localhost:8080/mcp"), UNPARSEABLE_URL);
+    }
+}
+
 #[cfg(test)]
 mod redact_url_tests {
     use super::redact_url_for_diagnostics as redact;

@@ -197,7 +197,7 @@ impl CapabilityExecutor {
     pub(super) async fn fetch_credential(
         &self,
         auth: &super::super::AuthConfig,
-        _context: &CapabilityExecutionContext,
+        context: &CapabilityExecutionContext,
     ) -> Result<String> {
         let key = &auth.key;
 
@@ -237,7 +237,7 @@ impl CapabilityExecutor {
         } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
             self.fetch_from_keychain(keychain_key).await
         } else if let Some(provider) = key.strip_prefix("oauth:") {
-            self.fetch_oauth_token(provider, auth.token_endpoint.as_deref())
+            self.fetch_oauth_token(provider, auth.token_endpoint.as_deref(), context)
                 .await
         } else if let Some(file_spec) = key.strip_prefix("file:") {
             self.fetch_from_file(file_spec)
@@ -322,6 +322,7 @@ impl CapabilityExecutor {
         &self,
         provider: &str,
         token_endpoint: Option<&str>,
+        context: &CapabilityExecutionContext,
     ) -> Result<String> {
         // 1. In-memory cache
         {
@@ -352,6 +353,7 @@ impl CapabilityExecutor {
                         endpoint,
                         storage,
                         token.client_id.as_deref(),
+                        context,
                     )
                     .await
                 {
@@ -399,7 +401,12 @@ impl CapabilityExecutor {
         token_endpoint: &str,
         storage: &crate::oauth::TokenStorage,
         client_id: Option<&str>,
+        context: &CapabilityExecutionContext,
     ) -> Result<String> {
+        // The refresh token and client secret go only where the capability's
+        // own request may go (#2113): the same destination check, before any
+        // byte is sent. Redirect hops are checked by the executor's client.
+        super::super::validate_capability_url_for_context(token_endpoint, context)?;
         let mut params = HashMap::new();
         params.insert("grant_type", "refresh_token");
         params.insert("refresh_token", refresh_token);
@@ -579,6 +586,10 @@ fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Resu
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "oauth_refresh_tests.rs"]
+mod oauth_refresh_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -587,11 +598,16 @@ mod tests {
     use parking_lot::RwLock;
     use tempfile::tempdir;
 
+    use crate::capability::CapabilityExecutionContext;
     use crate::capability::response_cache::ResponseCache;
     use crate::oauth::{TokenInfo, TokenStorage};
     use crate::secrets::SecretResolver;
 
     use super::super::CapabilityExecutor;
+
+    fn any() -> CapabilityExecutionContext {
+        CapabilityExecutionContext::default()
+    }
 
     fn executor_with_storage(storage: Arc<TokenStorage>) -> CapabilityExecutor {
         CapabilityExecutor {
@@ -648,7 +664,10 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         let ex = executor_with_storage(s);
         ex.set_oauth_token("p", valid_tok("cached"));
-        assert_eq!(ex.fetch_oauth_token("p", None).await.unwrap(), "cached");
+        assert_eq!(
+            ex.fetch_oauth_token("p", None, &any()).await.unwrap(),
+            "cached"
+        );
     }
 
     #[tokio::test]
@@ -657,7 +676,10 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         s.save("p2", "p2", &valid_tok("disk")).unwrap();
         let ex = executor_with_storage(s);
-        assert_eq!(ex.fetch_oauth_token("p2", None).await.unwrap(), "disk");
+        assert_eq!(
+            ex.fetch_oauth_token("p2", None, &any()).await.unwrap(),
+            "disk"
+        );
     }
 
     #[tokio::test]
@@ -666,7 +688,7 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         s.save("p3", "p3", &valid_tok("fresh")).unwrap();
         let ex = executor_with_storage(s);
-        ex.fetch_oauth_token("p3", None).await.unwrap();
+        ex.fetch_oauth_token("p3", None, &any()).await.unwrap();
         assert!(ex.oauth_tokens.read().contains_key("p3"));
     }
 
@@ -676,7 +698,7 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         s.save("p4", "p4", &expired_tok("old")).unwrap();
         let ex = executor_with_storage(s);
-        let err = ex.fetch_oauth_token("p4", None).await.unwrap_err();
+        let err = ex.fetch_oauth_token("p4", None, &any()).await.unwrap_err();
         assert!(err.to_string().contains("expired"), "{err}");
     }
 
@@ -688,14 +710,14 @@ mod tests {
         tok.refresh_token = Some("rt".to_string());
         s.save("p5", "p5", &tok).unwrap();
         let ex = executor_with_storage(s);
-        let err = ex.fetch_oauth_token("p5", None).await.unwrap_err();
+        let err = ex.fetch_oauth_token("p5", None, &any()).await.unwrap_err();
         assert!(err.to_string().contains("expired"), "{err}");
     }
 
     #[tokio::test]
     async fn missing_token_returns_not_found() {
         let ex = executor_no_storage();
-        let err = ex.fetch_oauth_token("unk", None).await.unwrap_err();
+        let err = ex.fetch_oauth_token("unk", None, &any()).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not found"), "{msg}");
         assert!(msg.contains("unk"), "{msg}");
@@ -709,7 +731,7 @@ mod tests {
         let ex = executor_with_storage(s);
         ex.set_oauth_token("p6", expired_tok("mem_stale"));
         assert_eq!(
-            ex.fetch_oauth_token("p6", None).await.unwrap(),
+            ex.fetch_oauth_token("p6", None, &any()).await.unwrap(),
             "disk_fresh"
         );
     }
