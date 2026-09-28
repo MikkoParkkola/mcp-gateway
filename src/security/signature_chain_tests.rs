@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::engine::general_purpose::STANDARD;
 use ring::signature::{Ed25519KeyPair, KeyPair as _};
 use serde_json::{Value, json};
 
@@ -17,7 +17,7 @@ const NOW: u64 = 1_750_000_000;
 const WINDOW: u64 = 300;
 const NONCE: &str = "caller-nonce-1";
 
-/// Test gateways: (key_id, seed byte). `gw-x` is trusted but pinned nowhere;
+/// Test gateways: (`key_id`, seed byte). `gw-x` is trusted but pinned nowhere;
 /// `gw-u` is not trusted at all.
 const A: (&str, u8) = ("gw-a", 1);
 const B: (&str, u8) = ("gw-b", 2);
