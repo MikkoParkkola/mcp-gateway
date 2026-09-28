@@ -54,21 +54,26 @@ impl Firewall {
         match observation {
             Observation::WarmingUp => {}
             Observation::Unobservable => {
+                // With an identity, the detector refused because the
+                // learned-pair map is full (hardened posture only).
+                let reason = if identity.is_some() {
+                    "the learned-pair map is full (security.posture=hardened)"
+                } else {
+                    "no caller identity to key on"
+                };
                 tracing::warn!(
                     server = server,
                     tool = tool,
-                    "OWASP ASI10: anomaly detection cannot observe this call (no caller \
-                     identity, or under the hardened posture a full learned-pair map); \
+                    "OWASP ASI10: anomaly detection cannot observe this call: {reason}; \
                      refusing rather than passing the call unscored"
                 );
                 gate.blind = true;
                 findings.push(Finding {
                     scan_type: ScanType::SequenceAnomaly,
                     severity: Severity::High,
-                    description:
-                        "Anomaly detection cannot observe this call (no caller identity, or a full \
-                         learned-pair map); call refused unscored"
-                            .to_string(),
+                    description: format!(
+                        "Anomaly detection cannot observe this call: {reason}; call refused unscored"
+                    ),
                     matched,
                     location: FindingLocation::SequenceAnomaly,
                 });

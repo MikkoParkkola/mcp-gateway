@@ -136,7 +136,7 @@ pub fn unhardened_multi_user_warning(config: &Config) -> Option<&'static str> {
             .implies_multi_user(!config.key_server.oidc.is_empty());
     unhardened.then_some(
         "multi-user deployment running security.posture=standard; set security.posture: \
-         hardened (restart required; see `mcp-gateway doctor`, row security-posture)",
+         hardened (restart required)",
     )
 }
 

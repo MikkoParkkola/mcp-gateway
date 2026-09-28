@@ -277,8 +277,36 @@ fn gateway_startup_logs_posture_once() {
         if level == "INFO" {
             assert!(records[0].1.contains("preset=team_shared"), "{records:?}");
             assert!(records[0].1.contains("non_bypassable=true"), "{records:?}");
+            assert!(
+                records[0].1.contains("anomaly_detection=true"),
+                "{records:?}"
+            );
+            assert!(
+                records[0].1.contains("anomaly_block_threshold=1"),
+                "{records:?}"
+            );
         }
     }
+}
+
+/// An in-memory hardened config is forced before it is validated, so a
+/// block threshold above 1.0 is refused on the constructor path too.
+#[test]
+fn gateway_constructor_validates_what_hardened_forces() {
+    let mut config = Config::default();
+    config.security.posture = SecurityPosture::Hardened;
+    config.security.firewall.anomaly_block_threshold = Some(1.5);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(async { crate::gateway::Gateway::new(config).await.map(drop) })
+        .expect_err("a forced detector's range check refuses 1.5");
+    assert!(
+        error.to_string().contains("anomaly_block_threshold"),
+        "{error}"
+    );
 }
 
 // ── A1: hardened forces anomaly blocking ─────────────────────────────────────

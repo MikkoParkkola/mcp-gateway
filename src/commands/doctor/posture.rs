@@ -11,7 +11,6 @@ pub(super) fn check_security_posture(config: &Config) -> CheckResult {
     let warning = mcp_gateway::security::posture::unhardened_multi_user_warning(config);
     let row = if let Some(warning) = warning {
         CheckResult::warn("security-posture", warning)
-            .with_hint("set security.posture: hardened (restart required)")
             .with_manual_fix("set security.posture: hardened in gateway.yaml, then restart")
     } else {
         CheckResult::pass(
