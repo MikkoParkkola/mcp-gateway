@@ -466,3 +466,24 @@ async fn x11_a_withheld_tool_is_refused_as_a_notification() {
         "the upstream received a notification for a withheld tool"
     );
 }
+
+/// X6c: a listing that carries an unparseable copy of a name beside a
+/// parseable one withholds every copy of that name: the gateway cannot tell
+/// which descriptor the backend acts on, so it fails closed (#1441).
+#[tokio::test]
+async fn x6c_an_unparseable_duplicate_withholds_every_copy_of_a_name() {
+    let backend = per_user_backend();
+    let mut listing = catalogue_with("Reads a file.");
+    let mut broken = listing[0].clone();
+    broken["annotations"] = json!("not an object");
+    listing.push(broken);
+    let withheld = backend.remember_listed_tools(Some("a"), false, &listing);
+    assert!(
+        withheld.contains(POISONED),
+        "the parseable copy was served beside an unparseable duplicate"
+    );
+    assert!(
+        refused(&backend, "a", POISONED),
+        "a name with an unparseable duplicate stayed callable"
+    );
+}

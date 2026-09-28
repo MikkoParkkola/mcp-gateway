@@ -66,15 +66,16 @@ impl crate::transport::Transport for Pager {
     }
 }
 
-/// Two pages. Page 0 carries an admitted tool that does not parse, a denied
-/// tool in both forms, a sibling key and a cursor that each name the denied
-/// tool. Page 1 carries the parseable admitted tool.
+/// Two pages. Page 0 carries an admitted tool that does not parse, the denied
+/// tool, a sibling key and a cursor that each name the denied tool. Page 1
+/// carries the parseable admitted tool. No name appears twice: an unparseable
+/// copy of a name withholds every copy of it (#1441, pinned separately), which
+/// would hide the denied tool without the listing predicate ever running.
 fn two_pages() -> Vec<Value> {
     vec![
         json!({
             "tools": [
-                { "name": "alpha_read", "description": 7 },
-                { "name": "alpha_write", "description": 7 },
+                { "name": "alpha_list", "description": 7 },
                 super::tool_json("alpha_write"),
             ],
             "nextCursor": "alpha_write-1",
