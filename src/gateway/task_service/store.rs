@@ -24,8 +24,18 @@ use super::record::{
     CommittedTask, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask,
     RECORD_VERSION, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
 };
-use crate::fs_lock::ExclusiveFileLock;
+use crate::fs_lock::{DirPin, ExclusiveFileLock};
+#[cfg(unix)]
+use std::fs::rename;
+#[cfg(windows)]
+#[path = "store_windows.rs"]
+mod platform;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
+#[cfg(windows)]
+use platform::{
+    create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
+    sync_file,
+};
 
 /// The one sidecar a fresh store creates. Deliberately not a `task-*.json` name,
 /// so the loader can never mistake custody state for a record.
@@ -667,21 +677,24 @@ fn open_blocking(
     dir: &Path,
     limits: StoreLimits,
 ) -> Result<(ExclusiveFileLock, BTreeMap<String, Entry>), StoreError> {
-    prepare_dir(dir)?;
-    let lease = acquire_lease(&dir.join(LEASE))?;
+    let pin = prepare_dir(dir)?;
+    let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
     Ok((lease, load(dir, limits)?))
 }
 
-fn prepare_dir(dir: &Path) -> Result<(), StoreError> {
+fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
     match fs::symlink_metadata(dir) {
         Ok(meta) => {
             if !meta.is_dir() || !has_mode(&meta, STORE_MODE) {
                 tracing::warn!(path = %dir.display(), "task store directory is not a private directory");
                 return Err(StoreError::UnsafeStore);
             }
-            Ok(())
+            judge_store_dir(dir)
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => create_private_dir(dir),
+        // A fresh directory is judged exactly like an existing one.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_private_dir(dir).and_then(|()| judge_store_dir(dir))
+        }
         Err(error) => {
             tracing::warn!(%error, path = %dir.display(), "task store directory unreadable");
             Err(StoreError::Unavailable)
@@ -706,6 +719,13 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
     ExclusiveFileLock::try_acquire(lease).map_err(|error| {
         if error.kind() == io::ErrorKind::WouldBlock {
             return StoreError::AlreadyOwned;
+        }
+        // Windows judges the lease's DACL inside `try_acquire`, the check unix
+        // makes above with `has_mode`; a lease that is not private is unsafe.
+        #[cfg(windows)]
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            tracing::warn!(%error, path = %lease.display(), "task store lease is not private");
+            return StoreError::UnsafeStore;
         }
         // Includes the platforms with no tested exclusion primitive: they refuse
         // custody outright rather than pretend to hold it.
@@ -815,14 +835,6 @@ fn open_record(path: &Path) -> Result<fs::File, StoreError> {
         })
 }
 
-#[cfg(not(unix))]
-fn open_record(path: &Path) -> Result<fs::File, StoreError> {
-    if !fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) {
-        return Err(StoreError::UnsafeStore);
-    }
-    fs::File::open(path).map_err(|_| StoreError::UnsafeStore)
-}
-
 enum Fault {
     BeforeRename(io::Error),
     AfterRename(io::Error),
@@ -843,7 +855,7 @@ fn write_record(
     let (file, temp) = create_temp(dir, name, counter).map_err(Fault::BeforeRename)?;
     let staged = stage_temp(file, bytes, hook)
         .and_then(|()| fire(hook, CommitStage::Rename))
-        .and_then(|()| fs::rename(&temp, dir.join(name)));
+        .and_then(|()| rename(&temp, dir.join(name)));
     if let Err(error) = staged {
         let _ = fs::remove_file(&temp);
         return Err(Fault::BeforeRename(error));
@@ -861,16 +873,8 @@ fn create_temp(dir: &Path, name: &str, counter: &AtomicU64) -> io::Result<(fs::F
     for _ in 0..TEMP_ATTEMPTS {
         let nonce = counter.fetch_add(1, Ordering::Relaxed);
         let temp = dir.join(format!("{name}.tmp.{}.{nonce}", std::process::id()));
-        let mut options = fs::OpenOptions::new();
-        options.create_new(true).write(true);
-        set_owner_only(&mut options);
-        match options.open(&temp) {
-            Ok(file) => {
-                // `mode` is masked by the process umask; the record is private
-                // regardless of how the surrounding process was configured.
-                force_owner_only(&file)?;
-                return Ok((file, temp));
-            }
+        match open_new_private(&temp) {
+            Ok(file) => return Ok((file, temp)),
             // A stale temp holds this name; take the next nonce and leave it be.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
@@ -888,7 +892,7 @@ fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io
     fire(hook, CommitStage::Write)?;
     file.write_all(bytes)?;
     fire(hook, CommitStage::Flush)?;
-    file.sync_all()?;
+    sync_file(&file)?;
     fire(hook, CommitStage::FileSync)
 }
 
@@ -897,14 +901,18 @@ fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "unix judges by mode; nothing to hold"
+)]
+fn judge_store_dir(_dir: &Path) -> Result<DirPin, StoreError> {
+    Ok(DirPin())
+}
+
+#[cfg(unix)]
 fn has_mode(meta: &fs::Metadata, expected: u32) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     meta.mode() & 0o7777 == expected
-}
-
-#[cfg(not(unix))]
-fn has_mode(_meta: &fs::Metadata, _expected: u32) -> bool {
-    true
 }
 
 #[cfg(unix)]
@@ -921,19 +929,24 @@ fn create_private_dir(dir: &Path) -> Result<(), StoreError> {
         })
 }
 
-#[cfg(not(unix))]
-fn create_private_dir(dir: &Path) -> Result<(), StoreError> {
-    fs::create_dir_all(dir).map_err(|_| StoreError::Unavailable)
+/// A scratch record: `mode` is masked by the process umask, so the record is
+/// forced private regardless of how the surrounding process was configured.
+#[cfg(unix)]
+fn open_new_private(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(RECORD_MODE)
+        .open(path)?;
+    force_owner_only(&file)?;
+    Ok(file)
 }
 
 #[cfg(unix)]
-fn set_owner_only(options: &mut fs::OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    options.mode(RECORD_MODE);
+fn sync_file(file: &fs::File) -> io::Result<()> {
+    file.sync_all()
 }
-
-#[cfg(not(unix))]
-fn set_owner_only(_options: &mut fs::OpenOptions) {}
 
 #[cfg(unix)]
 fn force_owner_only(file: &fs::File) -> io::Result<()> {
@@ -941,21 +954,11 @@ fn force_owner_only(file: &fs::File) -> io::Result<()> {
     file.set_permissions(fs::Permissions::from_mode(RECORD_MODE))
 }
 
-#[cfg(not(unix))]
-fn force_owner_only(_file: &fs::File) -> io::Result<()> {
-    Ok(())
-}
-
 /// Make the rename itself durable. Opening a directory as a file is not portable,
 /// and the durability target for this store is Linux and macOS.
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> io::Result<()> {
     fs::File::open(dir)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> io::Result<()> {
-    Ok(())
 }
 
 /// The S1 store surface: restart enumeration and the conditional durable expiry
