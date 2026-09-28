@@ -211,3 +211,61 @@ fn table_mode_keeps_its_hint_on_stdout() {
         "table mode hint moved off stdout:\n{stdout}"
     );
 }
+
+/// `kubernetes controller --watch -f json` never exits, so its stdout is a
+/// stream: one compact JSON document per line (NDJSON), one line per cycle.
+#[test]
+fn controller_watch_json_writes_one_document_per_line() {
+    use std::io::{BufRead, BufReader};
+
+    let resources = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+    );
+    let home = Home::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .env_clear()
+        .env("HOME", &home.root)
+        .current_dir(&home.root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .args([
+            "kubernetes",
+            "controller",
+            resources,
+            "--watch",
+            "--interval-seconds",
+            "1",
+            "--format",
+            "json",
+        ])
+        .spawn()
+        .expect("spawn mcp-gateway");
+    let stdout = child.stdout.take().expect("piped stdout");
+    // Two cycles; the reader ends at EOF if the process exits early.
+    let reader = std::thread::spawn(move || {
+        BufReader::new(stdout)
+            .lines()
+            .take(2)
+            .map(|line| line.expect("utf-8 stdout"))
+            .collect::<Vec<_>>()
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !reader.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let lines = reader.join().expect("reader thread");
+
+    assert_eq!(lines.len(), 2, "expected two cycles, got {lines:?}");
+    for line in &lines {
+        let doc: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("stdout line is not one JSON document ({e}): {line}"));
+        assert!(
+            doc.get("completed_cycles").is_some(),
+            "not a controller report: {line}"
+        );
+    }
+}
