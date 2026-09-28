@@ -1400,7 +1400,10 @@ mod tests {
 
     // ── cleanup task (tokio) ──────────────────────────────────────────────────
 
-    #[tokio::test]
+    // Paused clock: the task's interval and the wait below run on virtual
+    // time, which advances only when every task is idle, so the task has run
+    // its ticks before the wait returns however loaded the host is (#1821).
+    #[tokio::test(start_paused = true)]
     async fn spawn_cleanup_task_evicts_expired_entries() {
         // GIVEN: a cache with one stale completed entry
         // WHEN: the cleanup task runs
@@ -1423,7 +1426,7 @@ mod tests {
 
         spawn_cleanup_task(Arc::clone(&cache), Duration::from_millis(10));
 
-        // Wait a bit for the task to run
+        // Let the cleanup run during 50 ms of virtual time.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(cache.len(), 0, "stale entry should have been evicted");
