@@ -312,6 +312,13 @@ fn multi_api_key_config_reports_stdio_only_reachability() {
         "a multi-key config's reachability must name stdio-only reach, got {:?}",
         report.reachability
     );
+    assert!(
+        report
+            .reachability
+            .contains("an MCP backend bound to it still needs a verified end-user identity"),
+        "the reachability must state the MCP-backend limit, got {:?}",
+        report.reachability
+    );
 }
 
 /// an eligible single-user config serves the migrated grant to
@@ -333,6 +340,13 @@ fn eligible_single_user_config_reports_stdio_and_http_reachability() {
             .reachability
             .contains("reachable over stdio, and over HTTP by callers this gateway authenticates"),
         "an eligible single-user config's reachability must name both transports, got {:?}",
+        report.reachability
+    );
+    assert!(
+        report
+            .reachability
+            .contains("an MCP backend bound to it still needs a verified end-user identity"),
+        "the reachability must state the MCP-backend limit, got {:?}",
         report.reachability
     );
 }

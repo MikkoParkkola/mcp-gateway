@@ -1858,7 +1858,9 @@ directory share its accounts.
 ## 83. `MigratedCredential` has a public `reachability` field
 
 `accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
-when the configuration asserts a single user. For library users, the report type
+when the configuration asserts a single user, in each case through a REST capability bound to
+the account; an MCP backend bound to it still needs a verified end-user identity (#1961). For
+library users, the report type
 `MigratedCredential` gains a public `reachability: String` field and is marked
 `#[non_exhaustive]`.
 
