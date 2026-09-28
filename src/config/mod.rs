@@ -1288,7 +1288,9 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
-    /// Graceful shutdown timeout.
+    /// Graceful shutdown timeout: how long the HTTP listener gives open
+    /// requests after the signal before it cuts them, and then how long the
+    /// in-flight drain may wait (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
     /// Maximum request body size (bytes) on every route. Read once at startup:
