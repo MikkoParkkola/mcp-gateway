@@ -239,6 +239,13 @@ multi="$("$HELM" template t "$CHART" "${two[@]}" 2>&1)" \
   || fail "replicaCount=2 with modern_protocol=false did not render"
 grep -qE '^      replicas: 2$' <<<"$multi" || fail "server.replicas does not follow replicaCount=2"
 grep -qE '^    type: RollingUpdate$' <<<"$multi" || fail "no per-process state, yet no RollingUpdate"
+# Mesh mode mounts no audit volume and writes no log: a leftover claim is not
+# per-process state.
+"$HELM" template t "$CHART" "${two[@]}" --set auth.mode=mesh --set audit.existingClaim=x >/dev/null 2>&1 \
+  || fail "mesh with a leftover audit.existingClaim refused two replicas"
+out="$("$HELM" template t "$CHART" "${two[@]}" --set audit.existingClaim=x 2>&1)" \
+  && fail "audit.existingClaim with replicaCount=2 rendered"
+grep -q 'Error:.*audit.existingClaim' <<<"$out" || fail "existingClaim refusal does not name audit.existingClaim"
 ks="$("$HELM" template t "$CHART" --set config.key_server.enabled=true --show-only templates/deployment.yaml 2>&1)"
 grep -qE '^    type: Recreate$' <<<"$ks" || fail "key_server does not render strategy Recreate"
 grep -q 'rollingUpdate' <<<"$ks" && fail "Recreate still renders a rollingUpdate block"
