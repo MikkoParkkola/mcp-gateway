@@ -21,7 +21,7 @@ fn logger(dir: &tempfile::TempDir, policy: AuditFailurePolicy) -> Arc<Transparen
 
 /// Arm the next write to block until the returned barrier is released, and
 /// shorten the bound to `BOUND` so that held write times out quickly.
-fn stall(l: &TransparencyLogger) -> Arc<super::rotation::StallGate> {
+fn stall(l: &TransparencyLogger) -> super::rotation::StallRelease {
     l.stall_next_write_for_test(BOUND)
 }
 
@@ -43,9 +43,12 @@ async fn stalled_append_times_out() {
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
     let start = std::time::Instant::now();
+    // The gate holds the write for up to a minute, so returning while it is
+    // still held (is_stalled) is the bound; a timer never fires early, so
+    // the lower bound holds on any runner.
     let err = invocation(&l).await.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
-    assert!(start.elapsed() < BOUND * 3, "bounded");
+    assert!(start.elapsed() >= BOUND, "refused without waiting");
     assert!(l.is_stalled());
     release.release();
 }
@@ -116,14 +119,17 @@ async fn fail_closed_calls_fail_fast_while_stalled() {
     let release = stall(&l);
     assert!(invocation(&l).await.is_err());
     assert!(l.is_stalled());
-    let start = std::time::Instant::now();
+    assert!(release.wait_entered(), "the held write never started");
+    // A refusal returns before its first await: Ready on the first poll. A
+    // permit wait would be Pending.
     for _ in 0..10 {
-        assert!(invocation(&l).await.is_err());
+        let mut call = std::pin::pin!(invocation(&l));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match call.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(r) => assert!(r.is_err()),
+            std::task::Poll::Pending => panic!("waited instead of refusing"),
+        }
     }
-    assert!(
-        start.elapsed() < Duration::from_millis(50),
-        "no permit wait"
-    );
     assert_eq!(l.bound.closures_entered.load(Ordering::Acquire), 1);
     release.release();
 }

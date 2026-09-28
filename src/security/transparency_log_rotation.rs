@@ -539,33 +539,67 @@ pub(crate) enum WriteFault {
     SyncError,
 }
 
-/// F20: holds one write "in the kernel" until the test opens it, or for at
-/// most three seconds. The deadline turns an unbounded append (a mutant) into
-/// a failed timing assertion instead of a hung test run.
+/// F20: holds one write "in the kernel" until the test opens it. Every test
+/// opens it explicitly (the guard from `stall_next_write_for_test` also
+/// opens it on drop); the 60 s deadline is only a hang guard, turning an
+/// unbounded append (a mutant) into a failed assertion, never a timing bound.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct StallGate {
-    open: std::sync::Mutex<bool>,
+    /// (entered, open)
+    state: std::sync::Mutex<(bool, bool)>,
     cv: std::sync::Condvar,
 }
 
 #[cfg(test)]
 impl StallGate {
-    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+    pub(crate) const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 
-    /// Block the writer until opened or the deadline passes.
+    /// Record entry, then block the writer until opened or the deadline.
     pub(crate) fn hold(&self) {
-        let guard = self.open.lock().expect("gate lock");
+        let mut s = self.state.lock().expect("gate lock");
+        s.0 = true;
+        self.cv.notify_all();
         let _ = self
             .cv
-            .wait_timeout_while(guard, Self::DEADLINE, |open| !*open)
+            .wait_timeout_while(s, Self::DEADLINE, |s| !s.1)
             .expect("gate lock");
+    }
+
+    /// Wait until a write has entered `hold` (up to the deadline); whether
+    /// it did.
+    pub(crate) fn wait_entered(&self) -> bool {
+        let s = self.state.lock().expect("gate lock");
+        self.cv
+            .wait_timeout_while(s, Self::DEADLINE, |s| !s.0)
+            .expect("gate lock")
+            .0
+            .0
     }
 
     /// Let the held write finish.
     pub(crate) fn release(&self) {
-        *self.open.lock().expect("gate lock") = true;
+        self.state.lock().expect("gate lock").1 = true;
         self.cv.notify_all();
+    }
+}
+
+/// Opens its gate on drop, so a failed assertion never leaves a write held.
+#[cfg(test)]
+pub(crate) struct StallRelease(pub(crate) std::sync::Arc<StallGate>);
+
+#[cfg(test)]
+impl std::ops::Deref for StallRelease {
+    type Target = StallGate;
+    fn deref(&self) -> &StallGate {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for StallRelease {
+    fn drop(&mut self) {
+        self.0.release();
     }
 }
 

@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use super::lease::{LEASE_RETRY, acquire_with};
-use super::rotation_tests::{append, cfg, log_path, verify};
+use super::rotation_tests::{append, cfg, log_path, verify, with_progress};
 use super::segments::list_segments;
 
 /// Append until `n` more rotations have happened, counted by the newest
@@ -120,30 +120,29 @@ fn another_process_is_refused_for_the_whole_life_of_the_logger() {
     assert_eq!(child(), Some(0), "released on drop");
 }
 
-/// T3: a holder that lets go inside the wait window: the second open waits,
-/// then succeeds.
+/// T3: a holder that lets go inside the wait window: the open retries, then
+/// takes the lease. Driven without real time: the holder lets go from inside
+/// the first sleep.
 #[test]
 fn a_restart_overlap_inside_the_window_starts() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
-    let holder = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
-        drop(l);
-    });
-    let t = Instant::now();
-    let second = open_wait(&path, 2);
-    let waited = t.elapsed();
-    holder.join().unwrap();
-    assert!(second.is_ok(), "{:?}", second.err());
-    assert!(
-        waited >= Duration::from_millis(250),
-        "did not wait: {waited:?}"
+    let holder = std::cell::RefCell::new(Some(
+        TransparencyLogger::open(cfg(&path, 2, false)).unwrap(),
+    ));
+    let now = Instant::now();
+    let mut slept = 0;
+    let lease = acquire_with(
+        &path,
+        Duration::from_secs(2),
+        &mut |_| {
+            slept += 1;
+            drop(holder.borrow_mut().take());
+        },
+        &|| now,
     );
-    assert!(
-        waited < Duration::from_secs(2),
-        "waited past the release: {waited:?}"
-    );
+    assert!(lease.is_ok(), "{:?}", lease.err());
+    assert_eq!(slept, 1, "one retry after the holder let go");
 }
 
 /// T4: a holder that keeps the lease past the window: refused after it.
@@ -156,37 +155,35 @@ fn a_holder_past_the_window_is_refused_after_the_wait() {
     let e = open_wait(&path, 1).err().expect("refused");
     let waited = t.elapsed();
     assert!(is_lease_held(&e), "{e}");
+    // A timer never fires early; the window's end is pinned without real
+    // time by the_wait_retries_every_100_ms_until_the_window.
     assert!(
         waited >= Duration::from_secs(1),
         "gave up early: {waited:?}"
     );
-    assert!(
-        waited < Duration::from_secs(3),
-        "waited too long: {waited:?}"
-    );
 }
 
-/// T5: a zero wait refuses at once.
+/// T5: a zero wait refuses at once: it never sleeps.
 #[test]
 fn a_zero_wait_refuses_at_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let _l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
-    // The second open runs on its own thread: a lease taken as a blocking
-    // lock would wait forever, and this must fail rather than hang.
+    // On its own thread: a lease taken as a blocking lock would wait
+    // forever, and this must fail rather than hang.
     let (tx, rx) = std::sync::mpsc::channel();
     let p = path.clone();
     std::thread::spawn(move || {
-        let t = Instant::now();
-        let refused = open_wait(&p, 0).err();
-        let _ = tx.send((refused, t.elapsed()));
+        let now = Instant::now();
+        let refused = acquire_with(&p, Duration::ZERO, &mut |_| panic!("slept"), &|| now).err();
+        let _ = tx.send(refused);
     });
-    let (refused, took) = rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the second open blocked on the lease instead of refusing");
-    let e = refused.expect("refused");
+    let e = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the second open blocked on the lease instead of refusing")
+        .expect("refused");
     assert!(is_lease_held(&e), "{e}");
-    assert!(took < Duration::from_millis(200), "{took:?}");
+    assert!(open_wait(&path, 0).is_err_and(|e| is_lease_held(&e)));
 }
 
 /// T6: a lease file that cannot be opened is its own error, returned at
@@ -196,12 +193,21 @@ fn an_unopenable_lease_file_fails_at_once_and_is_not_lease_held() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     std::fs::create_dir(sibling(&path, "lock")).unwrap();
-    let t = Instant::now();
+    // A non-contention error never sleeps, whatever the window.
+    let now = Instant::now();
+    let raw = acquire_with(
+        &path,
+        Duration::from_secs(5),
+        &mut |_| panic!("slept"),
+        &|| now,
+    )
+    .err()
+    .expect("a directory is not a lease file");
+    assert!(!is_lease_held(&raw), "{raw}");
     let e = open_wait(&path, 5)
         .err()
         .expect("a directory is not a lease file");
     assert!(!is_lease_held(&e), "{e}");
-    assert!(t.elapsed() < Duration::from_millis(500), "it waited");
     let lock = sibling(&path, "lock").display().to_string();
     assert!(
         e.to_string().contains(&format!("audit log: lock {lock}")),
@@ -291,20 +297,24 @@ fn appends_take_no_file_lock_once_the_lease_is_held() {
 fn appends_across_rotations_do_not_deadlock_on_the_lease() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let (tx, rx) = std::sync::mpsc::channel();
     let p = path.clone();
-    std::thread::spawn(move || {
+    with_progress(move |step| {
         let l = TransparencyLogger::open(cfg(&p, 2, false)).unwrap();
         // Three rotations (the third expires a segment) and a synced append:
         // a lock re-taken anywhere on these paths blocks on the first one.
-        rotate_n(&l, &p, 3);
+        let newest = || list_segments(&p).unwrap().last().map_or(0, |s| s.seq + 1);
+        let target = newest() + 3;
+        for i in 0.. {
+            if newest() >= target {
+                break;
+            }
+            assert!(i < 5_000, "no rotation happened");
+            append(&l, i);
+            step();
+        }
         l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
             .unwrap();
-        let _ = tx.send(());
+        step();
     });
-    // A deadlock never finishes; the bound only has to outlast a slow,
-    // loaded runner (fsync per rotation), not measure speed.
-    rx.recv_timeout(Duration::from_secs(60))
-        .expect("appends deadlocked on the held lease");
     assert!(verify(&path, false).ok);
 }
