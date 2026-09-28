@@ -15,7 +15,6 @@ use super::{
     StoreConfig, config,
 };
 use std::io::Write as _;
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
 #[derive(serde::Deserialize)]
 struct AuthorityVersions {
@@ -62,15 +61,10 @@ fn install(fixture: &AuthorityVersions, authority: &str) -> (tempfile::TempDir, 
         hex::decode(&fixture.key_hex).unwrap()
     );
     for dir in [&settings.store_dir, &settings.authority_dir] {
-        std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        super::private_io::create_dir(dir);
     }
     let write = |path: std::path::PathBuf, bytes: &[u8]| {
-        std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(path)
-            .unwrap()
+        super::private_io::create_new(&path)
             .write_all(bytes)
             .unwrap();
     };

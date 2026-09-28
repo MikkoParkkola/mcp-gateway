@@ -72,11 +72,24 @@ impl Firewall {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let mut findings = Vec::new();
+        // Redact first: an injection finding quotes up to 200 chars of raw
+        // text (a value or, since #2114, a key), so it must quote the redacted
+        // text or a credential beside the marker reaches the audit log.
+        if self.config.credential_redaction {
+            #[cfg(test)]
+            self.response_observer
+                .redactions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            findings.extend(self.redactor.scan_and_redact(response));
+        }
         if self.config.prompt_injection_detection {
             #[cfg(test)]
             self.response_observer
                 .prompt_scans
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Detection always reads what the client receives. With redaction
+            // on that is already redacted text; with it off the raw quote is
+            // withheld, since masking a 200-char cut can miss a split token.
             let matches = self.response_scanner.scan_response(
                 correlation.external_server,
                 correlation.external_tool,
@@ -86,20 +99,20 @@ impl Firewall {
                 scan_type: ScanType::PromptInjection,
                 severity: Severity::Medium,
                 description: matched.pattern_description,
-                matched: matched.matched_fragment,
+                matched: if self.config.credential_redaction {
+                    matched.matched_fragment
+                } else {
+                    QUOTE_WITHHELD.to_owned()
+                },
                 location: FindingLocation::ResponseContent,
             }));
-        }
-        if self.config.credential_redaction {
-            #[cfg(test)]
-            self.response_observer
-                .redactions
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            findings.extend(self.redactor.scan_and_redact(response));
         }
         findings
     }
 }
+
+/// Audit text for an injection finding while credential redaction is off.
+const QUOTE_WITHHELD: &str = "[quote withheld: credential redaction is off]";
 
 fn strongest_action(left: FirewallAction, right: FirewallAction) -> FirewallAction {
     match (left, right) {
