@@ -1100,6 +1100,15 @@
         "docs/requirements/RELEASE-4.0.0-scope-update.md"
       ],
       "consequence": "The scope contract grows from 32 to 73 criteria: A0 met, 40 enterprise items pending until each lands; tier 4 is deferred and listed in the scope document."
+    },
+    {
+      "id": "audit_4_owner_ratification",
+      "status": "pending",
+      "selection": "",
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ],
+      "rationale": "MIK-7570.AUDIT.4 was added by maintainer decision (row 21) under the standing rule that every 4.0 follow-up ships in 4.0; explicit owner confirmation is pending, and this entry keeps the tag gate open until it is recorded."
     }
   ]
 }
