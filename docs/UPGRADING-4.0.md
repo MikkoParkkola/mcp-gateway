@@ -1926,9 +1926,9 @@ example downloaded and imported from a file.
 
 ## 85. The response firewall scans object keys
 
-The response firewall read only the values in a backend's JSON: a credential or prompt
-injection placed in an object key reached the client unchanged. In 4.0 both scanners read
-keys too.
+Before 4.0, the response firewall scanned only the values in a backend's JSON, so a
+credential or prompt injection placed in an object key reached the client unchanged. In
+4.0 both scanners scan keys as well.
 
 - A key that carries prompt-injection text is reported and acted on by the firewall rule,
   like the same text in a value.
@@ -1942,7 +1942,8 @@ keys too.
   `0x`-prefixed 64-digit hex hash, is renamed too.
 - A key finding's description ends in `(object key)`, and its matched text is the redacted
   key, never the credential. A prompt-injection finding's matched text, from a key or a
-  value, now has any credential in it masked the same way.
+  value, has credentials masked too. With `credential_redaction` off the payload is left
+  as it is and only that quoted text is masked.
 
 **Action:** none for most deployments. If a backend uses credential-shaped strings as
 object keys, expect those keys to be renamed; use other key names.

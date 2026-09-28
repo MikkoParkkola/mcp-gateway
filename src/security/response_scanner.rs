@@ -191,9 +191,9 @@ impl ResponseScanner {
 
     /// Scan a JSON value (recursively) for prompt injection patterns.
     ///
-    /// Searches all string values and object keys in the JSON tree; a key hit's
-    /// description ends in ` (object key)`. Returns matches with
-    /// the backend and tool context for logging.
+    /// Searches all string values and object keys in the JSON tree. A match
+    /// found in a key has "(object key)" appended to its description. Returns
+    /// matches with the backend and tool context for logging.
     pub fn scan_response(&self, backend: &str, tool: &str, value: &Value) -> Vec<InjectionMatch> {
         let mut all_matches = Vec::new();
         self.scan_value_recursive(value, &mut all_matches);
