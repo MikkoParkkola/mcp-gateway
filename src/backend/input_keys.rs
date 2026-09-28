@@ -104,7 +104,7 @@ impl Backend {
             count("input_schema_fetch_skipped_a3");
             return Ok(unavailable(mode));
         }
-        let fetched = self.tools_for_check(identity_key, headers, cached.is_some());
+        let fetched = self.tools_for_check(identity_key, &[], cached.is_some());
         let (tools, completeness) = match fetched.await {
             Ok(fetched) => fetched,
             // A stale hit falls back on any refresh error, to what the slot
