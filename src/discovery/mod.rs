@@ -114,7 +114,10 @@ impl DiscoveredServer {
         }
     }
 
-    /// Convert to backend config
+    /// Convert to backend config, values included: this is what the
+    /// owner-only config writer persists. `BackendConfig` is the gateway.yaml
+    /// schema, so its `Serialize` carries `env`/`headers` values as it does
+    /// for every hand-written backend; its `Debug` shows counts only.
     #[must_use]
     pub fn to_backend_config(&self) -> BackendConfig {
         // The one path that sees env and header values: the backend the

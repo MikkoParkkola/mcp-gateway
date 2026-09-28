@@ -4,7 +4,7 @@
 //!
 //! Both routinely hold credentials: API keys in `env`, bearer tokens in
 //! `headers`. The values reach exactly one place, the backend written to the
-//! owner-only gateway config ([`SecretMap::expose`] feeds
+//! owner-only gateway config (`SecretMap::expose` feeds
 //! [`super::DiscoveredServer::to_backend_config`]). Everything else that
 //! formats a discovered server (`Debug`, discovery JSON/YAML and shadow
 //! reports, logs, errors) sees the keys only.
@@ -40,9 +40,12 @@ impl SecretMap {
         self.0.is_empty()
     }
 
-    /// The values themselves. Only the config writer may call this.
+    /// The values themselves, for the config writer
+    /// ([`super::DiscoveredServer::to_backend_config`]) only. Private to
+    /// `discovery`: elsewhere the values are reachable only through that
+    /// method, never around the redacting `Debug`/`Serialize` below.
     #[must_use]
-    pub fn expose(&self) -> &BTreeMap<String, String> {
+    pub(super) fn expose(&self) -> &BTreeMap<String, String> {
         &self.0
     }
 }
