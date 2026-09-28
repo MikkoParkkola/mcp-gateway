@@ -57,3 +57,12 @@ operator rulings until the owner ratifies them.
 | # | Date | Decision | By |
 |---|---|---|---|
 | 20 | 2026-09-25 | MIK-7217.DISCOVER.3 is amended to "byte-identical to 3.5.0 except the capability corrections in UPGRADING-4.0 item 52" (F24). The 3.5.0 goldens stay as captured, and the test applies the three-flag delta. `nfr_compat_2` pins no capability flags, so it needs no delta. | Coordinator decision, flagged to owner |
+| 21 | 2026-09-27 | MIK-7570.AUDIT.4 (governance audit record, actor absent, for grant approve and revoke applied through the grant file, directly or via the `identity grants` CLI) is added as a pending 4.0.0 criterion. | Maintainer decision under the standing owner rule that every 4.0 follow-up ships in 4.0 (no deferral to 4.0.x); explicit owner confirmation pending. If the owner declines, the row moves out of scope in a follow-up change. CLI actor attribution needs an authenticated CLI identity; not in 4.0 scope unless the owner asks. |
+
+## Maintainer decisions under delegated authority
+
+Decided by the maintainer under authority the owner delegated, each after two independent reviews. They are not owner approvals.
+
+| # | Date | Decision | By |
+|---|---|---|---|
+| 22 | 2026-09-28 | MIK-7570.AUDIT.4 design: the `identity grants` CLI appends each change to an append-only sidecar journal (0600; actor `unknown`, OS account as an unauthenticated hint) and never writes the gateway's audit log (one-writer lease, #1570); the gateway ingests unseen journal entries at startup and on every reload; the startup `loaded` snapshot is a reconciliation check, and a journal/snapshot mismatch is recorded as an out-of-band edit. Journal entries carry verb, grant id, content digest, expiry and timestamp. Supersedes row 21, including its note that explicit owner confirmation is pending. Ledger decision `audit_4_owner_ratification`. | Maintainer decision under delegated authority; two independent reviews |

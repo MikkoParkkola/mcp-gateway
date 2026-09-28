@@ -28,7 +28,7 @@ Required:
 
 Encouraged:
 
-- [ ] CHANGELOG entry under `[Unreleased]`
+- [ ] Changelog fragment `changelog.d/<number>.<type>.md` (see CONTRIBUTING.md); required when `src/` changes
 - [ ] PR description explains the problem, the shape of the fix, anything I am unsure about
 - [ ] Config struct instead of 5+ positional arguments
 - [ ] Doc comments on any user-facing config field
