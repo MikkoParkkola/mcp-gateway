@@ -160,3 +160,4 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 #[cfg(test)]
 #[path = "log_filter_tests.rs"]
 mod log_filter_tests;
+
