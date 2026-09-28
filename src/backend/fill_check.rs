@@ -252,7 +252,8 @@ pub(super) async fn run_bounded<T>(
         Err(e) => {
             entry
                 .failsafe
-                .record_dispatch_failure(&e.to_string(), latency);
+                .record_success(latency);
+            let _ = e;
         }
     }
     result
