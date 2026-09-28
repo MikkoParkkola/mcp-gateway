@@ -259,8 +259,17 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.create(true).append(true).read(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        // Never follow a planted link: the append and the chmod below would
+        // land on whatever file it points at.
+        opts.mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    }
     let mut file = opts.open(journal)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("grant journal is not a regular file"));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

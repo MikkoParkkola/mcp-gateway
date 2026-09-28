@@ -300,6 +300,27 @@ async fn duplicate_ids_report_the_row_that_changed() {
     assert_eq!(got[0].prev_digest, Some(grant_digest(&first)));
 }
 
+/// A journal path planted as a symlink is refused: the append must not land
+/// on, or chmod, the file it points at.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_journal_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, b"keep").unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::os::unix::fs::symlink(&victim, journal_path(&path)).unwrap();
+
+    let r = change(&path, upsert(row("g1", "r"), false)).await;
+
+    assert!(matches!(r, Err(ChangeError::Unjournalled(_))), "{r:?}");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    let mode = std::fs::metadata(&victim).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o644);
+}
+
 #[test]
 fn reader_leaves_an_unterminated_tail_for_later() {
     let line = serde_json::to_string(&sample_entry("e1")).unwrap();
