@@ -436,7 +436,7 @@ impl EnvOverlay {
                 let mut loaded = loaded.peekable();
                 was_absent || loaded.peek().is_none() || loaded.any(|(_, t)| *t != text)
             }
-            Err(_) => true,
+            Err(_) => false,
         }
     }
 
