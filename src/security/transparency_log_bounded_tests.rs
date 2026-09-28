@@ -16,19 +16,25 @@ fn logger(dir: &tempfile::TempDir, policy: AuditFailurePolicy) -> Arc<Transparen
     let l = TransparencyLogger::open(cfg(&log_path(dir), 12, false))
         .unwrap()
         .with_failure_policy(policy);
-    *l.bound.limit.lock().unwrap() = BOUND;
     Arc::new(l)
 }
 
-/// Arm the next write to block until the returned barrier is released.
+/// Arm the next write to block until the returned barrier is released, and
+/// shorten the bound to `BOUND` so that held write times out quickly.
 fn stall(l: &TransparencyLogger) -> Arc<super::rotation::StallGate> {
-    let b = Arc::new(super::rotation::StallGate::default());
-    *l.hooks.stall.lock().unwrap() = Some(Arc::clone(&b));
-    b
+    l.stall_next_write_for_test(BOUND)
 }
 
 fn invocation(l: &Arc<TransparencyLogger>) -> impl std::future::Future<Output = io::Result<()>> {
     l.append_bounded(|l| l.log_invocation("s", "c", "srv", "t", "a", "b"))
+}
+
+/// A healthy append after a stall, under the production bound: `BOUND` only
+/// triggers the held write, and a healthy append asserts success, not
+/// latency, so a runner slower than `BOUND` no longer fails it (#1779).
+async fn healthy_invocation(l: &Arc<TransparencyLogger>) -> io::Result<()> {
+    *l.bound.limit.lock().unwrap() = super::bounded::AUDIT_APPEND_TIMEOUT;
+    invocation(l).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -148,7 +154,7 @@ async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
     }
     assert!(!l.is_stalled());
     assert!(l.admit().await.is_ok());
-    invocation(&l).await.unwrap();
+    healthy_invocation(&l).await.unwrap();
     assert!(
         verify_log(&l.path()).unwrap().ok,
         "the late record landed in the chain"
@@ -197,7 +203,7 @@ async fn completion_at_timeout_boundary_does_not_stick() {
     assert!(invocation(&l).await.is_err(), "the caller still timed out");
     assert!(!l.is_stalled(), "the finished write cleared the stall");
     assert!(l.admit().await.is_ok());
-    invocation(&l).await.unwrap();
+    healthy_invocation(&l).await.unwrap();
 }
 
 /// A stuck write that later fails leaves the log degraded with its real

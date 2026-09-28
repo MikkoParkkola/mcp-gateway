@@ -53,6 +53,11 @@ quantity.
 | D | 4.0.0, modern era | 0.7491 | 0.035 | 1.5551 | 0.612 |
 | E | 4.0.0, modern era, mixed | 0.8385 | 0.294 | 3.8150 | 4.706 |
 
+The workload contract (`docs/requirements/RELEASE-4.0.0-workload-contract.md`) asks
+cells D and E to report p90 as well. The committed files carry no p90 for any cell, and
+the per-rep summaries that would hold it are not in the repository (see Provenance), so
+the table cannot supply it.
+
 Baseline `min(A.p50, B.p50)` = 0.6681, limit at the 5% budget = 0.7015.
 Candidate C = **0.7321, which is 4.4% over the limit** — 8.3% slower than A, 9.6% slower
 than B. p99 passes: 1.5146 against a 1.6135 limit.
@@ -85,10 +90,12 @@ C is `5e557e08`, an ancestor of `origin/main`.
 
 ## What D and E priced
 
-C→D is **+2.3% p50** (0.7321 → 0.7491). That is the modern-protocol-era cost the D cell was
-built to measure, and it has never been produced before. Both cells take the same
-`SyncAdmission::Unprotected` arm — C via `!is_modern`, D via the read-only exemption — so
-the delta is protocol handling for an unauthenticated read-only call. It is not evidence
+C→D is **+2.3% p50** (0.7321 → 0.7491). The D cell was built to measure the modern-protocol-era
+cost, and this run cannot isolate it. Both cells take the same
+`SyncAdmission::Unprotected` arm — C via `!is_modern`, D via the read-only exemption. But
+this run used a fixed cell order: D and E ran after every A, B and C rep (randomised order
+came later, in `609e7ef95`). So the +2.3% mixes protocol handling with run position and
+time, and cannot be attributed to protocol handling alone. It is not evidence
 about the authenticated retry path; the admission store is bypassed on both sides.
 
 E's p99 spread of 4.706 (E3 alone reaches 12.3 ms) means the mixed-config cell is not
@@ -114,5 +121,6 @@ resolving anything at this rep count. D and E are report-only and do not enter t
 SHA `5e557e08` and health version 4.0.0 — they are symlinks to C's build, so the C→D
 comparison isolates protocol era against a byte-identical binary. The 145 raw artifacts —
 per-rep `*.summary.json`, `*.meta.json`, `*.health.json`, gateway stdout/stderr and k6
-output — are archived on bench-host at `<bench-dir>/results/gating-2026-09-20c/`, outside
-any checkout so they survive branch and worktree cleanup.
+output — were kept on the benchmark host, not committed. This directory holds only
+`README.md`, `pins.json` and `verdict.json`, so the record can be read but not re-graded
+from the repository: the evaluator's per-rep inputs are not here.

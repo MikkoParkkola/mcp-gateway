@@ -33,7 +33,10 @@ async fn built_from_yaml(yaml: &str) -> super::BuiltMetaMcp {
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("the configured error_budget must load");
-    let gateway = Gateway::new(config).await.expect("gateway boots");
+    let gateway = Gateway::new(config)
+        .await
+        .expect("gateway boots")
+        .with_data_dir(dir.path().to_path_buf());
     gateway.build_meta_mcp().await.expect("meta-MCP builds")
 }
 
