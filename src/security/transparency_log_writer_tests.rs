@@ -3,48 +3,54 @@
 //! D6: more than one writer, trigger timing, and verify edge rows.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::rotation::{EV_EXPIRED, EV_OPENED};
 use super::rotation_tests::{
-    SECRET, append, cfg, event, lines, log_path, rewrite_line, rotate_n, verify,
+    SECRET, append, cfg, event, lines, log_path, rewrite_line, rotate_n, verify, with_progress,
 };
 use super::segments::{list_segments, sealed_path};
 use super::*;
 
+/// A writer that reopens a path another writer rotated in the meantime
+/// (the old process exited, the new one starts): the chain continues across
+/// the seam. Two live writers on one path are refused (`lease_tests`).
 #[test]
-fn hot_path_append_follows_foreign_rotation() {
+fn a_reopened_writer_follows_the_previous_writers_rotation() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&a, 0);
+    drop(a);
+    let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     b.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
         .unwrap();
     rotate_n(&b, &path, 1);
-    append(&a, 42); // hot path, no resync
+    drop(b);
+    let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&a, 42);
     assert_eq!(lines(&path).pop().unwrap()["tool"], "tool_42");
     assert!(verify(&path, false).ok);
 }
 
+/// A reopened writer sees the size the previous writer left and rotates
+/// before its first append when that append would pass the limit.
 #[test]
-fn second_process_append_follows_rotation() {
+fn a_reopened_writer_rotates_on_the_size_it_inherits() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    rotate_n(&a, &path, 1);
+    rotate_n(&b, &path, 1);
     let mut f = serde_json::Map::new();
     f.insert("who_wrote".into(), "b".into());
     b.append_event_synced(f, &AuditEnvelope::gateway()).unwrap();
     assert_eq!(lines(&path).pop().unwrap()["who_wrote"], "b");
-    // B pushes the active file past the limit; A's next synced append must
-    // see the new size and rotate first.
     while std::fs::metadata(&path).unwrap().len() < 4000 {
         b.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
             .unwrap();
     }
+    drop(b);
     let sealed_before = list_segments(&path).unwrap().len();
+    let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     a.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
         .unwrap();
     assert!(list_segments(&path).unwrap().len() > sealed_before);
@@ -55,9 +61,8 @@ fn second_process_append_follows_rotation() {
 fn synced_append_rotates_without_deadlock() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let (tx, rx) = std::sync::mpsc::channel();
     let p = path.clone();
-    std::thread::spawn(move || {
+    with_progress(move |step| {
         let l = TransparencyLogger::open(cfg(&p, 12, false)).unwrap();
         for i in 0.. {
             if list_segments(&p).unwrap().len() >= 3 {
@@ -66,11 +71,9 @@ fn synced_append_rotates_without_deadlock() {
             assert!(i < 1_000, "no rotation happened");
             l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
                 .unwrap();
+            step();
         }
-        let _ = tx.send(());
     });
-    rx.recv_timeout(Duration::from_secs(10))
-        .expect("synced rotation deadlocked on <path>.lock");
     assert!(verify(&path, false).ok);
 }
 

@@ -16,30 +16,54 @@ fn logger(dir: &tempfile::TempDir, policy: AuditFailurePolicy) -> Arc<Transparen
     let l = TransparencyLogger::open(cfg(&log_path(dir), 12, false))
         .unwrap()
         .with_failure_policy(policy);
-    *l.bound.limit.lock().unwrap() = BOUND;
     Arc::new(l)
 }
 
-/// Arm the next write to block until the returned barrier is released.
-fn stall(l: &TransparencyLogger) -> Arc<super::rotation::StallGate> {
-    let b = Arc::new(super::rotation::StallGate::default());
-    *l.hooks.stall.lock().unwrap() = Some(Arc::clone(&b));
-    b
+/// Arm the next write to block until the returned barrier is released, and
+/// shorten the bound to `BOUND` so that held write times out quickly.
+fn stall(l: &TransparencyLogger) -> super::rotation::StallRelease {
+    l.stall_next_write_for_test(BOUND)
 }
 
 fn invocation(l: &Arc<TransparencyLogger>) -> impl std::future::Future<Output = io::Result<()>> {
     l.append_bounded(|l| l.log_invocation("s", "c", "srv", "t", "a", "b"))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// A healthy append after a stall, under the production bound: `BOUND` only
+/// triggers the held write, and a healthy append asserts success, not
+/// latency, so a runner slower than `BOUND` no longer fails it (#1779).
+async fn healthy_invocation(l: &Arc<TransparencyLogger>) -> io::Result<()> {
+    *l.bound.limit.lock().unwrap() = super::bounded::AUDIT_APPEND_TIMEOUT;
+    invocation(l).await
+}
+
+/// The held write times out at exactly the configured bound. Tokio's clock
+/// is paused and moved by hand, so this pins the deadline without depending
+/// on runner speed: one tick before the bound the call is still waiting, at
+/// the bound it returns `TimedOut` with the write still held.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn stalled_append_times_out() {
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     let release = stall(&l);
-    let start = std::time::Instant::now();
-    let err = invocation(&l).await.unwrap_err();
+    let l2 = Arc::clone(&l);
+    let call = tokio::spawn(async move { invocation(&l2).await });
+    // Once the write is held, the call has registered its deadline. Real
+    // time here is only a hang guard.
+    let guard = std::time::Instant::now();
+    while !release.is_entered() {
+        assert!(
+            guard.elapsed() < Duration::from_secs(60),
+            "the write never started"
+        );
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(BOUND.saturating_sub(Duration::from_millis(1))).await;
+    tokio::task::yield_now().await;
+    assert!(!call.is_finished(), "gave up before the bound");
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let err = call.await.unwrap().unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
-    assert!(start.elapsed() < BOUND * 3, "bounded");
     assert!(l.is_stalled());
     release.release();
 }
@@ -110,14 +134,17 @@ async fn fail_closed_calls_fail_fast_while_stalled() {
     let release = stall(&l);
     assert!(invocation(&l).await.is_err());
     assert!(l.is_stalled());
-    let start = std::time::Instant::now();
+    assert!(release.wait_entered(), "the held write never started");
+    // A refusal returns before its first await: Ready on the first poll. A
+    // permit wait would be Pending.
     for _ in 0..10 {
-        assert!(invocation(&l).await.is_err());
+        let mut call = std::pin::pin!(invocation(&l));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match call.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(r) => assert!(r.is_err()),
+            std::task::Poll::Pending => panic!("waited instead of refusing"),
+        }
     }
-    assert!(
-        start.elapsed() < Duration::from_millis(50),
-        "no permit wait"
-    );
     assert_eq!(l.bound.closures_entered.load(Ordering::Acquire), 1);
     release.release();
 }
@@ -148,7 +175,7 @@ async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
     }
     assert!(!l.is_stalled());
     assert!(l.admit().await.is_ok());
-    invocation(&l).await.unwrap();
+    healthy_invocation(&l).await.unwrap();
     assert!(
         verify_log(&l.path()).unwrap().ok,
         "the late record landed in the chain"
@@ -197,7 +224,7 @@ async fn completion_at_timeout_boundary_does_not_stick() {
     assert!(invocation(&l).await.is_err(), "the caller still timed out");
     assert!(!l.is_stalled(), "the finished write cleared the stall");
     assert!(l.admit().await.is_ok());
-    invocation(&l).await.unwrap();
+    healthy_invocation(&l).await.unwrap();
 }
 
 /// A stuck write that later fails leaves the log degraded with its real

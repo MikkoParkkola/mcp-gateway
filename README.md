@@ -10,7 +10,7 @@
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25%20%7C%202026--07--28-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
-[![MITRE F3](https://img.shields.io/badge/MITRE_F3-gateway_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
+[![MITRE F3](https://img.shields.io/badge/MITRE_F3-tool--call_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
@@ -54,17 +54,17 @@ flowchart LR
 
 ## What's new in 4.0
 
-4.0 is in beta. The current pre-release is `4.0.0-beta.2`; Homebrew, the npm `latest` tag, the `:latest` image and the MCP Registry stay on 3.x until 4.0.0 ships, so the Quick Start below installs 3.x. To try 4.0, pin it: `cargo install mcp-gateway --version 4.0.0-beta.2`, `npm install -g @mikkoparkkola/mcp-gateway@next`, or `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`. Several 4.0 changes make a 3.x config refuse to start instead of running on settings it no longer trusts, so read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first.
+4.0 is in beta. The current pre-release is `4.0.0-beta.2`; Homebrew, the npm `latest` tag, the `:latest` image and the MCP Registry stay on 3.x until 4.0.0 ships, so the Quick Start below installs 3.x. To try 4.0, pin it: `cargo install mcp-gateway --version 4.0.0-beta.2`, `npm install -g @mikkoparkkola/mcp-gateway@4.0.0-beta.2`, or `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`. Several 4.0 changes make a 3.x config refuse to start instead of running on settings it no longer trusts, so read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first.
 
 - **The newest MCP revision, 2026-07-28, on by default.** MCP (Model Context Protocol) is how AI clients talk to tool servers. The gateway now serves 2026-07-28 alongside 2025-11-25 and earlier, on the same endpoint. A 2026 client skips the `initialize` handshake and states its revision on each `POST /mcp` request (the `MCP-Protocol-Version` header and `io.modelcontextprotocol/protocolVersion` in the request's `_meta`). It gets `server/discover`; mid-call questions returned as a result it answers by retrying the call (on HTTP this needs a verified caller identity; an anonymous caller is refused); a caller-scoped `subscriptions/listen` stream; the tasks extension for long-running calls it polls; and optional idempotency keys (`io.mcp-gateway/idempotency-key` in `_meta`) that stop a retried call from running twice. Older clients keep the handshake and see no change. `server.modern_protocol: false` turns it off. Limits:
-  - While it is on, the gateway refuses to run more than one replica.
+  - While it is on, the gateway refuses to start when `server.replicas` declares more than one replica (the Helm chart keeps it equal to `replicaCount`; replicas started any other way are not detected).
   - A 2026 `tools/call` without a key is not protected against a double run unless you set `server.idempotency_key: required`, which covers `POST /mcp` and stdio but not the direct per-backend route `POST /mcp/{name}`.
   - On stdio, `server/discover` lists only the older revisions.
 - **Each caller sees and reaches only what it was granted.** Every discovery surface (tool lists, search, server lists, the direct per-backend route) shows a caller only the backends and tools it could invoke. A newly added backend is unreachable until a key is granted it, and a key with no `backends` reaches nothing. Cached results, idempotent results, backend change notifications and `subscriptions/listen` streams are kept per caller. Caller identity headers count only when they arrive from a source you configured: listed proxy addresses or Cloudflare Access.
 - **Admins from your identity provider.** A `control_plane.role_mapping` rule with `role: admin` makes a single sign-on (SSO) group or user a full gateway admin. The mapping is read on every request, so removing the rule revokes admin at once, and an admin rule that names only an email domain is refused. Identities from trusted-proxy or Cloudflare Access headers, and mTLS certificates, never confer admin. Key-server rules for OIDC (OpenID Connect, the sign-in protocol most identity providers speak) must name the issuer, and email and domain rules match only an email the provider has verified.
-- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2. Also landed after beta.2: admin actions (admin meta-tool calls and admin-panel changes, control-plane edits included) are recorded with who made them, and refused while the log is down.
-- **Keys and secrets handled as secrets.** API keys are stored as SHA-256 digests (`mcp-gateway hash-key` makes one) with an optional expiry that is enforced. A secret reference that resolves to nothing stops the load instead of sending an empty credential, and `/metrics` needs its own scrape token. Landed after beta.2: `file:/absolute/path` reads a secret from a file wherever `env:NAME` is accepted.
-- **A config that refuses to start instead of running unsafely.** An unknown config key, a config or env file other users can read, and plain HTTP on a network address with auth on each stop the start with an error that names the problem. `server.cleartext_http` declares that the traffic is protected some other way (TLS terminated upstream, host-local publish, or cluster-internal).
+- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2. Also landed after beta.2: admin actions (admin meta-tool calls and admin-panel changes, control-plane edits included) are recorded with who made them. An admin meta-tool call is refused when its record cannot be written; an admin-panel change is refused while the log is already failing, and if the write fails after the change ran, the change stands and its response is withheld with 503.
+- **Keys and secrets handled as secrets.** API keys are stored as SHA-256 digests (`mcp-gateway hash-key` makes one) with an optional expiry that is enforced. A secret reference that resolves to nothing stops the load instead of sending an empty credential (except `server.metrics_token`, which logs a warning and leaves `/metrics` answering 401 until it is set and the gateway restarted, and a personal-account `client_secret_ref`, which is read only when a token is requested, so a missing one fails that account later rather than the start), and `/metrics` needs its own scrape token. Landed after beta.2: `file:/absolute/path` reads a secret from a file wherever `env:NAME` is accepted.
+- **A config that refuses to start instead of running unsafely.** An unknown config key, a config or env file other users can read (on Unix; Windows is not checked), and plain HTTP on a network address with auth on each stop the start with an error that names the problem. `server.cleartext_http` declares that the traffic is protected some other way (TLS terminated upstream, host-local publish, or cluster-internal).
 - **A Helm chart that starts.** The Kubernetes chart now installs and serves with its default values, runs as the image's own non-root user, and defaults to one replica.
 
 Still to come before 4.0.0 (listed under *Known gaps* in the [beta.2 release notes](docs/release/4.0.0-beta.2-notes.md#known-gaps); `python3 scripts/release/check_scope_acceptance.py --release` names the criteria still open): audited grant decisions, dashboard session time limits, and API-key and OIDC auth in the Helm chart, among others.
@@ -89,7 +89,7 @@ That is it. Your AI clients now talk to the gateway, and the gateway routes to e
 
 > Read https://github.com/MikkoParkkola/mcp-gateway and install mcp-gateway to consolidate all my MCP servers behind one gateway
 
-Your agent will install the binary, run the setup wizard, import your existing MCP servers, and wire itself up. This works in Claude Code, Cursor, Windsurf, Codex, and any AI with terminal access.
+Your agent will install the binary, run the setup wizard, import your existing MCP servers, and wire itself up. It is written for any agent with terminal access, such as Claude Code, Cursor, Windsurf or Codex; which clients have a recorded 4.0 run is in [Supported clients](docs/CLIENTS.md).
 
 ### Install
 
@@ -215,15 +215,7 @@ mcp-gateway setup export --rollback <backup-file>     # restore one client confi
 
 Existing client files are backed up before mutation. The command prints the exact rollback command beside each updated client.
 
-| Client | Config path |
-|--------|-------------|
-| `claude-code` | `~/.claude.json` |
-| `claude-desktop` | platform-specific |
-| `cursor` | `.cursor/mcp.json` (workspace) |
-| `vs-code-copilot` | `.vscode/mcp.json` (workspace) |
-| `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
-| `cline` | `.cline/mcp_servers.json` (workspace) |
-| `zed` | `~/.config/zed/settings.json` |
+Targets: `claude-code`, `claude-desktop`, `cursor`, `vs-code-copilot`, `windsurf`, `cline`, `zed`, `generic`, `all`. The file each one writes, and which clients have been verified against 4.0, are in [Supported clients](docs/CLIENTS.md).
 
 Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe the health endpoint, then fall back).
 
@@ -315,7 +307,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
 - **OWASP Agentic AI Top 10 (self-assessed).** Controls are mapped across all 10 ASI risks at the gateway boundary in-tree. That is not a certification. Hardening follow-ups are tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
-- **MITRE Fight Fraud Framework (F3).** A tactic-by-tactic mapping of the same gateway-boundary controls to F3 v1.1, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Most cash-out and card-scheme techniques are explicit gaps. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
+- **MITRE Fight Fraud Framework (F3).** A technique-by-technique mapping of F3 v1.1 at the tool-call boundary, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Physical, card-scheme, payment-rail and victim-device techniques are out of scope for a tool gateway and marked N/A; techniques that target the gateway's own authentication, audit and capability surface are rated PARTIAL or GAP. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
 
 ### Recent additions
 
@@ -360,9 +352,8 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **Per-client tool scopes** | Allowlist or denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Security firewall** | Credential redaction, prompt-injection detection, and shell/SQL/path-traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
-| **Session sandboxing** | Per-session call limits, duration caps, backend restrictions | [CHANGELOG](CHANGELOG.md#250---2026-03-12) |
 | **mTLS** | Certificate-based auth for tool execution | [CHANGELOG](CHANGELOG.md#240---2026-02-25) |
-| **MITRE F3 mapping** | Tactic-by-tactic map of gateway-boundary controls to Fight Fraud Framework v1.1. Monetization and card-scheme techniques are listed as gaps | [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md) |
+| **MITRE F3 mapping** | Fight Fraud Framework v1.1 at the tool-call boundary. Card-scheme, payment-rail and cash-out techniques are out of scope (N/A); gaps on the gateway's own surface are named | [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md) |
 
 ### Integration and discovery
 
@@ -414,7 +405,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Primary job | MCP and REST capability router with a compact meta-surface | Docker-managed catalog, profiles, containerized MCP servers, and gateway | Self-hosted gateway that runs many MCP servers behind one endpoint | Protocol bridges: MCP to OpenAPI for mcpo; stdio to SSE/WS for Supergateway |
 | Install | Standalone Rust binary via cargo, Homebrew, VS Code, Cursor, and local build | Docker Desktop / Docker CLI plugin flow | Self-hosted gateway install and server registration | Python/uvx/Docker for mcpo; npm/CLI bridge for Supergateway |
 | Configuration | Wizard, local starter profile, service templates, client export, doctor JSON, backup and rollback | Docker profiles and catalog selection | Centralized server and client configuration | Per-bridge command/config for each exposed server or transport |
-| Security | OWASP Agentic AI matrix, MITRE F3 gateway-boundary mapping (gaps stated), firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
+| Security | OWASP Agentic AI matrix, MITRE F3 tool-call-boundary mapping (gaps stated), firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
 | Identity and grants | Local identity-grant contract and CLI; multi-user OAuth isolation is credential-agnostic by default (ADR-008), and a backend configured `required` fails closed rather than serve a shared credential; per-user identity propagation to backends via signed assertion, caller-token passthrough, or RFC 8693 token exchange; the OIDC key server is disabled by default, delegated-bearer acceptance is a separate opt-in, and control-plane role mappings are issuer-scoped | Docker/team controls depend on Docker organization setup | Authenticated clients and server access control | Not a grant engine; delegates identity policy to the surrounding deployment |
 | Runtime isolation | RuntimeProvider policy planning plus Docker/Podman/Kubernetes deployment paths | Container-first isolation is the core runtime model | Runs and manages MCP servers behind the gateway | Bridges existing server processes/transports rather than isolating arbitrary tools |
 | Trust metadata | TrustCard/CBOM generation, validation, TrustLab evidence, provenance stubs | Catalog packages carry image provenance and security update flow | Gateway inventory and observability focus | Protocol metadata bridge; trust metadata is not the primary product surface |
@@ -519,7 +510,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
-| [MITRE F3 mapping](docs/compliance/MITRE-F3-MAPPING.md) | Fight Fraud Framework tactic map (PARTIAL/GAP, not a coverage claim) |
+| [MITRE F3 mapping](docs/compliance/MITRE-F3-MAPPING.md) | Fight Fraud Framework technique map (PARTIAL/GAP/N/A, not a coverage claim) |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
 | [Enterprise agent governance comparison](docs/competitive/willow-enterprise-agent-governance.md) | Willow/Webrix feature bar and mcp-gateway's current gaps |
 | [vs Anthropic MCP tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose |
@@ -583,7 +574,7 @@ not, and that needs to be published rather than assumed.
 
 1. Fork and branch (`git checkout -b feature/your-feature`)
 2. Test (`cargo test`) and lint (`cargo fmt && cargo clippy -- -D warnings`)
-3. Open a PR against `main` with a clear description and a [CHANGELOG](CHANGELOG.md) entry
+3. Open a PR against `main` with a clear description and a changelog fragment in `changelog.d/` (see [CONTRIBUTING](CONTRIBUTING.md))
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted) to get started.
 

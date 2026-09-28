@@ -530,5 +530,8 @@ impl ExportStatus {
 }
 
 #[cfg(test)]
+#[path = "export_reader_tests.rs"]
+mod reader_tests;
+#[cfg(test)]
 #[path = "export_tests.rs"]
 mod tests;

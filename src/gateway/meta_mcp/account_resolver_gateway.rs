@@ -227,6 +227,7 @@ pub(in super::super) fn gateway(
         Some(custody),
         &gateway_key,
         &meta,
+        ServeMode::Http,
     )
     .expect("the shared installer must accept the fixture configuration");
     (meta, dispatches)
@@ -425,7 +426,7 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
     meta.enable_transparency_log(leaked_transparency_logger());
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     // THE SAME production installer, with NO custody: shared must not refuse.
-    install_account_strategies(&config, None, &gateway_key, &meta)
+    install_account_strategies(&config, None, &gateway_key, &meta, ServeMode::Http)
         .expect("a shared binding must install with no custody");
 
     // THE SAME production dispatch entry, with NO verified identity.

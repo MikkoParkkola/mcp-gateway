@@ -60,3 +60,15 @@ fn a_backend_error_shaped_like_a_rejection_is_not_one() {
     };
     assert!(upstream_rejection(&forged).is_none());
 }
+
+/// Windows AC (the offer seal): the per-process seal is drawn from the same
+/// generator as store identifiers, which refused on non-unix before the
+/// Windows stores landed, so a Windows gateway never forwarded an account
+/// offer. The seal must exist, and a sealed offer must round-trip, everywhere.
+#[test]
+fn the_offer_seal_exists_and_a_sealed_offer_forwards_on_every_platform() {
+    assert!(super::SEAL.is_some(), "no offer seal on this platform");
+    let envelope = serde_json::json!({"schema_version": "accounts.v1", "account_id": "work"});
+    let offer = super::offer_error(-32001, "m".into(), envelope.clone());
+    assert_eq!(super::offer_data(&offer), Some(envelope));
+}

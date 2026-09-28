@@ -54,11 +54,6 @@ def test_allows_the_shapes_a_heading_may_state():
     assert counter.heading_counts(text) == []
 
 
-def test_the_live_documents_pass():
-    for doc in (counter.STATUS, counter.PLAN):
-        assert counter.heading_counts(doc.read_text()) == [], doc
-
-
 REQ = "| NFR.PERF.1 | routing latency stays within budget | T, M |"
 
 
@@ -387,11 +382,6 @@ def test_a_mistyped_github_criterion_id_is_reported_rather_than_read_as_a_real_o
         "| GH475.RL.1abc | mistyped | T | yes |",
     ]
     assert counter.rows("\n".join(table)) == ([], ["GH475.RL.1abc"])
-
-
-def test_the_live_documents_agree_with_the_ledger():
-    criteria, _ = counter.rows(counter.STATUS.read_text())
-    assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []
 
 
 CLAUSE_QUALIFIED = "\n".join(

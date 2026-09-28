@@ -200,7 +200,7 @@ never refused.
 | Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
-| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown, reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
+| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown (for stdio, when the client closes stdin), reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
 
 While any of the three is on, the modern protocol included, the chart renders the
 Deployment with `strategy: Recreate`, because a rolling update runs the old and new
@@ -347,6 +347,23 @@ the offending line is the secret. A `~` in an `env_files` path resolves once, at
 against the home directory in force at that moment; each file is applied before the next
 is expanded, so a file that sets `HOME` moves where a later `~` points.
 
+A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
+re-reads every env file every 2 seconds and reloads when its content differs from what is
+loaded. A stdio gateway, or one that found its config on its own, watches neither its
+config nor its env files; restart it, or, for a stdio gateway started with `--config`,
+call the `gateway_reload_config` meta-tool. Env files are compared by content rather than
+watched, so this also works on NFS and FUSE mounts and through a retargeted link
+(`current/.env` after `current` moves to a new release, or an env file that is itself a
+symlink). A listed file that was missing is picked up when it appears, including when its
+directory appears later. A file that fails to load (malformed, refused mode) leaves the
+running values in place and is retried every 2 seconds; its warning is logged at most once
+a minute per file unless the error changes. Each tick reads the listed files in order,
+each in full, until one differs. A lookup error (a link loop, a directory the gateway
+cannot search) is not treated as a missing file: it fails the load and keeps the running
+values. After any failed reload, including one started by a config edit, the gateway
+retries the reload every 2 seconds until one succeeds, so a valid config edit that failed
+alongside a broken env file is applied once the env file is fixed or put back.
+
 Env files supply values to configuration references, and also the attestation signing
 key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same
 overlay under those fixed names, rather than named in a config file through a
@@ -366,7 +383,7 @@ mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out /etc/mcp-gateway/tls
 # Issue server certificate
 mcp-gateway tls issue-server \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
-  --cn gateway.company.com --san-dns "gateway.company.com,localhost" \
+  --cn gateway.company.com --san-dns "gateway.company.com,localhost,127.0.0.1,::1" \
   --out /etc/mcp-gateway/tls
 
 # Issue client certificate (for mTLS)
@@ -374,6 +391,11 @@ mcp-gateway tls issue-client \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
   --cn "claude-code-agent" --out /etc/mcp-gateway/tls/clients
 ```
+
+An IP literal passed to `--san-dns` becomes an IP SAN, which is what a client dialling that
+address checks. Include `127.0.0.1,::1` when the gateway binds loopback or a wildcard address:
+local clients reach it by address, and a wildcard bind without `server.public_url` accepts
+only numeric `Host` values, so `localhost` alone is not enough there.
 
 These commands write keys `0600` and certificates `0644`. The gateway refuses a key other
 users can read, and a certificate, CA or CRL other users can change. Certificates or a CRL you
@@ -834,6 +856,12 @@ security:
     path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 ```
 
+One gateway process writes an audit log path. A second one on the same path is refused at
+startup, after waiting up to 10 seconds for a
+restarting predecessor to exit. Replicas must not share a log path: give each replica its own
+volume, or put the pod name in the path. Keep the log on a local filesystem or one with working
+file locks (UPGRADING-4.0 item 49).
+
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
 
 ### API keys
@@ -931,9 +959,12 @@ always needs a hostname while a network client dials an address. Set
 
 ### What triggers a config reload
 
-The gateway watches the config file and reloads when it changes. A config named
-through symlinks is followed along its whole link chain, and the chain is
-re-read on every change in a directory it runs through:
+A gateway serving HTTP from a config named with `--config` or
+`MCP_GATEWAY_CONFIG` watches the config file and reloads when it changes (a
+stdio gateway, or one that found its config on its own, does not watch files;
+see the env-file note above). A config named through symlinks is followed along
+its whole link chain, and the chain is re-read on every change in a directory it
+runs through:
 
 - a deploy that points the link at a release in another directory is picked up,
   and later writes to the new target reload too;
@@ -955,8 +986,6 @@ Limits:
 - a directory link higher in the path (`/srv/app` itself a link, macOS `/var`)
   is resolved but not watched;
 - renaming a real (not linked) parent directory is not heard;
-- env files keep their startup path: an env file under `current/` stays on the
-  old release after a retarget (#1286);
 - a chain longer than 40 links is treated as a loop: the watcher keeps its last
   good watches and logs the error.
 

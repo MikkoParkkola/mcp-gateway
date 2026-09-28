@@ -60,7 +60,7 @@ use crate::config::account_bindings::compile;
 use crate::config::{BackendConfig, Config, TransportConfig};
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::gateway::oauth::GatewayKeyPair;
-use crate::gateway::server::account_bindings::install_account_strategies;
+use crate::gateway::server::account_bindings::{ServeMode, install_account_strategies};
 use crate::identity_propagation::{IdentityPropagationConfig, PropagationStrategyKind};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::config::{

@@ -27,3 +27,11 @@ mod r2_stdio_keys;
 mod stdio_listing_scope;
 
 mod stdio_initialize_order;
+
+mod stdio_sole_operator;
+
+#[cfg(feature = "cost-governance")]
+mod stdio_cost_persistence;
+
+#[cfg(feature = "cost-governance")]
+mod http_cost_persistence;

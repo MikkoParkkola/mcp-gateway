@@ -11,6 +11,40 @@ use super::segments::{list_segments, sealed_path, sibling};
 use super::*;
 use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 
+/// Run `work` on its own thread; it calls `step` after each append. Fails
+/// when 10 s pass with no step (a deadlock: a slow runner still steps), and
+/// re-raises the worker's own panic if it ends early. Bounds progress, not
+/// the total time of a loop of fsyncs.
+pub(super) fn with_progress(work: impl FnOnce(&mut dyn FnMut()) + Send + 'static) {
+    use std::sync::mpsc::RecvTimeoutError;
+    enum Progress {
+        Step,
+        Done,
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Progress>();
+    let worker = std::thread::spawn(move || {
+        let step_tx = tx.clone();
+        work(&mut || {
+            let _ = step_tx.send(Progress::Step);
+        });
+        let _ = tx.send(Progress::Done);
+    });
+    let mut steps = 0_usize;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Progress::Step) => steps += 1,
+            // Done, or the worker ended early: its panic is re-raised below.
+            Ok(Progress::Done) | Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("no progress for 10 s after {steps} appends: a suspected deadlock")
+            }
+        }
+    }
+    if let Err(panic) = worker.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 pub(super) const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
 
 /// A 4 KiB-segment config. Built directly, not through

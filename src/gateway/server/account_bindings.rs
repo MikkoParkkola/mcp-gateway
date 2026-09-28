@@ -45,6 +45,61 @@ pub(crate) fn declare_account_descriptors(config: &Config, registry: &AccountStr
     }
 }
 
+/// Which listener is installing strategies for this call.
+///
+/// `install_account_strategies` is THE ONE INSTALL, called once from the HTTP
+/// startup path and once from the stdio startup path (plus test fixtures that
+/// drive the same production call). The mode lets [`sole_operator_asserted`]
+/// give each listener its own predicate without a second install function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServeMode {
+    /// The HTTP listener's install call.
+    Http,
+    /// The stdio listener's install call.
+    Stdio,
+}
+
+/// Whether stored OAuth grants are served under one fixed sole-operator
+/// principal for this listener's install.
+///
+/// STDIO: always. The only caller of a stdio gateway is the local process that
+/// spawned it and owns its stdin; its provenance is `LocalTransport`, which
+/// already establishes the operator. Nothing else reaches a stdio process's
+/// strategies: stdio binds no listener. `auth.*` configures the HTTP listener
+/// and is not consulted here.
+///
+/// HTTP: the deployment must have asserted one user. The terms below are all
+/// required, and every one of them excludes a real multi-principal shape.
+///
+/// THE ADAPTER TERM IS NOT IN `grants_single_user_principal`, deliberately.
+/// `grants_single_user_principal` is an `AuthConfig` method and
+/// `accounts.adapters` is not auth configuration, so the predicate cannot see
+/// it. It matters for the same reason the OIDC term does: an adapter
+/// (`gateway::openwebui_adapter`) is the product's OTHER `VerifiedIdentity`
+/// producer, configured independently of any OIDC issuer, and a deployment
+/// running one serves real per-user principals. Worse, a caller holding the
+/// adapter's own credential but omitting the assertion header authenticates
+/// and carries no identity — exactly the shape that would otherwise fall
+/// through to the sole-operator principal.
+///
+/// An ASSERTION, not a proof: two humans sharing this machine's credential
+/// share the stored grants, because nothing here can tell them apart. That is
+/// already true of `auth.single_user` for request authorisation; this extends
+/// its reach to stored OAuth grants.
+pub(crate) fn sole_operator_asserted(config: &Config, mode: ServeMode) -> bool {
+    if mode == ServeMode::Stdio {
+        return true;
+    }
+    let has_identity_adapter = config
+        .accounts
+        .as_ref()
+        .is_some_and(|accounts| !accounts.adapters.is_empty());
+    config
+        .auth
+        .grants_single_user_principal(!config.key_server.oidc.is_empty())
+        && !has_identity_adapter
+}
+
 /// Install one strategy per configured descriptor, then bind it to every
 /// backend that names it — or refuse to start.
 ///
@@ -62,6 +117,7 @@ pub(crate) fn install_account_strategies(
     custody: Option<&Arc<dyn AccountCustody>>,
     gateway_key_pair: &Arc<GatewayKeyPair>,
     meta_mcp: &MetaMcp,
+    mode: ServeMode,
 ) -> Result<()> {
     let registry = meta_mcp.account_strategies();
     declare_account_descriptors(config, &registry);
@@ -72,36 +128,17 @@ pub(crate) fn install_account_strategies(
     // no identity adapter serves its stored OAuth grants under one fixed
     // principal — otherwise a solo install has no principal at all and its
     // per-user credential store is unreachable (MIK-6744.STORE.1, open item O3).
-    //
-    // THE ADAPTER TERM IS NOT IN THE PREDICATE, deliberately.
-    // `grants_single_user_principal` is an `AuthConfig` method and
-    // `accounts.adapters` is not auth configuration, so the predicate cannot
-    // see it. It matters for the same reason the OIDC term does: an adapter
-    // (`gateway::openwebui_adapter`) is the product's OTHER `VerifiedIdentity`
-    // producer, configured independently of any OIDC issuer, and a deployment
-    // running one serves real per-user principals. Worse, a caller holding the
-    // adapter's own credential but omitting the assertion header authenticates
-    // and carries no identity — exactly the shape that would otherwise fall
-    // through to the sole-operator principal.
-    //
-    // An ASSERTION, not a proof: two humans sharing this machine's credential
-    // share the stored grants, because nothing here can tell them apart. That
-    // is already true of `auth.single_user` for request authorisation; this
-    // extends its reach to stored OAuth grants.
-    let has_identity_adapter = config
-        .accounts
-        .as_ref()
-        .is_some_and(|accounts| !accounts.adapters.is_empty());
-    let sole_operator = config
-        .auth
-        .grants_single_user_principal(!config.key_server.oidc.is_empty())
-        && !has_identity_adapter;
-    if sole_operator {
-        tracing::info!(
+    let sole_operator = sole_operator_asserted(config, mode);
+    match mode {
+        ServeMode::Stdio => tracing::info!(
+            "stdio: managed accounts are served to the local operator that started this gateway"
+        ),
+        ServeMode::Http if sole_operator => tracing::info!(
             "auth.single_user is asserted: managed accounts are served under one fixed \
              sole-operator principal, to callers this gateway authenticates. Anyone holding \
              this gateway's credential holds its stored OAuth grants."
-        );
+        ),
+        ServeMode::Http => {}
     }
 
     for compiled in compile_descriptors(config)? {
@@ -242,3 +279,7 @@ fn install_descriptor(
 /// Subject-assertion lifetime for an external descriptor's strategy, matching
 /// the process-wide install site: 5 minutes, clamped further by the strategy.
 const ASSERTION_TTL_SECS: i64 = 300;
+
+#[cfg(test)]
+#[path = "account_bindings_tests.rs"]
+mod account_bindings_tests;
