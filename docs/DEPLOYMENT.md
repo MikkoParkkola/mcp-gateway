@@ -347,21 +347,22 @@ the offending line is the secret. A `~` in an `env_files` path resolves once, at
 against the home directory in force at that moment; each file is applied before the next
 is expanded, so a file that sets `HOME` moves where a later `~` points.
 
-A gateway serving HTTP re-reads every env file every 2 seconds and reloads when its
-content differs from what is loaded. A stdio gateway watches neither its config nor its
-env files; reload it with the `gateway_reload_config` meta-tool, or restart it. Env files
-are compared by content rather than watched, so this also works on NFS and FUSE mounts and
-through a retargeted link (`current/.env` after `current` moves to a new release, or an
-env file that is itself a symlink). A listed file that was missing is picked up when it
-appears, including when its directory appears later. A file that fails to load (malformed,
-refused mode) leaves the running values in place and is retried every 2 seconds; its
-warning is logged at most once a minute per file unless the error changes. Each tick reads
-the listed files in order, each in full, until one differs. A lookup error (a link loop, a
-directory the gateway cannot search) is not treated as a missing file: it fails the load
-and keeps the running values. After any failed reload, including one started by a config
-edit, the gateway retries the reload every 2 seconds until one succeeds, so a valid config
-edit that failed alongside a broken env file is applied once the env file is fixed or put
-back.
+A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
+re-reads every env file every 2 seconds and reloads when its content differs from what is
+loaded. A stdio gateway, or one that found its config on its own, watches neither its
+config nor its env files; restart it, or, for a stdio gateway started with `--config`,
+call the `gateway_reload_config` meta-tool. Env files are compared by content rather than
+watched, so this also works on NFS and FUSE mounts and through a retargeted link
+(`current/.env` after `current` moves to a new release, or an env file that is itself a
+symlink). A listed file that was missing is picked up when it appears, including when its
+directory appears later. A file that fails to load (malformed, refused mode) leaves the
+running values in place and is retried every 2 seconds; its warning is logged at most once
+a minute per file unless the error changes. Each tick reads the listed files in order,
+each in full, until one differs. A lookup error (a link loop, a directory the gateway
+cannot search) is not treated as a missing file: it fails the load and keeps the running
+values. After any failed reload, including one started by a config edit, the gateway
+retries the reload every 2 seconds until one succeeds, so a valid config edit that failed
+alongside a broken env file is applied once the env file is fixed or put back.
 
 Env files supply values to configuration references, and also the attestation signing
 key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same
@@ -934,10 +935,12 @@ always needs a hostname while a network client dials an address. Set
 
 ### What triggers a config reload
 
-A gateway serving HTTP watches the config file and reloads when it changes (a stdio
-gateway does not watch files; see the env-file note above). A config named
-through symlinks is followed along its whole link chain, and the chain is
-re-read on every change in a directory it runs through:
+A gateway serving HTTP from a config named with `--config` or
+`MCP_GATEWAY_CONFIG` watches the config file and reloads when it changes (a
+stdio gateway, or one that found its config on its own, does not watch files;
+see the env-file note above). A config named through symlinks is followed along
+its whole link chain, and the chain is re-read on every change in a directory it
+runs through:
 
 - a deploy that points the link at a release in another directory is picked up,
   and later writes to the new target reload too;

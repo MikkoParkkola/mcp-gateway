@@ -115,13 +115,14 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 - **Env files follow a retargeted link.** An env file reached through a link (`current/.env` after
   a release switch, or an env file that is itself a symlink) kept reloading from the old target,
-  because its directory watch was fixed at startup. A gateway serving HTTP now re-reads env files
-  every 2 seconds and reloads when their content differs from what is loaded, which also works on
-  NFS and FUSE mounts; a stdio gateway watches no files, as before. A file that fails to load
-  keeps the running values and is retried, with at most one warning a minute per file unless the
-  error changes. A lookup error on an env file (a link loop, a directory the gateway cannot
-  search) now fails the load instead of reading as a missing file. After a failed reload the
-  gateway retries every 2 seconds until one succeeds, so a config edit that failed alongside a
+  because its directory watch was fixed at startup. A gateway serving HTTP from a config named
+  with `--config` or `MCP_GATEWAY_CONFIG` now re-reads env files every 2 seconds and reloads when
+  their content differs from what is loaded, which also works on NFS and FUSE mounts; a stdio
+  gateway, or one that found its config on its own, watches no files, as before. A file that fails
+  to load keeps the running values and is retried, with at most one warning a minute per file
+  unless the error changes. A lookup error on an env file (a link loop, a directory the gateway
+  cannot search) now fails the load instead of reading as a missing file. After a failed reload
+  the gateway retries every 2 seconds until one succeeds, so a config edit that failed alongside a
   broken env file still applies once the env file is fixed. See `docs/DEPLOYMENT.md` and
   `docs/UPGRADING-4.0.md` item 72. (#1286)
 
