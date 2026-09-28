@@ -32,7 +32,14 @@ classify() {
 from_git() {
   local base=$1 pr=$2 head=$3 repo_url=${REPO_URL:?} probe
   probe=$(mktemp -d)
-  trap 'rm -rf -- "$probe"' RETURN
+  from_git_in "$probe" "$base" "$pr" "$head" "$repo_url"
+  local rc=$?
+  rm -rf -- "$probe"
+  return $rc
+}
+
+from_git_in() {
+  local probe=$1 base=$2 pr=$3 head=$4 repo_url=$5
   git init -q "$probe"
   # The head through refs/pull/<n>/head, which the base repository holds for
   # fork pull requests too; checked against the event's head SHA.

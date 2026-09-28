@@ -63,7 +63,8 @@ def runs(job: dict, c: dict) -> bool:
     declared = {n: c["needs"][n] for n in needs if n in c["needs"]}
     all_ok = all(declared.get(n, {"result": "success"})["result"] == "success" for n in needs)
     local = dict(c, needs=declared)
-    local["_status"] = dict(c["_status"], success=all_ok, failure=not all_ok)
+    results = [declared.get(n, {"result": "success"})["result"] for n in needs]
+    local["_status"] = dict(c["_status"], success=all_ok, failure="failure" in results)
     cond = str(job.get("if", ""))
     if not re.search(r"\b(cancelled|always|success|failure)\(", cond) and not all_ok:
         return False
