@@ -10,7 +10,9 @@ import itertools
 import os
 import pathlib
 import re
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -2275,6 +2277,39 @@ class WorkflowWiring(unittest.TestCase):
         for line in "\n".join(live_lines("release.yml")).splitlines():
             if re.match(r"^\s+ref:", line):
                 self.assertNotRegex(line, r"github\.ref|inputs\.tag|github\.sha", f"a ref must be the resolved commit: {line.strip()}")
+
+    def test_the_release_commit_is_the_event_commit_and_a_branch_dispatch_is_refused(self):
+        # GITHUB_SHA is the commit the event names, an annotated tag peeled,
+        # and a re-run keeps it; it is what npm provenance attests. Looking
+        # the tag up again (ls-remote) can land on a commit the tag was moved
+        # to after the event. A dispatch runs at `--ref <tag>`, so a dispatch
+        # from anywhere else would build one commit and label it another.
+        self.assertNotIn("ls-remote", "\n".join(live_lines("release.yml")), "release.yml must not look a tag up again")
+        (block,) = steps("release.yml", "resolve")
+        start = next(i for i, l in enumerate(block) if re.match(r"^\s*run:\s*\|\s*$", l))
+        indent = len(block[start]) - len(block[start].lstrip())
+        body = textwrap.dedent("\n".join(
+            itertools.takewhile(lambda l: not l.strip() or len(l) - len(l.lstrip()) > indent, block[start + 1:])))
+        event = "a" * 40
+        for label, name, ref, tag, ok in [
+            ("tag push", "push", "refs/tags/v4.0.0", "", True),
+            ("dispatch at the tag", "workflow_dispatch", "refs/tags/v4.0.0", "v4.0.0", True),
+            ("dispatch from a branch", "workflow_dispatch", "refs/heads/main", "v4.0.0", False),
+            ("dispatch at another tag", "workflow_dispatch", "refs/tags/v3.5.1", "v4.0.0", False),
+            ("dispatch with no tag", "workflow_dispatch", "refs/tags/v4.0.0", "", False),
+        ]:
+            with tempfile.TemporaryDirectory() as directory:
+                output = pathlib.Path(directory, "output")
+                output.touch()
+                env = {"PATH": os.environ["PATH"], "GITHUB_EVENT_NAME": name, "GITHUB_REF": ref,
+                       "GITHUB_SHA": event, "TAG": tag, "GITHUB_OUTPUT": str(output)}
+                run = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True)
+                written = output.read_text()
+            if ok:
+                self.assertEqual((run.returncode, written), (0, f"sha={event}\n"), f"{label}: {run.stderr}")
+            else:
+                self.assertNotEqual(run.returncode, 0, f"{label} must be refused")
+                self.assertEqual(written, "", f"{label}: wrote an output before refusing")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only

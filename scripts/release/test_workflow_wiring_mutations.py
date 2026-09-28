@@ -1453,6 +1453,16 @@ CASES += [
      "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Scan Rust dependencies against OSV\n", CAUGHT),
     ("packaged-suite-stops-waiting-for-resolve", "release.yml",
      "  packaged-suite:\n    needs: resolve\n", "  packaged-suite:\n", CAUGHT),
+    # The resolver itself: a dispatch from a branch or another tag, and a
+    # second lookup of the tag, must each turn the suite red.
+    ("resolve-accepts-a-branch-dispatch", "release.yml",
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n', "          if false; then\n", CAUGHT),
+    ("resolve-accepts-any-tag-dispatch", "release.yml",
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then\n',
+     '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [[ "$GITHUB_REF" != refs/tags/* ]]; then\n', CAUGHT),
+    ("resolve-looks-the-tag-up-again", "release.yml",
+     '          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"\n',
+     '          [ -z "$TAG" ] || GITHUB_SHA="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG^{}" | cut -f1)"\n' + '          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"\n', CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):

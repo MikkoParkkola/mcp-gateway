@@ -22,9 +22,11 @@ jobs:
   # The one commit this release is built, tested and published from. A tag
   # name is movable: resolved again by a later job (or on a re-run), a tag
   # moved in between would build, test or publish a different commit. It is
-  # resolved once here and every checkout and called workflow below uses the
-  # SHA. On a tag push that is the event's commit; on a dispatch, the commit
-  # the `tag` input names now, with an annotated tag peeled to its commit.
+  # fixed once here and every checkout and called workflow below uses the
+  # SHA: GITHUB_SHA, the commit the event names (an annotated tag peeled),
+  # which a re-run keeps. A dispatch must run at the tag it names
+  # (`--ref <tag> -f tag=<tag>`); from any other ref it is refused, so the
+  # `tag` input can never name a commit other than the one checked out.
   resolve:
     name: Resolve the release commit
     runs-on: ubuntu-latest
@@ -36,20 +38,12 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [ -z "$TAG" ]; then
-            sha="$GITHUB_SHA"
-          else
-            refs="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
-            # The peeled line (^{}) exists only for an annotated tag; it names the commit.
-            sha="$(printf '%s\n' "$refs" | awk -v t="refs/tags/$TAG^{}" '$2 == t {print $1}')"
-            [ -n "$sha" ] || sha="$(printf '%s\n' "$refs" | awk -v t="refs/tags/$TAG" '$2 == t {print $1}')"
-          fi
-          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::cannot resolve the release commit for '${TAG:-$GITHUB_REF}'"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::dispatched from '$GITHUB_REF', not the tag '$TAG': run with --ref $TAG -f tag=$TAG"
             exit 1
           fi
-          echo "release commit: $sha"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "release commit: $GITHUB_SHA"
+          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
   # Release backstop for the dependency-vulnerability gate. ci.yml runs
   # `cargo audit` on every PR/push (RustSec advisories); this re-scans the
