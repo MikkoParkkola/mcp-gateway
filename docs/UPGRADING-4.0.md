@@ -66,6 +66,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 74
 - Item 77
 - Item 78
+- Item 80
 - Item 83
 - Item 84
 - Item 85
@@ -181,7 +182,7 @@ without it.**
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Reserved: lands with a pending change | None yet |
-| 80 | Reserved: lands with a pending change | None yet |
+| 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
@@ -2016,6 +2017,41 @@ account store lives, so this grants no one new access. Several stdio gateways sh
 directory share its accounts.
 
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
+
+## 80. Discovery keeps env, headers and argument boundaries
+
+`mcp-gateway cap discover` and the setup wizard import MCP servers from client config files
+(Claude, Cursor, Windsurf, Codex, Zed). They used to keep only the command line or URL:
+
+- a server's `env` (stdio) and `headers` (HTTP) were dropped, so an imported backend could not
+  start or authenticate;
+- `args` were joined with spaces, so an argument containing a space or a quote changed;
+- Zed's `settings.json`, which allows comments and trailing commas, was skipped when it had any.
+
+In 4.0 all three survive. `cap discover --write-config` writes the `env` and `headers` values
+into the backend it adds; on Unix the config file is written owner-only (item 35). Those values are usually
+credentials, so everywhere else they are shown by key only: discover's JSON and YAML output,
+logs and `Debug` output print `<redacted>` for every value; the table and `--shadow` reports
+do not show them.
+
+A client's `${env:NAME}` is written as the gateway's `${NAME}`. A key whose value uses a variable
+only the client resolves (`${input:…}`, `${workspaceFolder}`, `${userHome}`) is left out, with a
+warning naming the client, server and key, so the written config always loads.
+
+A value that contains `${VAR}` is expanded by the gateway when the config loads, like any backend
+`env` or `headers` value; if `VAR` is not set, the load is refused and the error names the field
+(`backends.<name>.env.<KEY>`).
+
+`setup export --target zed` into a settings file with comments or trailing commas no longer fails
+with a bare parse error: it leaves the file untouched and prints the entry to paste by hand.
+
+For code that uses the library, `mcp_gateway::discovery::DiscoveredServer` gains the fields `env`
+and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is now
+`#[non_exhaustive]`. Build one with `DiscoveredServer::new` and set the fields after.
+
+**Action:** after `cap discover --write-config`, review the written backends: they now carry the
+credentials the client config held. Library users replace struct literals with
+`DiscoveredServer::new`.
 
 ## 83. `MigratedCredential` has a public `reachability` field
 
