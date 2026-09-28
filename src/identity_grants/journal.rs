@@ -331,7 +331,8 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
         if mode & 0o022 != 0 {
             return Err(std::io::Error::other(format!(
                 "grant journal {} is writable by group or other; refusing to \
-                 append onto an untrusted file (fix: chmod go-w it)",
+                 append onto an untrusted file (check its entries against the \
+                 grant file or restore a trusted copy, then chmod go-w it)",
                 journal.display()
             )));
         }
