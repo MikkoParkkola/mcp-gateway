@@ -1,0 +1,4 @@
+# The one self-hosted runner label (see scripts/ci/check-hosted-runners.sh).
+self-hosted-runner:
+  labels:
+    - mcpgw-trusted-arm64
