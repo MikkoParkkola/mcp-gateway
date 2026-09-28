@@ -79,4 +79,22 @@ async fn ac_mrtr_7a_the_returned_last_round_gates_its_request_keys() {
         Err(BridgeError::ChallengeRefused { dispatched: true }),
         "expected a tainted key in the last round to be refused"
     );
+    let seen = gate.inspected();
+    assert_eq!(
+        seen.len(),
+        4,
+        "expected three asked rounds and the last one"
+    );
+    // The production scanners read values, not object keys (#2114), so the
+    // key must reach the gate as a string value.
+    let last: Value = serde_json::from_str(&seen[3]).expect("inspected batch is JSON");
+    assert_eq!(
+        last[0]["key"], tainted,
+        "expected the key as a string value"
+    );
+    assert_eq!(
+        client.methods().len(),
+        3,
+        "expected no frame for the last round"
+    );
 }
