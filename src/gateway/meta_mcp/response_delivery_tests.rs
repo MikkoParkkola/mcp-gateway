@@ -94,6 +94,8 @@ impl Fixture {
                 correlation: correlation(),
                 mutation,
                 signing: None,
+                chain_source: super::super::response_security::ChainSource::NotEligible,
+                chain_nonce: None,
             },
         ))
     }

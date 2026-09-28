@@ -34,7 +34,7 @@ pub mod scope_collision;
 // Pure module; increment 2 of the ASI07 design adds its first caller, at
 // which point this `expect` stops being fulfilled and must be removed.
 #[cfg_attr(not(test), expect(dead_code))]
-mod signature_chain;
+pub(crate) mod signature_chain;
 pub mod ssrf;
 pub mod tool_integrity;
 pub mod transparency_log;

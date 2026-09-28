@@ -34,6 +34,7 @@ use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targe
 
 /// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
 mod attestation_routes;
+mod chain_direct;
 mod f24_resource_subscribe;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
@@ -305,17 +306,30 @@ pub(super) async fn test_router_app_state_with_backend(
 async fn test_router_app_state_with_provenance_backend(
     backend: Arc<Backend>,
 ) -> (Arc<AppState>, tempfile::TempDir) {
+    test_router_app_state_with_meta(backend, |meta| {
+        // Derive the receipt-domain subkey before stamping, mirroring the
+        // production `resolve_provenance_signer` wiring in `gateway::server`
+        // (MIK-6909): the validator below derives the same subkey internally,
+        // so the stamping side must derive it too or signatures won't
+        // cross-verify.
+        meta.enable_provenance_stamping(
+            crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
+        );
+    })
+    .await
+}
+
+/// The same `AppState`, with the shared Meta-MCP configured by `configure`
+/// before it is frozen behind an `Arc`.
+async fn test_router_app_state_with_meta(
+    backend: Arc<Backend>,
+    configure: impl FnOnce(&mut MetaMcp),
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
-    // Derive the receipt-domain subkey before stamping, mirroring the
-    // production `resolve_provenance_signer` wiring in `gateway::server`
-    // (MIK-6909): the validator below derives the same subkey internally, so
-    // the stamping side must derive it too or signatures won't cross-verify.
-    meta.enable_provenance_stamping(
-        crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
-            .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
-    );
+    configure(&mut meta);
     let meta_mcp = Arc::new(meta);
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(

@@ -28,6 +28,8 @@ pub mod oauth;
 mod openwebui_adapter;
 pub mod proxy;
 #[cfg(test)]
+pub(crate) mod chain_test_support;
+#[cfg(test)]
 mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;

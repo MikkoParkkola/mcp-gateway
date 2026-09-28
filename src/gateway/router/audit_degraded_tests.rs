@@ -329,6 +329,8 @@ async fn delivery_attempt_append_is_bounded() {
                 },
                 mutation: ResponseMutationPolicy::Redact,
                 signing: None,
+                chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
+                chain_nonce: None,
             },
         )
         .await;
@@ -381,6 +383,8 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
                 },
                 mutation: ResponseMutationPolicy::Redact,
                 signing: None,
+                chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
+                chain_nonce: None,
             },
         )
         .await;

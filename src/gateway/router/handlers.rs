@@ -1911,6 +1911,8 @@ async fn meta_mcp_dispatch(
         },
         mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
         signing: signing_context.as_ref(),
+        chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
+        chain_nonce: None,
     };
     response = (state.meta_mcp)
         .finalize_response_after_inspection(response, &delivery, delivery_inspection)

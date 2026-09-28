@@ -40,7 +40,7 @@ pub use playbooks::PlaybooksConfig;
 pub use runtime::{RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
     AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
+    IdentityGrantsConfig, RemoteServerSigningConfig, ChainEmit, SignatureChainConfig, ResponseContractConfig, SecurityConfig,
     ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
