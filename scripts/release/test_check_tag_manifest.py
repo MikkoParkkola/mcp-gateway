@@ -2321,14 +2321,16 @@ class WorkflowWiring(unittest.TestCase):
         # double-quoted value may continue onto the next line after a `\`,
         # and YAML joins the pieces into one reference no line contains, so
         # a `uses:` value that does not close its quote on its own line fails.
+        # An escape (`\x2d` for `-`) spells a reference no text check reads,
+        # so a double-quoted `uses:` value may hold no backslash at all.
         opened = re.compile(r"""(?:^|[\s{,])(["']?)uses\1\s*:\s*"(?P<rest>.*)$""")
         found = []
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 m = opened.search(line)
-                if m and not re.search(r'(?<!\\)"', m.group("rest")):
+                if m and ("\\" in m.group("rest") or not re.search(r'"', m.group("rest"))):
                     found.append(f"{path.name}:{number}: {line.strip()}")
-        self.assertEqual(found, [], "a `uses:` value continues onto another line")
+        self.assertEqual(found, [], "a `uses:` value continues onto another line or spells itself with an escape")
 
     def test_the_release_builds_tests_and_publishes_the_event_commit(self):
         # The release commit is GITHUB_SHA, which a re-run keeps, and it is what

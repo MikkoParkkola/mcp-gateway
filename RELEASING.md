@@ -195,7 +195,7 @@ scripts/ci/smoke-full-image.sh ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-full
 A host only pulls its own architecture. Run it on both an amd64 and an arm64 host, or
 cite the per-architecture CI legs (`Docker (amd64)`, `Docker (arm64)`) for the
 architecture you did not run. Also confirm the stable pointers moved and are signed, with
-cosign 2.6.5 or later (earlier versions accept signatures they should refuse:
+cosign 2.6.5 or later on 2.x, or 3.1.3 or later on 3.x (earlier versions accept signatures they should refuse:
 GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m):
 
 ```sh

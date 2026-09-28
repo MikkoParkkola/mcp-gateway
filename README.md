@@ -102,8 +102,8 @@ Your agent will install the binary, run the setup wizard, import your existing M
 | **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
 | **Docker, `npx`/`uvx` backends** | Same, with `:latest-full` — the default image carries no Node or `uv`, so a stdio backend that shells out to either cannot spawn. See [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment). |
 
-Release images are signed with keyless cosign. To check one, use cosign 2.6.5 or later; earlier
-versions accept signatures they should refuse (GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m).
+Release images are signed with keyless cosign. To check one, use cosign 2.6.5 or later on the 2.x
+line, or 3.1.3 or later on 3.x; earlier versions accept signatures they should refuse (GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m).
 The command is in [RELEASING.md](RELEASING.md).
 
 On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
