@@ -152,7 +152,9 @@ pub(crate) struct DescriptorGate {
     logged: parking_lot::Mutex<HashSet<(String, String, bool)>>,
     /// Set when the blocked-name map hit its cap: from then on a by-name call
     /// is refused unless the caller's own validated catalogue holds the name,
-    /// so a backend cannot flood its way past the cap (fail closed).
+    /// so a backend cannot flood its way past the cap (fail closed). Cleared
+    /// only by a restart: no single listing can prove the untracked names are
+    /// gone from every caller's catalogue.
     saturated: std::sync::atomic::AtomicBool,
 }
 
@@ -188,11 +190,6 @@ impl Backend {
             }
             !sources.is_empty()
         });
-        if listing == Listing::Complete && verdicts.withheld.is_empty() {
-            self.descriptor_gate
-                .saturated
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        }
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
             if first_time(&mut logged, (name.clone(), digest.clone(), true)) {

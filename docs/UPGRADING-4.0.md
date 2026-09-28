@@ -1823,8 +1823,8 @@ because it breaks every client that calls a remembered tool name without listing
 
 The gateway remembers at most 4,096 withheld tool names per backend. A backend that withholds more
 is marked saturated, with one warning naming the cap: from then on a call by name to that backend
-is refused unless the caller's own validated listing holds the tool. The mark clears on restart or
-on a complete listing that withholds nothing. A name withheld by more than 64 callers stays blocked
+is refused unless the caller's own validated listing holds the tool. The mark clears only on
+restart. A name withheld by more than 64 callers stays blocked
 until restart.
 
 To serve a withheld tool you trust, pin its current description:

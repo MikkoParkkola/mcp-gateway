@@ -310,4 +310,15 @@ async fn x8_past_the_cap_an_untracked_name_is_refused() {
             .is_none(),
         "a validated tool was refused"
     );
+    // A second caller's complete, clean listing proves nothing about the
+    // names the cap left untracked: the backend stays saturated.
+    let _ = backend.remember_listed_tools(Some("b"), false, &catalogue_with("Reads a file."));
+    for caller in ["a", "b"] {
+        assert!(
+            backend
+                .undeclared_key_refusal(Some(caller), "p4096", &json!({}))
+                .is_some(),
+            "a clean listing reopened the name past the cap for {caller}"
+        );
+    }
 }
