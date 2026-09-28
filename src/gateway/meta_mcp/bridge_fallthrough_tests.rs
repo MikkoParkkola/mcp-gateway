@@ -197,11 +197,15 @@ async fn t1a_an_undeclaring_legacy_caller_is_refused_before_the_bridge() {
         .await
         .expect_err("an undeclared question is refused");
     assert!(err.to_string().contains("did not declare"), "{err}");
-    assert_eq!(*channel.attempts.lock(), 0, "the bridge was entered");
+    assert_eq!(
+        *channel.attempts.lock(),
+        0,
+        "expected the bridge not to be entered"
+    );
     assert_eq!(
         calls.lock().len(),
         1,
-        "the bridge must not re-invoke the backend"
+        "expected no bridged round to re-invoke the backend"
     );
 }
 
@@ -216,12 +220,16 @@ async fn t1b_a_declared_caller_with_no_reachable_session_gets_a_continuation() {
         .invoke_tool(&args(), Some("session-1"), &caller)
         .await
         .expect("NoSession falls through, it does not fail the call");
-    assert_eq!(*channel.attempts.lock(), 1, "the bridge was never entered");
+    assert_eq!(
+        *channel.attempts.lock(),
+        1,
+        "expected the bridge to be entered once"
+    );
     let _ = envelope(&result);
     assert_eq!(
         calls.lock().len(),
         1,
-        "no bridged round reached the backend"
+        "expected no bridged round to reach the backend"
     );
 }
 
@@ -323,6 +331,31 @@ async fn t3b_an_exhausted_exchange_releases_the_idempotency_key() {
     m.invoke_tool(&args(), Some("session-1"), &caller)
         .await
         .expect("an exhausted exchange is handed back, not failed");
+    let first = calls.lock().len();
+    let _ = m.invoke_tool(&args(), Some("session-1"), &caller).await;
+    assert!(
+        calls.lock().len() > first,
+        "the key was settled, so the retry was replayed"
+    );
+}
+
+/// T3d — the same rule on a path that ends before the result completes: a
+/// caller the gateway cannot bind a continuation to is refused after the
+/// exhausted exchange, and the key must still be released on the way out. T3b
+/// cannot see this, because a completed interim removes the key regardless.
+#[tokio::test]
+async fn t3d_an_exhausted_exchange_that_cannot_be_sealed_releases_the_key() {
+    let (m, calls) = meta_that_always_asks(ROOTS);
+    let m = with_idempotency(m);
+    let channel = Answering::default();
+    let retry = keyed("key-t3d");
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: None,
+        ..legacy_caller(&channel, &retry)
+    };
+    m.invoke_tool(&args(), Some("session-1"), &caller)
+        .await
+        .expect_err("no principal to bind the continuation to");
     let first = calls.lock().len();
     let _ = m.invoke_tool(&args(), Some("session-1"), &caller).await;
     assert!(
