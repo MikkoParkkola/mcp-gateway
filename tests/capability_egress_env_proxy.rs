@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mcp_gateway::capability::{
-    CapabilityDefinition, CapabilityExecutor, OpenApiConverter, parse_capability,
+    CapabilityDefinition, CapabilityExecutor, DiscoveryEngine, DiscoveryOptions, OpenApiConverter,
+    parse_capability,
 };
 use mcp_gateway::config::CapabilityConfig;
 
@@ -66,7 +67,7 @@ providers:
 }
 
 #[tokio::test]
-async fn an_environment_proxy_carries_no_capability_or_import_traffic() {
+async fn an_environment_proxy_carries_no_capability_import_or_discovery_traffic() {
     let (proxy, seen) = recording_proxy().await;
     // SAFETY: the only test in this binary; nothing else reads the environment.
     unsafe {
@@ -115,5 +116,16 @@ async fn an_environment_proxy_carries_no_capability_or_import_traffic() {
         seen.load(Ordering::SeqCst),
         0,
         "OpenAPI import went through the environment proxy"
+    );
+
+    // Capability discovery.
+    let discovered = DiscoveryEngine::new(DiscoveryOptions::default())
+        .discover(PROBE)
+        .await;
+    assert!(discovered.is_err(), "the probe host resolves nowhere");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        0,
+        "capability discovery went through the environment proxy"
     );
 }
