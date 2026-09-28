@@ -266,8 +266,8 @@ CASES = [
     (
         "needs-verify-replaced-by-a-comment",
         "release.yml",
-        "    needs: [build, verify]",
-        "    needs: [build] # verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs: [build, packaged-suite] # verify",
         CAUGHT,
     ),
     (
@@ -560,8 +560,8 @@ CASES = [
     (
         "needs-in-block-form",
         "release.yml",
-        "    needs: [build, verify]",
-        "    needs:\n      - build\n      - verify",
+        "    needs: [build, verify, packaged-suite]",
+        "    needs:\n      - build\n      - verify\n      - packaged-suite",
         TOLERATED,
     ),
     (
@@ -1405,6 +1405,13 @@ CASES += [
     ("packaged-rehearsal-on-every-pr", "ci.yml",
      "    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_packaged_suite",
      "    if: github.event_name == 'pull_request' || (inputs.rehearse_packaged_suite", CAUGHT),
+    ("release-stops-waiting-for-the-packaged-suite", "release.yml",
+     "    needs: [build, verify, packaged-suite]\n", "    needs: [build, verify]\n", CAUGHT),
+    ("packaged-suite-dropped-from-the-release", "release.yml",
+     "  packaged-suite:\n    uses: ./.github/workflows/packaged-suite.yml\n",
+     "  packaged-suite:\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
+    ("crates-publish-stops-waiting-for-release", "release.yml",
+     "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
     ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
      "--skip mik_7479_full_burst\n", "--skip mik_7479_full_burst --skip some_new_skip\n", CAUGHT),
 ]

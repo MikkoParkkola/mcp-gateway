@@ -120,6 +120,16 @@ jobs:
     with:
       ref: ${{ inputs.tag || github.ref }}
 
+  # The tests run from the packaged crate, as anyone installing it would. A
+  # file the tests read that `include` leaves out passes the checkout-based
+  # tests in `verify` and fails only here, so `release` waits on this, and
+  # every publishing job waits on `release`: a crates.io or npm version
+  # cannot be replaced once published.
+  packaged-suite:
+    uses: ./.github/workflows/packaged-suite.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   verify:
     needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
     runs-on: ubuntu-latest
@@ -252,7 +262,7 @@ jobs:
           retention-days: 14
 
   release:
-    needs: [build, verify]
+    needs: [build, verify, packaged-suite]
     runs-on: ubuntu-latest
     permissions:
       contents: write

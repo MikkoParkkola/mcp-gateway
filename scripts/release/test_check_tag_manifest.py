@@ -2178,6 +2178,14 @@ class WorkflowWiring(unittest.TestCase):
         ran = [c for b in steps("packaged-suite.yml", "packaged-suite") for c in joined(b)]
         self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+run\b", c) for c in ran), ran)
 
+        # On a tag nothing publishes until the packaged suite has passed: a
+        # crates.io or npm version cannot be replaced, and the checkout-based
+        # tests cannot see a file the package leaves out.
+        release_jobs = jobs("release.yml")
+        self.assertIn("uses: ./.github/workflows/packaged-suite.yml", release_jobs.get("packaged-suite", ""))
+        self.assertIn("packaged-suite", needs_of(release_jobs["release"]) or "", "release must wait for the packaged suite")
+        for publisher in ("publish", "npm-publish", "homebrew-update"):
+            self.assertIn("release", needs_of(release_jobs[publisher]) or "", f"{publisher} must wait for release")
         # The rehearsal reaches the post-merge path from a dispatch only.
         self.assertEqual(
             conjuncts(job_if("ci.yml", "packaged-suite-rehearsal"))[0],
