@@ -99,3 +99,26 @@ Also M10: CLI handler skips the journal (T1a); M11: gateway reads the grant file
 
 M1-M9 map to T1a, T8, T2d, T4a, T3c, T5a, T7a, T4d, T4e. One throwaway PR per mutant until the batched
 workflow lands.
+
+## Amendments after review round 2 (override the tables above)
+
+| Cell | Change |
+|---|---|
+| T10a | Forced, not raced: a test-only hook `JournalHook::AfterGrantWrite` blocks the CLI change between the grant-file write and the append on a barrier; the test then runs a reload, which must report busy and write 0 records; release the barrier, reload: exactly one `add` record, no `out_of_band`. A CLI that drops the lock before the append makes the first reload succeed and record `out_of_band` |
+| T12 | Two cells: HTTP (listener bind hook sees `loaded_complete` already in the log) and stdio (`run_stdio_on` with a pipe; the `initialize` response gate added for STDIO.2 asserts `loaded_complete` is in the log before the first response) |
+| T4k | The reused state's grant map disagrees with the new file (same grant id, different digest); zero `out_of_band` required |
+| T7c | Fault `GrantAuditFault::AfterPlanWrite` on the gap-bearing plan: state on disk has `gap: true` and the pending plan holds the gap record; restart: gap record once, then `gap: false` |
+| T2e | Precondition: a successful load of 2 grants; after the parse refusal the live set still holds those 2 |
+| T1e | Grant-file write failure is injected with a test-only `JournalHook::FailGrantWrite` (lock taken normally); journal-append failure with `JournalHook::FailAppend`. Then, in (c), reconcile records `out_of_band` for the C1 case |
+| T1a | Also runs while a gateway fixture holds the governance-store lease; the CLI succeeds (it never touches the store) |
+| Producers | Every record assertion also pins `action == MutateGrant` and the event-id prefix (`grant-journal:`, `grant-out_of_band:<gen>:`, `grant-loaded:<run>`) |
+| T4l | New. Baseline set, then `direct_write` adds an unjournalled grant: one `out_of_band` with its digest |
+| T4h | Also after `restart()`: the discontinuity is not reported again |
+| T6c | New. Plan write fails at startup: served set empty, no snapshot |
+
+LOW, dispositioned: T4c pinning `out_of_band` before the snapshot is covered by T12's ordering.
+
+## Split across pull requests
+
+(b) journal module and CLI writer: T1a-T1f, T10a's CLI half (the hook and lock hold), reader unit cells
+(torn line, unterminated tail). (c) gateway: everything else, including T10a's reload half.
