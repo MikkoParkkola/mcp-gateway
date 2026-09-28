@@ -41,13 +41,11 @@ async fn start() -> (BackendFixture, HttpGateway) {
     (backend, gateway)
 }
 
+/// The ASI10 refusal code, required on every route: a caller must be able to
+/// tell an anomaly block from any other refusal by the code alone.
 fn refused_as_anomaly(body: &Value) -> bool {
-    body.get("error").is_some_and(|error| {
-        error["code"] == -32002
-            || error["message"]
-                .as_str()
-                .is_some_and(|m| m.contains("Anomaly detection"))
-    })
+    body.get("error")
+        .is_some_and(|error| error["code"] == -32002)
 }
 
 async fn direct(gateway: &HttpGateway, session: &str, tool: &str) -> Value {
