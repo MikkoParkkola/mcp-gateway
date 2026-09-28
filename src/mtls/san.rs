@@ -36,7 +36,11 @@ pub(super) fn leaf_sans(san_dns: &[String], san_uris: &[String]) -> Result<Vec<S
 /// `entry` as an IP address: IPv4 dotted quad, IPv6, or IPv6 in brackets.
 fn ip_literal(entry: &str) -> Option<IpAddr> {
     match entry.strip_prefix('[').and_then(|e| e.strip_suffix(']')) {
-        Some(inner) => inner.parse::<Ipv6Addr>().ok().map(IpAddr::V6),
+        Some(inner) => inner
+            .parse::<Ipv6Addr>()
+            .ok()
+            .map(IpAddr::V6)
+            .and(entry.parse().ok()),
         None => entry.parse().ok(),
     }
 }
