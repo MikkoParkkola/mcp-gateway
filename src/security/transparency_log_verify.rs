@@ -111,10 +111,44 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
 /// `NotFound` when neither the log nor any sealed segment exists, or a
 /// segment cannot be read.
 pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>> {
-    let mut results = Vec::new();
     let fp = crate::gateway::session_id::session_fp(session);
-    for (_, file) in existing_log_files(path)? {
-        let content = bounded_read_to_string(&file, MAX_AUDIT_READ_BYTES)?;
+    let mut attempt = 0;
+    loop {
+        #[cfg(test)]
+        {
+            PASSES.with(|c| c.set(c.get() + 1));
+            fire(&BEFORE_STREAM);
+        }
+        let files = existing_log_files(path)?;
+        #[cfg(test)]
+        fire(&LISTED);
+        let read = matching_entries(&files, session, &fp);
+        #[cfg(test)]
+        fire(&AFTER_STREAM);
+        // Growth leaves the file list as it was; only a rotation changes it.
+        let stable = seqs(&files) == seqs(&log_files(path)?);
+        match read {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+            Ok(found) if stable => return Ok(found),
+            Ok(_) => {}
+        }
+        if attempt == 1 {
+            return Err(changed_under_reader("reading"));
+        }
+        attempt += 1;
+    }
+}
+
+/// One pass of [`show_session_entries`] over `files`.
+fn matching_entries(
+    files: &[(Option<u64>, PathBuf)],
+    session: &str,
+    fp: &str,
+) -> io::Result<Vec<Value>> {
+    let mut results = Vec::new();
+    for (_, file) in files {
+        let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
         for raw in content.lines().filter(|l| !l.trim().is_empty()) {
             match serde_json::from_str::<Value>(raw.trim()) {
                 Ok(entry)
@@ -131,6 +165,19 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>
         }
     }
     Ok(results)
+}
+
+/// The segment numbers a listing names, oldest first.
+fn seqs(files: &[(Option<u64>, PathBuf)]) -> Vec<Option<u64>> {
+    files.iter().map(|(s, _)| *s).collect()
+}
+
+/// A log that rotated under a reader twice in a row: busy, retry.
+fn changed_under_reader(what: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Interrupted,
+        format!("log changed during {what} (a live rotation); retry"),
+    )
 }
 
 /// The log's files, or `NotFound` when there is nothing to read at all.
@@ -176,14 +223,11 @@ pub(crate) fn verify_segments(
     mode: VerifyMode,
 ) -> io::Result<VerifyResult> {
     let secret = config.shared_secret.as_bytes();
-    let changed = || {
-        io::Error::new(
-            io::ErrorKind::Interrupted,
-            "log changed during verification (a live rotation); retry",
-        )
-    };
+    let changed = || changed_under_reader("verification");
     let mut attempt = 0;
     loop {
+        #[cfg(test)]
+        PASSES.with(|c| c.set(c.get() + 1));
         #[cfg(test)]
         BEFORE_STREAM.with(|h| {
             let taken = h.borrow_mut().take();
@@ -211,7 +255,6 @@ pub(crate) fn verify_segments(
         })
         .run(&files, hw.as_ref(), mode);
         let files_after = log_files(path)?;
-        let seqs = |f: &[(Option<u64>, PathBuf)]| f.iter().map(|(s, _)| *s).collect::<Vec<_>>();
         let stable = seqs(&files) == seqs(&files_after);
         match result {
             // A file listed a moment ago vanished: a rotation renamed it.
@@ -229,6 +272,19 @@ pub(crate) fn verify_segments(
     }
 }
 
+/// A one-shot test hook.
+#[cfg(test)]
+type HookSlot = std::cell::RefCell<Option<Box<dyn FnOnce()>>>;
+
+/// Run and clear a one-shot test hook.
+#[cfg(test)]
+fn fire(hook: &'static std::thread::LocalKey<HookSlot>) {
+    let taken = hook.with(|h| h.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// Runs once after a pass lists the files, before it reads them.
@@ -241,6 +297,8 @@ thread_local! {
     /// prove `.hwm` is read before the stream, not after it.
     pub(crate) static AFTER_STREAM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    /// Reader passes on this thread, so a test can count rescans.
+    pub(crate) static PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One verification pass over the ordered files.
