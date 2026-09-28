@@ -110,6 +110,12 @@ impl AccountCustody for GatedCustody {
         // is the answer the consumer sees.
         self.inner.release(lease).await
     }
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<crate::personal_accounts::RejectionOutcome, CustodyError> {
+        self.inner.refresh_after_rejection(lease).await
+    }
 }
 
 /// Delegating custody whose `release` is a rendezvous for `parties` callers.
@@ -144,5 +150,11 @@ impl AccountCustody for RendezvousCustody {
         // every one of them has started.
         self.barrier.wait().await;
         self.inner.release(lease).await
+    }
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<crate::personal_accounts::RejectionOutcome, CustodyError> {
+        self.inner.refresh_after_rejection(lease).await
     }
 }

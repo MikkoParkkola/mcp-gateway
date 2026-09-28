@@ -17,20 +17,6 @@ use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
 use crate::fs_lock::ExclusiveFileLock;
 use crate::security::audit_rotation_config::OnDiskFull;
 
-/// Acquire `<path>.lock` once per append, on first need; the one
-/// acquisition point (F19).
-fn guard<'a>(
-    slot: &'a mut Option<ExclusiveFileLock>,
-    path: &Path,
-) -> io::Result<&'a ExclusiveFileLock> {
-    if slot.is_none() {
-        *slot = Some(ExclusiveFileLock::acquire(&segments::sibling(
-            path, "lock",
-        ))?);
-    }
-    Ok(slot.as_ref().expect("filled above"))
-}
-
 /// Truncate a torn tail back to `good` bytes. An append-only handle cannot
 /// truncate on Windows (it lacks write-data access), so fall back to a write
 /// handle on the path. The handle is opened first and checked against ours,
@@ -68,7 +54,6 @@ impl TransparencyLogger {
         resync: bool,
     ) -> io::Result<String> {
         let path = self.path();
-        let mut lock: Option<ExclusiveFileLock> = None;
         // Every append checks for a rotated or deleted path, on every
         // writer; a synced (governance) append always re-reads the tail.
         let moved = match std::fs::metadata(&path) {
@@ -77,8 +62,7 @@ impl TransparencyLogger {
             Err(e) => return Err(e),
         };
         if moved || resync {
-            let g = guard(&mut lock, &path)?;
-            self.rebuild(inner, &path, g)?;
+            self.rebuild(inner, &path, &self.lease)?;
         }
         let (line, _) = chain_line(
             &self.config,
@@ -101,12 +85,10 @@ impl TransparencyLogger {
         // are appends too, so a full disk here takes the path below.
         let mut staged = Ok(());
         if inner.seg.sealed > rot.retain_segments as usize {
-            let g = guard(&mut lock, &path)?;
-            staged = self.apply_retention(inner, &path, g);
+            staged = self.apply_retention(inner, &path, &self.lease);
         }
         let rotated = if staged.is_ok() && inner.seg.has_records && (too_big || too_old) {
-            let g = guard(&mut lock, &path)?;
-            self.rotate(inner, &path, g, now)
+            self.rotate(inner, &path, &self.lease, now)
         } else {
             staged
         };
@@ -118,8 +100,7 @@ impl TransparencyLogger {
                 if e.kind() == io::ErrorKind::StorageFull
                     && rot.on_disk_full == OnDiskFull::ExpireOldest =>
             {
-                let g = guard(&mut lock, &path)?;
-                self.free_space(inner, &path, g, e)?;
+                self.free_space(inner, &path, &self.lease, e)?;
                 let retried = self.write_record(inner, &path, fields, resync);
                 if let Err(e) = segments::ensure_reserve(&path) {
                     tracing::warn!(error = %e, "audit log: disk-full reserve not recreated");
@@ -167,19 +148,26 @@ impl TransparencyLogger {
     /// length, so no later record is glued onto a torn line.
     fn write_line(&self, inner: &mut Inner, line: &str, sync: bool) -> io::Result<()> {
         let bytes = format!("{line}\n");
-        let good = inner.file.metadata()?.len();
+        let path = self.path();
+        let good = inner
+            .file
+            .metadata()
+            .map_err(segments::ctx("stat", &path))?
+            .len();
         let written = self
             .injected_write(inner, bytes.as_bytes())
             .unwrap_or_else(|| inner.file.write_all(bytes.as_bytes()))
+            .map_err(segments::ctx("write", &path))
             .and_then(|()| {
                 if sync {
                     self.injected_sync(inner)
+                        .map_err(segments::ctx("sync", &path))
                 } else {
                     Ok(())
                 }
             });
         if written.is_err()
-            && let Err(e) = cut_back(&inner.file, &self.path(), good)
+            && let Err(e) = cut_back(&inner.file, &path, good)
         {
             tracing::warn!(error = %e, "audit log: torn tail not cut back");
         }
@@ -202,7 +190,18 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn injected_write(&self, inner: &mut Inner, bytes: &[u8]) -> Option<io::Result<()>> {
         use super::rotation::WriteFault;
+        let stall = self.hooks.stall.lock().unwrap().take();
+        if let Some(gate) = stall {
+            gate.hold(); // held under `Inner`, like a write stuck in the kernel
+        }
         let fault = *self.hooks.fault.lock().unwrap();
+        if fault == Some(WriteFault::WriteError) {
+            *self.hooks.fault.lock().unwrap() = None;
+            self.hooks
+                .fault_fired
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            return Some(Err(io::Error::other("injected write failure")));
+        }
         let full = match fault {
             Some(WriteFault::FullForever) => true,
             Some(WriteFault::FullUntilReserveFreed) => !self
@@ -224,6 +223,16 @@ impl TransparencyLogger {
     #[cfg(test)]
     fn injected_sync(&self, inner: &mut Inner) -> io::Result<()> {
         use super::rotation::WriteFault;
+        {
+            let mut fault = self.hooks.fault.lock().unwrap();
+            if *fault == Some(WriteFault::SyncError) {
+                *fault = None;
+                self.hooks
+                    .fault_fired
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                return Err(io::Error::other("injected sync failure"));
+            }
+        }
         if *self.hooks.fault.lock().unwrap() == Some(WriteFault::ExpirySyncFails)
             && self
                 .hooks
@@ -277,7 +286,8 @@ impl TransparencyLogger {
             ],
         );
         self.write_record(inner, path, seal, true)?;
-        std::fs::rename(path, segments::sealed_path(path, seq))?;
+        let sealed = segments::sealed_path(path, seq);
+        std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
         segments::sync_dir(path)?;
         #[cfg(test)]
         {
@@ -381,7 +391,7 @@ impl TransparencyLogger {
             .expiry_in_flight
             .store(false, std::sync::atomic::Ordering::Release);
         written?;
-        std::fs::remove_file(&seg.path)?;
+        std::fs::remove_file(&seg.path).map_err(segments::ctx("remove", &seg.path))?;
         inner.seg.sealed = inner.seg.sealed.saturating_sub(1);
         segments::sync_dir(path)?;
         telemetry_metrics::counter!("mcp_audit_segments_expired_total", "reason" => reason)

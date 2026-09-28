@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use crate::security::http_diagnostics::safe_http_status_error;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -2290,9 +2291,23 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
 /// falsifier above would still be green.
 #[tokio::test]
 async fn an_unredirected_connect_failure_is_pre_dispatch_end_to_end() {
+    // The client end of a live loopback connection owns this port without
+    // listening, for the whole test: the connect is refused on every platform,
+    // and no other process can bind the port and answer it, the way it could
+    // a dropped listener's port (#1754). The client is bound explicitly,
+    // without address reuse, so no later connect can be handed its port.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(false).unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let client = socket
+        .connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    // Declared after `client`, so dropped first: the server end's port, not
+    // the explicitly bound one, takes the TIME_WAIT.
+    let _server = listener.accept().await.unwrap().0;
+    let addr = client.local_addr().unwrap();
 
     let base = format!("http://{addr}/mcp");
     let transport =
@@ -2626,42 +2641,6 @@ async fn row_16b_a_non_2xx_without_a_json_rpc_error_body_is_still_retried() {
     server.abort();
 }
 
-/// Row 16f - the retry boundary of the same branch. A peer under load can echo
-/// the request id in a JSON-RPC error body while its status says "ask again".
-/// Reading that as the peer's considered answer would take the retry away from
-/// exactly the case the retry exists for, so a transient status keeps the
-/// opaque fault the retry classifiers already understand.
-#[tokio::test]
-async fn row_16f_a_transient_status_carrying_a_json_rpc_error_is_still_retried() {
-    let (addr, hits, server) = spawn_fixed_response_server(
-        axum::http::StatusCode::TOO_MANY_REQUESTS,
-        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32000,"message":"rate limited"}}"#,
-    )
-    .await;
-
-    let transport = make_transport(&format!("http://{addr}/mcp"));
-    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
-
-    let err = request_through_retry(&transport, "tools/list")
-        .await
-        .expect_err("a 429 must not report success");
-
-    match &err {
-        Error::JsonRpcRetryable { code, status, .. } => {
-            assert_eq!(*code, -32000, "the peer's own code must survive the retry");
-            assert_eq!(*status, 429, "the carriage is what made it retryable");
-        }
-        other => panic!("a transient status must keep both facts, got: {other:?}"),
-    }
-    assert_eq!(
-        hits.load(Ordering::Relaxed),
-        3,
-        "a transient status stays retryable; a JSON-RPC body must not make it terminal"
-    );
-
-    server.abort();
-}
-
 /// Row 16g - the half row 16f alone cannot pin, and the one the health probe
 /// depends on. `row_6b` asserts that a status-carried `-32603` is scored as an
 /// unserved answer rather than a transport fault, but it asserts it against a
@@ -2852,3 +2831,6 @@ async fn row_16d_a_404_carrying_a_session_error_body_still_reinitializes() {
 
     server.abort();
 }
+
+#[path = "status_typing_tests.rs"]
+mod status_typing;

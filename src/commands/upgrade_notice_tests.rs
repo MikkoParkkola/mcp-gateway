@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all twenty-four items, each named by the
+/// GH475.MIG.4 — the notice carries all twenty-five items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_twenty_four_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 24);
+fn notice_4_0_0_carries_all_twenty_five_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 25);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -43,6 +43,7 @@ fn notice_4_0_0_carries_all_twenty_four_items() {
         "circuit breaker is open",
         "audit_segment_expired",
         "minted by the gateway",
+        "without the `requeststate`",
     ] {
         assert!(
             all.contains(expected),
@@ -77,6 +78,7 @@ fn notice_4_0_0_discloses_the_3_x_files_the_migration_and_its_one_way_door() {
         // must be typed. A notice naming a command that does not exist is
         // worse than one naming none.
         "accounts migrate-credentials",
+        "--config",
         "--descriptor-id",
         "--legacy-issuer",
         // And the one-way door: the old file stops being a fallback the
@@ -102,6 +104,8 @@ fn the_migration_command_named_in_the_notice_is_one_the_cli_accepts() {
         "mcp-gateway",
         "accounts",
         "migrate-credentials",
+        "--config",
+        "/etc/mcp-gateway/gateway.yaml",
         "--descriptor-id",
         "workspace-personal",
         "--legacy-issuer",
@@ -141,6 +145,7 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (45, "circuit breaker is open"),
     (49, "audit_segment_expired"),
     (58, "minted by the gateway"),
+    (55, "without the `requeststate`"),
 ];
 
 /// The item numbers the guide says the first start prints: the list after

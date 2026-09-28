@@ -81,7 +81,7 @@ pub enum ExportTarget {
     Windsurf,
     /// Cline (`.cline/mcp_servers.json`, workspace-relative)
     Cline,
-    /// Zed (`~/.config/zed/settings.json`)
+    /// Zed (platform-specific: Zed's own config directory)
     Zed,
     /// Generic: write to stdout
     Generic,
@@ -506,6 +506,12 @@ pub enum Command {
         /// Output format for `--shadow` rule export: "grep", "nginx", or "yaml"
         #[arg(long, default_value = "grep", value_name = "FORMAT")]
         shadow_format: String,
+
+        /// Start each stdio backend and complete `initialize`, reporting why one
+        /// that dies first died (its exit status and redacted stderr). Runs the
+        /// configured commands, with their side effects; off by default.
+        #[arg(long)]
+        start_stdio: bool,
     },
 
     /// Apply pending post-upgrade migrations and update the version stamp

@@ -57,6 +57,10 @@ module = "src/security/transparency_log_append.rs"
 reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
 
 [[coverage.not_a_control]]
+module = "src/security/signature_chain.rs"
+reason = "ASI07 chain signing and verification with no caller yet; it becomes a control row when the invoke paths enforce it (design increment 2)"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
 
@@ -339,6 +343,20 @@ description = "the audit log rotates into sealed, hash-linked segments and recor
 source = "src/security/transparency_log_rotation.rs"
 probe = "none"
 reason = "an on-disk property of the log; nothing on the wire changes when it rotates"
+
+[[control]]
+id = "audit-writer-lease"
+description = "one gateway process writes an audit log path: the log holds an exclusive lease on <path>.lock for its whole life, and a second writer is refused at startup after a bounded wait, whatever the auth setting"
+source = "src/security/transparency_log_lease.rs"
+probe = "none"
+reason = "refuses at process startup, before any listener exists; a live probe of a running install cannot start a second gateway on its log path"
+
+[[control]]
+id = "audit-append-bound"
+description = "every hot-path audit append runs off the request threads under a 5 s wait and 5 s write bound; a stalled disk refuses fail-closed calls with 503 and marks /readyz stalled instead of exhausting the workers (F20)"
+source = "src/security/transparency_log_bounded.rs"
+probe = "none"
+reason = "fires only when the audit volume stops answering; a live probe cannot stall the disk of the install it probes"
 
 [[control]]
 id = "audit-log-verify"

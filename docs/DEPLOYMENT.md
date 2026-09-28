@@ -200,7 +200,7 @@ never refused.
 | Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
-| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown, reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
+| Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown (for stdio, when the client closes stdin), reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
 
 While any of the three is on, the modern protocol included, the chart renders the
 Deployment with `strategy: Recreate`, because a rolling update runs the old and new
@@ -366,7 +366,7 @@ mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out /etc/mcp-gateway/tls
 # Issue server certificate
 mcp-gateway tls issue-server \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
-  --cn gateway.company.com --san-dns "gateway.company.com,localhost" \
+  --cn gateway.company.com --san-dns "gateway.company.com,localhost,127.0.0.1,::1" \
   --out /etc/mcp-gateway/tls
 
 # Issue client certificate (for mTLS)
@@ -374,6 +374,11 @@ mcp-gateway tls issue-client \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
   --cn "claude-code-agent" --out /etc/mcp-gateway/tls/clients
 ```
+
+An IP literal passed to `--san-dns` becomes an IP SAN, which is what a client dialling that
+address checks. Include `127.0.0.1,::1` when the gateway binds loopback or a wildcard address:
+local clients reach it by address, and a wildcard bind without `server.public_url` accepts
+only numeric `Host` values, so `localhost` alone is not enough there.
 
 These commands write keys `0600` and certificates `0644`. The gateway refuses a key other
 users can read, and a certificate, CA or CRL other users can change. Certificates or a CRL you
@@ -775,6 +780,9 @@ Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) 
 
 ## Authentication for Production
 
+Deploying for more than one person? Start with the
+[team deployment guide](TEAM_DEPLOYMENT.md); it links back to the sections below.
+
 **The gateway refuses to start when its tools can be called without a
 credential and it can be reached from off this machine.** The refusal happens
 before a listener is opened, because any caller who reaches such a gateway can
@@ -817,6 +825,12 @@ security:
     enabled: true
     path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 ```
+
+One gateway process writes an audit log path. A second one on the same path is refused at
+startup, after waiting up to 10 seconds for a
+restarting predecessor to exit. Replicas must not share a log path: give each replica its own
+volume, or put the pod name in the path. Keep the log on a local filesystem or one with working
+file locks (UPGRADING-4.0 item 49).
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
 

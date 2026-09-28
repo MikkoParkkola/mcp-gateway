@@ -5,19 +5,22 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49 and 58 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 55 and 58 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
-The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
+The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
 7 and 8 are decided per backend, so there is no single moment at startup at which
-the binary could know whether a given deployment is affected. Item 10 changes the shipped
+the binary could know whether a given deployment is affected; item 8 refuses the start with an
+error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 38, 51 and 54 refuse the start with their own error, which names the setting or file, so a notice would
-only repeat it; item 51 also warns once per `role: admin` rule at every load. Items 60 and 64 are decided per
-capability file, and a file they affect is refused at load with an error that names it.
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
+the setting or file, so a notice would only repeat it; item 51 also warns once per `role: admin` rule at every
+load. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 70, 73 and 74 print no notice: read them here
+before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -42,6 +45,9 @@ upgrading a running deployment.
 | 15 | Discovery shows a caller only what it could invoke | None to configure; see below for what non-admin callers stop seeing |
 | 16 | `trust_caller_identity_headers` is replaced by `security.caller_identity` | Choose a mode; list your proxies and an authority, or configure Cloudflare Access |
 | 17 | Key-server rules need an issuer and a verified email; revocation needs an issuer | Add `issuer` to every `key_server.policies[].match`; pass `issuer` to `DELETE /auth/tokens` |
+| 18 | Never assigned | None |
+| 19 | Never assigned | None |
+| 20 | Never assigned | None |
 | 21 | The Helm chart and enterprise-alpha manifests start | Write `config.backends` as a map (`{}`); expect task records to last only as long as the pod |
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
 | 23 | `logging/setLevel` on `/mcp` and `/mcp/{name}` needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
@@ -57,7 +63,7 @@ upgrading a running deployment.
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
-| 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
+| 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `runAsUser`, `runAsGroup` or `fsGroup` override other than 1001; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
@@ -71,18 +77,32 @@ upgrading a running deployment.
 | 47 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §47 for what is refused on `ws_url` |
 | 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 | 49 | The audit log rotates at 64 MiB and keeps 12 sealed segments; `audit verify` reads every segment and detects a deleted or truncated active file | Copy or archive the segments together, never rotate the log externally, and size the volume for `(retain_segments + 1) x max_segment_bytes` (Helm refuses an emptyDir too small) |
+| 50 | Every hot-path audit append is bounded (5 s wait, 5 s write); a stalled audit disk answers 503 and `/readyz` reports `stalled` instead of hanging the gateway | Alert on `mcp_audit_append_timeouts_total` and the `stalled` `/readyz` body; a mount that never recovers needs a restart |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
-| 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
+| 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused on `/mcp` (`/mcp/{name}` still forwards them) | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 53 | A backend's own rate-limit refusal reads `Rate limit exceeded for backend 'x'` (hint `RATE_LIMITED`, code still -32000) and no longer counts against the error budgets or `mcp_backend_circuit_state` | Match the new text in clients and alerts that looked for "Circuit breaker open"; watch `mcp_backend_rate_limited_total` for throttling |
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
+| 55 | A `tools/call` carrying `inputResponses` without the `requestState` the gateway issued is refused with `-32602` instead of being forwarded | Echo the `requestState` from the `input_required` result on every retry; send `inputResponses` only as an answer to it |
+| 56 | Reserved: lands with a pending change | None yet |
+| 57 | Never assigned | None |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
+| 59 | Reserved: lands with #1364 | None yet |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
+| 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
+| 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
+| 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
+| 68 | Reserved: lands with #1473 | None yet |
+| 69 | Reserved: lands with a pending change | None yet |
+| 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
+| 71 | Reserved: lands with a pending change | None yet |
+| 72 | Reserved: lands with a pending change | None yet |
+| 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
+| 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 
-Numbers 18-20 are intentionally unused.
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -137,9 +157,10 @@ The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 
-One boundary is deliberate and worth knowing: a capacity failure worded as a throttle — for
-example `request throttled: upstream out of capacity` — is still treated as rate limiting and
-therefore still exempt. Narrowing that needs a rate-limit co-signal and is not in 4.0.0.
+One boundary is worth knowing: a capacity failure worded as a throttle — for example
+`request throttled: upstream out of capacity` — is still treated as rate limiting and
+therefore still exempt. Narrowing that needs a rate-limit co-signal; it is 4.0.0 work tracked
+in #1613, and this paragraph changes when it lands.
 
 ## 5. One license across the repository
 
@@ -155,7 +176,7 @@ is the change to route past whoever approves your licensing, not a runtime conce
 
 The response cache is now keyed by the protocol revision the request was served under, and a
 request whose revision cannot be identified is not cached at all
-(`cache_protocol_revision`, `src/protocol/meta.rs:514`). A modern request carries its revision
+(`cache_protocol_revision` in `src/protocol/meta.rs`). A modern request carries its revision
 in the body. A legacy request must supply it in the `MCP-Protocol-Version` header, or have
 bound one by completing `initialize` on the session.
 
@@ -204,6 +225,8 @@ own price.
 
 ## 10. Probes read `/livez` and `/readyz`, not `/health`
 
+> Superseded in part by item 65: `/readyz` also waits for the startup capability scan, and the compose healthcheck now probes `/readyz`.
+
 `/health` answers 503 whenever the health tracker marks any backend down. The Helm chart and
 the enterprise-alpha manifests used it for the liveness, readiness and startup probes, so one
 flapping upstream restarted every replica, and a backend that was down at deploy time kept new
@@ -213,7 +236,8 @@ gate refuses on a `0.0.0.0` bind with no `public_url`, so the image reported its
 4.0.0 adds two endpoints that never read backend health:
 
 - `/livez` answers 200 while the process serves. Use it for liveness and container healthchecks.
-- `/readyz` answers 200 once the config has loaded and the listener is up. Use it for readiness
+- `/readyz` answers 200 once the config has loaded and the listener is up (since item 65, also
+  once the startup capability scan has finished). Use it for readiness
   and startup. It deliberately does not fail on a backend: there is no per-backend `required`
   setting, and one unreachable upstream is not a reason to take the gateway out of rotation.
   Since item 43 it does fail, with 503, while an auth-enabled gateway's audit log cannot append.
@@ -390,6 +414,8 @@ Embedders: `MetaMcp::with_trusted_identity_headers(bool)` and
 
 ## 17. Key-server OIDC rules need an issuer and a verified email
 
+> Superseded in part by item 51: a `role: admin` rule whose only condition is `domain` now fails the load.
+
 Before 4.0 an email or domain rule matched the raw `email` claim, whether or not the identity
 provider had verified it. On a self-service or multi-tenant IdP anyone could set their address
 to `ceo@corp.com` and match. Rules also needed no issuer, so a token from a second configured
@@ -418,7 +444,8 @@ IdP could satisfy a rule written for the first.
   longer shares a cap or a revocation. The token store is in memory, so the upgrade restart drops
   every issued key-server token; clients exchange again.
 - **Control-plane role mapping** gets the same verified-email and case-insensitive matching with
-  no config change.
+  no config change, except a `role: admin` rule whose only condition is `domain`, which item 51
+  refuses.
 - **Identity propagation** stops carrying an unverified email: the gateway-signed assertion's
   `email` claim is empty for such users. A backend keyed on the propagated email must key on
   `sub` plus `tenant` instead. The assertion carries no `email_verified` claim, so when
@@ -426,6 +453,8 @@ IdP could satisfy a rule written for the first.
   it with an issuer-only rule on the `mcp-gateway` issuer, not an email or domain rule.
 
 ## 21. The Helm chart and enterprise-alpha manifests start
+
+> Superseded in part by item 25: grant and policy edits are refused on every install, not only in a chart install.
 
 The chart has never been able to start, from its introduction (#292, which already had
 `serve --host`; `--host` has been non-global since v2.0.0) up to this release. Three fatal errors
@@ -447,20 +476,23 @@ the kubelet cannot check against `runAsNonRoot: true`, so the pod was never crea
 security context now sets `runAsUser: 1001`, the image's gateway user.
 
 Task records live in the `state` volume. An `emptyDir` survives a container restart, and a pod
-that is replaced (rollout, eviction, reschedule) starts empty. This release has no
-chart setting for a persistent volume.
+that is replaced (rollout, eviction, reschedule) starts empty. The chart has no
+setting for a persistent `state` volume (the audit log has one, `audit.existingClaim`, item 43).
 
 Each pod has its own `state` volume, so a task created on one pod is unknown to another. Both
 shipped defaults now run one pod, and more than one is refused while the task surface is on
 (item 37).
 
 The control-plane store still sits next to the config on
-the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
-startup). That is tracked separately.
+the read-only ConfigMap mount, so a chart install reports the store unavailable (one WARN at
+startup). Since item 25, grant and policy edits are refused on every install; the store keeps
+the governance audit log and any 3.x grant and policy rows (item 25).
 
 Both still serve the bearer token over plain HTTP inside the cluster. Item 38 makes that a
 declared choice, `cleartext_http: cluster_internal`, rather than a silent one.
 ## 22. The governance store location is configurable
+
+> Superseded in part by item 25: the store no longer takes grant or policy edits.
 
 New `control_plane.store_dir`. When it is unset, the store stays at
 `<config dir>/<config stem>-control-plane`, so existing installs do not move. When it is set, it
@@ -472,8 +504,9 @@ and `base_source` (`explicit` or `default`), and a 503 mutation answer names the
 path.
 
 Helm: the chart's config directory is a read-only ConfigMap, so the default location cannot be
-created there, and a chart install reports `store_unavailable`. Governance mutation on Helm needs
-a persistent `store_dir`; an `emptyDir` would lose a revocation on restart.
+created there, and a chart install reports `store_unavailable`. Since item 25 the store
+takes no new grant or policy edit, but it still holds the governance audit log and the 3.x rows
+that 4.1 will import as drafts, so keep `store_dir` persistent on Helm.
 
 ## 23. `logging/setLevel` needs an admin key
 
@@ -505,7 +538,8 @@ backends the caller could not use.
 
 On an authenticated gateway the frame now reaches a session only if its API key may access the
 edited backend: the same check that gates tool calls to it. A key whose `backends` list is `["*"]`
-or empty is still told about every edit. After a removal, the callers whose key named the removed
+is still told about every edit; a key with an empty list reaches no backend and is told nothing
+(item 32). After a removal, the callers whose key named the removed
 backend are told, because the check reads the key, not the registry. The check runs at delivery
 against the credential the session was opened with, so a revoked or expired key-server token is not
 told. A session that presented no credential is told nothing. With authentication off, every
@@ -522,17 +556,20 @@ read that store. A grant revoked there was still enforced and a grant added ther
 enforced; the same held for policies. The page then showed the store's rows, which could hide an
 enforced grant, or show SSRF protection as off while it was on, and it called itself "Mutating".
 
-Those three routes now check RBAC and then return **409** with `reason_code`
-`grants_managed_in_identity_grants_file` or `policies_managed_in_gateway_config`. Nothing is
-written, including the audit log. A caller without admin still gets 403. The page shows
+Those three routes now return **409** with `reason_code`
+`grants_managed_in_identity_grants_file` or `policies_managed_in_gateway_config` (a decision of
+any other kind gets 422). A caller without admin still gets 403. Where the control-plane store
+is unavailable, as in a default Helm install (item 22), they answer **503**
+`CONTROL_STORE_UNAVAILABLE` instead of 409. Nothing is written to the control-plane store or its audit log; the
+admin-action record of item 51 is separate. The page shows
 "Read Only", lists `no_mutation_endpoint` in `current_limits`, reports `GovernanceMutation` as
 unavailable, and adds `authority`, which names where each kind is enforced.
 
 What is enforced has not changed. Grants come from the file at `security.identity_grants.path`,
 edited with `mcp-gateway identity grants grant|revoke|list`. Policies come from
 `security.sanitize_input` and `security.ssrf_protection`. The store still holds the governance
-audit log, which the page and SIEM export read, so the note in item 22 about a persistent
-`store_dir` now applies to the audit log only.
+audit log, which the page and SIEM export read, and the rows below, so keep the persistent
+`store_dir` of item 22.
 
 Existing rows in `store/grants.json` and `store/policies.json` are no longer shown. Leave them on
 disk: 4.1 will bring them back as unenforced drafts that need re-approval. **Do not delete or
@@ -728,9 +765,11 @@ granted backends.
 
 ## 33. `/metrics` requires its own scrape token
 
+> Superseded in part by item 44: `server.metrics_token` also accepts a `file:` reference.
+
 In 3.x `/metrics` sat outside authentication and answered anyone who could reach the port,
 and its labels name your backends. It now answers only `Authorization: Bearer <token>` where
-the token is `server.metrics_token`, a literal or `env:VAR`, and returns 401 with
+the token is `server.metrics_token`, a literal, `env:VAR` or `file:` path (item 44), and returns 401 with
 `WWW-Authenticate: Bearer` until it is set. Prefer the `env:VAR` form, so the token stays out of
 the config file. The token is resolved at startup: setting or changing it takes effect after a
 restart, not on a config reload.
@@ -933,6 +972,8 @@ other route, webhooks included, used the framework's 2 MiB default.
 
 ## 40. A secret reference that resolves to nothing fails the load
 
+> Superseded in part by item 41: API keys are `key_sha256` digests, so the `env:` reference checked here is `auth.api_keys[].key_sha256`.
+
 In 3.x an unset or empty secret became an empty credential without a word. `${GITHUB_TOKEN}`
 with `GITHUB_TOKEN` unset expanded to `""`, so the backend was sent `Authorization: Bearer `.
 An `env:` reference to a variable that was set but empty passed validation, and so did a literal
@@ -953,9 +994,9 @@ An `env:` reference to a variable that was set but empty passed validation, and 
   file and reloads; while the variable is unset that reload fails, names the variable, and the
   running config is kept. The file already says `enabled: true`, so set the variable (or disable
   the backend again) before the next restart, which would otherwise refuse to start.
-- **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
+- **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key_sha256`,
   `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
-  `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',
+  `NAME` is unset or empty: `auth.api_keys['ci'].key_sha256 references environment variable 'CI_KEY',
   which is empty; empty secrets are refused.` An empty literal in any of these four fails too
   (`auth.bearer_token is empty.`), including when the config is built in code rather than
   loaded, and the key server never accepts an empty admin bearer.
@@ -1025,6 +1066,8 @@ read at startup; a reload that changes `webhooks` needs a restart.
 
 ## 43. With auth on, the audit log is required and fails closed
 
+> Superseded in part by item 49: the log rotates, and a full volume expires old segments by default instead of stopping calls.
+
 An authenticated gateway used to run with no tool-call audit, and when the log did run it
 named an API-key label rather than a person and skipped every refused or failed call.
 
@@ -1048,13 +1091,13 @@ named an API-key label rather than a person and skipped every refused or failed 
   `/readyz` itself tries that probe, so a drained pod recovers without traffic; `/livez`
   stays 200, so the pod is not restarted. Watch `mcp_audit_append_failures_total` and
   `mcp_audit_degraded`. Probe records carry `type: "audit_probe"`.
-- **The log is not rotated yet, and a full volume stops the gateway.** Rotation is a separate
-  item due before 4.0.0 final. Until then, when the log's volume fills every append fails
+- **A full volume.** Item 49 added rotation: by default the oldest sealed segments expire to
+  make room. Before the first rotation there is no sealed segment to expire, so a volume that
+  fills that early still fails appends as below. With `rotation.on_disk_full: refuse`, a full volume makes every append fail
   with `storage_full`: tool calls get 503 and `/readyz` returns 503 (its body names the
   cause), and the counter reads `mcp_audit_append_failures_total{cause="storage_full"}`.
-  Size the volume for your traffic: a tool call writes one or two records of roughly 1 KiB,
-  so the chart's default 1Gi holds on the order of half a million calls. Archive or export
-  the file before it fills; the gateway recovers on its own once an append succeeds. The
+  Size the volume with item 49's rule, and archive or export segments you must keep; the
+  gateway recovers on its own once an append succeeds. The
   chart always writes the log to the `audit` volume, whatever
   `config.security.transparency_log.path` says, and prints a warning at install while
   `audit.existingClaim` is unset.
@@ -1286,10 +1329,32 @@ beside the log so that record can still be written on a full disk. The reserve e
 log has rotated at least once. Set `rotation.on_disk_full: refuse` to keep every record and go
 unready instead (the item 43 behaviour).
 
-Do not rotate the log with an external tool (logrotate, `copytruncate`, a cron `mv`). Any
-external rotation breaks the hash chain, and verify then reports it as tampering.
+Do not rotate, rename or move the log's files with an external tool (logrotate,
+`copytruncate`, a cron `mv`). Only the gateway may touch them: any external rotation breaks the
+hash chain, and verify then reports it as tampering.
 
-On Windows, a writer recognises a file by its creation time, because there is no inode. So run a single gateway process per log path there; two processes sharing one path can miss each other's rotation.
+One gateway process writes a log path, on every platform. The log takes a writer lease on
+`<path>.lock` when it opens and holds it until the gateway exits. A second gateway on the same
+path is refused at startup, with an error naming the path, whatever the auth setting. This is
+enforced because the writer keeps the chain's counter and hash in memory, so two writers would
+fork the chain. `audit verify` and `audit show` only read and take no lease, so they work beside
+a running gateway.
+
+A restart where the supervisor starts the new process before the old one has exited waits for
+the lease for up to 10 seconds, then refuses; the wait is not configurable in 4.0. Stop the old
+gateway first when its shutdown can take longer. Replicas
+must not share a log path: use one replica per volume, or put the pod name in the path. The Helm
+chart deploys with the Recreate strategy when the audit log is on a persistent volume, so the
+old pod exits before the new one starts.
+
+The lease needs a filesystem with working byte-range locks. A local disk has them; some network
+shares (NFS without lockd, some SMB setups) do not, and there the lease cannot exclude a writer
+on another host.
+
+Before this version, a writer did not hold a lease. When upgrading, stop the old gateway before
+starting this one on the same log path: an older binary cannot see the lease, so a supervisor
+that overlaps the two could still let both write once. `mcp-gateway audit verify` reports any
+fork that results.
 
 Sizing: one tool call writes one or two records of about 1 KiB, so each MiB holds roughly
 500-1000 calls, and the default 832 MiB holds the last 400k-800k calls. For more, set
@@ -1318,6 +1383,32 @@ On a signed log, `.hwm` is signed too.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
+## 50. A stalled audit disk answers 503 within seconds instead of hanging
+
+With auth on, every tool call waits for its audit record (item 43). Before this release a
+filesystem that stopped answering (a hung NFS mount, a throttled volume) blocked that write
+indefinitely, and the blocked writes used up the server's worker threads until the gateway stopped
+answering at all. Now every audit append on the request path runs off the request threads and is
+bounded: the invocation record on both routes (`gateway_invoke` and `POST /mcp/{name}`), the
+response delivery attempt, and the identity-propagation mint, refuse and revoke records. Each waits
+at most 5 s behind another append, then writes for at most 5 s. A mint whose record times out is
+refused, so no credential is issued without a durable record.
+
+When the bound expires, the call is refused with 503 (`AuditUnavailable`), the log is marked
+stalled, `mcp_audit_append_timeouts_total` goes up and `/readyz` answers 503 with
+`audit log unavailable: stalled`. Later calls are refused at once, without waiting, until the
+stuck write returns. When it returns, the log clears itself; a failed write leaves it degraded with
+the real cause (item 43). With auth off (`BestEffort`) calls keep being served, and `/readyz` stays
+200.
+
+A write the kernel never returns cannot be abandoned, so a mount that never recovers keeps the
+gateway refusing calls until it is restarted. Alert on `mcp_audit_append_timeouts_total` and on
+the `stalled` `/readyz` body.
+
+A call refused this way can still gain an invocation record when the stuck write finally lands.
+That record has no `response_delivery_attempt` record after it: an invocation record with no
+delivery attempt means the result was withheld.
+
 ## 51. SSO admin rules now grant full gateway admin
 
 A `control_plane.role_mapping` rule with `role: admin` used to make its identity
@@ -1427,7 +1518,7 @@ its mode and the fix, and points at item 35.
 | a capability credential `file:/path.json:field` | on each tool call that uses it | fails that call |
 | the CA key given to `mcp-gateway tls issue-server` / `issue-client` as `--ca-key` | when the command runs | the command exits 1 and issues nothing |
 
-Four more files decide whom the gateway trusts. They may stay readable by others, but a file that
+Six more files decide whom the gateway trusts. They may stay readable by others, but a file that
 other users can **change** is refused (group- or world-write bit set). Fix: `chmod go-w <file>`.
 
 | File | When it is read | A refusal |
@@ -1453,6 +1544,20 @@ held to item 35.
 - **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
 - `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
+
+## 55. Answers without the gateway's `requestState` are refused
+
+A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+refused with `-32602` ("inputResponses are not accepted without the requestState this
+gateway issued") instead of being forwarded to the backend.
+
+- **Why.** Every interim the gateway relays carries a `requestState` it minted, so an honest
+  retry always presents one. Forwarded without it, the answers reached the backend as a fresh
+  call, and a backend that ignores the field ran the call again.
+- **Who is affected.** Only a client that sends answers it was never asked for. A retry that
+  echoes the `requestState` it received is unchanged, and `inputResponses: {}` still runs.
+- **Idempotency.** The refusal happens before dispatch and releases the idempotency key, so
+  the same key can be used for a corrected call.
 
 ## 58. Session ids are always minted by the gateway
 
@@ -1482,11 +1587,12 @@ the caller has no credential, so the gateway now treats it as a secret.
   stay raw, but they name no live session: sessions do not survive the restart.
   The dashboard's cost view (`/ui/api/costs`, `by_session[].session_id`) shows the
   fingerprint too; the admin API `/api/costs` keeps raw ids, since inspecting a
-  session by id needs one.
-- **Header-logging middleware brings the leak back.** A layer you add that logs
-  request headers (for example a tower-http trace layer configured to log
-  headers) prints the raw `Mcp-Session-Id` whatever the gateway's own log fields
-  do.
+  session by id needs one. It takes that id in the `X-Cost-Session-Id` header
+  (item 70).
+- **The gateway's own HTTP trace span recorded the full URI** at DEBUG, query
+  string included, until item 70. It now records the method and route template
+  only. A layer you add that logs request headers or URIs still prints whatever
+  it sees, including the raw `Mcp-Session-Id`.
 - A legacy destructive call with no usable session, an empty id included, is
   unchanged: it runs with a warning that nobody could be asked.
 - Library users: `NotificationMultiplexer::first_session_id` and
@@ -1517,6 +1623,48 @@ To reproduce a pin from a shell, strip the CR of each CRLF first:
 `sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`. The recipe assumes the
 pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by the gateway
 and dropped by `grep -v` (item 64).
+
+## 61. A backend that refuses a managed account's token forces one refresh, then a reconnect
+
+In 3.x and in the 4.0 betas, a managed personal account (`accounts.descriptors`,
+`mode: personal_managed`) was refreshed only when its token expired. If the provider revoked
+the grant earlier, every call returned a generic backend error that said "retry", with the
+same dead token each time, for up to the token's lifetime, which is often an hour.
+
+- **The first HTTP 401 from the backend forces one refresh of that account's token.** If the
+  provider answers `invalid_grant`, the account is marked reconnect-required and the call is
+  refused with the reconnect offer (JSON-RPC -32001 on `gateway_invoke`, HTTP 403 and -32003
+  on `/mcp/{backend}`), exactly as an expired grant is today.
+- **Otherwise the caller is told whether a retry can help.** The tool result's `recovery`
+  (or, on `/mcp/{backend}`, the error's `data`) carries `error_code: UPSTREAM_AUTH_REJECTED`
+  with `retry: true` when the token rotated or the provider was unreachable, and
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` with `retry: false` when this token was already
+  force-refreshed and the backend still refuses it. That is a scope or permission problem,
+  not a dead token. The gateway retries nothing automatically.
+- **At most one forced refresh per token revision, across restarts.** The revision is
+  recorded in the account store before the provider is asked, whatever it answers. A
+  backend that refuses every token costs one provider round trip per token revision.
+- **Only the status decides.** A 200 result whose text says "401" is passed through as it is
+  today.
+- **A 401 or 403 from any HTTP backend is no longer retried.** Retrying repeats the refusal
+  with the same credential. A 429, a 5xx, a 400 and a 404 are retried as before. A 404 and a
+  400 still re-initialize an expired MCP session. Chain steps follow the same rule.
+- **Every route:** `gateway_invoke`, a capability (REST) call, `/mcp/{backend}`, and the
+  re-dispatch of an elicitation the gateway bridges for a legacy client.
+- **The audit log's `error_code` changes for a backend 401 on a capability (REST) call:**
+  `-32000` instead of `-32600`. The capability executor now reports a 401 as the backend's
+  refusal, not as an invalid request. A 401 that ends in the reconnect refusal is recorded as
+  that refusal: `outcome: denied` with `-32001` when the reconnect offer is attached. A 401 or
+  403 from an MCP backend over HTTP keeps `-32000`.
+- **Not covered:** backend-level OAuth (`backends.<name>.oauth`), which is planned for 4.1,
+  and external (token-exchange) descriptors, which hold no refreshable grant.
+
+**Rolling back to an earlier 4.0 beta is not supported once a forced refresh has happened.**
+The account store's authority file then records `forced_revision` for that account. An
+earlier 4.0 binary refuses an authority file with a field it does not know, so its account
+custody does not start, and with it the gateway. The file is sealed, so the field cannot be
+removed by hand. It is removed for an account when that account's token next rotates or the
+user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
 
 ## 63. Error results are never served from a response cache
 
@@ -1592,11 +1740,142 @@ and an audit record with outcome `error`. It is now refused like an admin-only t
 **Action:** only a client, alert or log query that matched the old 400/-32603 answer or the
 "Configuration error" text for this refusal needs to match 403/-32600 instead.
 
+## 67. Task calls on per-backend routes are refused
+
+`POST /mcp/{name}` forwarded `tasks/get`, `tasks/update`, `tasks/cancel` and every other
+`tasks/*` method to the backend unchanged, with no owner check. Callers allowed on the same
+backend share its credential, so the backend could not tell them apart: one caller holding
+another's task id could read that task's result or cancel it.
+
+In 4.0, task calls on per-backend routes are refused until they carry an owner check:
+
+- Every `tasks/*` method on `POST /mcp/{name}`, in any letter case, and `subscriptions/listen`
+  naming `taskIds`, is answered with JSON-RPC -32601 (HTTP 200). Nothing reaches the backend.
+- `POST /mcp` still serves tasks, with each task visible only to the caller that created it.
+- Every other method on `POST /mcp/{name}` forwards as before, including a `tools/call`
+  carrying `task`, and `subscriptions/listen` without `taskIds`.
+
+**Action:** a client that polled or cancelled backend tasks through `POST /mcp/{name}` now
+gets -32601. Create and follow tasks through `POST /mcp` instead.
+
+## 70. Secrets stay out of the request URI and its trace
+
+The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
+secrets travelled there: a raw session id in `GET /api/costs?session=<id>`, and the one-time
+dashboard link value in `/dashboard?bootstrap=<value>`. With `tower_http=debug` logging on, both
+reached the log.
+
+- The span now records the method and the matched route template only (for example
+  `/mcp/{name}`), for every route the gateway traces. It never records the query string, a path
+  value or a header.
+- `/api/costs` selects a session by the `X-Cost-Session-Id` request header. `?session=` is refused
+  with HTTP 400 and a message naming the header. `?key=` (an API key's name) is unchanged. Sending
+  both `?key=` and the header is refused.
+- A dashboard link presented from anywhere but the gateway's own machine is refused, as before, and
+  is now also used up. The refusal says so. A copy left in a browser history, a proxy log or a
+  `Referer` header therefore dies on its first use elsewhere. On the gateway's own machine, a
+  refusal because no admin credential is configured still leaves the link usable.
+
+**Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
+Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
+first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
+
+## 73. Task calls to surfaced tools are confirmed unless known to be harmless
+
+The confirmation gate for a task-augmented `tools/call` to a surfaced tool read the tool's
+`destructiveHint` from the shared tool list. On a backend with `identity_propagation`, calls
+run on the caller's own session, whose tool list the shared one does not describe; an empty or
+different shared list let a destructive task call run without confirmation.
+
+In 4.0:
+
+- On a backend with `identity_propagation`, every modern task-augmented call to a surfaced tool
+  from a caller with a verified identity is confirmed. The prompt says the tool could not be
+  classified rather than calling it destructive. A caller with no verified identity runs on the
+  shared tool list, so it is classified from that list like any other backend.
+- On other backends, a surfaced tool missing from the shared tool list (an upstream that refuses
+  an anonymous `tools/list`, or before warm-start finishes) is confirmed the same way, with a
+  warning in the log naming the server and tool.
+- A client without the `elicitation` capability gets JSON-RPC -32021 for these calls. The
+  confirmation runs before attestation, so under attestation enforce an unattested call to
+  such a tool gets -32021 (or the confirmation prompt) rather than the attestation refusal
+  -32002.
+- Calls without `task`, legacy-revision calls and non-surfaced tools are unchanged.
+- A confirmation is bound to the caller's verified identity. A caller with none (authentication
+  off) cannot be confirmed, so its task call to a destructive or unclassified surfaced tool is
+  refused with JSON-RPC -32003 whatever it declares; it can call without `task`, or authenticate.
+- A confirmation already granted is honoured even if the tool list changes before the answer.
+
+**Action:** clients that make task calls to surfaced tools on these backends should declare
+`elicitation` and answer the prompt, or call without `task`.
+
+## 74. A stdio gateway writes `costs.json`
+
+With `cost_governance` enabled, a stdio gateway (`mcp-gateway --stdio`) loaded today's spend
+from `costs.json` at startup but never saved it, so each restart reset the daily budgets.
+
+In 4.0 the stdio gateway saves the file as the HTTP gateway does:
+
+- when the client closes stdin, after the calls still in flight have finished;
+- every 5 minutes while it runs.
+
+A gateway stopped any other way (killed, or its task cancelled when embedded) loses at most the
+last 5 minutes of spend. The file is per process: two gateways sharing one data directory
+(`MCP_GATEWAY_CONFIG_DIR`, default `~/.mcp-gateway`) each enforce their own budget, and the file
+holds whichever saved last.
+
+**Action:** none for most setups. If several stdio gateways share a data directory and you need
+each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
+
+## Upgrading from 3.5.x: a walkthrough
+
+This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
+upgrades a 3.5.1 gateway with an API key and a mounted backend to this build, checks it, and
+rolls it back. Steps that the rehearsal checks name the check in brackets; the others are
+precautions it does not exercise.
+
+1. Stop the 3.5.x gateway and copy `gateway.yaml` and the data directory
+   (`~/.mcp-gateway` by default) somewhere safe. The config copy is what a rollback restores.
+2. Install 4.0 and run the upgrade step against the same data directory. It prints the
+   breaking-change notice once, advances `version.stamp`, and leaves `gateway.yaml` and the
+   OAuth token files byte-identical [PHASE2.STAMP_ADVANCED, PHASE2.CONFIG_PRESERVED,
+   PHASE2.CREDENTIALS_PRESERVED]. `--dry-run` shows what it would do without writing.
+
+   ```bash
+   mcp-gateway upgrade --dry-run --data-dir ~/.mcp-gateway
+   mcp-gateway upgrade --data-dir ~/.mcp-gateway
+   ```
+
+3. Give every API key an explicit `backends` list, or `["*"]` for all: a 3.x key without one
+   reached every backend and now reaches none (item 32). Then replace every plaintext
+   `auth.api_keys[].key` with its digest (item 41). The same key keeps working
+   [PHASE2.API_KEY_MIGRATED_TO_DIGEST]:
+
+   ```bash
+   printf %s "$KEY" | mcp-gateway hash-key                   # put the output in key_sha256
+   printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>
+   ```
+
+4. With auth on, enable the audit log on a writable path (item 43):
+   `security.transparency_log.enabled: true` and `path`.
+5. Start the gateway. If it refuses, the error names the setting or file; the bold list at the
+   top of this guide says which items refuse the start, and each item says what to change.
+6. Check a real caller: the same API key reaches the same backend tool
+   [PHASE2.ACTIVE_CALLER_POST_UPGRADE], and the call left an audit record
+   [PHASE2.AUDIT_LOG_WRITTEN].
+7. Optional: `server.modern_protocol: false` turns off the 2026-07-28 protocol revision, and an
+   `initialize` for it is then refused [PHASE3.MODERN_OFF_INITIALIZE_REFUSED].
+
+To go back, follow [Rolling back](#rolling-back): restore the config copy from step 1 and start
+3.5.x. It warns "Downgrade detected", leaves the stamp alone and serves the same caller
+[PHASE4.DOWNGRADE_WARNING_LOGGED, PHASE4.STAMP_UNCHANGED, PHASE4.ACTIVE_CALLER_POST_ROLLBACK].
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
 - Re-authorize OAuth backends at a time you choose rather than on a user's first call.
-- If startup is refused, read the error — item 2 is the one that refuses rather than warns.
+- If startup is refused, read the error: it names the setting or file. The bold list at the top
+  says which items refuse the start.
 
 ## Other behaviour changes
 
@@ -1605,6 +1884,7 @@ These need no action and have no startup notice.
 - **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
   `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
   has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
+  Item 74 covers stdio.
 - **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
   a private capability checkout under `$HOME/github` if it existed. If you relied on that,
   add the directory to `capabilities.directories`.
@@ -1618,10 +1898,17 @@ These need no action and have no startup notice.
 
 ## Rolling back
 
-Keep the 3.x `gateway.yaml` you had before migrating API keys (item 41): 3.x reads `key` and
-cannot read `key_sha256`, so a rollback puts that copy back. Beyond that, downgrading loads the
-same file, because 4.0.0 itself never edited it. The upgrade
-leaves the 3.x token files in place — its migration prints the notice and stamps the version,
-and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
-files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
+Keep the 3.x `gateway.yaml` you had before making the 4.0 edits, and put it back to roll back.
+4.0.0 itself never edits the file, but several items ask you to, and 3.x cannot read the
+result: 3.x reads `key` and not `key_sha256` (item 41), and reads a `file:` secret as the
+literal text `file:...` (item 44). The upgrade leaves the 3.x token files in place — its
+migration prints the notice and stamps the version, and touches no credential
+(`migrate_4_0_0_release_notice` in `src/commands/upgrade.rs`). A rollback therefore picks those
+files back up rather than prompting again, unless the tokens expired in the meantime, or a
+credential migrated with `mcp-gateway accounts migrate-credentials` was refreshed on 4.0 against
+a provider that rotates refresh tokens: that refresh retires the copy in the old file, and 3.x
+has to authorize again (item 1). What 4.0.0
 wrote under the per-issuer key is simply not read by 3.x.
+
+Within 4.0, a rollback to an earlier beta is unsupported once a managed account has had a
+forced refresh (item 61): that beta cannot open the account store and refuses to start.

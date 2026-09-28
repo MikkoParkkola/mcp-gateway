@@ -53,7 +53,10 @@ PUSH_STEP = (
     "        with:\n"
     "          name: image-digest-${{ matrix.arch }}\n"
     "          path: digests/${{ matrix.arch }}\n"
-    "          retention-days: 1\n"
+    "          # Read by the manifest job. Kept for the repository's 14-day retention\n"
+    "          # cap so a failed manifest job can be retried without rebuilding the\n"
+    "          # legs (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
     "          if-no-files-found: error\n"
 )
 
@@ -1013,14 +1016,16 @@ CASES = [
         # It no longer has a step-level `push:` to reopen -- the build pushes
         # by digest under no name -- so the way back in is the condition that
         # decides whether the manifest job runs at all. Anchored to the line
-        # above it: the job-level condition is a prefix of the step-level ones,
-        # so on its own it matches four times and mutates the wrong copy.
+        # above it: the job-level condition is identical to the step-level ones,
+        # so on its own it matches several times and mutates the wrong copy.
+        # The mutation re-admits tags beside the main-only pin.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
         "    needs: build\n"
-        "    if: github.event_name != 'pull_request'"
-        " && !startsWith(github.ref, 'refs/tags/v')",
-        "    needs: build\n    if: github.event_name != 'pull_request'",
+        "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+        "    needs: build\n"
+        "    if: github.event_name == 'push' && (github.ref == 'refs/heads/main'"
+        " || startsWith(github.ref, 'refs/tags/v'))",
         CAUGHT,
     ),
     (
@@ -1287,6 +1292,144 @@ CASES += [
      SIGN_IF.replace("&& startsWith(github.ref, 'refs/tags/v')", "&& (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')"), CAUGHT),
 ]
 
+
+# Job-handoff retention. Each anchor carries the comment line only its own
+# site has, so it names one upload and not the other two.
+RELEASE_KEEP = (
+    "          # workflow says what actually takes effect (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
+)
+CI_KEEP = (
+    "          path: digests/\n"
+    "          # Read by docker-manifest. Kept for the repository's 14-day retention\n"
+    "          # cap so a failed manifest job can be retried without rebuilding the\n"
+    "          # legs (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
+)
+DOCKER_KEEP = (
+    "          # Read by the manifest job. Kept for the repository's 14-day retention\n"
+    "          # cap so a failed manifest job can be retried without rebuilding the\n"
+    "          # legs (RELEASING.md rule 4).\n"
+    "          retention-days: 14\n"
+)
+CASES += [
+    ("release-handoff-expires-in-a-day", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace(": 14", ": 1"), CAUGHT),
+    ("ci-digest-handoff-expires-in-a-day", "ci.yml", CI_KEEP,
+     CI_KEEP.replace(": 14", ": 1"), CAUGHT),
+    ("docker-digest-handoff-expires-in-a-day", "docker.yml", DOCKER_KEEP,
+     DOCKER_KEEP.replace(": 14", ": 1"), CAUGHT),
+    ("release-handoff-one-day-short", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace(": 14", ": 13"), CAUGHT),
+    # Past the repository setting the value is clamped, so the file would
+    # promise a re-run window that does not exist.
+    ("release-handoff-past-the-repository-cap", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace(": 14", ": 30"), CAUGHT),
+    # Unset inherits a repository setting nobody reviews.
+    ("release-handoff-retention-unset", "release.yml", RELEASE_KEEP,
+     RELEASE_KEEP.replace("          retention-days: 14\n", ""), CAUGHT),
+    # Outside `with:` the action never sees the key.
+    ("ci-digest-retention-moved-out-of-with", "ci.yml",
+     "        with:\n          name: image-digests-${{ matrix.arch }}\n" + CI_KEEP,
+     "        retention-days: 14\n        with:\n          name: image-digests-${{ matrix.arch }}\n"
+     + CI_KEEP.replace("          retention-days: 14\n", ""), CAUGHT),
+    # The scan must keep finding every handoff: a download it can no longer
+    # match drops one silently, and the per-workflow guard is what says so.
+    ("ci-digest-download-renamed", "ci.yml",
+     "          pattern: image-digests-*\n", "          pattern: image-digest-leg-*\n", CAUGHT),
+    # `name:` wins over `pattern:` in the action, so a download that names
+    # some other artifact takes no digests, whatever its pattern says.
+    ("ci-digest-download-named-elsewhere", "ci.yml",
+     "          pattern: image-digests-*\n",
+     "          name: some-other-artifact\n          pattern: image-digests-*\n", CAUGHT),
+]
+
+
+# The tooling unit tests fail every ref; only live-ledger checks are
+# report-only. Each anchor names the new job's own header or steps.
+UNIT_JOB = "    name: Release tooling unit tests\n    runs-on: ubuntu-latest\n"
+MUTATIONS_STEP = (
+    "      - name: Test that the workflow-wiring assertions catch their mutations\n"
+    "        run: python3 scripts/release/test_workflow_wiring_mutations.py\n"
+)
+_CI_TEXT = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+_RC_FIRST = (
+    "      - name: Check the release-criteria ledger header against its rows\n"
+    "        run: python3 scripts/release/count-release-criteria.py --check\n"
+)
+_RELEASE_CRITERIA_SPAN = _CI_TEXT[
+    _CI_TEXT.index(MUTATIONS_STEP) : _CI_TEXT.index(_RC_FIRST) + len(_RC_FIRST)
+]
+CASES += [
+    ("unit-tests-swallowed", "ci.yml", UNIT_JOB,
+     UNIT_JOB + "    continue-on-error: true\n", CAUGHT),
+    ("unit-tests-swallowed-off-a-tag", "ci.yml", UNIT_JOB,
+     UNIT_JOB + "    continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}\n", CAUGHT),
+    ("unit-tests-explicitly-blocking", "ci.yml", UNIT_JOB,
+     UNIT_JOB + "    continue-on-error: false\n", TOLERATED),
+    ("publish-gate-test-back-in-the-report-only-job", "ci.yml",
+     "      - name: Test the tag/manifest publish gate\n"
+     "        run: python3 scripts/release/test_check_tag_manifest.py\n",
+     "", CAUGHT),
+    ("mutation-harness-dropped", "ci.yml",
+     MUTATIONS_STEP + "\n  release-criteria:\n",
+     "\n  release-criteria:\n", CAUGHT),
+    # Moved, not dropped: still run, but inside the job whose failure is
+    # swallowed off a tag. The span runs from the step to the first step of
+    # release-criteria, so the edit is one contiguous replacement.
+    ("mutation-harness-moved-to-the-report-only-job", "ci.yml",
+     _RELEASE_CRITERIA_SPAN,
+     _RELEASE_CRITERIA_SPAN.replace(MUTATIONS_STEP, "", 1)
+     + MUTATIONS_STEP, CAUGHT),
+    ("docker-build-stops-waiting-for-unit-tests", "ci.yml",
+     "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
+]
+
+# Throwaway runs carry the release tooling's Python suites. The hosted job is
+# named by its runner line, the trusted one by its env block, so each anchor
+# names one job although both run the same steps.
+_HOSTED_PY = (
+    "    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    "        with:\n          persist-credentials: false\n"
+)
+_TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
+_HOSTED_PY_STEP = _HOSTED_PY + (
+    "      # The release tooling's Python suites, which `release-script-tests` runs\n"
+    '      # but which that job skips here. Without this, a throwaway meant to show\n'
+    '      # a workflow-wiring or release-script test going red passes on cargo\n'
+    '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
+    '      - name: Release tooling Python suites\n'
+    '        run: |\n'
+    '          set -uo pipefail\n'
+    '          fail=0\n'
+    '          for suite in scripts/release/test_*.py; do\n'
+    '            echo "::group::$suite"\n'
+    '            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }\n'
+    '            echo "::endgroup::"\n'
+    '          done\n'
+    '          exit "$fail"\n'
+)
+CASES += [
+    ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
+    ("throwaway-python-failure-swallowed", "ci.yml",
+     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     "      # Restore only: saving from throwaway runs would evict the entries the\n"
+     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "        with:\n          save-if: false\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "  # Same run on the self-hosted arm64 runner.",
+     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
+     "      # Restore only: saving from throwaway runs would evict the entries the\n"
+     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
+     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "        with:\n          save-if: false\n"
+     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
+     "  # Same run on the self-hosted arm64 runner.", CAUGHT),
+    ("trusted-throwaway-swallows-failures", "ci.yml",
+     _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
+]
 
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""

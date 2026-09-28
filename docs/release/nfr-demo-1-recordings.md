@@ -7,6 +7,12 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (41 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
 
+The recordings are text transcripts. They meet the criterion, which asks for versions,
+expected observations and actual outcomes (`docs/requirements/RELEASE-4.0.0-scope-tests.md`).
+The design's second artefact, a `.tape` script and GIF per scenario
+(`docs/design/2026-09-17-nfr-demo-1-scenario-recordings.md`), does not exist yet; it lands
+with the re-recording of the demos on the current release line.
+
 The machine-readable evidence is [`nfr-demo-1-recordings.json`](nfr-demo-1-recordings.json).
 This page is the human-readable half: what each rule in the gate is answering, and
 what the recordings do and do not prove.
@@ -280,7 +286,11 @@ embeds no commit SHA, so the source revision is established by comparing build
 on both sides — blob ids from `git ls-tree -r 88e160d2` locally, `git
 hash-object` on the bench-host tree. That is what earns
 `build_sha_confidence: measured` for these two, and it is the check the earlier
-pass could not make.
+pass could not make. `measured` here covers `src/` and the Cargo manifests only:
+three files the binary embeds from outside `src/`
+(`capabilities/knowledge/weather_current.yaml`,
+`capabilities/knowledge/public_holidays.yaml`,
+`benchmarks/discovery_response_fixture.json`) were not hashed on the bench host.
 
 ### Scenarios 1, 3 and 5 — assumption, corroborated separately
 

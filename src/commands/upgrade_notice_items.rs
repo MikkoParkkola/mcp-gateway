@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The twenty-four 4.0.0 changes, in the order they are printed.
+/// The twenty-five 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -18,7 +18,7 @@ pub(super) const NOTICE_4_0_0_ITEMS: &[&str] = &[
 read where they sit. By default each OAuth backend re-authenticates once, on \
 its next use: expect one authorization prompt per backend, and no config \
 change is needed. To keep a credential instead, run `mcp-gateway accounts \
-migrate-credentials --descriptor-id ID --legacy-issuer URL` per backend, which \
+migrate-credentials --config PATH --descriptor-id ID --legacy-issuer URL` per backend, which \
 is offline and refuses rather than guessing. Either way your 3.x token files \
 are left untouched in `~/.mcp-gateway/oauth/` at mode 0600. Delete them once \
 every backend has re-authorized or migrated AND been used successfully: a \
@@ -105,4 +105,6 @@ segment (`rotation.on_disk_full: refuse` keeps every record and goes unready ins
 `Mcp-Session-Id` that names no live session is replaced (the new id is in the response header), \
 an empty one counts as absent, and logs carry an 8-hex fingerprint instead of the id. With auth \
 off, holding a session id is what makes a session yours.",
+    "A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is \
+refused with -32602 instead of being forwarded to the backend as a fresh call.",
 ];

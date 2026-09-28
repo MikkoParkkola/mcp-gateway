@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- New entries go here, under the heading that fits, never under a tagged release below. -->
+<!-- New entries go in changelog.d/<number>.<type>.md (see CONTRIBUTING.md); they are folded in here at release. -->
 
 ### Highlights
 
@@ -19,10 +19,20 @@ and cached results, notifications and subscriptions stay per caller. SSO `role_m
 rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
 with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
 with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read, an unresolved secret or, with auth
-on, cleartext HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+unrecognised config key, a config file other users can read (Unix only), an unresolved secret
+(except `server.metrics_token`, which warns and keeps `/metrics` closed, and a personal-account `client_secret_ref`, which is read only when a token is requested) or, with auth on, cleartext
+HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
 ### Added
+
+- `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
+  launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
+  and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
+  backend under a runtime profile is skipped. (#526)
+- **The 3.5.1 upgrade rehearsal runs in CI.** A new `upgrade-rehearsal` job upgrades the
+  v3.5.1 release binary to the pull request's build, turns the modern protocol off, rolls back,
+  and fails when config, credentials, permissions, mounts or active callers do not survive.
+  `scripts/release/nfr_upgrade_1_rehearsal.sh` now exits 1 when any check fails.
 
 - **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
   reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
@@ -49,6 +59,20 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
 
 ### Changed
 
+- **One gateway writes an audit log path.** The transparency log takes a writer lease on
+  `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
+  error naming the path, whatever the auth setting. A restart overlap waits up to
+  10 seconds (not configurable). Appends no longer take a file lock.
+  `audit show` and the SIEM exporter rescan once when the log rotates under them, and I/O errors
+  from the log name the operation and the path. See UPGRADING item 49.
+- A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+  refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
+  idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
+
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
 - **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
   the startup capability scan has read every directory, so a pod or container is no longer
   sent traffic while its catalogue is empty; the admin `/health` view adds
@@ -86,9 +110,44 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   template, and the outcome; bodies and queries are never logged. With auth on
   they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
   item 51.
+- **A backend that refuses a managed personal account's token (HTTP 401) forces one refresh of
+  that token**, then answers with the reconnect offer when the provider has revoked the grant,
+  or with `recovery.error_code` `UPSTREAM_AUTH_REJECTED` (`retry: true`) or
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` (`retry: false`). At most one forced refresh per token
+  revision, recorded durably. A 401 or 403 from an HTTP backend is no longer retried. A downgrade
+  to an earlier 4.0 beta after a forced refresh is unsupported. See UPGRADING-4.0 item 61.
+  (A11, MIK-7570.RECONNECT.1)
 
 ### Fixed
 
+- **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
+
+- The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
+  command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
+- **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
+  binaries and image digests handed between jobs expired after a day, so a later re-run
+  published a release with no binaries or failed to find the digests. They now last the
+  repository's 14-day artifact retention, and a CI check keeps every such handoff there.
+- **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
+  row let a release pass while the burnup still listed it as held. A test also pins the
+  approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
+  cannot leave its approval behind.
+- **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
+  It used to wait out the request timeout and report a timeout, with the child's stderr already
+  discarded. The error now names the exit status and points at the gateway log, where one record
+  carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
+  text redacted. The stderr never goes to MCP clients. A build without the `firewall` feature has
+  no credential recogniser, so it logs a withheld marker instead of the text. `doctor
+  --start-stdio` caps a whole start at 15 s. (#526, #1568)
+- **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
+  about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
+  thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
+  Release builds were not affected.
 - **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
   durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
   non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
@@ -140,6 +199,26 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   it ran `cargo check` only. (#524)
 
 ### Security
+
+- **Secrets stay out of the request URI and its trace.** The HTTP trace span records the method and
+  route template, never the full URI, so a session id or a dashboard link value no longer reaches
+  DEBUG logs. `/api/costs` takes a session id in the `X-Cost-Session-Id` header (`?session=` is 400),
+  and a dashboard link presented from another machine is used up. UPGRADING-4.0 §70. (#1529)
+
+- **The OWASP self-assessment matches the shipped controls.** It had claimed a
+  tool-descriptor validator and a grant-collision check that never run on a request, a removed
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites
+  request-path and config-load controls (plus release-time supply-chain controls for ASI04),
+  states which are on by default, adds the 4.0 multi-user controls, uses the 2026 OWASP ASI
+  risk names, and reads 2/10 COVERED, 8/10 PARTIAL.
+  CI fails when it cites a path or test that no longer exists.
+  Withholding poisoned tool descriptors is tracked in #1441.
+
+- **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
+  `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
+  so callers sharing a backend could read or cancel each other's tasks. These methods now
+  answer JSON-RPC -32601 and never reach the backend; `POST /mcp` still serves tasks.
+  See UPGRADING-4.0 item 67 (#1442).
 
 - **A non-admin call to a callback-registering capability is refused as a denial.** It was
   answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
@@ -1025,12 +1104,12 @@ on, cleartext HTTP on a network bind. The Helm chart now installs and serves wit
   than handed to the client, bound to the caller and the original request, and
   redeemable once.
 
-  **Retry forwarding is not implemented in this release.** The minting,
-  sealing and single-use ledger exist and are tested; unsealing a continuation
-  and forwarding the retry to the backend does not. A well-formed retry is
-  refused with `-32602` and "retry forwarding is not available on this build"
-  rather than being run as a fresh call, because running it fresh would repeat
-  whatever the first attempt already did. MIK-7325 owns the forwarding path.
+  **A retry is forwarded through the sealed continuation.** The gateway opens
+  the `requestState` it minted, checks that it is bound to this caller and this
+  request, spends it once, and sends the backend's own state and the client's
+  answers upstream beside `arguments`. Answers without that `requestState` are
+  refused with `-32602` rather than run as a fresh call, because running it
+  fresh would repeat whatever the first attempt already did.
 
 - **`tools/call` no longer drops a retry's `inputResponses` and
   `requestState`.** Both were silently discarded, so an elicitation could never

@@ -280,6 +280,13 @@ success:
 - Revoke user A's token via `DELETE /auth/token/{jti}` and confirm the next call
   is refused.
 
+A managed account (`mode: personal_managed`) whose provider grant is revoked
+early is noticed on the backend's first HTTP 401: the gateway forces one
+refresh, and when the provider answers `invalid_grant` the user gets the
+reconnect offer instead of repeated backend errors. A backend that keeps
+refusing a freshly refreshed token answers `UPSTREAM_AUTH_REJECTED_PERSISTENT`,
+which means scope or permission, not a dead token (UPGRADING-4.0 item 61).
+
 ## Per-user consent journey (hosted)
 
 The section above assumes a backend will already accept the caller's identity
@@ -433,4 +440,5 @@ only raise it.
 - [ADR-008 — multi-user OAuth isolation](adr/ADR-008-multi-user-oauth-isolation.md),
   the rungs and why passthrough is the primary path.
 - [OAUTH_CONFIG.md](OAUTH_CONFIG.md) for the provider-side setup.
+- [TEAM_DEPLOYMENT.md](TEAM_DEPLOYMENT.md), the order to set up a team gateway in.
 - [DEPLOYMENT.md](DEPLOYMENT.md) for everything that is not identity.

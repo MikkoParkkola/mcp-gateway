@@ -243,12 +243,13 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}${{ matrix.suffix }}
           # These binaries are a handoff to the `release` job below, which
-          # downloads them and attaches them to the GitHub release; once that
-          # has happened the artifact copy is a duplicate of a release asset
-          # that is kept indefinitely. Without this the default 90 days applies
-          # and every build target's binary is stored twice for three months.
-          # ci.yml and docker.yml already set the same ceiling.
-          retention-days: 1
+          # downloads them and attaches them to the GitHub release. Once they
+          # expire, re-running a failed `release` job publishes a release with
+          # no binaries and the only recovery is a rebuild. 14 is the
+          # repository's artifact retention setting, which caps this value:
+          # a larger number would be clamped to it without a word, so the
+          # workflow says what actually takes effect (RELEASING.md rule 4).
+          retention-days: 14
 
   release:
     needs: [build, verify]
@@ -296,7 +297,7 @@ jobs:
             Download the appropriate binary for your platform from the assets below.
 
             **Supported platforms:**
-            - `mcp-gateway-darwin-arm64` - macOS Apple Silicon (M1/M2/M3)
+            - `mcp-gateway-darwin-arm64` - macOS Apple Silicon (M1 and later)
             - `mcp-gateway-darwin-x86_64` - macOS Intel
             - `mcp-gateway-linux-x86_64` - Linux x86_64 (static musl)
             - `mcp-gateway-linux-aarch64` - Linux ARM64 (static musl)

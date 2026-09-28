@@ -12,39 +12,46 @@ use super::rotation_tests::{
 use super::segments::{list_segments, sealed_path};
 use super::*;
 
+/// A writer that reopens a path another writer rotated in the meantime
+/// (the old process exited, the new one starts): the chain continues across
+/// the seam. Two live writers on one path are refused (`lease_tests`).
 #[test]
-fn hot_path_append_follows_foreign_rotation() {
+fn a_reopened_writer_follows_the_previous_writers_rotation() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&a, 0);
+    drop(a);
+    let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     b.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
         .unwrap();
     rotate_n(&b, &path, 1);
-    append(&a, 42); // hot path, no resync
+    drop(b);
+    let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&a, 42);
     assert_eq!(lines(&path).pop().unwrap()["tool"], "tool_42");
     assert!(verify(&path, false).ok);
 }
 
+/// A reopened writer sees the size the previous writer left and rotates
+/// before its first append when that append would pass the limit.
 #[test]
-fn second_process_append_follows_rotation() {
+fn a_reopened_writer_rotates_on_the_size_it_inherits() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let b = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    rotate_n(&a, &path, 1);
+    rotate_n(&b, &path, 1);
     let mut f = serde_json::Map::new();
     f.insert("who_wrote".into(), "b".into());
     b.append_event_synced(f, &AuditEnvelope::gateway()).unwrap();
     assert_eq!(lines(&path).pop().unwrap()["who_wrote"], "b");
-    // B pushes the active file past the limit; A's next synced append must
-    // see the new size and rotate first.
     while std::fs::metadata(&path).unwrap().len() < 4000 {
         b.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
             .unwrap();
     }
+    drop(b);
     let sealed_before = list_segments(&path).unwrap().len();
+    let a = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     a.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway())
         .unwrap();
     assert!(list_segments(&path).unwrap().len() > sealed_before);

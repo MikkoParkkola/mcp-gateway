@@ -16,6 +16,7 @@ mod control_plane_store;
 mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
+mod identity_grants;
 mod persistence;
 #[cfg(test)]
 mod replica_state_tests;
@@ -59,8 +60,6 @@ use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
-#[cfg(feature = "cost-governance")]
-use crate::cost_accounting::persistence as cost_persistence;
 use crate::key_server::{KeyServer, store::spawn_reaper};
 use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
@@ -73,10 +72,9 @@ use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 use control_plane_store::{build_control_plane_store, control_plane_base};
+use identity_grants::{identity_grant_sink_for, load_configured_identity_grants};
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
-#[cfg(feature = "cost-governance")]
-use support::build_persisted_costs;
 use support::{log_startup_banner, serve_tls, shutdown_signal};
 
 /// State owner for the single client on a long-lived stdio connection.
@@ -171,48 +169,6 @@ fn expand_home_path(path: &str) -> PathBuf {
             .join(rest);
     }
     PathBuf::from(path)
-}
-
-/// The grant sink a reload publishes into, or `None` when grants are off.
-///
-/// Rebuilt from config at the `ReloadContext` sites rather than threaded out
-/// of `build_meta_mcp`: the path is `config.security.identity_grants.path`
-/// either way, and `expand_home_path` is the same resolution startup used.
-fn identity_grant_sink_for(
-    config: &crate::config::IdentityGrantsConfig,
-    meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
-) -> Option<Arc<crate::config_reload::IdentityGrantSink>> {
-    if !config.enabled {
-        return None;
-    }
-    let (store, epoch) = meta_mcp.identity_grant_sink();
-    Some(Arc::new(crate::config_reload::IdentityGrantSink::new(
-        store,
-        epoch,
-        expand_home_path(&config.path),
-    )))
-}
-
-async fn load_configured_identity_grants(
-    config: &crate::config::IdentityGrantsConfig,
-) -> Result<Option<(PathBuf, crate::identity_grants::LocalIdentityGrantStore)>> {
-    if !config.enabled {
-        return Ok(None);
-    }
-
-    let path = expand_home_path(&config.path);
-    match crate::identity_grants::load_identity_grants_file(&path).await {
-        Ok(grants) => Ok(Some((path, grants))),
-        Err(e) if config.fail_on_error => Err(Error::Config(e)),
-        Err(e) => {
-            warn!(
-                error = %e,
-                path = %path.display(),
-                "Failed to load local identity grants; personal capabilities without matching grants will fail closed"
-            );
-            Ok(None)
-        }
-    }
 }
 
 /// Spawn the SIEM evidence-export background task (MIK-6703).
@@ -370,6 +326,9 @@ pub struct Gateway {
     /// account shutdown releases the store and its two file locks while this
     /// handle stays here to refuse everything that arrives afterwards.
     custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
+    /// In-process tests point this at their tempdir (`with_data_dir`).
+    #[cfg(test)]
+    data_dir: Option<std::path::PathBuf>,
 }
 
 /// Who the stdio dispatcher is serving: the session's id, the channel that
@@ -630,6 +589,8 @@ impl Gateway {
         }
 
         Ok(Self {
+            #[cfg(test)]
+            data_dir: None,
             config,
             config_path,
             backends,
@@ -911,6 +872,9 @@ impl Gateway {
         // ── Usage stats + search ranker with on-disk persistence ─────────────
         let usage_stats = Some(Arc::new(UsageStats::new()));
 
+        #[cfg(test)]
+        let data_dir = (self.data_dir.clone()).unwrap_or_else(persistence::standard_data_dir);
+        #[cfg(not(test))]
         let data_dir = persistence::standard_data_dir();
         persistence::ensure_data_dir(&data_dir);
 
@@ -1067,6 +1031,11 @@ impl Gateway {
                         .enable_transparency_log(Arc::clone(&logger));
                     transparency_log = Some(logger);
                     info!("Transparency log enabled");
+                }
+                // Two writers of one log fork its chain, so this refuses
+                // whatever the auth setting.
+                Err(e) if crate::security::transparency_log::is_lease_held(&e) => {
+                    return Err(Error::Config(format!("refusing to start: {e}")));
                 }
                 Err(e) if auth_on => {
                     return Err(Error::Config(format!(
@@ -2074,34 +2043,19 @@ impl Gateway {
         // this feature exists to correct.
         spawn_idle_reaper(Arc::clone(&self.backends), Some(shutdown_tx.subscribe()));
 
-        // Spawn periodic cost-governance persistence (every 5 minutes)
+        // Ends on the shutdown broadcast; awaited before the shutdown save.
         #[cfg(feature = "cost-governance")]
-        if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
-            let enforcer_persist = Arc::clone(enforcer);
-            let costs_path_periodic = data_dir.join("costs.json");
-            let mut shutdown_rx_costs = shutdown_tx.subscribe();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-                // Skip first immediate tick (don't save before any spend occurs)
-                interval.tick().await;
-                loop {
-                    tokio::select! {
-                        _ = interval.tick() => {
-                            let snap = enforcer_persist.snapshot();
-                            let persisted = build_persisted_costs(&snap);
-                            if let Err(e) = cost_persistence::save(&costs_path_periodic, &persisted) {
-                                warn!(error = %e, "Periodic cost persistence failed");
-                            } else {
-                                debug!("Periodic cost data saved");
-                            }
-                        }
-                        _ = shutdown_rx_costs.recv() => {
-                            break;
-                        }
-                    }
-                }
+        let cost_saver = meta_mcp_for_shutdown
+            .budget_enforcer
+            .as_ref()
+            .map(|enforcer| {
+                persistence::spawn_cost_saver(
+                    Arc::clone(enforcer),
+                    data_dir.clone(),
+                    persistence::COST_SAVE_INTERVAL,
+                    Some(shutdown_tx.subscribe()),
+                )
             });
-        }
 
         // Run server — plain HTTP or mTLS depending on config
         if self.config.mtls.enabled {
@@ -2143,18 +2097,13 @@ impl Gateway {
             "Saved transition tracking data",
         );
 
-        // Save cost governance data on graceful shutdown
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
-            let costs_path = data_dir.join("costs.json");
-            let snap = enforcer.snapshot();
-            let persisted = build_persisted_costs(&snap);
-            persistence::save_with_logging(
-                &costs_path,
-                |path| cost_persistence::save(path, &persisted),
-                "Failed to save cost data on shutdown",
-                "Saved cost governance data",
-            );
+            // A periodic save still running must not land after this one.
+            if let Some(saver) = cost_saver {
+                drop(saver.await);
+            }
+            persistence::save_costs(enforcer, &data_dir);
         }
 
         // Graceful drain: wait for in-flight requests to complete.
@@ -2402,6 +2351,16 @@ impl Gateway {
             &self.config.failsafe.health_check,
             None,
         ));
+        // As in HTTP mode, so a hard kill loses at most one interval of spend.
+        #[cfg(feature = "cost-governance")]
+        let cost_saver = meta_mcp.budget_enforcer.as_ref().map(|enforcer| {
+            AbortOnDrop::new(persistence::spawn_cost_saver(
+                Arc::clone(enforcer),
+                data_dir.clone(),
+                persistence::COST_SAVE_INTERVAL,
+                None,
+            ))
+        });
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
@@ -2681,6 +2640,15 @@ impl Gateway {
             dispatches.shutdown().await;
         }
         Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
+        // After the drain, so the last calls' spend is in the snapshot; the
+        // saver is stopped first so an older periodic save cannot land after.
+        #[cfg(feature = "cost-governance")]
+        if let Some(enforcer) = &meta_mcp.budget_enforcer {
+            if let Some(saver) = cost_saver {
+                saver.stop().await;
+            }
+            persistence::save_costs(enforcer, &data_dir);
+        }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
         drop(writer);
@@ -2969,7 +2937,7 @@ impl Gateway {
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
             },
-        );
+        ).await;
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }

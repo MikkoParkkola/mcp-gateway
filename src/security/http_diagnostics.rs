@@ -104,15 +104,53 @@ pub fn safe_http_status_error(status: StatusCode, body: &str) -> Error {
     Error::Transport(safe_status_text(status, body))
 }
 
+/// A11-g: a credential refusal the backend answers the same way however often
+/// it is asked, so it is typed and never retried. Not 400 or 404: the HTTP
+/// transport reads an expired MCP session from their `Error::Transport` text
+/// (`transport::http::is_session_expired_error`), and typing them would stop
+/// the session from being re-initialized.
+pub(crate) const fn is_deterministic_refusal(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// A non-2xx the HTTP transport answers with. A credential refusal keeps its
+/// typed status (A11-b), URL stripped; anything else keeps today's safe
+/// transport text, which MCP session-expiry detection reads.
+pub(crate) fn status_refusal(
+    typed: Option<reqwest::Error>,
+    status: StatusCode,
+    body: &str,
+) -> Error {
+    match typed {
+        // A 401/403 whose body says the session expired keeps the marker, so
+        // the transport re-initializes the session instead (as for 400/404).
+        Some(e) if is_deterministic_refusal(status) && !carries_session_expiry(body) => {
+            Error::Http(e.without_url())
+        }
+        _ => safe_http_status_error(status, body),
+    }
+}
+
+/// A11-b: the backend refused the presented credential. Read from the typed
+/// status only, never from body text (ADR-008, `personal_accounts/refusal.rs`).
+pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {
+    matches!(error, Error::Http(e) if e.status() == Some(StatusCode::UNAUTHORIZED))
+}
+
 /// OAuth token-endpoint / registration failure. Status stays; body does not.
 #[must_use]
 pub fn safe_oauth_http_error(context: &str, status: StatusCode, body: &str) -> String {
     format!("{context}: {}", safe_status_text(status, body))
 }
 
+/// Whether a non-2xx body says the MCP session expired (JSON-RPC `-32015` or
+/// "session not found"), which the transport answers by re-initializing.
+fn carries_session_expiry(body: &str) -> bool {
+    body.contains("-32015") || body.to_ascii_lowercase().contains("session not found")
+}
+
 fn safe_status_text(status: StatusCode, body: &str) -> String {
-    let lower = body.to_ascii_lowercase();
-    if body.contains("-32015") || lower.contains("session not found") {
+    if carries_session_expiry(body) {
         format!("HTTP {status}: {SESSION_EXPIRED_MARKER}")
     } else {
         format!("HTTP {status}")
@@ -144,6 +182,53 @@ mod tests {
 
     const CANARY: &str = "SENTINEL_SWEEP_7222";
 
+    /// A typed `reqwest::Error` for `status`, as the transport captures it.
+    fn typed(status: u16) -> Option<reqwest::Error> {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .body(String::new())
+            .expect("fixture response builds");
+        reqwest::Response::from(response).error_for_status().err()
+    }
+
+    /// A11 T19: a 401 or 403 is typed only when its body does NOT signal an
+    /// expired MCP session. With the signal it keeps the untyped marker form
+    /// the transport re-initializes on, as 400 and 404 always do.
+    #[test]
+    fn a_session_expiry_body_keeps_the_reinit_marker_on_401_and_403() {
+        for status in [401_u16, 403] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            for body in ["session not found", r#"{"error":{"code":-32015}}"#] {
+                match status_refusal(typed(status), code, body) {
+                    Error::Transport(text) => assert!(
+                        text.contains(SESSION_EXPIRED_MARKER),
+                        "{status} {body}: {text}"
+                    ),
+                    other => panic!("{status} {body} must stay re-initializable: {other:?}"),
+                }
+            }
+            assert!(
+                matches!(
+                    status_refusal(typed(status), code, "denied"),
+                    Error::Http(_)
+                ),
+                "{status} with no session-expiry signal is a typed credential refusal"
+            );
+        }
+        for status in [400_u16, 404] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            for body in ["denied", "session not found"] {
+                assert!(
+                    matches!(
+                        status_refusal(typed(status), code, body),
+                        Error::Transport(_)
+                    ),
+                    "{status} is never typed, with or without a session-expiry body"
+                );
+            }
+        }
+    }
+
     #[test]
     fn oauth_and_status_drop_body_canary() {
         let body = format!("{{\"access_token\":\"{CANARY}\",\"client_secret\":\"{CANARY}\"}}");
@@ -163,21 +248,39 @@ mod tests {
         assert!(!err.to_string().contains(CANARY));
     }
 
-    /// A dead port: bind to learn a free address, then give it up.
-    async fn closed_port() -> String {
+    /// A dead port, and the connection that keeps it dead (#1754): the
+    /// client end of a live loopback connection owns the port without
+    /// listening, so a connect to it is refused on every platform and no
+    /// other process can bind the port and answer it, the way it could a
+    /// dropped listener's port. The client is bound explicitly, without
+    /// address reuse: a port `connect()` picks for itself can be handed to a
+    /// later connect, which then reaches itself. (A bound socket that never
+    /// connects is refused on Linux but times out on macOS.) Hold the pair
+    /// until the request is done; it drops server end first, so the `TIME_WAIT`
+    /// lands on the listener's port, not the explicitly bound one.
+    async fn closed_port() -> (String, (tokio::net::TcpStream, tokio::net::TcpStream)) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind ephemeral port");
-        let address = listener.local_addr().expect("local addr");
-        drop(listener);
-        format!("http://{address}/mcp")
+        let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+        socket.set_reuseaddr(false).expect("no address reuse");
+        socket
+            .bind("127.0.0.1:0".parse().expect("loopback"))
+            .expect("bind client port");
+        let client = socket
+            .connect(listener.local_addr().expect("local addr"))
+            .await
+            .expect("connect");
+        let (server, _) = listener.accept().await.expect("accept");
+        let address = client.local_addr().expect("client addr");
+        (format!("http://{address}/mcp"), (server, client))
     }
 
     /// An unredirected connect failure is provably pre-dispatch: nothing was
     /// written, so the idempotency key must be released rather than settled.
     #[tokio::test]
     async fn an_unredirected_connect_failure_is_pre_dispatch() {
-        let url = closed_port().await;
+        let (url, _held) = closed_port().await;
         let error = reqwest::Client::new()
             .post(&url)
             .send()
@@ -212,7 +315,7 @@ mod tests {
     /// `src/transport/http/tests.rs` -- this row only pins the classifier.
     #[tokio::test]
     async fn a_connect_failure_the_caller_cannot_vouch_for_stays_coarse() {
-        let url = closed_port().await;
+        let (url, _held) = closed_port().await;
         let error = reqwest::Client::new()
             .post(&url)
             .send()
@@ -273,7 +376,7 @@ mod tests {
     /// are post-dispatch by construction.
     #[tokio::test]
     async fn the_coarse_constructor_never_returns_the_narrow_variant() {
-        let url = closed_port().await;
+        let (url, _held) = closed_port().await;
         let error = reqwest::Client::new()
             .post(&url)
             .send()
