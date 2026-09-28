@@ -339,6 +339,33 @@ async fn a_symlinked_journal_is_refused() {
     assert_eq!(mode & 0o777, 0o644);
 }
 
+/// A journal another local account can write to is refused, not repaired: a
+/// group/world-writable journal may already carry entries this process never
+/// wrote, and chmod-ing it to 0600 would launder that history for the next
+/// reader. T1f's 0o644 (read-only exposure) still gets tightened.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_writable_by_others_journal_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    change(&path, upsert(row("g1", "r"), false)).await.unwrap();
+    let journal = journal_path(&path);
+    let before = std::fs::read(&journal).unwrap();
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o646)).unwrap();
+
+    let r = change(&path, upsert(row("g2", "r"), false)).await;
+
+    assert!(matches!(r, Err(ChangeError::Unjournalled(_))), "{r:?}");
+    assert_eq!(std::fs::read(&journal).unwrap(), before, "no line appended");
+    let mode = std::fs::metadata(&journal).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o777,
+        0o646,
+        "mode is refused, not laundered to 0600"
+    );
+}
+
 #[test]
 fn reader_leaves_an_unterminated_tail_for_later() {
     let line = serde_json::to_string(&sample_entry("e1")).unwrap();
