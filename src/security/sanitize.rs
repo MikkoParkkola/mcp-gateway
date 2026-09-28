@@ -614,9 +614,29 @@ pub fn redact_url_for_diagnostics(raw: &str) -> String {
 /// mistyped: userinfo, query and fragment are removed, whether or not the
 /// input parses as a URL with a host (#2113).
 #[must_use]
-#[allow(dead_code, reason = "red-first stub")]
 pub(crate) fn redact_url_keep_path(raw: &str) -> String {
-    raw.to_string()
+    if let Ok(mut url) = url::Url::parse(raw)
+        && url.has_host()
+    {
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        return url.to_string();
+    }
+    // No host: `user:pw@host/p` parses with scheme `user` and the password in
+    // its path, and `bob@host/p` or `http://u:pw@[bad/p` do not parse at all.
+    // Treat all of them as text: cut the query and fragment, then everything
+    // from the authority's start up to its last `@`, which is where userinfo
+    // sits. A `scheme://` prefix is kept.
+    let text = raw.split(['?', '#']).next().unwrap_or_default();
+    let start = text.find("://").map_or(0, |i| i + 3);
+    let rest = &text[start..];
+    let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+    match authority.rfind('@') {
+        Some(at) => format!("{}{}", &text[..start], &rest[at + 1..]),
+        None => text.to_string(),
+    }
 }
 
 #[cfg(test)]
