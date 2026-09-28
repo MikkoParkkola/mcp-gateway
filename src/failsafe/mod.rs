@@ -61,8 +61,8 @@ impl Failsafe {
     /// refusal never reports an open circuit, and counts each limiter refusal
     /// in `mcp_backend_rate_limited_total{backend}`.
     pub fn admit(&self, backend: &str) -> crate::Result<()> {
-        self.check_circuit(backend)?;
-        self.take_token(backend)
+        self.take_token(backend)?;
+        self.check_circuit(backend)
     }
 
     /// The breaker half of [`Self::admit`], with its gauge. Split out so a
