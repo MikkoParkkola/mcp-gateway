@@ -223,7 +223,8 @@ fn controller_watch_json_writes_one_document_per_line() {
         "/deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
     );
     let home = Home::new();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    command
         .env_clear()
         .env("HOME", &home.root)
         .current_dir(&home.root)
@@ -239,9 +240,11 @@ fn controller_watch_json_writes_one_document_per_line() {
             "1",
             "--format",
             "json",
-        ])
-        .spawn()
-        .expect("spawn mcp-gateway");
+        ]);
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+    let mut child = command.spawn().expect("spawn mcp-gateway");
     let stdout = child.stdout.take().expect("piped stdout");
     // Two cycles; the reader ends at EOF if the process exits early.
     let reader = std::thread::spawn(move || {
