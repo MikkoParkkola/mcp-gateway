@@ -210,7 +210,6 @@ impl CapabilityExecutor {
                 "capability calls go through capabilities.egress_proxy; the proxy, not the \
                  gateway, resolves their destinations"
             );
-            executor.client = client::build(Some(&proxy));
         }
         executor
     }
