@@ -34,11 +34,13 @@ SKIPPED = {
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
     "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "orphan-test-modules", "public-claims", "release-script-tests",
+    "package-tests",
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes",
 }
 # Never run on an ordinary pull request (tag, dispatch or throwaway only).
-NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry"}
+NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
+              "packaged-suite-rehearsal"}
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 
