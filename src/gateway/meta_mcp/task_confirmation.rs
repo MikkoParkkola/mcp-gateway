@@ -31,7 +31,7 @@
 //! never asked; a client-chosen one would let it answer its own.
 
 use serde_json::{Value, json};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::gateway::task_service::OwnedAdmissionRequest;
 use crate::hashing::{canonical_json, sha256_hex};
@@ -65,6 +65,33 @@ const ACCEPT: &str = "accept";
 /// digest can never collide with the backend-request digest the same field
 /// carries for a [`ContinuationPurpose::BackendInput`] envelope.
 const DIGEST_DOMAIN: &str = "mcp-gateway.destructive-confirmation.v1";
+
+/// The question a challenge asks. An unclassified tool is not called
+/// destructive: the prompt says what is actually known.
+fn confirmation_prompt(tool_name: &str, unclassified: bool) -> String {
+    if unclassified {
+        format!(
+            "Confirm the tool '{tool_name}'. Whether it is destructive could not be established \
+             before the call runs, so it is confirmed as if it were. It runs as a task once \
+             accepted. Accept to proceed, decline to abort."
+        )
+    } else {
+        format!(
+            "Confirm the destructive tool '{tool_name}'. It runs as a task once accepted, and \
+             cannot be undone. Accept to proceed, decline to abort."
+        )
+    }
+}
+
+/// A surfaced tool as the gate sees it, with the server that owns it.
+enum Classification {
+    /// The dispatch slot's entry says destructive.
+    Destructive(String),
+    /// The dispatch slot's entry says nothing destructive.
+    Harmless(String),
+    /// No entry could be read from the dispatch slot. Confirmed.
+    Unclassified(String),
+}
 
 /// What the gate decided.
 #[derive(Debug)]
@@ -120,17 +147,29 @@ impl MetaMcp {
         &self,
         request: &TaskConfirmationRequest<'_>,
     ) -> TaskConfirmation {
-        // Not task-augmented, not modern, or not a truthfully destructive
-        // surfaced tool: this gate has nothing to say. The legacy gate still
-        // governs the built-in meta-tools it always governed.
+        // Not task-augmented, not modern, not surfaced, or a surfaced tool the
+        // dispatch slot knows to be harmless: this gate has nothing to say. The
+        // legacy gate still governs the built-in meta-tools it always governed.
         let Some(task) = request.task else {
             return TaskConfirmation::NotRequired;
         };
         if !request.is_modern {
             return TaskConfirmation::NotRequired;
         }
-        let Some(backend_id) = self.destructive_surfaced_backend(request.tool_name) else {
-            return TaskConfirmation::NotRequired;
+        let (backend_id, unclassified) = match self.classify_surfaced(request) {
+            None => return TaskConfirmation::NotRequired,
+            Some(Classification::Destructive(server)) => (server, false),
+            Some(Classification::Unclassified(server)) => (server, true),
+            // A grant this gate issued is honoured even if the tool now reads
+            // harmless: the caller answered the question it was asked, and
+            // dispatching with the grant still attached would be refused as
+            // the wrong purpose downstream. Any other state is not ours.
+            Some(Classification::Harmless(server)) => {
+                if !self.carries_confirmation_grant(request) {
+                    return TaskConfirmation::NotRequired;
+                }
+                (server, false)
+            }
         };
         // A keyless call is refused by admission itself, in its own words. A
         // challenge here would ask a question whose answer could never be
@@ -173,7 +212,7 @@ impl MetaMcp {
                     record("admitted_replay");
                     return TaskConfirmation::Granted(cleared(request.retry));
                 }
-                self.challenge(request, &backend_id, fingerprint, digest)
+                self.challenge(request, &backend_id, unclassified, fingerprint, digest)
                     .await
             }
             // Answers with no grant. Not a fresh call — it claims to be
@@ -191,21 +230,71 @@ impl MetaMcp {
         }
     }
 
-    /// The backend behind a surfaced tool whose own catalog entry says it is
-    /// destructive, or `None`.
+    /// What the catalogue says about a surfaced tool, read from the slot the
+    /// call will dispatch on, or `None` when the tool is not surfaced.
     ///
     /// Read from the backend's cached descriptor — the same annotation the
     /// public catalog shows — so eligibility is the tool's truthful claim about
     /// itself. Nothing is relabelled here, and no wrapper inherits its target's
     /// annotation: a `gateway_invoke` is not this tool, whatever it points at.
-    fn destructive_surfaced_backend(&self, tool_name: &str) -> Option<String> {
+    ///
+    /// A backend with identity propagation dispatches on the CALLER's slot,
+    /// and that slot cannot be named without minting the caller's credential,
+    /// which this gate must not do: minting reaches the identity provider and
+    /// writes audit records, and a challenge acts on nothing. The shared slot
+    /// is not the dispatch slot there, so it proves nothing either way. A tool
+    /// whose entry cannot be read is confirmed as if it were destructive:
+    /// "unknown" is never "harmless".
+    ///
+    /// A caller with no verified identity resolves no binding, and
+    /// `Backend::pool_key_for` maps no binding to the shared slot, so the
+    /// shared entry is the one its call runs on.
+    fn classify_surfaced(&self, request: &TaskConfirmationRequest<'_>) -> Option<Classification> {
+        let tool_name = request.tool_name;
         let server = self.surfaced_tool_server(tool_name)?;
         let backend = self.backends.get(server)?;
-        let tool = backend.get_cached_tool(tool_name)?;
-        tool.annotations
+        if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
+            debug!(
+                server,
+                tool = tool_name,
+                "Per-caller catalogue: confirming a surfaced task call as unclassified"
+            );
+            return Some(Classification::Unclassified(server.to_owned()));
+        }
+        let Some(tool) = backend.get_cached_tool(tool_name) else {
+            // Usually an upstream that refuses an anonymous tools/list, or a
+            // warm-start that has not finished.
+            warn!(
+                server,
+                tool = tool_name,
+                "Surfaced tool missing from the shared catalogue; confirming it as unclassified"
+            );
+            return Some(Classification::Unclassified(server.to_owned()));
+        };
+        let destructive = tool
+            .annotations
             .as_ref()
-            .is_some_and(|annotations| annotations.destructive_hint == Some(true))
-            .then(|| server.to_owned())
+            .is_some_and(|annotations| annotations.destructive_hint == Some(true));
+        Some(if destructive {
+            Classification::Destructive(server.to_owned())
+        } else {
+            Classification::Harmless(server.to_owned())
+        })
+    }
+
+    /// Whether this call carries a grant this gate issued. Opened, not
+    /// redeemed: nothing is spent or held here.
+    fn carries_confirmation_grant(&self, request: &TaskConfirmationRequest<'_>) -> bool {
+        request.retry.request_state.as_deref().is_some_and(|token| {
+            self.continuation
+                .keyring()
+                .open(token, now_unix_secs())
+                .is_ok_and(|payload| {
+                    payload
+                        .require_purpose(ContinuationPurpose::DestructiveConfirm)
+                        .is_ok()
+                })
+        })
     }
 
     /// Mint the grant and ask the question.
@@ -217,6 +306,7 @@ impl MetaMcp {
         &self,
         request: &TaskConfirmationRequest<'_>,
         backend_id: &str,
+        unclassified: bool,
         fingerprint: String,
         digest: String,
     ) -> TaskConfirmation {
@@ -235,9 +325,14 @@ impl MetaMcp {
                 Some(request.id.clone()),
                 -32021,
                 format!(
-                    "'{}' is destructive and must be confirmed, which needs the '{capability}' \
-                     capability the client did not declare",
-                    request.tool_name
+                    "'{}' {} and must be confirmed, which needs the '{capability}' capability \
+                     the client did not declare",
+                    request.tool_name,
+                    if unclassified {
+                        "is destructive or could not be classified"
+                    } else {
+                        "is destructive"
+                    }
                 ),
                 json!({ "requiredCapabilities": [capability] }),
             )));
@@ -291,12 +386,7 @@ impl MetaMcp {
                     issued_key: {
                         "method": CONFIRMATION_METHOD,
                         "params": {
-                            "message": format!(
-                                "Confirm the destructive tool '{}'. It runs as a task once \
-                                 accepted, and cannot be undone. Accept to proceed, decline \
-                                 to abort.",
-                                request.tool_name
-                            ),
+                            "message": confirmation_prompt(request.tool_name, unclassified),
                         },
                     },
                 },
@@ -518,3 +608,6 @@ mod tests {
         assert_eq!(cleared.idempotency_key.as_deref(), Some("key-a"));
     }
 }
+
+#[cfg(test)]
+mod slot_tests;

@@ -1400,11 +1400,10 @@ mod tests {
 
     // ── cleanup task (tokio) ──────────────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn spawn_cleanup_task_evicts_expired_entries() {
-        // GIVEN: a cache with one stale completed entry
-        // WHEN: the cleanup task runs
-        // THEN: the entry is evicted
+        // A stale entry is evicted. On the paused clock the task's ticks run
+        // before the virtual wait returns, however loaded the host (#1821).
         let cache = Arc::new(IdempotencyCache::new());
         cache.entries.insert(
             "stale".to_string(),
@@ -1423,7 +1422,7 @@ mod tests {
 
         spawn_cleanup_task(Arc::clone(&cache), Duration::from_millis(10));
 
-        // Wait a bit for the task to run
+        // Let the cleanup run during 50 ms of virtual time.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(cache.len(), 0, "stale entry should have been evicted");
