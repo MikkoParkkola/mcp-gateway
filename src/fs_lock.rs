@@ -140,9 +140,30 @@ impl ExclusiveFileLock {
         ))
     }
 
+    /// One non-blocking attempt at an exclusive lease on `lock_path`, on
+    /// every platform: `Ok(None)` when another handle holds it, `Err` for any
+    /// other failure (a directory in the way, a read-only volume, locking
+    /// unsupported). A separate constructor from [`Self::try_acquire`], which
+    /// must stay unavailable off unix: the task store relies on that refusal.
+    pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Option<Self>> {
+        #[cfg(test)]
+        count_attempt(lock_path);
+        let mut opts = OpenOptions::new();
+        opts.create(true).write(true).read(true);
+        set_owner_only(&mut opts);
+        let file = opts.open(lock_path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => Err(e),
+        }
+    }
+
     /// Block until an exclusive lock on `lock_path` is acquired, creating the
     /// sidecar file (owner-only, `0600` on unix) if it does not exist yet.
     pub(crate) fn acquire(lock_path: &Path) -> io::Result<Self> {
+        #[cfg(test)]
+        count_attempt(lock_path);
         let mut opts = OpenOptions::new();
         opts.create(true).write(true).read(true);
         set_owner_only(&mut opts);
@@ -196,6 +217,33 @@ fn lock_exclusive(file: &File) -> io::Result<()> {
 #[cfg(not(unix))]
 fn lock_exclusive(file: &File) -> io::Result<()> {
     file.lock()
+}
+
+/// Test-only: lock attempts per lock path, so a test can prove a code path
+/// takes no file lock at all.
+#[cfg(test)]
+static LOCK_ATTEMPTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
+> = std::sync::LazyLock::new(Default::default);
+
+#[cfg(test)]
+fn count_attempt(lock_path: &Path) {
+    *LOCK_ATTEMPTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(lock_path.to_path_buf())
+        .or_default() += 1;
+}
+
+/// Test-only: how many lock attempts `lock_path` has seen.
+#[cfg(test)]
+pub(crate) fn lock_attempts(lock_path: &Path) -> usize {
+    LOCK_ATTEMPTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(lock_path)
+        .copied()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

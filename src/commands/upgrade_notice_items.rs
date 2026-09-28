@@ -18,7 +18,7 @@ pub(super) const NOTICE_4_0_0_ITEMS: &[&str] = &[
 read where they sit. By default each OAuth backend re-authenticates once, on \
 its next use: expect one authorization prompt per backend, and no config \
 change is needed. To keep a credential instead, run `mcp-gateway accounts \
-migrate-credentials --descriptor-id ID --legacy-issuer URL` per backend, which \
+migrate-credentials --config PATH --descriptor-id ID --legacy-issuer URL` per backend, which \
 is offline and refuses rather than guessing. Either way your 3.x token files \
 are left untouched in `~/.mcp-gateway/oauth/` at mode 0600. Delete them once \
 every backend has re-authorized or migrated AND been used successfully: a \
