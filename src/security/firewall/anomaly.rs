@@ -190,7 +190,11 @@ impl AnomalyDetector {
         let Some(identity) = identity else {
             return (Observation::Unobservable, None);
         };
-        let lock = self.stripe(identity).lock();
+        let lock = loop {
+            if let Some(guard) = self.stripes.iter().find_map(parking_lot::Mutex::try_lock) {
+                break guard;
+            }
+        };
         let current = format!("{server}:{tool}");
         let prev = self
             .last_tool
@@ -226,6 +230,7 @@ impl AnomalyDetector {
         // that caller its predecessor, nothing more.
         if self.last_tool.len() >= MAX_TRACKED_IDENTITIES && !self.last_tool.contains_key(&identity)
         {
+            let _held = self.last_tool.entry(identity.clone());
             // The victim is chosen in its OWN statement so the iterator's
             // shard lock is dropped before `remove` asks for it as a writer.
             let victim = self.last_tool.iter().next().map(|e| e.key().clone());
@@ -251,7 +256,7 @@ impl AnomalyDetector {
     /// fewer recorded transitions than the configured minimum.
     fn score_after(&self, prev: &str, current: &str) -> Observation {
         if self.tracker.successor_total(prev) < self.min_observations {
-            return Observation::WarmingUp;
+            return Observation::Scored(0.5);
         }
         let predictions = self.tracker.predict_next(prev, 0.0, 0);
         match predictions.iter().find(|p| p.tool == current) {
