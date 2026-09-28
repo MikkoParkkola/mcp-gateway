@@ -902,7 +902,6 @@ pub fn spawn_cleanup_task(cache: Arc<IdempotencyCache>, interval: Duration) {
             if Arc::strong_count(&cache) <= 1 {
                 break;
             }
-            cache.evict_expired();
         }
     });
 }
