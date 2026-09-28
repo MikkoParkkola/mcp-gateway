@@ -184,3 +184,23 @@ async fn a_shutdown_signal_sent_before_the_server_first_waits_is_not_lost() {
         .expect("a signal sent before the first poll was lost: the server kept running")
         .expect("serve");
 }
+
+/// The same through `listener::serve`: a shutdown future that is already
+/// resolved still stops the listener, so the forwarding task is not lost.
+#[tokio::test]
+async fn an_already_resolved_shutdown_future_stops_the_listener() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let listener = listener.into_std().expect("std listener");
+    let mut config = Config::default();
+    config.server.shutdown_timeout = Duration::from_secs(10);
+    timeout(
+        HANG_STOP,
+        serve(Router::new(), listener, addr, &config, async {}),
+    )
+    .await
+    .expect("the listener kept running after its shutdown future resolved")
+    .expect("serve");
+}

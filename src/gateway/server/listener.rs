@@ -29,6 +29,8 @@ pub(super) async fn serve(
     let grace = config.server.shutdown_timeout;
     tokio::spawn(async move {
         shutdown.await;
+        // One call is enough: axum_server keeps the signal as a stored flag
+        // its accept loop reads each iteration, so it cannot fire too early.
         bridge.graceful_shutdown(Some(grace));
     });
     if config.mtls.enabled {
