@@ -89,6 +89,12 @@ pub mod transition;
 pub mod transport;
 pub mod trust;
 pub mod validator;
+// Windows owner-only store custody; `win_acl` is the one module allowed
+// `unsafe` (ADR-016).
+#[cfg(windows)]
+mod private_fs;
+#[cfg(windows)]
+mod win_acl;
 
 pub use error::{Error, Result};
 
