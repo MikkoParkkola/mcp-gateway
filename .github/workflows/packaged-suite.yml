@@ -1,0 +1,31 @@
+name: Packaged test suite
+
+# The full test suite from the packaged crate (#1812). Pull requests only build
+# the packaged tests (ci.yml `package-tests`); running them doubles a test run,
+# so that happens here, after a merge, the same way the post-merge image and
+# code scans run. ci.yml calls this workflow on a dispatch with
+# `rehearse_packaged_suite`, so the path can be exercised before it is merged.
+on:
+  push:
+    branches: [main, docs/ranking-1-release-line]
+    tags: ["v*"]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  packaged-suite:
+    name: Tests from the packaged crate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Run the tests from the packaged crate
+        run: scripts/ci/packaged-tests.sh run

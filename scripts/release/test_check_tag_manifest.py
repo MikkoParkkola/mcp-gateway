@@ -2156,6 +2156,44 @@ class WorkflowWiring(unittest.TestCase):
                 continue
             self.assertRegex(line, permitted, raw_line)
 
+    def test_the_packaged_crate_is_built_on_every_ref_and_run_after_merge(self):
+        # #1812: tests that read a repository file the package leaves out
+        # compile in a checkout and fail from the published crate. Every ref
+        # builds them from the package; the full run is post-merge, so a pull
+        # request does not pay for a second test run.
+        body = jobs("ci.yml").get("package-tests")
+        self.assertIsNotNone(body, "ci.yml has no package-tests job")
+        self.assertNotRegex(body, r"(?m)^ {4}(if|continue-on-error):", "package-tests must run and block on every ref")
+        built = [c for b in steps("ci.yml", "package-tests") for c in joined(b)]
+        self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+build\b", c) for c in built), built)
+        self.assertIn("package-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+        on = "\n".join(live_lines("packaged-suite.yml"))
+        trigger = on[on.index("on:") : on.index("jobs:")]
+        self.assertRegex(trigger, r"(?m)^  push:\n    branches: \[[^\]]*\bdocs/ranking-1-release-line\b")
+        self.assertNotRegex(trigger, r"(?m)^  pull_request", "a PR trigger would run the suite twice per PR")
+        self.assertRegex(trigger, r"(?m)^  workflow_call:")
+        ran = [c for b in steps("packaged-suite.yml", "packaged-suite") for c in joined(b)]
+        self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+run\b", c) for c in ran), ran)
+
+        # The rehearsal reaches the post-merge path from a dispatch only.
+        self.assertEqual(
+            conjuncts(job_if("ci.yml", "packaged-suite-rehearsal"))[0],
+            "github.event_name == 'workflow_dispatch'",
+        )
+        self.assertIn("uses: ./.github/workflows/packaged-suite.yml", jobs("ci.yml")["packaged-suite-rehearsal"])
+
+        # The packaged run skips what ci.yml `test` skips, plus only the tests
+        # that read repository files deliberately kept out of the crate.
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text()
+        test_cmd = " ".join(c for b in steps("ci.yml", "test") for c in joined(b))
+        packaged_only = {"mik_5843_"}  # repo-only competitive notes
+        self.assertEqual(
+            set(re.findall(r"--skip\s+(\S+)", script)),
+            set(re.findall(r"--skip\s+(\S+)", test_cmd)) | packaged_only,
+            "the packaged run must skip ci.yml test's list plus only the repo-only reads",
+        )
+
     def test_release_tooling_unit_tests_block_on_every_ref(self):
         # release-criteria is report-only off a tag because its live-ledger
         # checks read documents edited mid-flight. The tooling's own unit tests

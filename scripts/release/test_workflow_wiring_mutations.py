@@ -1380,7 +1380,33 @@ CASES += [
      _RELEASE_CRITERIA_SPAN.replace(MUTATIONS_STEP, "", 1)
      + MUTATIONS_STEP, CAUGHT),
     ("docker-build-stops-waiting-for-unit-tests", "ci.yml",
-     "release-criteria, release-script-tests]", "release-criteria]", CAUGHT),
+     "release-criteria, release-script-tests, package-tests]", "release-criteria, package-tests]", CAUGHT),
+]
+
+# #1812: packaged tests build on every ref and run after a merge.
+CASES += [
+    ("package-tests-swallowed", "ci.yml",
+     "    name: Tests build from the packaged crate\n",
+     "    name: Tests build from the packaged crate\n    continue-on-error: true\n", CAUGHT),
+    ("package-tests-only-on-push", "ci.yml",
+     "    name: Tests build from the packaged crate\n",
+     "    name: Tests build from the packaged crate\n    if: github.event_name == 'push'\n", CAUGHT),
+    ("package-tests-build-step-dropped", "ci.yml",
+     "      - name: Build the tests from the packaged crate\n"
+     "        run: scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
+    ("docker-build-stops-waiting-for-package-tests", "ci.yml",
+     "release-script-tests, package-tests]", "release-script-tests]", CAUGHT),
+    ("packaged-suite-leaves-the-release-line", "packaged-suite.yml",
+     "    branches: [main, docs/ranking-1-release-line]\n", "    branches: [main]\n", CAUGHT),
+    ("packaged-suite-runs-on-every-pr", "packaged-suite.yml",
+     "  workflow_dispatch:\n", "  pull_request:\n  workflow_dispatch:\n", CAUGHT),
+    ("packaged-suite-builds-instead-of-running", "packaged-suite.yml",
+     "scripts/ci/packaged-tests.sh run\n", "scripts/ci/packaged-tests.sh build\n", CAUGHT),
+    ("packaged-rehearsal-on-every-pr", "ci.yml",
+     "    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_packaged_suite",
+     "    if: github.event_name == 'pull_request' || (inputs.rehearse_packaged_suite", CAUGHT),
+    ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
+     "--skip mik_7479_full_burst\n", "--skip mik_7479_full_burst --skip some_new_skip\n", CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):
