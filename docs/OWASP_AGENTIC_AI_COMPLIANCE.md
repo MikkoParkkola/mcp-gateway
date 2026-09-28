@@ -7,7 +7,7 @@
 
 This matrix is a **self-assessment**, not a certification. It tracks mcp-gateway only. It cites controls that run on the request path or when config loads, plus, for ASI04 alone, the release-time supply-chain controls (signing, SBOM, npm provenance); a control that exists only in the CLI or in tests is not counted. Each row says which controls are on by default and which an operator must enable. Current mapping: **2/10 COVERED, 8/10 PARTIAL** for the gateway boundary. CI checks that every path and validation test cited here exists (`scripts/dev/check-owasp-citations.py`).
 
-Companion (different question, same boundary): [MITRE Fight Fraud Framework mapping](compliance/MITRE-F3-MAPPING.md). OWASP ASI is agent-tool risk. F3 is financial-fraud actor behavior. The F3 document is a PARTIAL/GAP mapping, not a coverage badge.
+Companion (different question, same boundary): [MITRE Fight Fraud Framework mapping](compliance/MITRE-F3-MAPPING.md). OWASP ASI is agent-tool risk. F3 is financial-fraud actor behavior. The F3 document is a PARTIAL/GAP/N/A mapping, not a coverage badge.
 
 ## Compliance Matrix
 
