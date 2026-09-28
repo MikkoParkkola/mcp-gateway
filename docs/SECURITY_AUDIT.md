@@ -39,17 +39,7 @@ The mcp-gateway has security defenses for the six primary MCP attack vectors ide
 
 > **Update (4.0, #1441):** `detect_collisions()` was removed. Nothing in the gateway ever called it, and it compared tool names, while every served surface addresses a tool as backend plus name, so two backends sharing a name do not collide. The collision tests listed below went with it. `validate_tool_name()` stays.
 
-**Defense**: `detect_collisions()` scanned all `(backend_name, tools)` pairs and flagged any tool name appearing on more than one backend. `validate_tool_name()` rejects tool names containing path traversal, shell metacharacters, control characters, null bytes, or exceeding 128 characters.
-
-**Tests proving the defense works**:
-
-| Test | Scenario | Result |
-|------|----------|--------|
-| `collision_exact_duplicate_across_two_backends` | Two backends expose `search` | DETECTED |
-| `collision_across_many_backends` | Four backends expose `search` | DETECTED |
-| `collision_no_false_positives_with_prefixed_names` | Properly prefixed names (brave_search, tavily_search) | NO FALSE POSITIVE |
-| `collision_multiple_collisions_across_shared_toolsets` | read + write collide, unique tools do not | CORRECT |
-| `collision_empty_tool_list_no_crash` | Empty tool lists | NO CRASH |
+**Defense**: `validate_tool_name()` rejects tool names containing path traversal, shell metacharacters, control characters, null bytes, or exceeding 128 characters. Its tests are in `tests/security_tests.rs`; the collision tests this section listed were removed with `detect_collisions()`.
 
 ### 3. Prompt Injection via Tool Responses (AC2, AC8)
 
