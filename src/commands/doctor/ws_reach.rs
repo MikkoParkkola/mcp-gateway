@@ -75,12 +75,19 @@ mod tests {
             up.detail
         );
         drop(listener);
+        // The closed port stays bound, never listening, until the check is
+        // done: a connect is refused, and no other process can re-bind the
+        // port and answer it the way a freed port could (#1754).
+        let closed = tokio::net::TcpSocket::new_v4().unwrap();
+        closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = closed.local_addr().unwrap().port();
         let down = check_ws_backend(
             "rt",
             &ws(&format!("ws://u:SECRET@127.0.0.1:{port}/mcp?t=SECRET")),
         )
         .await
         .expect("a ws_url backend is checked");
+        drop(closed);
         assert!(
             down.status == super::super::CheckStatus::Fail,
             "{}",
