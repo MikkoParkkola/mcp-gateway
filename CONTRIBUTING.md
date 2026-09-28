@@ -164,6 +164,7 @@ impl Transport for MyTransport {
 
 - **Formatting:** `cargo fmt` before every commit. CI rejects unformatted code.
 - **Linting:** `cargo clippy --all-features -- -D warnings`. Pedantic warnings are promoted to errors in CI.
+- **Feature sets:** test targets are supported with the default feature set only; builds without default features are covered for the library and binary alone (the *Feature combination* job in `.github/workflows/ci.yml`).
 - **Safety:** `unsafe` code is denied at the crate level. No exceptions.
 - **Errors:** `thiserror` for typed errors, `anyhow` for application-level.
 - **Logging:** `tracing` macros (`info!`, `debug!`, `warn!`), never `println!`.
@@ -181,6 +182,18 @@ Allowed clippy exceptions (in `Cargo.toml`): `module_name_repetitions`, `must_us
 5. **CI must pass.** Formatting, clippy pedantic, and the full test suite.
 
 Smaller PRs are reviewed faster. For large changes, open an issue first.
+
+**What runs where.** Every pull request runs the CI workflow. The container image build and
+CodeQL code scanning run once per merge, on the push to the release branch (and on `main` and
+tags), not on each pull-request push; a pull request into the release branch still builds the
+image when it changes `Dockerfile`, `.dockerignore`, `Cargo.toml`, `Cargo.lock`,
+`deploy/helm/`, the smoke scripts or `docker.yml`. Pull requests into `main` run everything.
+Maintainer `throwaway/` branches (red-first and mutation-proof runs, never merged) run only the
+test suite (`Tests (throwaway)`), on a hosted runner until the project's own arm64 runner is
+registered, then on that runner; see `scripts/ci/trusted-runner/`.
+Mutation proofs are batched: push `throwaway/mutants-<pr>` as the pull request's head plus one
+commit adding `.mutants/manifest.tsv` and the patches; one run of the Mutants workflow classifies
+every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).
 
 ## Architecture Decisions
 

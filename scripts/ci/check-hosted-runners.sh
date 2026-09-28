@@ -9,12 +9,17 @@
 # the run logs; the only signal is the invoice. This keeps every `runs-on:`
 # and every matrix `os:` value inside the GitHub-hosted namespace, so
 # swapping in a fleet has to be a deliberate edit to the allowlist below.
+#
+# One deliberate exception: `mcpgw-trusted-arm64`, the single label of the
+# project's own self-hosted runner. It is allowed as that exact string only;
+# `self-hosted` and every other generic label stay rejected, so a job cannot
+# reach that runner (or any other) through a label list.
 set -euo pipefail
 
 # GitHub-hosted images. `${{ matrix.os }}` is the one expression that passes,
 # because the matrix `os:` entries it expands to are checked on their own; any
 # other expression could resolve to a fleet label that never appears in a diff.
-readonly ALLOWED='^((ubuntu|windows|macos)-[A-Za-z0-9._-]+|\$\{\{[[:space:]]*matrix\.os[[:space:]]*\}\})$'
+readonly ALLOWED='^((ubuntu|windows|macos)-[A-Za-z0-9._-]+|\$\{\{[[:space:]]*matrix\.os[[:space:]]*\}\}|mcpgw-trusted-arm64)$'
 
 runner_is_allowed() {
   [[ $1 =~ $ALLOWED ]]
@@ -144,6 +149,8 @@ jobs:
   c:
     runs-on:
       - ubuntu-latest
+  d:
+    runs-on: mcpgw-trusted-arm64
 YAML
   if ! scan "$dir" >/dev/null 2>&1; then
     echo "self-test: rejected a workflow that only uses GitHub-hosted runners" >&2
@@ -151,7 +158,7 @@ YAML
   fi
 
   local case_name body
-  for case_name in direct inline matrix sequence matrix-sequence expression; do
+  for case_name in direct inline matrix sequence matrix-sequence expression self-hosted lookalike label-list; do
     case $case_name in
       direct) body='jobs:
   a:
@@ -184,6 +191,15 @@ YAML
       expression) body='jobs:
   a:
     runs-on: ${{ vars.RUNNER_LABEL }}' ;;
+      self-hosted) body='jobs:
+  a:
+    runs-on: self-hosted' ;;
+      lookalike) body='jobs:
+  a:
+    runs-on: mcpgw-trusted-arm64-x' ;;
+      label-list) body='jobs:
+  a:
+    runs-on: [self-hosted, mcpgw-trusted-arm64]' ;;
     esac
     printf '%s\n' "$body" >"$dir/good.yml"
     if scan "$dir" >/dev/null 2>&1; then
@@ -199,7 +215,7 @@ YAML
   fi
 
   if [[ $rc -eq 0 ]]; then
-    echo "self-test: 8 workflow fixtures classified as expected"
+    echo "self-test: 11 workflow fixtures classified as expected"
   fi
   return $rc
 }

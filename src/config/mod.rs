@@ -11,6 +11,7 @@ mod config_file;
 mod env_overlay;
 mod features;
 mod input_schema;
+pub(crate) mod log_once;
 mod secret_file;
 mod secret_ref;
 mod strict_keys;
@@ -441,6 +442,7 @@ impl Config {
     ) -> Result<Evaluated> {
         let resolved = Self::prepare(path)?;
         Self::evaluate(resolved.as_ref(), home, Tolerance::Fail, Expansion::Resolve)
+            .inspect(Evaluated::log_env_files)
     }
 
     /// Re-evaluate against env files the running process already recorded.
@@ -748,18 +750,15 @@ impl Config {
 
     /// As [`Config::validate`], resolving `env:` references through `overlay`.
     ///
-    /// A separate entry point rather than a field on `Config`: validation runs
-    /// against the environment the load produced, and that environment is not
-    /// part of the config it validates.
+    /// A separate entry point rather than a field on `Config`: validation runs against
+    /// the environment the load produced, which is not part of the config it validates.
     ///
     /// # Errors
     ///
     /// Returns [`Error::ConfigValidation`] describing the first violation found.
     pub fn validate_with_env(&self, overlay: &EnvOverlay) -> Result<()> {
         // Port 0 is valid (OS-assigned ephemeral port); u16 caps the top.
-        if self.server.port == 0 {
-            tracing::warn!("Server port is 0; OS will assign an ephemeral port");
-        }
+        log_once::warn_port_zero(self.server.port, &log_once::PORT_ZERO_WARNED);
         // First, so no other reader touches a plaintext key (E4).
         self.auth.validate_api_key_material(overlay)?;
         // The router caps every body at this (C8), so 0 would refuse all of them.
@@ -787,6 +786,7 @@ impl Config {
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
         self.tasks.validate()?;
+        self.capabilities.egress_proxy_url()?;
         // Descriptor structure first, and separately: a `personal_managed`
         // descriptor under `enabled: false` must refuse, and the arm below
         // deliberately accepts `NotEnabled` from `resolve` so that an
