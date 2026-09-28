@@ -53,6 +53,10 @@ module = "src/security/audit_rotation_config.rs"
 reason = "the audit log's rotation settings and their load-time bounds; configuration, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/posture.rs"
+reason = "the security.posture switch raises other controls' settings at load; it refuses no request, and the controls it raises have their own rows"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_append.rs"
 reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
 
