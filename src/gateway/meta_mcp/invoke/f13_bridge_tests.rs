@@ -226,3 +226,56 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         "a tools/call went out"
     );
 }
+
+/// #1989: an operator kill between round one and a later bridged round
+/// refuses that round before it reaches the backend. `NotAdmitted`, so the
+/// idempotency key is not burned by work that never ran.
+#[tokio::test]
+async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
+    let backend = Arc::new(Backend::new(
+        "edits",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let slot = Arc::new(Slot::default());
+    backend.set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(backend));
+    let meta = MetaMcp::new(registry);
+    meta.kill_switch().kill("edits");
+    let arguments = json!({"edits": []});
+    let round = BridgeDispatcher {
+        meta: &meta,
+        server: "edits",
+        tool: "edit",
+        arguments: &arguments,
+        prompt_cache_key: None,
+        inbound_meta: None,
+        want_full: false,
+        session_id: None,
+        caller_identity: None,
+        caller_proof: CallerProof::Anonymous,
+        headers: &[],
+        cache_binding: None,
+        account_credential: None,
+        api_key_name: None,
+        trace_id: "mik-1989-bridged",
+        policy_epoch: 0,
+        protocol_revision: None,
+        routing_profile: "default",
+        scope: InvokeScope::allow_all(CallerStanding::Standard),
+        managed: None,
+        account_refusal: &parking_lot::Mutex::new(None),
+    };
+    let outcome = round.invoke(json!({})).await;
+    assert!(
+        matches!(outcome, Err(BridgeError::NotAdmitted { ref message }) if message.contains("kill switch")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        slot.calls.load(Ordering::SeqCst),
+        0,
+        "a killed server's round reached the transport"
+    );
+}
