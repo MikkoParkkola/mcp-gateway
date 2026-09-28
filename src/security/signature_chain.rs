@@ -275,14 +275,8 @@ pub(crate) fn verify_chain(
     now: u64,
 ) -> std::result::Result<Vec<ChainLink>, ChainRefusal> {
     // 1. Size caps before anything is parsed or verified, then schema.
-    if exceeds(chain, MAX_CHAIN_BYTES) {
-        return Err(ChainRefusal::Size);
-    }
     let items = chain.as_array().ok_or(ChainRefusal::Schema)?;
     if items.len() >= policy.max_links {
-        return Err(ChainRefusal::Size);
-    }
-    if items.iter().any(|item| exceeds(item, MAX_LINK_BYTES)) {
         return Err(ChainRefusal::Size);
     }
     let links = items
@@ -304,6 +298,12 @@ pub(crate) fn verify_chain(
         }
     }
 
+    if exceeds(chain, MAX_CHAIN_BYTES) {
+        return Err(ChainRefusal::Size);
+    }
+    if items.iter().any(|item| exceeds(item, MAX_LINK_BYTES)) {
+        return Err(ChainRefusal::Size);
+    }
     // 3. No hop admitted an unverified upstream.
     if links.iter().any(|link| link.up == Upstream::Unverified) {
         return Err(ChainRefusal::Unverified);
