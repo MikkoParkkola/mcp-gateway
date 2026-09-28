@@ -165,3 +165,60 @@ async fn ac_mrtr_7a_the_returned_last_round_is_gated_without_its_state() {
     );
     assert_eq!(gate.inspected().len(), 4, "expected the last round gated");
 }
+
+/// The per-request slice narrows the handed-back round as it narrows every
+/// asked one: a capability the session declared but the slice left out is
+/// refused, not handed back for the caller to answer.
+#[tokio::test]
+async fn ac_mrtr_7a_the_returned_last_round_is_held_to_the_slice() {
+    let content = json!({"branch": "main"});
+    let client = FakeClient::new(accepts(6, &content));
+    let mut rounds = vec![asking(&[("k", ask("again?"))]); 2];
+    rounds.push(asking(&[("k", entry("roots/list", &json!({})))]));
+    let backend = FakeBackend::new(rounds);
+    let records = Records::default();
+    let naming = ["elicitation".to_string()];
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        Some(&naming[..]),
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            outcome,
+            Err(BridgeError::Refused {
+                reason: Refusal::Capability(_),
+                ..
+            })
+        ),
+        "expected the out-of-slice last round refused, got {outcome:?}"
+    );
+}
+
+/// The handed-back round holds the backend's raw `requestState`, which the
+/// gateway never shows the caller, so the error's debug form must not either.
+#[test]
+fn ac_mrtr_7a_an_exhausted_error_does_not_print_the_backend_state() {
+    let mut body = asking(&[("k", ask("again?"))]);
+    body["requestState"] = json!("backend-state-secret-7");
+    let error = BridgeError::RoundsExhausted {
+        last: Some(Box::new(body)),
+    };
+
+    let shown = format!("{error:?}");
+
+    assert!(
+        !shown.contains("backend-state-secret-7"),
+        "expected the state redacted, got {shown}"
+    );
+    assert!(
+        shown.contains("RoundsExhausted"),
+        "expected the variant named, got {shown}"
+    );
+}
