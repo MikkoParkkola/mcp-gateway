@@ -38,7 +38,6 @@ use super::faults::{self, Boundary};
 use super::probe::{self, Outcome};
 use super::{AccountLookup, PersonalAccountStore, alice, config, grant};
 use std::io::Write as _;
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -115,13 +114,7 @@ fn candidates(store_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn write_private(path: &Path, bytes: &[u8]) {
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)
-        .unwrap();
+    let mut file = super::private_io::create_or_truncate(path);
     file.write_all(bytes).unwrap();
 }
 

@@ -93,6 +93,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
+        "src/identity_grants/journal.rs",
+        "grant-change journal append; O_NOFOLLOW, owner-only; no secret",
+    ),
+    (
         "src/mtls/cert_manager.rs",
         "reads through read_secret_file (R1, I1, I2); writes keys 0600 (W1) and public certs",
     ),
@@ -107,6 +111,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/personal_accounts/storage.rs",
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
+    ),
+    (
+        "src/private_fs.rs",
+        "Windows store custody: no-follow open, DACL judged on the handle (ADR-016)",
     ),
     (
         "src/registry/marketplace/mod.rs",
