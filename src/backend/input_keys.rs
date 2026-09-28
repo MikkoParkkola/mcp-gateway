@@ -127,7 +127,7 @@ impl Backend {
             Err(e) if mode == InputSchemaEnforcement::Closed && is_transport_failure(&e) => {
                 return Err(e);
             }
-            Err(_) => return Ok(unavailable(mode)),
+            Err(_) => return Ok(None),
         };
         // A store voided by a newer list (a list replaced the slot mid-fill)
         // is judged wholly from that list and its completeness, presence and
