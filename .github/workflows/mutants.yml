@@ -25,9 +25,10 @@ env:
   RUSTFLAGS: --cap-lints=warn
 
 jobs:
+  # Reads git only, so a hosted runner is enough wherever the rows run.
   plan:
     name: Plan mutant batch
-    runs-on: mcpgw-trusted-arm64
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       has_linux: ${{ steps.plan.outputs.has_linux }}
@@ -47,10 +48,43 @@ jobs:
       - id: plan
         run: python3 "$RUNNER_TEMP/run_mutants.py" plan
 
-  linux:
-    name: Mutants (linux, trusted arm64)
+  # Linux rows run on a hosted runner until the repository variable
+  # MCPGW_TRUSTED_RUNNER is `ready` (set once the self-hosted runner's
+  # registration checklist is complete), then on that runner. `runs-on` stays
+  # a literal on both jobs so the hosted-runner guard reads every label.
+  linux-hosted:
+    name: Mutants (linux)
     needs: plan
-    if: needs.plan.outputs.has_linux == 'true'
+    if: needs.plan.outputs.has_linux == 'true' && vars.MCPGW_TRUSTED_RUNNER != 'ready'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # The runner script comes from the release line, never from the tree
+      # under test: a source head that edited it could fake its own checks.
+      - name: Fetch the reviewed runner script
+        shell: bash
+        run: |
+          git fetch --quiet --depth=1 origin docs/ranking-1-release-line
+          git show FETCH_HEAD:scripts/ci/mutants/run_mutants.py > "$RUNNER_TEMP/run_mutants.py"
+      - name: Run the linux rows
+        run: python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out mutants-out
+      - name: Upload the per-mutant results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-${{ github.run_id }}-linux
+          path: mutants-out/
+          if-no-files-found: warn
+
+  linux-trusted:
+    name: Mutants (linux)
+    needs: plan
+    if: needs.plan.outputs.has_linux == 'true' && vars.MCPGW_TRUSTED_RUNNER == 'ready'
     runs-on: mcpgw-trusted-arm64
     timeout-minutes: 720
     env:

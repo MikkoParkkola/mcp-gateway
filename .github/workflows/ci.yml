@@ -74,6 +74,10 @@ jobs:
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
         run: python3 scripts/ci/mutants/run_mutants.py --self-test
+      - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/test_throwaway_routing.py
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
@@ -421,26 +425,48 @@ jobs:
       # that job provisions, and the gate below `needs` that job.
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
-  # The same test run for red-first and mutation-proof pull requests: a
-  # same-repo `throwaway/` branch into the release line. It runs on the
-  # project's own arm64 runner, so those runs hold no hosted runner, and every
-  # other job in this file skips them (the inverse condition above each job).
-  # Mutation evidence asks whether a named test fails on a mutant and passes
-  # on the fix; that is logic, not instruction set (nothing in the tree is
-  # conditional on the target architecture). Merge evidence stays on the
-  # hosted `Tests` job, which every other pull request and push still runs.
+  # The test run for red-first and mutation-proof pull requests: a same-repo
+  # `throwaway/` branch into the release line. Every other job in this file
+  # skips those runs (the inverse condition above each job), so a throwaway
+  # PR costs one runner. Merge evidence stays on the hosted `Tests` job, which
+  # every other pull request and push still runs.
   #
-  # Its own name, not `Tests`: main requires `Tests`, and a skipped job of
-  # the same name would read as passing there.
-  #
-  # The condition below is not the security boundary: a fork's pull request
-  # runs its own copy of this file. The runner itself refuses any job that is
+  # Two jobs, one name (`Tests (throwaway)`, never `Tests`: main requires
+  # `Tests`, and a skipped job of that name would read as passing there). The
+  # repository variable MCPGW_TRUSTED_RUNNER picks the host: unset, a hosted
+  # runner; `ready`, the project's own self-hosted runner, which is set only
+  # after that runner's registration checklist is complete. `runs-on` stays a
+  # literal on both, so the hosted-runner guard still reads every label.
+  test-throwaway-hosted:
+    name: Tests (throwaway)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER != 'ready' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # Restore only: saving from throwaway runs would evict the entries the
+      # merge-evidence jobs rely on from the shared 10 GB repository cache.
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          save-if: false
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+
+  # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
+  # named test fails on a mutant and passes on the fix; that is logic, not
+  # instruction set (nothing in the tree is conditional on the target
+  # architecture). The condition is not the security boundary: a fork's pull
+  # request runs its own copy of this file. The runner refuses any job that is
   # not a same-repo `throwaway/` pull request into the release line before a
   # step runs (scripts/ci/trusted-runner/), and fork workflows need approval.
   # No secrets and a read-only token, since the runner is persistent.
   test-trusted:
-    name: Tests (trusted arm64)
-    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') }}
+    name: Tests (throwaway)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER == 'ready' }}
     runs-on: mcpgw-trusted-arm64
     timeout-minutes: 60
     permissions:
@@ -452,9 +478,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      # Restore only: the cache key carries the host triple, so this reads arm64
-      # entries alone, and saving would let arm64 targets evict the hosted
-      # runners' entries from the shared repository cache.
+      # Restore only: saving from throwaway runs would evict the entries the
+      # merge-evidence jobs rely on from the shared 10 GB repository cache.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           save-if: false
