@@ -239,6 +239,7 @@ fn startup_warn_matches_unhardened_table() {
                 let line = &records[0].1;
                 assert!(line.contains("preset=team_shared"), "{records:?}");
                 assert!(line.contains("non_bypassable=true"), "{records:?}");
+                assert!(line.contains("anomaly_block_threshold=1"), "{records:?}");
             }
         }
     }
@@ -278,4 +279,59 @@ fn gateway_startup_logs_posture_once() {
             assert!(records[0].1.contains("non_bypassable=true"), "{records:?}");
         }
     }
+}
+
+// ── A1: hardened forces anomaly blocking ─────────────────────────────────────
+
+fn firewall_yaml(posture: &str, block: Option<&str>) -> String {
+    let block = block.map_or(String::new(), |b| {
+        format!("    anomaly_block_threshold: {b}\n")
+    });
+    format!(
+        "security:\n  posture: {posture}\n  firewall:\n    enabled: false\n    \
+         anomaly_detection: false\n{block}"
+    )
+}
+
+fn load_err(body: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    Config::load(Some(&write_yaml(&dir, body)))
+        .expect_err("refused")
+        .to_string()
+}
+
+#[test]
+fn hardened_forces_anomaly_blocking() {
+    for (block, expected) in [(None, 1.0), (Some("0.95"), 0.95), (Some("0.9"), 0.9)] {
+        let config = load(&firewall_yaml("hardened", block));
+        let firewall = &config.security.firewall;
+        assert!(firewall.enabled, "{block:?}: firewall forced on");
+        assert!(firewall.anomaly_detection, "{block:?}: detection forced on");
+        assert_eq!(
+            firewall.anomaly_block_threshold,
+            Some(expected),
+            "{block:?}: block threshold"
+        );
+    }
+}
+
+#[test]
+fn standard_posture_leaves_the_firewall_alone() {
+    let config = load(&firewall_yaml("standard", None));
+    let firewall = &config.security.firewall;
+    assert!(!firewall.enabled);
+    assert!(!firewall.anomaly_detection);
+    assert_eq!(firewall.anomaly_block_threshold, None);
+}
+
+#[test]
+fn hardened_refuses_a_block_threshold_below_the_floor() {
+    let error = load_err(&firewall_yaml("hardened", Some("0.85")));
+    assert!(error.contains("anomaly_block_threshold"), "{error}");
+    assert!(error.contains("0.9"), "names the floor: {error}");
+    // Above 1.0 is refused by the range check the forced detection enables.
+    let error = load_err(&firewall_yaml("hardened", Some("1.5")));
+    assert!(error.contains("anomaly_block_threshold"), "{error}");
+    // Standard keeps its own semantics: detection off, nothing checked.
+    load(&firewall_yaml("standard", Some("0.85")));
 }

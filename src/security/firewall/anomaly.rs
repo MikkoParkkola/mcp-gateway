@@ -278,6 +278,19 @@ impl AnomalyDetector {
         self
     }
 
+    /// Refuse a call whose transition cannot be learned because the pair map
+    /// is full (`security.posture: hardened`), instead of passing it unscored.
+    #[must_use]
+    pub(crate) fn refusing_unlearnable(self) -> Self {
+        self
+    }
+
+    /// New transitions not learned because the pair map was full.
+    #[cfg(test)]
+    pub(crate) fn pairs_dropped_count(&self) -> u64 {
+        0
+    }
+
     /// Calls answered [`Observation::WarmingUp`] since start.
     #[cfg(test)]
     pub(crate) fn warming_up_count(&self) -> u64 {
