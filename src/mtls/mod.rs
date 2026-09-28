@@ -50,6 +50,8 @@ pub mod config;
 pub mod identity;
 
 #[cfg(test)]
+mod ip_san_tests;
+#[cfg(test)]
 mod mode_tests;
 
 pub use access_control::{MtlsPolicy, PolicyDecision};
