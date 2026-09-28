@@ -4,6 +4,8 @@
 # Decides whether a pull request changes documentation only.
 #
 #   changed-scope.sh <base sha> <pr number> <head sha>   prints docs_only=true|false
+#     (the base SHA is accepted for the callers but unused: the listing comes
+#      from the PR test-merge commit, see from_git_in)
 #   changed-scope.sh --classify < NUL-separated paths    same, for a path list
 #   changed-scope.sh --self-test
 #
@@ -39,16 +41,20 @@ from_git() {
 }
 
 from_git_in() {
-  local probe=$1 base=$2 pr=$3 head=$4 repo_url=$5
+  local probe=$1 pr=$3 head=$4 repo_url=$5
   git init -q "$probe"
-  # The head through refs/pull/<n>/head, which the base repository holds for
-  # fork pull requests too; checked against the event's head SHA.
-  git -C "$probe" fetch -q --depth=1 "$repo_url" "$base" "+refs/pull/$pr/head:refs/probe/head" || return 1
-  [[ $(git -C "$probe" rev-parse refs/probe/head) == "$head" ]] || return 1
+  # GitHub's test-merge commit refs/pull/<n>/merge: first parent is the base
+  # tip, second the PR head. Diffing the merge against its first parent lists
+  # exactly what the PR changes, however far the base has moved since the PR
+  # branched (a plain base-vs-head diff would count base-only changes too).
+  # The base repository holds this ref for fork pull requests as well. Missing
+  # or stale (a conflicting PR has none): the caller falls back to running all.
+  git -C "$probe" fetch -q --depth=2 "$repo_url" "+refs/pull/$pr/merge:refs/probe/merge" || return 1
+  [[ $(git -C "$probe" rev-parse refs/probe/merge^2) == "$head" ]] || return 1
   # --no-renames: a rename from src/ to docs/ lists both sides.
   # Into a file, not a pipe: classify stops at the first code path, and the
   # writer's SIGPIPE would then read as a failed listing under pipefail.
-  git -C "$probe" diff -z --no-renames --name-only "$base" "$head" >"$probe/paths" || return 1
+  git -C "$probe" diff -z --no-renames --name-only refs/probe/merge^1 refs/probe/merge >"$probe/paths" || return 1
   classify <"$probe/paths"
 }
 
