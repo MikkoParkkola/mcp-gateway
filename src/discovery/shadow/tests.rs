@@ -16,23 +16,23 @@ fn stdio_server(
     pid: Option<u32>,
     port: Option<u16>,
 ) -> DiscoveredServer {
-    DiscoveredServer {
-        name: name.to_string(),
-        description: description.to_string(),
+    DiscoveredServer::new(
+        name.to_string(),
+        description.to_string(),
         source,
-        transport: TransportConfig::Stdio {
+        TransportConfig::Stdio {
             command: command.to_string(),
             cwd: None,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: config_path.map(PathBuf::from),
             pid,
             port,
             command: Some(command.to_string()),
             working_dir: None,
         },
-    }
+    )
 }
 
 fn http_server(
@@ -43,23 +43,23 @@ fn http_server(
     pid: Option<u32>,
     port: Option<u16>,
 ) -> DiscoveredServer {
-    DiscoveredServer {
-        name: name.to_string(),
-        description: description.to_string(),
+    DiscoveredServer::new(
+        name.to_string(),
+        description.to_string(),
         source,
-        transport: TransportConfig::Http {
+        TransportConfig::Http {
             http_url: url.to_string(),
             streamable_http: false,
             protocol_version: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             config_path: None,
             pid,
             port,
             command: None,
             working_dir: None,
         },
-    }
+    )
 }
 
 fn report(discovered: &[DiscoveredServer], registered: &[&str]) -> ShadowScanReport {
@@ -385,5 +385,24 @@ fn a_dns_name_beginning_127_is_reported_network_exposed() {
     assert_eq!(
         classify_severity(&exposure, &ShadowDataRisk::Unknown),
         ShadowRiskSeverity::High
+    );
+}
+
+#[test]
+fn executable_name_parses_a_quoted_program_path() {
+    let argv = ["/opt/My Tools/srv".to_string(), "--flag".to_string()];
+    let command = crate::transport::join_command(&argv).expect("joinable");
+    assert_eq!(
+        executable_name(&command).as_deref(),
+        Some("srv"),
+        "{command}"
+    );
+}
+
+#[test]
+fn executable_name_keeps_raw_process_text_literal() {
+    assert_eq!(
+        executable_name("/usr/bin/it's-srv --port 1").as_deref(),
+        Some("it's-srv")
     );
 }

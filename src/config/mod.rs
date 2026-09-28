@@ -39,6 +39,7 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
+pub(crate) use secret_ref::is_template_syntax;
 
 // New items (F18), not widened ones: the one mode-checked read for files
 // outside `config`.
