@@ -444,6 +444,8 @@ pub(crate) struct LockedRead {
 /// cannot be written: the only case where reading without the lock is safe.
 /// A lock file another account made unreadable is not that case.
 fn lock_dir_is_unwritable(lock: &Path, error: &std::io::Error) -> bool {
+    #[cfg(not(unix))]
+    let _ = lock;
     match error.kind() {
         std::io::ErrorKind::ReadOnlyFilesystem => true,
         #[cfg(unix)]
