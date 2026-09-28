@@ -529,7 +529,7 @@ impl ConfigScanner {
     ) -> Option<DiscoveredServer> {
         let flat =
             config.get("command").is_some_and(Value::is_string) || config.get("url").is_some();
-        if !flat {
+        if flat {
             return None;
         }
         Self::parse_server_config(name, config, &DiscoverySource::Zed, config_path)
