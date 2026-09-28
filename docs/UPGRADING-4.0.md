@@ -17,7 +17,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 75, 77, 78, 83 and 85 print no notice: read them here
+that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 75, 77, 78, 80, 83, 84 and 85 print no notice: read them here
 before upgrading.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
@@ -107,11 +107,11 @@ upgrading a running deployment.
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Reserved: lands with a pending change | None yet |
-| 80 | Reserved: lands with a pending change | None yet |
+| 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
-| 84 | Reserved: lands with a pending change | None yet |
+| 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 
 
@@ -1993,6 +1993,41 @@ directory share its accounts.
 
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
 
+## 80. Discovery keeps env, headers and argument boundaries
+
+`mcp-gateway cap discover` and the setup wizard import MCP servers from client config files
+(Claude, Cursor, Windsurf, Codex, Zed). They used to keep only the command line or URL:
+
+- a server's `env` (stdio) and `headers` (HTTP) were dropped, so an imported backend could not
+  start or authenticate;
+- `args` were joined with spaces, so an argument containing a space or a quote changed;
+- Zed's `settings.json`, which allows comments and trailing commas, was skipped when it had any.
+
+In 4.0 all three survive. `cap discover --write-config` writes the `env` and `headers` values
+into the backend it adds; on Unix the config file is written owner-only (item 35). Those values are usually
+credentials, so everywhere else they are shown by key only: discover's JSON and YAML output,
+logs and `Debug` output print `<redacted>` for every value; the table and `--shadow` reports
+do not show them.
+
+A client's `${env:NAME}` is written as the gateway's `${NAME}`. A key whose value uses a variable
+only the client resolves (`${input:…}`, `${workspaceFolder}`, `${userHome}`) is left out, with a
+warning naming the client, server and key, so the written config always loads.
+
+A value that contains `${VAR}` is expanded by the gateway when the config loads, like any backend
+`env` or `headers` value; if `VAR` is not set, the load is refused and the error names the field
+(`backends.<name>.env.<KEY>`).
+
+`setup export --target zed` into a settings file with comments or trailing commas no longer fails
+with a bare parse error: it leaves the file untouched and prints the entry to paste by hand.
+
+For code that uses the library, `mcp_gateway::discovery::DiscoveredServer` gains the fields `env`
+and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is now
+`#[non_exhaustive]`. Build one with `DiscoveredServer::new` and set the fields after.
+
+**Action:** after `cap discover --write-config`, review the written backends: they now carry the
+credentials the client config held. Library users replace struct literals with
+`DiscoveredServer::new`.
+
 ## 83. `MigratedCredential` has a public `reachability` field
 
 `accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
@@ -2004,6 +2039,28 @@ library users, the report type
 
 **Action:** library users only. Code that builds `MigratedCredential` with a struct literal, or
 destructures it without a trailing `..`, no longer compiles; read the fields of the value `migrate_legacy_credential_offline` returns instead.
+
+## 84. Capability OAuth refresh sends tokens only where the capability may call
+
+A capability with an `oauth:` credential refreshes an expired token by sending the refresh
+token, the client ID and any client secret to its `auth.token_endpoint`. That endpoint was
+never checked: a capability could name a loopback, private or cloud-metadata IP address as
+its token endpoint and receive them there.
+
+In 4.0 the token endpoint gets the same destination check as the capability's own request
+URL, before anything is sent:
+
+- An IP-literal endpoint in a private, loopback, link-local or metadata range is refused.
+  The refresh fails and the stored token stays expired, so the caller must re-authenticate.
+- An endpoint named by hostname is resolved and checked on a direct connection, like any
+  capability call, and refused if it resolves to such an address.
+- Error messages that name a malformed URL no longer include its userinfo, query or
+  fragment.
+
+**Action:** if a capability's identity provider lives on a private network, name it by
+hostname and set `capabilities.egress_proxy` to a proxy that can reach it (item 77): the
+proxy resolves the name, so the refresh goes through it. An IP-literal private endpoint is
+refused either way.
 
 ## 85. The response firewall scans object keys
 
