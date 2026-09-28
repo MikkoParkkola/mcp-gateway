@@ -208,10 +208,14 @@ def run_cmd(cmd: list[str], limit: int, log: Path) -> Outcome:
         leaked = os.name != "nt" and not group_gone(proc.pid)
         buf.seek(0)
         output = buf.read()
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(f"$ {' '.join(cmd)}\n{output}", encoding="utf-8")
-    if leaked:
-        raise ProcessLeak(f"a process of `{' '.join(cmd)}` survived SIGKILL for 10 s; see {log}")
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"$ {' '.join(cmd)}\n{output}", encoding="utf-8")
+    finally:
+        # A failed log write must not turn a leak into a plain error: that
+        # would let the caller revert the tree under a live test process.
+        if leaked:
+            raise ProcessLeak(f"a process of `{' '.join(cmd)}` survived SIGKILL for 10 s; see {log}")
     return Outcome(proc.returncode, output, timed_out)
 
 
