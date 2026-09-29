@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all twenty-five items, each named by the
+/// GH475.MIG.4 — the notice carries all thirty items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_twenty_five_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 25);
+fn notice_4_0_0_carries_all_thirty_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 30);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -44,6 +44,10 @@ fn notice_4_0_0_carries_all_twenty_five_items() {
         "audit_segment_expired",
         "minted by the gateway",
         "without the `requeststate`",
+        "-32022",
+        "proven principal",
+        "expose_stats_tool",
+        "refuses (403)",
     ] {
         assert!(
             all.contains(expected),
@@ -146,31 +150,47 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (49, "audit_segment_expired"),
     (58, "minted by the gateway"),
     (55, "without the `requeststate`"),
+    (59, "lists the backend"),
+    (90, "-32022"),
+    (91, "proven principal"),
+    (92, "expose_stats_tool"),
+    (93, "refuses (403)"),
 ];
 
-/// The item numbers the guide says the first start prints: the list after
-/// "one-time notice to stderr listing items" up to "below", ranges expanded.
+/// The item numbers the guide says the first start prints: every section whose
+/// startup marker, the first non-blank line after its heading, begins with
+/// `**Startup:** prints a notice`.
+///
+/// Line endings are normalised first: a Windows checkout reads the guide with
+/// CRLF.
 fn guide_notice_items(doc: &str) -> std::collections::BTreeSet<u32> {
-    let flat = doc.split_whitespace().collect::<Vec<_>>().join(" ");
-    let start = flat
-        .find("one-time notice to stderr listing items ")
-        .expect("the guide no longer says which items the notice lists")
-        + "one-time notice to stderr listing items ".len();
-    let list = &flat[start..start + flat[start..].find(" below").expect("list ends in 'below'")];
+    let doc = doc.replace("\r\n", "\n");
     let mut items = std::collections::BTreeSet::new();
-    for part in list.replace(" and ", ", ").split(", ") {
-        let part = part.trim();
-        if let Some((a, b)) = part.split_once('-') {
-            let (a, b): (u32, u32) = (a.parse().unwrap(), b.parse().unwrap());
-            items.extend(a..=b);
-        } else {
-            items.insert(
-                part.parse()
-                    .unwrap_or_else(|_| panic!("not an item: {part:?}")),
-            );
+    for section in doc.split("\n## ").skip(1) {
+        let Some((number, rest)) = section.split_once(". ") else {
+            continue;
+        };
+        let Ok(n) = number.parse::<u32>() else {
+            continue;
+        };
+        let marker = rest.lines().skip(1).find(|l| !l.trim().is_empty());
+        if marker.is_some_and(|l| l.starts_with("**Startup:** prints a notice")) {
+            items.insert(n);
         }
     }
     items
+}
+
+/// A CRLF checkout (Windows) reads the same markers as an LF one.
+#[test]
+fn guide_notice_items_reads_crlf() {
+    let doc = "Intro.\r\n\r\n## 1. One\r\n\r\n**Startup:** prints a notice\r\n\r\nBody.\r\n\r\n\
+               ## 2. Two\r\n\r\n**Startup:** no notice\r\n\r\n\
+               ## 6. Six\r\n\r\n**Startup:** prints a notice; refuses to start\r\n";
+    assert_eq!(
+        guide_notice_items(doc),
+        std::collections::BTreeSet::from([1, 6])
+    );
 }
 
 /// The guide's list of notice items matches the notice. A notice item the list
@@ -204,6 +224,6 @@ fn upgrading_guide_lists_exactly_the_items_the_notice_prints() {
     let listed = guide_notice_items(include_str!("../../docs/UPGRADING-4.0.md"));
     assert_eq!(
         listed, printed,
-        "docs/UPGRADING-4.0.md lists notice items {listed:?}; the notice prints {printed:?}"
+        "docs/UPGRADING-4.0.md marks items {listed:?} as printing a notice; the notice prints {printed:?}"
     );
 }

@@ -320,10 +320,13 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         let send_resource = descriptor
             .send_resource_parameter
             .ok_or(ProviderRefreshError::Unavailable)?;
+        // Permanent, not transient (#2255): with no refresh token the grant can
+        // never be refreshed, so it must reconnect rather than stay Connected
+        // and fail as "unavailable" on every call.
         let refresh_token = current
             .refresh_token
             .as_deref()
-            .ok_or(ProviderRefreshError::Unavailable)?;
+            .ok_or(ProviderRefreshError::InvalidGrant)?;
 
         // The snapshot bootstrap accepted, and the only endpoint this refresh
         // will talk to. No discovery happens here, ever.

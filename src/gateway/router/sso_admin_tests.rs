@@ -259,3 +259,7 @@ mod cells;
 #[cfg(feature = "webui")]
 #[path = "sso_admin_tests/admin_action.rs"]
 mod admin_action;
+/// E5-T7: an SSO admin cannot mint a dashboard link it could not redeem.
+#[cfg(feature = "webui")]
+#[path = "sso_admin_tests/dashboard_link.rs"]
+mod dashboard_link;

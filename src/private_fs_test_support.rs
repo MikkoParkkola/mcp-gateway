@@ -257,3 +257,20 @@ pub(crate) fn assert_owner_only(row: &str, path: &Path, dir: bool) {
         path.display()
     );
 }
+
+/// A temp directory whose DACL lets Everyone do anything and hands that to
+/// every child, so a file created in it inherits a hostile descriptor unless
+/// the creator sets its own.
+pub(crate) fn everyone_full_dir(row: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| fixture_fail(row, &e.to_string()));
+    icacls(row, dir.path(), &["/grant", "*S-1-1-0:(OI)(CI)F"]);
+    dir
+}
+
+/// Plant `path` with the user as owner, a protected DACL granting the user
+/// everything, plus `extra` (an SDDL ACE such as `(A;;FR;;;WD)`, or empty).
+pub(crate) fn plant_file_with(row: &str, path: &Path, extra: &str) {
+    let user = user_sid();
+    let sddl = format!("O:{user}D:P(A;;FA;;;{user}){extra}");
+    plant_sddl(row, path, &sddl, &sddl);
+}

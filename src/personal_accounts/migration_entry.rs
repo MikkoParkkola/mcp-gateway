@@ -47,6 +47,9 @@ pub(in crate::personal_accounts) struct MigrationRequest<'a> {
     pub(in crate::personal_accounts) bound_backend: &'a str,
     /// `--legacy-backend-name`, for a backend renamed since 3.x.
     pub(in crate::personal_accounts) legacy_backend_name: Option<&'a str>,
+    /// The resource 3.x hashed the token file over: the backend's own
+    /// `http_url`, which need not equal the descriptor resource (#2262).
+    pub(in crate::personal_accounts) legacy_resource: &'a str,
     /// `--legacy-issuer`: the authorization server the caller asserts issued
     /// this credential. Never defaulted from the descriptor.
     pub(in crate::personal_accounts) legacy_issuer: &'a str,
@@ -95,7 +98,7 @@ pub(in crate::personal_accounts) fn migrate_backend(
     request: &MigrationRequest<'_>,
 ) -> Result<MigrationOutcome, MigrationRefusal> {
     let backend_name = request.legacy_backend_name.unwrap_or(request.bound_backend);
-    let path: PathBuf = legacy.token_path(backend_name, &request.key_descriptor.resource);
+    let path: PathBuf = legacy.token_path(backend_name, request.legacy_resource);
 
     // Loud, per design 5.3c.1: a resolved path that does not exist must not
     // read as "nothing to migrate".
@@ -121,6 +124,11 @@ pub(in crate::personal_accounts) fn migrate_backend(
         client_id,
         generation,
         revision,
+        // An unreadable clock reads as "everything has expired": it can only
+        // refuse an unrefreshable credential, never admit one.
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(u64::MAX, |since| since.as_secs()),
     )?;
 
     let account = account_key(request)?;

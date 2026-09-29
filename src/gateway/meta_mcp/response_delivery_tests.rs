@@ -44,18 +44,17 @@ impl Fixture {
         logging: bool,
     ) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let firewall = Arc::new(Firewall::from_config(
-            FirewallConfig {
-                enabled,
-                scan_responses,
-                scan_requests: false,
-                audit_log: Some(directory.path().join("firewall.ndjson")),
-                rules,
-                ..FirewallConfig::default()
-            },
-            None,
-        ));
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let config = FirewallConfig {
+            enabled,
+            scan_responses,
+            scan_requests: false,
+            audit_log: Some(directory.path().join("firewall.ndjson")),
+            rules,
+            ..FirewallConfig::default()
+        };
+        let firewall =
+            Arc::new(Firewall::from_config(config, None).with_continuations(meta.continuation()));
         meta.set_firewall(Some(Arc::clone(&firewall)));
         if logging {
             let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -162,11 +161,11 @@ fn shaped_response(text: &str) -> JsonRpcResponse {
 }
 
 fn read_events(path: &std::path::Path) -> Vec<Value> {
-    std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
+    let text = std::fs::read_to_string(path).unwrap();
+    let parsed = text.lines().map(serde_json::from_str::<Value>);
+    let mut events: Vec<Value> = parsed.map(Result::unwrap).collect();
+    events.retain(|e| e["event"] != "audit_segment_opened"); // genesis record (#2275)
+    events
 }
 
 // Independent serializer and SHA-256, not the production helpers; exact integers.
@@ -728,7 +727,7 @@ fn firewall_delivery_attempt_preserves_existing_invocation_and_hash_chain() {
         "new attempt must extend the same chain: {}",
         verified.error_message.unwrap_or_default()
     );
-    assert_eq!(verified.entries_checked, 2);
+    assert_eq!(verified.entries_checked, 3); // plus the genesis record (#2275)
 }
 
 /// MIK-7407.RESPONSE.5; FWR-15 handle one append Err without replay or output change.
@@ -794,7 +793,10 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
     assert_eq!(logger.append_attempts_for_test(), 3);
     let events = fixture.attempts();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["counter"], 1);
+    assert_eq!(events[0]["counter"], 2); // 1 is the genesis record (#2275)
     assert_attempt(&events[0], &next);
     fixture.assert_counts(2);
 }
+
+#[path = "response_delivery_tests/minted.rs"]
+mod minted;

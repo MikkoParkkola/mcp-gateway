@@ -123,6 +123,10 @@ pub fn fixture_config(backend_url: &str) -> Value {
     json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true},
         "cache": {"enabled": false},
+        // Relative to the child's own directory. `HOME` cannot isolate it on
+        // Windows (`dirs::home_dir` ignores it), so parallel fixtures would
+        // fight over the runner profile's task store.
+        "tasks": {"store_dir": "tasks"},
         "backends": {(BACKEND): {"http_url": backend_url, "streamable_http": true}},
         "security": {
             "trust_configured_backends": true,
@@ -139,6 +143,8 @@ pub fn child_command(directory: &Path, config_path: &Path) -> Command {
         .env("HOME", directory)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
+        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
         .current_dir(directory)
         .arg("--config")
         .arg(config_path)
@@ -166,6 +172,12 @@ impl HttpGateway {
     /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
         const MAX_ATTEMPTS: u32 = 5;
+        // Every child gets its own task store (relative to its cwd): HOME cannot
+        // isolate it on Windows, and the runner's shared store is single-owner.
+        let mut config = config;
+        if config["tasks"].get("store_dir").is_none() {
+            config["tasks"]["store_dir"] = json!("tasks");
+        }
         for attempt in 1..=MAX_ATTEMPTS {
             match Self::try_start(config.clone(), env).await {
                 Ok(gateway) => return gateway,

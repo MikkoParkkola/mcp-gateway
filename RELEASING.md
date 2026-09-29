@@ -81,6 +81,24 @@ python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # rev
 python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
 ```
 
+For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
+section, so that the release leaves exactly one `[4.0.0]` heading. Before the fold,
+every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
+or its mention removed from the draft.
+
+1. Rename `## [Unreleased]` to `## [4.0.0] - <date>`.
+2. Move every bullet of `## [4.0.0] - Unreleased`, and its upgrading and performance-numbers
+   notes, into the matching subsection of the new heading. Copy (don't move) into the new heading every
+   bullet that appears only in `[4.0.0-beta.1]` or `[4.0.0-beta.2]`. The beta sections keep their bullets as
+   history. Create a missing subsection in the order Added, Changed, Removed, Fixed, Security.
+3. Delete the old heading and its "Not tagged yet" note.
+4. Reword the beta prefaces so each one says what that beta was, in the past tense, and points to
+   the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
+   criteria open or lists known gaps.
+5. Give every Security entry in the new heading the versions it affects and what an operator
+   has to do, or "no action" when there is nothing to do.
+6. Add a new empty `## [Unreleased]` above.
+
 Then, once that pull request has merged:
 
 ```sh
@@ -170,7 +188,7 @@ gh run list --commit "$(git rev-parse HEAD)" --event push --json workflowName,da
 | Stage (job) | Verify |
 |---|---|
 | `release.yml` `verify` | `Check tag against manifest and classify the channel` classified the tag as `stable`; `Verify publish package` (`cargo publish --dry-run`) green |
-| `release.yml` `release` | `gh release view v4.0.0` shows 5 binaries, the license files and `SHA256SUMS.txt`; not marked prerelease. Download and run `sha256sum -c SHA256SUMS.txt` |
+| `release.yml` `release` | The job signs each binary, writes its SBOM, uploads everything to a **draft**, verifies what the draft serves (`Verify the draft release's assets`), and only then publishes. `gh release view v4.0.0` shows 5 binaries, each with `.spdx.json` and `.sigstore.json`, the license files, and `SHA256SUMS.txt` with its bundle; not marked prerelease. Download one binary and run `cosign verify-blob --bundle <binary>.sigstore.json --certificate-identity https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/release.yml@refs/tags/v4.0.0 --certificate-oidc-issuer https://token.actions.githubusercontent.com <binary>` and `sha256sum -c SHA256SUMS.txt`. Rehearse before tagging: `gh workflow run ci.yml --ref <branch> -f rehearse_binary_signing=true` signs one binary into a draft release, verifies it, and deletes it |
 | `release.yml` `publish` | `xh https://crates.io/api/v1/crates/mcp-gateway/4.0.0` returns the version (200, not 404); `cargo search` reads a search index that can lag, so do not rely on it; `cargo install mcp-gateway --version 4.0.0` succeeds |
 | `release.yml` `npm-publish` | `npm view @mikkoparkkola/mcp-gateway dist-tags` shows `latest: 4.0.0`; `npm view @mikkoparkkola/mcp-gateway@4.0.0 dist.attestations` is present |
 | `release.yml` `homebrew-update` | `MikkoParkkola/homebrew-tap` has commit `mcp-gateway 4.0.0`; `brew update && brew upgrade mcp-gateway && mcp-gateway --version` prints 4.0.0 |
@@ -194,7 +212,9 @@ scripts/ci/smoke-full-image.sh ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-full
 
 A host only pulls its own architecture. Run it on both an amd64 and an arm64 host, or
 cite the per-architecture CI legs (`Docker (amd64)`, `Docker (arm64)`) for the
-architecture you did not run. Also confirm the stable pointers moved and are signed:
+architecture you did not run. Also confirm the stable pointers moved and are signed, with
+cosign 2.6.5 or later on 2.x, or 3.1.3 or later on 3.x (earlier versions accept signatures they should refuse:
+GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m):
 
 ```sh
 for t in 4.0.0 4.0 latest; do crane digest ghcr.io/mikkoparkkola/mcp-gateway:$t; done   # all three equal
@@ -233,9 +253,11 @@ this runbook does not edit the ledger.
 
 1. **Re-run failed jobs in the same run. Do not re-push the tag or dispatch a new run.**
    `gh run rerun <run-id> --failed` re-runs only the failed jobs and the jobs that depend
-   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` at
-   `--ref v4.0.0` with `tag: v4.0.0`; a dispatch from any other ref is refused) repeats
-   every publish that already succeeded. On crates.io and npm that
+   on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` with
+   `tag: v4.0.0`) repeats every publish that already succeeded. A dispatch must run at
+   the tag itself (`gh workflow run release.yml --ref v4.0.0 -f tag=v4.0.0`): `resolve`
+   refuses one started from any other ref, which would build that ref and sign the
+   binaries as it. On crates.io and npm that
    is a hard failure, because the version already exists.
    **A re-run builds the tagged commit again.** It cannot pick up a fix pushed to a
    branch afterwards. Re-run only for a transient failure: a runner, network or registry

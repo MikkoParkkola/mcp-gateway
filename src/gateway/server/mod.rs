@@ -17,6 +17,7 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+mod listener;
 mod persistence;
 #[cfg(test)]
 mod replica_state_tests;
@@ -72,10 +73,10 @@ use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 use control_plane_store::{build_control_plane_store, control_plane_base};
-use identity_grants::{identity_grant_sink_for, load_configured_identity_grants};
+use identity_grants::load_configured_identity_grants;
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
-use support::{log_startup_banner, serve_tls, shutdown_signal};
+use support::{log_startup_banner, shutdown_signal};
 
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
@@ -309,6 +310,10 @@ pub struct Gateway {
     config: Config,
     /// Path to config file on disk (enables hot-reload when `Some`)
     config_path: Option<std::path::PathBuf>,
+    /// A config file found by discovery rather than named (#1868): watched and
+    /// reloaded, but never used where `config_path` picks a location (the
+    /// governance store) or grants a write (admin config edits).
+    watched_config: Option<std::path::PathBuf>,
     /// Backend registry
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
@@ -486,6 +491,30 @@ fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json:
 }
 
 impl Gateway {
+    /// A firewall with its own transition tracker. Both transports build theirs
+    /// here, so each leaves the continuations `meta_mcp` minted unredacted
+    /// (#2210).
+    #[cfg(feature = "firewall")]
+    fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
+        let fw_cfg = self.config.security.firewall.clone();
+        let fw_enabled = fw_cfg.enabled;
+        let tt = if fw_cfg.anomaly_detection {
+            Some(Arc::new(TransitionTracker::new()))
+        } else {
+            None
+        };
+        let fw = Arc::new(
+            Firewall::from_config(fw_cfg, tt)
+                .with_env(Arc::clone(&self.env))
+                .with_continuations(meta_mcp.continuation())
+                .with_posture(self.config.security.posture),
+        );
+        if fw_enabled {
+            info!("Security firewall enabled (RFC-0071)");
+        }
+        fw
+    }
+
     /// Create a new gateway
     ///
     /// # Errors
@@ -600,6 +629,7 @@ impl Gateway {
             data_dir: None,
             config,
             config_path,
+            watched_config: None,
             backends,
             shutdown_tx: None,
             // The environment the config was just validated against, retained:
@@ -621,6 +651,25 @@ impl Gateway {
     pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
         self.env = env;
         self
+    }
+
+    /// Watch and hot-reload `path`, a config file found by discovery (#1868).
+    ///
+    /// This only sets the watched path: the config watcher, the env-file poll
+    /// and the reload context use it when no config path was named. It does
+    /// not change `config_path`, so the governance store location, admin
+    /// config writes and the shadow scan behave exactly as for a gateway
+    /// started without `--config`. A named config path still wins.
+    #[must_use]
+    pub fn with_watched_config(mut self, path: std::path::PathBuf) -> Self {
+        self.watched_config = Some(path);
+        self
+    }
+
+    /// The config file this gateway watches and reloads: the named one, else
+    /// the one discovery found.
+    fn reload_path(&self) -> Option<&std::path::PathBuf> {
+        self.config_path.as_ref().or(self.watched_config.as_ref())
     }
 
     /// Create a gateway from an already evaluated config and the environment it
@@ -1181,21 +1230,7 @@ impl Gateway {
         // (see `AppState`); each keeps its own `TransitionTracker`.
         #[cfg(feature = "firewall")]
         {
-            let fw_cfg = self.config.security.firewall.clone();
-            let fw_enabled = fw_cfg.enabled;
-            let fw_tt = if fw_cfg.anomaly_detection {
-                Some(Arc::new(TransitionTracker::new()))
-            } else {
-                None
-            };
-            let fw = Arc::new(
-                Firewall::from_config(fw_cfg, fw_tt)
-                    .with_env(Arc::clone(&self.env))
-                    .with_posture(self.config.security.posture),
-            );
-            if fw_enabled {
-                info!("Security firewall enabled (RFC-0071)");
-            }
+            let fw = self.response_firewall(&meta_mcp);
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")
                 .set_firewall(Some(fw));
@@ -1377,7 +1412,7 @@ impl Gateway {
             let scan = async move {
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    CapabilityBackend::settle_before_initial_scan().await;
                 }
 
                 let mut total_caps = 0;
@@ -1521,17 +1556,19 @@ impl Gateway {
         let export_status =
             spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
 
-        // Wire the config hot-reload *context* into meta_mcp before it moves
-        // into AppState. The file watcher that can mutate `live_config` is
-        // started later (after `create_router`) so the router's startup
-        // bind-origin snapshot reads `live_config` while it still equals the
-        // config the listener binds — no startup reload race (MIK-6750 r4).
-        // ONE sink for the meta-tool context and the watcher: its mutex is what
-        // serializes grant reloads, and a second sink over the same store would
-        // let a watcher reload and a meta-tool reload race to publish.
-        let identity_grant_sink =
-            identity_grant_sink_for(&self.config.security.identity_grants, &meta_mcp);
-        if let Some(ref path) = self.config_path {
+        // Reload context into meta_mcp before AppState; the watcher starts after
+        // `create_router`, so the bind-origin snapshot sees the bound config
+        // (MIK-6750 r4). ONE grant sink for meta-tool and watcher (its mutex
+        // serializes grant reloads), built after the store it records into.
+        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
+        let identity_grant_sink = identity_grants::start_identity_grant_audit(
+            &self.config,
+            &meta_mcp,
+            control_plane_store.as_ref(),
+            &control_plane_base.path,
+        )
+        .await?;
+        if let Some(path) = self.reload_path() {
             // Ends this context's reload waits on shutdown (#1808): axum's
             // graceful shutdown waits for every handler, and an admin or
             // meta-tool reload waiting on a stalled NFS or FUSE read would
@@ -1703,7 +1740,7 @@ impl Gateway {
         // isolated. Detection is fail-closed — any enabled auth is treated as
         // multi-user (a single shared API key or bearer can be handed to a whole
         // team; count alone cannot prove otherwise) unless the operator sets
-        // `auth.single_user = true`. More than one API key or any OIDC issuer is
+        // `auth.single_user = true`. More than one credential or any OIDC issuer is
         // a hard multi-user signal. See `AuthConfig::implies_multi_user`.
         let multi_user = self
             .config
@@ -1725,7 +1762,8 @@ impl Gateway {
         // another; if the gateway is ever reached by more than one identity the
         // isolation the guard would have provided is silently gone. We warn
         // rather than refuse because a genuinely single-user deployment is valid.
-        if self.config.auth.single_user {
+        // Only while the assertion actually holds the guard off (#2241).
+        if self.config.auth.single_user && !multi_user {
             let leaky_backends = leaky_single_user_backends(&self.config);
             if !leaky_backends.is_empty() {
                 warn!(
@@ -1744,21 +1782,7 @@ impl Gateway {
         // a fresh tracker so the firewall has its own dedicated state.
         #[cfg(feature = "firewall")]
         let firewall_arc: Option<Arc<Firewall>> = {
-            let fw_cfg = self.config.security.firewall.clone();
-            let fw_enabled = fw_cfg.enabled;
-            let tt = if fw_cfg.anomaly_detection {
-                Some(Arc::new(TransitionTracker::new()))
-            } else {
-                None
-            };
-            let fw = Arc::new(
-                Firewall::from_config(fw_cfg, tt)
-                    .with_env(Arc::clone(&self.env))
-                    .with_posture(self.config.security.posture),
-            );
-            if fw_enabled {
-                info!("Security firewall enabled (RFC-0071)");
-            }
+            let fw = self.response_firewall(&meta_mcp);
             Some(fw)
         };
 
@@ -1774,8 +1798,6 @@ impl Gateway {
         // Only the cost-governance shutdown tasks consume this clone.
         #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
-
-        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
 
         // The durable task runtime, opened before any listener exists.
         //
@@ -1959,7 +1981,11 @@ impl Gateway {
             None
         };
 
-        tools_changed::spawn_drain(Arc::clone(&state), tools_changed_rx);
+        tools_changed::spawn_drain(
+            Arc::clone(&state),
+            tools_changed_rx,
+            shutdown_tx.subscribe(),
+        );
 
         // Captured before the router takes ownership: the startup banner prints
         // the dashboard link and runs after the bind.
@@ -1974,7 +2000,7 @@ impl Gateway {
         // active. MIK-6750 r4: starting it earlier would let a startup-time
         // reload move `live_config` before the snapshot, surfacing a
         // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+        let _config_watcher: Option<ConfigWatcher> = if let Some(path) = self.reload_path() {
             match ConfigWatcher::start(
                 path.clone(),
                 Arc::clone(&live_config),
@@ -2037,6 +2063,11 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
+        // `server.port: 0` asks the OS for a port; a minted dashboard link
+        // must name the one actually bound, not the configured 0.
+        if let Ok(bound) = listener.local_addr() {
+            dashboard_bootstrap.set_bound_port(bound.port());
+        }
 
         log_startup_banner(
             &self.config,
@@ -2089,29 +2120,16 @@ impl Gateway {
                 )
             });
 
-        // Run server — plain HTTP or mTLS depending on config
-        if self.config.mtls.enabled {
-            // `axum_server` needs a std listener; the socket is the same one.
-            let std_listener = listener
-                .into_std()
-                .map_err(|e| Error::Tls(format!("could not hand the listener to TLS: {e}")))?;
-            serve_tls(
-                app,
-                std_listener,
-                addr,
-                &self.config.mtls,
-                shutdown_signal(shutdown_tx),
-            )
-            .await?;
-        } else {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-            .await
-            .map_err(|e| Error::Tls(e.to_string()))?;
-        }
+        // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
+        let std_listener = listener.into_std()?;
+        listener::serve(
+            app,
+            std_listener,
+            addr,
+            &self.config,
+            shutdown_signal(shutdown_tx),
+        )
+        .await?;
 
         // Save search ranker usage data
         persistence::save_with_logging(
@@ -2264,8 +2282,15 @@ impl Gateway {
             data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        // Held for the whole serve: it owns the governance store's lease.
+        let grant_sink = identity_grants::stdio_identity_grants(
+            &self.config,
+            self.config_path.as_deref(),
+            &meta_mcp,
+        )
+        .await?;
         // Give stdio the same explicit reload context as HTTP.
-        if let Some(ref path) = self.config_path {
+        if let Some(path) = self.reload_path() {
             let live_config = Arc::new(
                 LiveConfig::new(self.config.clone())
                     .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
@@ -2279,10 +2304,7 @@ impl Gateway {
                     self.config.meta_mcp.cache_ttl,
                 )
                 .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(identity_grant_sink_for(
-                    &self.config.security.identity_grants,
-                    &meta_mcp,
-                )),
+                .with_identity_grant_sink_opt(grant_sink.clone()),
             );
             meta_mcp.set_reload_context(reload_ctx);
         }
@@ -3570,7 +3592,7 @@ fn spawn_idle_reaper(
             }
 
             for backend in backends.all() {
-                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL).await;
+                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL);
                 if closed > 0 {
                     debug!(
                         backend = %backend.name,
@@ -3883,8 +3905,8 @@ mod tests {
 
         assert_eq!(
             collecting.delivered().len(),
-            1,
-            "recovered poll must forward the pending log entry"
+            2,
+            "recovered poll must forward the genesis open record (#2275) and the pending entry"
         );
     }
 
@@ -4754,7 +4776,7 @@ mod tests {
                     streamable_http: true,
                     protocol_version: None,
                 },
-                ..BackendConfig::default()
+                ..BackendConfig::r2_off()
             },
         );
         let gateway = Gateway::new(config).await.unwrap();

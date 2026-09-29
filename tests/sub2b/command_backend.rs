@@ -41,6 +41,12 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A path as `sh` reads it: forward slashes, since a Windows backslash is an
+/// escape to the shell (and to the quoted YAML scalar it sits in).
+fn sh_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 /// Write `gateway.yaml` pointing the backend at a `command:` peer, and return
 /// the release path the peer waits on.
 fn write_command_config(home: &Path) -> std::path::PathBuf {
@@ -50,14 +56,14 @@ fn write_command_config(home: &Path) -> std::path::PathBuf {
     let body = COMMAND_PEER
         .replace("__VERSION__", CLIENT_PROTOCOL_VERSION)
         .replace("__TOOL__", SLOW_TOOL)
-        .replace("__LOG__", &log.display().to_string())
-        .replace("__RELEASE__", &release.display().to_string());
+        .replace("__LOG__", &sh_path(&log))
+        .replace("__RELEASE__", &sh_path(&release));
     std::fs::write(&script, body).expect("write command peer");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
             "backends:\n  {BACKEND}:\n    command: \"sh {}\"\n",
-            script.display()
+            sh_path(&script)
         ),
     )
     .expect("write gateway.yaml");

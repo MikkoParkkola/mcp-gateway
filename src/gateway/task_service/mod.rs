@@ -135,6 +135,8 @@ pub(crate) async fn open_runtime_with_recovery(
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
+    #[cfg(debug_assertions)]
+    execution::pause_hook::install_from_env(&executor);
     // Ready to serve means recovered. Rows a previous process left mid-flight are
     // settled here, after the admission import and before this returns; a store
     // that cannot take that write gives custody back instead of serving half of

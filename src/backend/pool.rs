@@ -104,9 +104,31 @@ pub(crate) struct PooledEntry {
     /// fill budget). Cleared by the next fill that drains to completion.
     /// Tools only — the other three families keep their pages either way.
     pub(crate) tools_truncated: AtomicBool,
+    /// When this slot's last tools fill ended without storing (F13): a drain,
+    /// parse or start error, a `CallTimeout` expiry, or a voided store. Fills
+    /// within `LIST_FILL_COOLDOWN` of it fail fast. Tokio's `Instant`, so a
+    /// paused test clock advances it with the timeouts. Tools only. The flag
+    /// is the transport failure to replay (A3), `None` for an unreadable
+    /// list, so a fast-failed call answers as the failure it stands in for.
+    pub(crate) tools_fill_failed_at:
+        parking_lot::Mutex<Option<(tokio::time::Instant, Option<super::fill_check::Replay>)>>,
+    /// When a stale hit's refresh last failed (A4). Inside
+    /// `LIST_FILL_COOLDOWN` of it a stale hit is judged from the held schema
+    /// without listing, whatever the failure's class. Stale hits only.
+    pub(crate) tools_refresh_failed_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    /// A non-throttle request or request-triggered fill failure, or a health
+    /// probe trip (#2219), was recorded
+    /// since the breaker last ended a success Closed (#1300). While set, a
+    /// warm-up success may not reset an Open breaker: it did not trip it alone.
+    /// A mutex, held across each record and its flag change, so a warm-up's
+    /// check-then-reset cannot interleave with a request failure.
+    pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
+
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
+    /// A `PerUser` slot's admission (#2300); dropped with the entry.
+    identity_lease: Option<super::identity_slots::SlotLease>,
 }
 
 /// RAII marker for one in-flight client request against a pool slot.
@@ -190,9 +212,14 @@ impl PooledEntry {
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
+            tools_fill_failed_at: parking_lot::Mutex::new(None),
+            tools_refresh_failed_at: parking_lot::Mutex::new(None),
+            request_failed_since_close: parking_lot::Mutex::new(false),
+
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
+            identity_lease: None,
         }
     }
 
@@ -269,23 +296,27 @@ impl Backend {
     /// out the `Arc`, or the two are simply not ordered. Anything that must be
     /// atomic with respect to removal belongs in `under_guard`.
     ///
-    /// Telemetry stays OUTSIDE the guard: `self.pool.len()` walks every shard, so
-    /// calling it while holding one is asking for trouble.
+    /// Telemetry (creation only, MIK-6735 fix 3) stays OUTSIDE the guard:
+    /// `self.pool.len()` walks every shard.
     ///
-    /// Logs + gauges the live slot count on creation only (MIK-6735 fix 3) —
-    /// minimal observability into per-user pool growth without a per-request
-    /// cost on the (overwhelmingly more common) cache-hit path.
+    /// # Errors
+    /// `IdentitySlotsExhausted` when a new `PerUser` slot is refused (#2300).
     fn pooled_entry_with<R>(
         &self,
         key: &PoolKey,
         under_guard: impl FnOnce(&Arc<PooledEntry>) -> R,
-    ) -> (Arc<PooledEntry>, R) {
+    ) -> crate::Result<(Arc<PooledEntry>, R)> {
         let mut created = false;
         let (entry, out) = {
-            let slot = self.pool.entry(key.clone()).or_insert_with(|| {
-                created = true;
-                Arc::new(PooledEntry::new(&self.name, &self.failsafe_config))
-            });
+            let slot = match self.pool.entry(key.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(slot) => slot.into_ref(),
+                dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                    let mut entry = PooledEntry::new(&self.name, &self.failsafe_config);
+                    entry.identity_lease = self.admit(key)?;
+                    created = true;
+                    vacant.insert(Arc::new(entry))
+                }
+            };
             let entry = Arc::clone(slot.value());
             let out = under_guard(&entry);
             (entry, out)
@@ -300,7 +331,7 @@ impl Backend {
             .set(live);
             tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
         }
-        (entry, out)
+        Ok((entry, out))
     }
 
     /// Fetch (or lazily create) the pooled entry for `key`. The `Arc` is cloned
@@ -309,8 +340,8 @@ impl Backend {
     /// Callers that intend to USE the slot's transport want
     /// [`Backend::claim_pooled_entry`] instead: this one hands back an entry the
     /// evictor is still free to remove.
-    pub(super) fn pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
-        self.pooled_entry_with(key, |_| ()).0
+    pub(super) fn pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
+        self.pooled_entry_with(key, |_| ()).map(|(entry, ())| entry)
     }
 
     /// Fetch (or lazily create) the entry for `key` AND claim one in-flight slot
@@ -327,12 +358,12 @@ impl Backend {
     /// Lock order is shard → transport, matching every other nesting in this
     /// module (`shared_transport`, `stop_all`), so no cycle exists. The read
     /// guard is scoped to the claim itself and never survives to an `.await`.
-    fn claim_pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+    fn claim_pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
         self.pooled_entry_with(key, |entry| {
             let _transport = entry.transport.read();
             entry.in_flight.fetch_add(1, Ordering::SeqCst);
         })
-        .0
+        .map(|(entry, ())| entry)
     }
 
     /// The canonical shared slot's `PooledEntry`. Inserted at construction and
@@ -387,9 +418,9 @@ impl Backend {
     /// TOCTOU the reaper's atomic `remove_if` never had: with the removal now
     /// unconditional, the write guard is the only remaining mutual exclusion
     /// against a claim landing mid-eviction.
-    pub async fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
+    pub fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
         // First pass: collect matching keys without holding a shard guard
-        // across the async close(), mirroring the reaper's two-pass shape.
+        // across the removals, mirroring the reaper's two-pass shape.
         let candidates: Vec<PoolKey> = self
             .pool
             .iter()
@@ -404,6 +435,8 @@ impl Backend {
 
         let mut evicted = 0;
         for key in candidates {
+            // Under `stop`'s lock: shutdown takes this slot or drains its close.
+            let mut cleanups = self.replaced_transport_cleanups.lock();
             let Some((_, entry)) = self.pool.remove(&key) else {
                 // A concurrent reaper or eviction took it first; it is gone
                 // either way, which is what this call is for.
@@ -422,7 +455,7 @@ impl Backend {
                 }
             };
             if let Some(transport) = idle_transport {
-                let _ = transport.close().await;
+                self.close_evicted(&mut cleanups, transport);
             }
         }
 
@@ -444,20 +477,40 @@ impl Backend {
     /// reports empty. `pooled_transport_for_test` does not create, but answers
     /// `None` for both "slot absent" and "slot present, transport unstarted".
     /// This is the one probe that distinguishes them.
+    /// Test-only: empty every slot's tool catalogue, so the next R2 check
+    /// on any slot is cold (F13 cells for a slot emptied between rounds).
+    #[cfg(test)]
+    pub(crate) fn empty_tool_catalogues_for_test(&self) {
+        for entry in &self.pool {
+            entry.value().tools_cache.invalidate_if(|_| true);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn pool_has_slot_for_test(&self, key: &PoolKey) -> bool {
         self.pool.get(key).is_some()
     }
 
+    /// Close an evicted transport off the caller's path (#2245), capped in
+    /// count and counted when abandoned (#2300, `IdentitySlots::spawn_close`).
+    /// `stop` drains the task with the replaced-transport cleanups.
+    fn close_evicted(&self, cleanups: &mut super::CleanupState, transport: Arc<dyn Transport>) {
+        let (backend, budget) = (self.name.clone(), self.budgets.close_stage);
+        if let Some(handle) = self.identity_slots.spawn_close(backend, budget, transport) {
+            cleanups.handles.retain(|h| !h.is_finished());
+            cleanups.handles.push(handle);
+        }
+    }
+
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
-    /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
-    /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
-    /// number of slots closed (MIK-6735 POOL.2).
-    pub async fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
+    /// scheduling a bounded background close of their transports. The canonical
+    /// [`PoolKey::Shared`] slot is never evicted. Returns the number of slots
+    /// evicted, not closed: a close may still be running (MIK-6735 POOL.2).
+    pub fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
         let cutoff = idle_ttl.as_secs();
 
         // First pass: collect candidate keys without holding a guard across the
-        // async close(). Skip the shared slot outright.
+        // removals. Skip the shared slot outright.
         let candidates: Vec<PoolKey> = self
             .pool
             .iter()
@@ -469,7 +522,8 @@ impl Backend {
         for key in candidates {
             // Atomically remove only if STILL idle — re-checked inside the shard
             // lock so a request that touched the slot after the first pass keeps
-            // it alive and is never torn down mid-flight.
+            // it alive and is never torn down mid-flight. Cleanup lock: as above.
+            let mut cleanups = self.replaced_transport_cleanups.lock();
             let removed = self.pool.remove_if(&key, |k, entry| {
                 // in_flight is checked INSIDE the shard lock, alongside the
                 // timestamp. A relaxed timestamp alone is not enough: a request
@@ -485,7 +539,7 @@ impl Backend {
             if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
-                    let _ = transport.close().await;
+                    self.close_evicted(&mut cleanups, transport);
                 }
                 closed += 1;
             }
@@ -512,24 +566,22 @@ impl Backend {
 
     #[cfg(test)]
     pub(crate) fn set_transport_for_test(&self, transport: Arc<dyn Transport>) {
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         *entry.transport.write() = Some(transport);
     }
 
-    /// Test-only: inject a transport into a specific pool slot so isolation
-    /// tests can seed distinct per-user sessions (MIK-6735 POOL.4).
+    /// Test-only: seed one slot's transport (MIK-6735 POOL.4).
     #[cfg(test)]
     pub(crate) fn set_pooled_transport_for_test(
         &self,
         key: &PoolKey,
         transport: Arc<dyn Transport>,
     ) {
-        let entry = self.pooled_entry(key);
+        let entry = self.pooled_entry(key).expect("test slot admitted");
         *entry.transport.write() = Some(transport);
     }
 
-    /// Test-only: clone the transport `Arc` stored in a specific pool slot, so
-    /// isolation tests can assert distinct instances via `Arc::ptr_eq`.
+    /// Test-only: one slot's transport, for `Arc::ptr_eq` isolation checks.
     #[cfg(test)]
     pub(crate) fn pooled_transport_for_test(&self, key: &PoolKey) -> Option<Arc<dyn Transport>> {
         self.pool
@@ -537,9 +589,8 @@ impl Backend {
             .and_then(|entry| entry.value().transport.read().clone())
     }
 
-    /// Test-only: the consecutive and lifetime unserved probe counts, which
-    /// rows 10 to 11b assert are two different values with two different reset
-    /// rules.
+    /// Test-only: the consecutive and lifetime unserved probe counts (rows
+    /// 10 to 11b: two values, two reset rules).
     #[cfg(test)]
     pub(crate) fn unserved_counts_for_test(&self) -> (u64, u64) {
         (
@@ -575,7 +626,7 @@ impl Backend {
     /// trip one identity's slot without touching another's.
     #[cfg(test)]
     pub(crate) fn trip_circuit_breaker_for_test_key(&self, key: &PoolKey) {
-        let entry = self.pooled_entry(key);
+        let entry = self.pooled_entry(key).expect("test slot admitted");
         let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
         for _ in 0..threshold {
             entry
@@ -596,11 +647,11 @@ impl Backend {
     /// Mark the start of a client request against `key`, returning a guard that
     /// protects the slot from being stopped until dropped. The only caller-facing
     /// way to write the idle clock.
-    pub(super) fn begin_activity(&self, key: &PoolKey) -> ActivityGuard {
+    pub(super) fn begin_activity(&self, key: &PoolKey) -> crate::Result<ActivityGuard> {
         self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-        let entry = self.claim_pooled_entry(key);
+        let entry = self.claim_pooled_entry(key)?;
         entry.touch();
-        ActivityGuard::adopt_claimed(entry, true)
+        Ok(ActivityGuard::adopt_claimed(entry, true))
     }
 
     /// Hold the shared slot's transport open for internal work without claiming
@@ -617,6 +668,7 @@ impl Backend {
     /// caller sees a spurious `BackendUnavailable` for a backend that is fine.
     pub(super) fn begin_internal_activity(&self) -> ActivityGuard {
         self.begin_internal_activity_for(&PoolKey::Shared)
+            .expect("the shared slot is never refused admission")
     }
 
     /// The slot-scoped form of [`Self::begin_internal_activity`].
@@ -627,8 +679,12 @@ impl Backend {
     /// hands back an entry `evict_idle_per_user_entries` is still free to
     /// remove, which would close the transport under the fetch
     /// (MIK-7334.CATALOGUE.1 R3).
-    pub(super) fn begin_internal_activity_for(&self, key: &PoolKey) -> ActivityGuard {
-        ActivityGuard::adopt_claimed(self.claim_pooled_entry(key), false)
+    pub(super) fn begin_internal_activity_for(
+        &self,
+        key: &PoolKey,
+    ) -> crate::Result<ActivityGuard> {
+        self.claim_pooled_entry(key)
+            .map(|e| ActivityGuard::adopt_claimed(e, false))
     }
 
     /// Stop this backend's process if it has been unused past

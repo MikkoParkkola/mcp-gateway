@@ -679,11 +679,16 @@ impl Transport for WebSocketTransport {
         let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
 
         let msg = McpFrame::Request(request).to_ws_message()?;
-        self.send_message(msg).await?;
-
-        match tokio::time::timeout(self.timeout, rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(Error::Transport(
+        // The timeout covers the enqueue too: a full queue behind a stalled
+        // writer must not outlast the configured backend timeout.
+        let exchange = async {
+            self.send_message(msg).await?;
+            Ok::<_, Error>(rx.await)
+        };
+        match tokio::time::timeout(self.timeout, exchange).await {
+            Ok(Ok(Ok(response))) => Ok(response),
+            Ok(Err(e)) => Err(e),
+            Ok(Ok(Err(_))) => Err(Error::Transport(
                 "WebSocket connection closed before the response arrived".to_string(),
             )),
             Err(_) => Err(Error::BackendTimeout(
@@ -716,6 +721,10 @@ impl Transport for WebSocketTransport {
         if let Some(h) = self.inner.task.lock().take() {
             h.abort();
         }
+
+        // The aborted task skips its own cleanup: fail in-flight calls here so
+        // they do not wait out their timeouts.
+        self.inner.pending.clear();
 
         Ok(())
     }

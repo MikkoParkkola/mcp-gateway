@@ -156,7 +156,13 @@ impl Harness {
 
     /// Seed a 3.x credential under a BACKEND REGISTRY NAME.
     fn seed(&self, backend_name: &str, tag: &str) {
-        let path = self.legacy.token_path(backend_name, RESOURCE);
+        self.seed_at(backend_name, RESOURCE, tag);
+    }
+
+    /// Seed a 3.x credential hashed over `backend_url`, which is what 3.x
+    /// passed as the resource: the backend's own `http_url`.
+    fn seed_at(&self, backend_name: &str, backend_url: &str, tag: &str) {
+        let path = self.legacy.token_path(backend_name, backend_url);
         crate::gateway::test_helpers::write_owner_only(&path, legacy_json(tag)).expect("seed");
         #[cfg(unix)]
         {
@@ -277,6 +283,61 @@ fn the_override_names_the_file_when_the_backend_was_renamed_since_3_x() {
     );
 }
 
+const BACKEND_URL: &str = "https://mcp.example.test/v1/mcp/stream";
+
+/// Point the bound `gdrive` backend at [`BACKEND_URL`], away from the
+/// descriptor resource.
+fn move_gdrive(harness: &mut Harness) {
+    match &mut harness
+        .config
+        .backends
+        .get_mut("gdrive")
+        .expect("the fixture binds gdrive")
+        .transport
+    {
+        crate::config::TransportConfig::Http { http_url, .. } => {
+            *http_url = BACKEND_URL.to_owned();
+        }
+        _ => panic!("the fixture's gdrive backend is HTTP"),
+    }
+}
+
+/// #2262: 3.x hashed the token file over the backend's `http_url`, not the
+/// descriptor resource. When the two differ, the file must still be found.
+#[test]
+fn the_3_x_file_is_found_under_the_backend_url_when_the_resource_differs() {
+    let mut harness = Harness::new("");
+    move_gdrive(&mut harness);
+    harness.seed_at("gdrive", BACKEND_URL, "moved");
+
+    let report = harness
+        .migrate(None)
+        .expect("the file 3.x wrote under the backend URL must be found");
+    assert!(report.written);
+    assert_eq!(
+        harness.stored_access_token().as_deref(),
+        Some("moved-access-token")
+    );
+}
+
+/// #2262, renamed since 3.x: the old name is no longer configured, so the URL
+/// comes from the backend now bound to the descriptor.
+#[test]
+fn a_renamed_backend_is_found_under_the_bound_backend_url() {
+    let mut harness = Harness::new("");
+    move_gdrive(&mut harness);
+    harness.seed_at("gdrive-in-3x", BACKEND_URL, "renamed-moved");
+
+    let report = harness
+        .migrate(Some("gdrive-in-3x"))
+        .expect("the renamed backend's file must be found under the bound URL");
+    assert!(report.written);
+    assert_eq!(
+        harness.stored_access_token().as_deref(),
+        Some("renamed-moved-access-token")
+    );
+}
+
 /// A named API key with every other field at its zero value, reused by the
 /// two reachability rows below.
 fn api_key(name: &str) -> ApiKeyConfig {
@@ -317,9 +378,8 @@ fn multi_api_key_config_reports_stdio_only_reachability() {
     assert!(
         report
             .reachability
-            .contains("an MCP backend bound to it still needs a verified end-user identity"),
-        "the reachability must state the MCP-backend limit, got {:?}",
-        report.reachability
+            .contains("That covers a REST capability or an MCP backend bound to this account"),
+        "stdio reach covers both kinds of backend (#1961)"
     );
 }
 
@@ -347,8 +407,7 @@ fn eligible_single_user_config_reports_stdio_and_http_reachability() {
     assert!(
         report
             .reachability
-            .contains("an MCP backend bound to it still needs a verified end-user identity"),
-        "the reachability must state the MCP-backend limit, got {:?}",
-        report.reachability
+            .contains("the direct /mcp/{name} route still needs a verified end-user identity"),
+        "the reachability must state the direct-route limit (#1961)"
     );
 }

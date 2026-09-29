@@ -115,6 +115,17 @@ pub enum Error {
     #[error("Rate limit exceeded for backend '{0}'")]
     RateLimited(String),
 
+    /// The backend refused a new per-caller slot: it holds its cap of caller
+    /// slots, or this caller's principal holds its own (#2300). Refused
+    /// before dispatch, like `RateLimited`; never served on the shared slot.
+    #[error("Backend '{backend}' has no free caller slot ({limit} limit reached)")]
+    IdentitySlotsExhausted {
+        /// The backend that refused.
+        backend: String,
+        /// Which limit refused: `backend` or `principal`.
+        limit: &'static str,
+    },
+
     /// Tool not found in any connected backend.
     ///
     /// Carries the tool name that was requested.
@@ -219,10 +230,12 @@ pub enum Error {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
-    /// TLS error — certificate loading, binding, or handshake failure.
+    /// TLS error: certificate loading, TLS acceptor setup, or handshake
+    /// failure on the mTLS listener.
     ///
-    /// Use this instead of `Internal` for `rustls`/`axum-server` errors in
-    /// the TLS server path.
+    /// Use this instead of `Internal` for `rustls` and TLS-acceptor errors.
+    /// A socket or listener error that is not about TLS is `Io`, on either
+    /// listener.
     #[error("TLS error: {0}")]
     Tls(String),
 
@@ -323,9 +336,21 @@ impl Error {
             self,
             Self::CircuitOpen { .. }
                 | Self::RateLimited(_)
+                | Self::IdentitySlotsExhausted { .. }
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
+        )
+    }
+
+    /// The gateway's own limiter or slot admission refused: the backend was
+    /// never asked, so this is not a backend failure. Matched on the variant,
+    /// never on the message (F23, #2300).
+    #[must_use]
+    pub(crate) fn is_gateway_throttle(&self) -> bool {
+        matches!(
+            self,
+            Self::RateLimited(_) | Self::IdentitySlotsExhausted { .. }
         )
     }
 
@@ -343,6 +368,7 @@ impl Error {
             Self::BackendUnavailable(_)
             | Self::CircuitOpen { .. }
             | Self::RateLimited(_)
+            | Self::IdentitySlotsExhausted { .. }
             | Self::BackendTimeout(_)
             | Self::Transport(_)
             // A connect failure is the same class on the wire; the variant

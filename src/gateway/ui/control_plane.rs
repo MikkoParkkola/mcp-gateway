@@ -360,6 +360,7 @@ fn resolve_decision_core(
     // Build the audited mutation and authorize it first, so a non-admin gets
     // RBAC's 403 rather than the 409 below.
     let event = ControlPlaneAuditEvent {
+        grant_change: None,
         event_id: format!("cpa-{}-{}", Utc::now().timestamp_millis(), req.target_id),
         actor_id: actor.actor_id.clone(),
         action,
@@ -443,6 +444,7 @@ fn apply_mutation(
     }
 
     let event = ControlPlaneAuditEvent {
+        grant_change: None,
         event_id: format!("cpa-{}-{target_id}", Utc::now().timestamp_millis()),
         actor_id: actor.actor_id.clone(),
         action,
@@ -1361,6 +1363,7 @@ mod read_reflect_tests {
             .unwrap();
         store
             .append_audit(&ControlPlaneAuditEvent {
+                grant_change: None,
                 event_id: "e1".to_string(),
                 actor_id: "alice".to_string(),
                 action: ControlPlaneAction::MutateGrant,
@@ -1531,49 +1534,5 @@ mod read_reflect_tests {
 /// B6 (MIK-7570.BREAKER.1): an open breaker reads `Down` and `Blocked`,
 /// through the real `Backend::status()`, never a hand-built status.
 #[cfg(test)]
-mod breaker_tests {
-    use super::{
-        ControlPlaneHealth, ControlPlaneServerStatus, runtime_health_from_backend,
-        server_status_from_backend,
-    };
-    use crate::backend::Backend;
-    use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
-
-    fn backend() -> Backend {
-        let transport = TransportConfig::Http {
-            http_url: "http://127.0.0.1:9/mcp".to_string(),
-            streamable_http: false,
-            protocol_version: None,
-        };
-        let config = BackendConfig {
-            transport,
-            enabled: true,
-            ..BackendConfig::default()
-        };
-        let timeout = std::time::Duration::from_secs(60);
-        Backend::new("down", config, &FailsafeConfig::default(), timeout)
-    }
-
-    #[test]
-    fn control_plane_reports_open_breaker_down_and_blocked() {
-        let backend = backend();
-        let closed = backend.status();
-        assert_eq!(
-            server_status_from_backend(&closed),
-            ControlPlaneServerStatus::Enabled
-        );
-        // Never started, so not running: a closed breaker reads as not yet known.
-        assert_eq!(
-            runtime_health_from_backend(&closed),
-            ControlPlaneHealth::Unknown
-        );
-
-        backend.trip_circuit_breaker_for_test();
-        let open = backend.status();
-        assert_eq!(
-            server_status_from_backend(&open),
-            ControlPlaneServerStatus::Blocked
-        );
-        assert_eq!(runtime_health_from_backend(&open), ControlPlaneHealth::Down);
-    }
-}
+#[path = "control_plane_breaker_tests.rs"]
+mod breaker_tests;

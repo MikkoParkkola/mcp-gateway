@@ -8,7 +8,7 @@ use mcp_gateway::config::Config;
 use super::CheckResult;
 
 pub(super) fn check_security_posture(config: &Config) -> CheckResult {
-    let warning = mcp_gateway::security::posture::unhardened_multi_user_warning(config);
+    let warning = mcp_gateway::security::unhardened_multi_user_warning(config);
     let row = if let Some(warning) = warning {
         CheckResult::warn("security-posture", warning)
             .with_manual_fix("set security.posture: hardened in gateway.yaml, then restart")
@@ -30,7 +30,7 @@ fn posture_name(config: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use mcp_gateway::security::posture::{SecurityPosture, unhardened_multi_user_warning};
+    use mcp_gateway::security::{SecurityPosture, unhardened_multi_user_warning};
     use serde_json::json;
 
     use super::super::CheckStatus;

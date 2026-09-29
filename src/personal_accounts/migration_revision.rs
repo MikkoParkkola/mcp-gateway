@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-6744.STORE.1 §7.3 — the first producer of a `descriptor_revision`.
 //!
-//! WHAT THIS VALUE DOES AND DOES NOT BUY. Nothing in the tree compares a live
-//! descriptor's fingerprint against a stored `descriptor_revision`: every
-//! occurrence is a field copy, a format validator, or a comparison of two
-//! values that both came from stored records (§7.3, O7 / MIK-7524). So this
-//! produces a value that VALIDATES (`storage.rs:135` demands 64 lowercase hex)
-//! and is ready for a fence when one is built. It detects no descriptor change
-//! today, and this module does not claim otherwise.
+//! WHAT THIS VALUE BUYS. It is the fence input for a descriptor change
+//! (#2249): `config::account_bindings` computes it from the live descriptor at
+//! install, and `VaultStrategy::prepare` refuses a grant whose stored revision
+//! differs, before any refresh or release. It also VALIDATES
+//! (`storage.rs:135` demands 64 lowercase hex).
 //!
 //! THE FIELD SET IS WHAT THE KEY CANNOT SEE. `AccountKey` already carries
 //! `resource` and `oauth_issuer`, so a change to either moves the key and the
@@ -39,7 +37,7 @@ const DOMAIN: &[u8] = b"mcp-gateway/descriptor-revision/v1";
 /// resolved: `config.rs:272-274` keeps it a reference precisely so no secret is
 /// materialised into a serialized or `Debug`-rendered configuration, and
 /// hashing a resolved value would undo that.
-pub(super) fn descriptor_revision(descriptor: &AccountDescriptor) -> Result<String, AccountError> {
+pub(crate) fn descriptor_revision(descriptor: &AccountDescriptor) -> Result<String, AccountError> {
     // `Option` fields encode as a presence marker plus the value, so "declared
     // empty" and "not declared" are different bytes. A bare `unwrap_or("")`
     // would collide them, and for `send_resource_parameter` the two genuinely

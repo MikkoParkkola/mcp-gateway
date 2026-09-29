@@ -7,8 +7,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::info;
+use tracing::{error, info};
 
+use super::grant_audit::{GrantAuditor, Prepared, Recorded};
 use super::{RELOAD_LOCK_WAIT, ReloadContext, env_poll, grant_delta};
 use crate::identity_grants::{GrantSubject, IdentityGrant, LocalIdentityGrantStore};
 
@@ -28,6 +29,8 @@ pub struct IdentityGrantSink {
     pub(super) epoch: Arc<std::sync::atomic::AtomicU64>,
     pub(super) path: PathBuf,
     pub(super) lock: tokio::sync::Mutex<()>,
+    /// Records each reload's grant changes; `None` without a governance store.
+    pub(super) auditor: Option<Arc<GrantAuditor>>,
     /// Throttles an unchanged grants read error: retries re-read the file.
     read_errors: parking_lot::Mutex<env_poll::WarnLimiter>,
 }
@@ -45,8 +48,22 @@ impl IdentityGrantSink {
             epoch,
             path,
             lock: tokio::sync::Mutex::new(()),
+            auditor: None,
             read_errors: parking_lot::Mutex::new(env_poll::WarnLimiter::default()),
         }
+    }
+
+    /// Record every reload's grant changes through `auditor` (MIK-7570.AUDIT.4).
+    #[must_use]
+    pub(crate) fn with_auditor(mut self, auditor: Arc<GrantAuditor>) -> Self {
+        self.auditor = Some(auditor);
+        self
+    }
+
+    /// Whether reloads through this sink are recorded.
+    #[cfg(test)]
+    pub(crate) fn has_auditor(&self) -> bool {
+        self.auditor.is_some()
     }
 }
 
@@ -141,7 +158,25 @@ impl ReloadContext {
             ));
         };
 
-        let file = match crate::identity_grants::read_identity_grants_file(&sink.path).await {
+        // With an auditor, the grant file and journal are read under the
+        // journal lock, held through record (design 5.4).
+        let (file, locked) = if sink.auditor.is_some() {
+            let Some(read) =
+                crate::identity_grants::journal::read_locked(&sink.path, RELOAD_LOCK_WAIT).await
+            else {
+                error!(path = %sink.path.display(), "Identity-grant reload busy: grant journal locked");
+                return Some(Err(
+                    "identity grants reload busy: a grant change is in progress; retry".to_string(),
+                ));
+            };
+            (read.grants, Some((read.guard, read.journal)))
+        } else {
+            (
+                crate::identity_grants::read_identity_grants_file(&sink.path).await,
+                None,
+            )
+        };
+        let file = match file {
             Ok(file) => {
                 *sink.read_errors.lock() = env_poll::WarnLimiter::default();
                 file
@@ -155,11 +190,25 @@ impl ReloadContext {
             }
         };
 
+        // Plan before publish: a plan that cannot be made durable refuses the
+        // change and publishes nothing (design 5.2 step 6).
+        let prepared = match (&sink.auditor, &locked) {
+            (Some(auditor), Some((_, journal))) => match auditor.prepare(&file.grants, journal) {
+                Ok(prepared) => Some(prepared),
+                Err(refusal) => {
+                    error!(path = %sink.path.display(), reason = %refusal.0, "Identity-grant reload refused");
+                    return Some(Err(refusal.0));
+                }
+            },
+            _ => None,
+        };
         let incoming = LocalIdentityGrantStore::from_grants(file.grants);
         let outgoing: Vec<_> = sink.store.read().values().cloned().collect();
         let incoming_rows: Vec<_> = incoming.values().cloned().collect();
         if outgoing == incoming_rows {
-            return Some(Ok("identity grants unchanged".to_string()));
+            // Still recorded: an identical-content `--replace` has an entry.
+            let clause = audit_clause(sink.auditor.as_deref(), prepared);
+            return Some(Ok(format!("identity grants unchanged{clause}")));
         }
 
         let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
@@ -184,7 +233,7 @@ impl ReloadContext {
             };
             let mut hit = 0usize;
             for backend in self.registry.all() {
-                hit += backend.evict_identity_slots(&prefix).await;
+                hit += backend.evict_identity_slots(&prefix);
             }
             if hit == 0 {
                 matched_nothing += 1;
@@ -201,9 +250,23 @@ impl ReloadContext {
             subjects_skipped = ?skipped,
             "Identity grants reloaded"
         );
+        // Record after publish: a failed append never unpublishes (AUDIT4.6).
+        let clause = audit_clause(sink.auditor.as_deref(), prepared);
+        drop(locked);
         Some(Ok(format!(
-            "identity grants reloaded ({} rows, {delta}, {evicted} pool slots evicted)",
+            "identity grants reloaded ({} rows, {delta}, {evicted} pool slots evicted){clause}",
             incoming_rows.len()
         )))
+    }
+}
+
+/// Append a prepared plan and say how it went, for the reload outcome.
+fn audit_clause(auditor: Option<&GrantAuditor>, prepared: Option<Prepared>) -> String {
+    match (auditor, prepared) {
+        (Some(auditor), Some(prepared)) => match auditor.record(prepared) {
+            Recorded::All(n) => format!("; grant records: {n} written"),
+            Recorded::Unrecorded(reason) => format!("; grant change UNRECORDED: {reason}"),
+        },
+        _ => String::new(),
     }
 }

@@ -43,7 +43,11 @@ pub(super) fn log_startup_banner(
     info!("============================================================");
     info!("MCP GATEWAY v{}", env!("CARGO_PKG_VERSION"));
     info!("============================================================");
-    info!(host = %config.server.host, port = %config.server.port, "Listening");
+    // `server.port: 0` binds an OS-chosen port; print the one actually bound.
+    let port = bootstrap
+        .and_then(DashboardBootstrap::bound_port)
+        .unwrap_or(config.server.port);
+    info!(host = %config.server.host, port = %port, "Listening");
     info!(backends = backends.all().len(), "Backends registered");
 
     if config.auth.enabled {
@@ -64,7 +68,7 @@ pub(super) fn log_startup_banner(
                     "DASHBOARD (opens once, then remembered in this browser): \
                      {}://{}/dashboard?bootstrap={}",
                     if config.mtls.enabled { "https" } else { "http" },
-                    url_authority(&config.server.host, config.server.port),
+                    url_authority(&config.server.host, port),
                     value
                 );
             }
@@ -148,7 +152,7 @@ pub(super) fn log_startup_banner(
 /// Start the HTTPS (mTLS) server using `axum-server`.
 ///
 /// Builds a `rustls::ServerConfig` from `mtls_config`, wraps it in
-/// `axum-server`'s `RustlsConfig`, and runs until the `shutdown_fut` resolves.
+/// `axum-server`'s `RustlsConfig`, and runs until `handle` shuts it down.
 /// Takes an ALREADY BOUND listener rather than an address.
 ///
 /// It used to bind its own, while the caller had bound the same address for the
@@ -162,7 +166,7 @@ pub(super) async fn serve_tls(
     listener: std::net::TcpListener,
     addr: SocketAddr,
     mtls_config: &crate::mtls::MtlsConfig,
-    shutdown_fut: impl std::future::Future<Output = ()> + Send + 'static,
+    handle: axum_server::Handle<SocketAddr>,
 ) -> crate::Result<()> {
     use crate::mtls::cert_manager::build_tls_config;
 
@@ -174,15 +178,6 @@ pub(super) async fn serve_tls(
         require_client_cert = mtls_config.require_client_cert,
         "mTLS listener starting"
     );
-
-    let handle = axum_server::Handle::new();
-    let handle_for_shutdown = handle.clone();
-
-    // Bridge our broadcast-based shutdown signal to the axum-server handle
-    tokio::spawn(async move {
-        shutdown_fut.await;
-        handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
-    });
 
     let acceptor = PeerCertIdentityAcceptor::new(RustlsAcceptor::new(rustls_config));
 
@@ -353,93 +348,8 @@ pub(super) fn build_persisted_costs(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::convert::Infallible;
-    use std::future::{Ready, ready};
-
-    use axum::http::Request;
-    use rcgen::string::Ia5String;
-    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
-
-    fn spiffe_leaf_der(uri: &str) -> Vec<u8> {
-        let mut params = CertificateParams::default();
-        let mut dn = DistinguishedName::new();
-        dn.push(DnType::CommonName, "test-agent");
-        params.distinguished_name = dn;
-        params.subject_alt_names = vec![SanType::URI(Ia5String::try_from(uri).unwrap())];
-
-        let key_pair = KeyPair::generate().expect("key generation failed");
-        params
-            .self_signed(&key_pair)
-            .expect("cert generation failed")
-            .der()
-            .to_vec()
-    }
-
-    #[test]
-    fn peer_chain_identity_extracts_spiffe_svid_leaf() {
-        let leaf = CertificateDer::from(spiffe_leaf_der("spiffe://example.test/agent/alpha"));
-        let identity = client_identity_from_peer_chain(Some(&[leaf]))
-            .expect("peer chain should parse")
-            .expect("identity should be present");
-
-        assert_eq!(identity.san_uris, vec!["spiffe://example.test/agent/alpha"]);
-        assert_eq!(identity.display_name, "spiffe://example.test/agent/alpha");
-    }
-
-    #[test]
-    fn peer_chain_identity_is_absent_without_client_certificate() {
-        let identity = client_identity_from_peer_chain(None).expect("missing chain is allowed");
-        assert!(identity.is_none());
-
-        let empty_identity =
-            client_identity_from_peer_chain(Some(&[])).expect("empty chain is allowed");
-        assert!(empty_identity.is_none());
-    }
-
-    #[test]
-    fn peer_chain_identity_rejects_malformed_certificate() {
-        let malformed = CertificateDer::from(vec![0, 1, 2, 3]);
-
-        let error = client_identity_from_peer_chain(Some(&[malformed]))
-            .expect_err("malformed peer certificate must fail closed");
-
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn peer_cert_identity_service_inserts_identity_extension() {
-        let identity = CertIdentity {
-            san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
-            display_name: "spiffe://example.test/agent/alpha".to_owned(),
-            ..CertIdentity::default()
-        };
-        let mut service = PeerCertIdentityLayer::new(Some(identity.clone())).layer(EchoIdentity);
-
-        let inserted_identity = futures::executor::block_on(service.call(Request::new(())))
-            .expect("echo service should not fail");
-
-        assert_eq!(inserted_identity, Some(identity));
-    }
-
-    #[derive(Clone)]
-    struct EchoIdentity;
-
-    impl Service<Request<()>> for EchoIdentity {
-        type Response = Option<CertIdentity>;
-        type Error = Infallible;
-        type Future = Ready<Result<Self::Response, Self::Error>>;
-
-        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn call(&mut self, request: Request<()>) -> Self::Future {
-            ready(Ok(request.extensions().get::<CertIdentity>().cloned()))
-        }
-    }
-}
+#[path = "support_tests.rs"]
+mod tests;
 
 /// The route that carries tool-invocation authority (`router::create_router_with`).
 const TOOL_ROUTE: &str = "/mcp";
@@ -473,7 +383,7 @@ fn url_authority(host: &str, port: u16) -> String {
 /// reason instead of the dead link is what tells the operator which knob moved.
 fn dashboard_link_refusal(config: &Config) -> Option<String> {
     let public = config.server.public_url.as_deref()?;
-    if config.mtls.enabled || !public.starts_with("https://") {
+    if config.mtls.enabled || !crate::gateway::auth::is_https_url(public) {
         return None;
     }
     Some(format!(

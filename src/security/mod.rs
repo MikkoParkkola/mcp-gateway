@@ -10,7 +10,7 @@
 //!
 //! Modules added per the Doyensec MCP AuthN/Z research:
 //! - [`tool_integrity`]: Anti-rug-pull — hash tool schemas, detect mutations
-//! - [`scope_collision`]: Namespace collision detection + tool name validation
+//! - [`scope_collision`]: Tool name validation
 //! - [`response_scanner`]: Prompt injection pattern detection in tool responses
 //! - [`firewall`]: Unified request/response security firewall (RFC-0071)
 
@@ -24,7 +24,10 @@ pub mod firewall;
 pub mod http_diagnostics;
 pub mod message_signing;
 pub mod policy;
-pub mod posture;
+pub(crate) mod posture;
+/// The `security.posture` value and the multi-user warning `doctor` shows;
+/// the rest of the posture module is crate-private.
+pub use posture::{SecurityPosture, unhardened_multi_user_warning};
 pub mod remote_provenance;
 pub mod response_contract;
 pub mod response_inspect;
@@ -70,7 +73,7 @@ pub use sanitize::{
     SanitizedResourceMeta, redact_url_for_diagnostics, sanitize_json_value, sanitize_optional_json,
     sanitize_resource_metadata,
 };
-pub use scope_collision::{detect_collisions, validate_tool_name};
+pub use scope_collision::validate_tool_name;
 pub use ssrf::{
     HostResolver, PinningResolver, SystemResolver, check_host_not_ssrf, resolve_and_validate_host,
     validate_redirect_chain, validate_url_not_ssrf,

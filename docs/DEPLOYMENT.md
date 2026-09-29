@@ -347,11 +347,14 @@ the offending line is the secret. A `~` in an `env_files` path resolves once, at
 against the home directory in force at that moment; each file is applied before the next
 is expanded, so a file that sets `HOME` moves where a later `~` points.
 
-A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
-re-reads every env file every 2 seconds and reloads when its content differs from what is
-loaded. A stdio gateway, or one that found its config on its own, watches neither its
-config nor its env files; restart it, or, for a stdio gateway started with `--config`,
-call the `gateway_reload_config` meta-tool. Env files are compared by content rather than
+A gateway serving HTTP from a config file, whether named with `--config` or
+`MCP_GATEWAY_CONFIG` or found by discovery (`gateway.yaml` or `config.yaml` in the working
+directory, then `~/.config/mcp-gateway/gateway.yaml`, then `/etc/mcp-gateway/gateway.yaml`), re-reads every env file every 2 seconds
+and reloads when its content differs from what is loaded. A stdio gateway watches neither
+its config nor its env files; restart it, or call the `gateway_reload_config` meta-tool,
+which any gateway that loaded a config file offers. A discovered config keeps the
+governance store under `~/.mcp-gateway/control-plane` and does not enable admin config
+edits; name the config with `--config` for those. Env files are compared by content rather than
 watched, so this also works on NFS and FUSE mounts and through a retargeted link
 (`current/.env` after `current` moves to a new release, or an env file that is itself a
 symlink). A listed file that was missing is picked up when it appears, including when its
@@ -411,6 +414,12 @@ mtls:
   server_key: /etc/mcp-gateway/tls/server.key
   require_client_cert: true
 ```
+
+A client certificate's identity, for grants and for the firewall's per-caller limits, is its first
+SAN URI, else its CN. Issue each workload a SAN URI (for example a SPIFFE ID) where you can: without
+one, two certificates with the same CN count as one caller, so identity relies on your CA issuing
+unique CNs. A certificate with neither is not an identity for the per-caller limits
+(UPGRADING-4.0 item 94).
 
 ### Strict validation and existing certificate generations
 
@@ -654,6 +663,19 @@ prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
   `mcp_backend_requests_total{status="rate_limited"}`. At most one series per configured
   backend; a backend's series appears on its first refusal, so an absent series means zero.
 - `mcp_circuit_breaker_opened_total` -- breaker trips
+- `mcp_input_schema_events_total` -- undeclared-argument-key check (R2) events by
+  `kind`, a fixed label, never a tool or key name:
+  - check outcomes: `input_schema_refused_unavailable`, `input_schema_refused_truncated`,
+    `input_schema_refused_absent` (refused under `closed`), and `input_schema_unknown`,
+    `input_schema_truncated_forward`, `input_schema_absent_forward` (forwarded under
+    `standard`); `input_schema_fetch_skipped_a3` when a shared catalogue is not listed for a
+    credentialed caller;
+  - catalogue fills (one per `tools/list` drain, whatever started it): `input_schema_fetched`,
+    `input_schema_fetch_failed`, `input_schema_fill_cancelled` (the caller disconnected),
+    `input_schema_fill_cooldown` (refused inside the 10 s window after a failure);
+  - `input_schema_fill_refused` with `reason="circuit"` or `reason="rate"`: the slot's breaker
+    or its `failsafe.rate_limit` refused a cold call's list. These are fill-origin refusals;
+    a limiter refusal here is also counted in `mcp_backend_rate_limited_total`.
 - `mcp_tool_invocations_total`, `mcp_tool_invocation_duration_seconds` -- per-tool calls and latency
 - `mcp_cache_hits_total` -- response cache hits
 - `mcp_jsonrpc_requests_total` -- JSON-RPC requests by method
@@ -946,10 +968,9 @@ always needs a hostname while a network client dials an address. Set
 
 ### What triggers a config reload
 
-A gateway serving HTTP from a config named with `--config` or
-`MCP_GATEWAY_CONFIG` watches the config file and reloads when it changes (a
-stdio gateway, or one that found its config on its own, does not watch files;
-see the env-file note above). A config named through symlinks is followed along
+A gateway serving HTTP from a config file, named or found by discovery, watches
+the config file and reloads when it changes (a stdio gateway does not watch
+files; see the env-file note above). A config named through symlinks is followed along
 its whole link chain, and the chain is re-read on every change in a directory it
 runs through:
 
@@ -1167,6 +1188,57 @@ in a cookie is long-lived and recoverable from the wire without TLS, while a
 handle means nothing outside the running process and dies with it. It is
 `HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
 cross-site, and it is marked `Secure` when the listener speaks TLS.
+
+#### Session limits, logout and signing in again
+
+A session ends after 30 minutes without activity or 8 hours after sign-in,
+whichever comes first; the cookie's `Max-Age` matches the 8 hours. The
+dashboard's own 5-second refresh is checked but is not activity, so an unattended
+tab signs out at the idle limit. Change the limits under `auth.dashboard_session`
+(`idle_timeout_secs`, `absolute_timeout_secs`); a reload applies them to open
+sessions. A browser keeps the `Max-Age` its cookie was issued with, so a longer
+absolute limit reaches sessions opened after the reload.
+
+**Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
+on the server as well as in the browser and redirects to `/ui`. It answers `303`
+whether or not the session was still live, and it works while the audit log is
+unavailable. A logout that ends a session writes one `admin_action` audit record.
+
+To sign in again without a restart:
+
+```bash
+read -rs MCP_GATEWAY_TOKEN && export MCP_GATEWAY_TOKEN   # paste the bearer or an admin API key
+mcp-gateway dashboard-link
+```
+
+It calls `POST /ui/api/dashboard-link`, which replaces any unused link and
+returns a new one. The credential is read from the environment, never from an
+argument, so it does not appear in the command line other users can list; read
+it as above rather than typing it into the command, which would put it in shell
+history. Without `--url`, the gateway address comes from the config, and a config
+that fails to load is an error rather than a guess.
+
+On an mTLS listener, pass a client certificate the listener trusts (from
+`mcp-gateway tls issue-client`); `--client-cert` and `--client-key` go together
+and also read `MCP_GATEWAY_CLIENT_CERT` and `MCP_GATEWAY_CLIENT_KEY`:
+
+```bash
+mcp-gateway dashboard-link --client-cert client.crt --client-key client.key
+```
+
+Without `--url` or `--ca-cert`, the server certificate must chain to
+`mtls.ca_cert`, the only root trusted. With `--url`, no config is read: name the server's CA with
+`--ca-cert` (or `MCP_GATEWAY_CA_CERT`), which likewise replaces the built-in
+roots, or leave it out for a server certificate from a public CA. A config that
+requires a client certificate refuses to run without one.
+
+Only the static bearer or an admin API key may mint a link: a dashboard session or an SSO login gets `403`. The new link
+keeps every rule above: single use, from this machine only. A gateway bound to a
+network address (not loopback, not a wildcard) answers `409` and re-arms nothing,
+because a link for that address could never open.
+
+Sessions live in each replica's memory. Serve the dashboard from one replica, or
+put it behind sticky sessions.
 
 ### Admin requires a credential
 

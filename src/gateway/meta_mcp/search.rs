@@ -183,10 +183,9 @@ impl MetaMcp {
             // backend's tool metadata via the static gateway OAuth token on a
             // multi-user gateway. Skip BEFORE backend_tools_for_discovery so the
             // guard precedes any network round-trip (fail-closed = omit).
-            let (headers, binding) = self.caller_credential_for(&backend.name, caller).await;
-            if self.meta_route_isolation_refused_for_caller(&backend, binding.as_deref()) {
+            let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
                 continue;
-            }
+            };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Some(tools) = Self::backend_tools_for_discovery(
                 &backend,
@@ -292,10 +291,9 @@ impl MetaMcp {
             }
             // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
             // multi-user gateway (fail-closed = omit, not leak).
-            let (headers, binding) = self.caller_credential_for(&backend.name, caller).await;
-            if self.meta_route_isolation_refused_for_caller(&backend, binding.as_deref()) {
+            let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
                 continue;
-            }
+            };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Some(tools) =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
@@ -403,12 +401,9 @@ impl MetaMcp {
             Vec::new()
         };
 
-        Ok(build_search_response(
-            &query,
-            &matches,
-            total_found,
-            &suggestions,
-        ))
+        let mut out = build_search_response(&query, &matches, total_found, &suggestions);
+        self.inspect_discovery_value(&mut out)?;
+        Ok(out)
     }
 
     /// Handle `gateway_execute` — Code Mode single-tool or chain execution.
@@ -641,7 +636,7 @@ impl MetaMcp {
                 "status": if killed { "disabled" } else { "active" },
                 "tools": tools
             });
-            self.scan_tool_list_value(&mut out);
+            self.inspect_discovery_value(&mut out)?;
             return Ok(out);
         }
 
@@ -658,10 +653,9 @@ impl MetaMcp {
         // both the verdict and the fetch below. Admissible HERE and not at the
         // shared-credential sites because the fetch that follows runs over the
         // slot this credential selected.
-        let (headers, binding) = self.caller_credential_for(server, caller).await;
-        if self.meta_route_isolation_refused_for_caller(&backend, binding.as_deref()) {
+        let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
             return Err(Error::BackendNotFound(server.to_string()));
-        }
+        };
 
         let tools: Vec<_> = backend
             .get_tools_for_binding(binding.as_deref(), &headers)
@@ -678,7 +672,7 @@ impl MetaMcp {
             "status": if killed { "disabled" } else { "active" },
             "tools": tools
         });
-        self.scan_tool_list_value(&mut out);
+        self.inspect_discovery_value(&mut out)?;
         Ok(out)
     }
 
@@ -738,10 +732,9 @@ impl MetaMcp {
             }
             // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
             // multi-user gateway (fail-closed = omit, not leak).
-            let (headers, binding) = self.caller_credential_for(&backend.name, caller).await;
-            if self.meta_route_isolation_refused_for_caller(&backend, binding.as_deref()) {
+            let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
                 continue;
-            }
+            };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Some(tools) =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
@@ -775,7 +768,7 @@ impl MetaMcp {
             "tools": all_tools,
             "total": all_tools.len()
         });
-        self.scan_tool_list_value(&mut out);
+        self.inspect_discovery_value(&mut out)?;
         Ok(out)
     }
 
@@ -857,7 +850,7 @@ impl MetaMcp {
         };
 
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
-        self.scan_tool_list_value(&mut out);
+        self.inspect_discovery_value(&mut out)?;
         Ok(out)
     }
 }

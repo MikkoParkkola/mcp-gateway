@@ -4,18 +4,20 @@
 //! prompts, each backed by a single-flight [`super::cached_metadata::CachedMetadata`]
 //! slot on [`super::Backend`].
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::debug;
 
 use super::Backend;
-use super::annotations::prepare_tool_metadata;
+use super::annotations::{PreparedTools, prepare_tool_metadata};
 use super::cached_metadata::CachedMetadata;
+use super::fill_check::{
+    Completeness, FillBound, FillEnd, FillGuard, LIST_FILL_COOLDOWN, admit_fill, run_bounded,
+};
+use super::list_drain::drain_list_pages;
 use super::pool::PoolKey;
-use super::{CACHE_LIST_DRAIN_BUDGET, LIST_MAX_PAGES};
 use crate::Error;
 use crate::Result;
 use crate::protocol::{
@@ -32,8 +34,30 @@ impl Backend {
     /// selects the transport. Identity-free readers pass `None` through the
     /// named `*_shared`-style wrappers below, which is how `Shared` stays
     /// reachable without any caller spelling a key.
+    ///
+    /// A LOOKUP, NEVER A CREATE (#2300). Every reader here only reads, so a
+    /// caller with no slot yet reads a cold entry that is never inserted:
+    /// probes cannot fill the identity-slot cap. Fills go through
+    /// `begin_internal_activity_for`, which admits the slot.
     fn tools_slot(&self, binding: Option<&str>) -> Arc<super::pool::PooledEntry> {
-        self.pooled_entry(&self.pool_key_for(binding))
+        self.pool.get(&self.pool_key_for(binding)).map_or_else(
+            || {
+                Arc::new(super::pool::PooledEntry::new(
+                    &self.name,
+                    &self.failsafe_config,
+                ))
+            },
+            |slot| Arc::clone(slot.value()),
+        )
+    }
+
+    /// Whether a stale hit's refresh on `binding`'s slot failed within the
+    /// cooldown (A4), so a stale hit is judged from the held schema at once.
+    pub(super) fn stale_refresh_cooling(&self, binding: Option<&str>) -> bool {
+        self.tools_slot(binding)
+            .tools_refresh_failed_at
+            .lock()
+            .is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
     }
 
     /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
@@ -66,9 +90,11 @@ impl Backend {
         // between the caller observing emptiness and acting on it, which would
         // turn a backend that had just become discoverable back into an
         // invisible one. The check happens under the cache's own write lock.
+        // "Empty" is what callers are served: a list whose every tool has
+        // since been blocked reads as empty, so it is discarded too (#1441).
         self.tools_slot(None)
             .tools_cache
-            .invalidate_if(Vec::is_empty);
+            .invalidate_if(|tools| self.all_blocked(tools));
     }
 
     /// Number of tools cached on `binding`'s slot (non-blocking, no network I/O).
@@ -77,9 +103,14 @@ impl Backend {
     /// design: it never triggers a refresh.
     #[must_use]
     pub fn cached_tools_count_for(&self, binding: Option<&str>) -> usize {
-        self.tools_slot(binding)
-            .tools_cache
-            .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
+        self.tools_slot(binding).tools_cache.with_cached(|tools| {
+            tools.map_or(0, |tools| {
+                tools
+                    .iter()
+                    .filter(|t| !self.is_blocked_tool(&t.name))
+                    .count()
+            })
+        })
     }
 
     /// The shared slot's count.
@@ -100,12 +131,13 @@ impl Backend {
     #[must_use]
     pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
         let slot = self.tools_slot(None);
-        slot.tools_cache.with_cached(|tools| {
+        let (tools, truncated) = slot.tools_cache.with_cached(|tools| {
             (
                 tools.map_or_else(|| Arc::new(Vec::new()), Arc::clone),
                 slot.tools_truncated.load(Ordering::SeqCst),
             )
-        })
+        });
+        (self.without_blocked(tools), truncated)
     }
 
     /// Both under one guard; use wherever the two travel together.
@@ -114,7 +146,13 @@ impl Backend {
         self.tools_slot(None)
             .tools_cache
             .with_cached_and_populated(|tools, populated| {
-                (tools.map_or(0, |tools| tools.len()), populated)
+                let count = tools.map_or(0, |tools| {
+                    tools
+                        .iter()
+                        .filter(|t| !self.is_blocked_tool(&t.name))
+                        .count()
+                });
+                (count, populated)
             })
     }
 
@@ -126,11 +164,15 @@ impl Backend {
     /// back door while the front door is sealed.
     #[must_use]
     pub fn get_cached_tool_names_for(&self, binding: Option<&str>) -> Vec<String> {
-        self.tools_slot(binding).tools_cache.with_cached(|tools| {
+        let names: Vec<String> = self.tools_slot(binding).tools_cache.with_cached(|tools| {
             tools
                 .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
                 .unwrap_or_default()
-        })
+        });
+        names
+            .into_iter()
+            .filter(|name| !self.is_blocked_tool(name))
+            .collect()
     }
 
     /// The shared slot's tool names.
@@ -142,6 +184,9 @@ impl Backend {
     /// One tool by exact name from `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tool_for(&self, binding: Option<&str>, name: &str) -> Option<Tool> {
+        if self.is_blocked_tool(name) {
+            return None;
+        }
         self.tools_slot(binding).tools_cache.with_cached(|tools| {
             tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
         })
@@ -153,13 +198,28 @@ impl Backend {
         self.get_cached_tool_for(None, name)
     }
 
+    /// The list `binding`'s slot holds now, fresh or not, with its
+    /// completeness, read under one cache guard; `None` when empty.
+    pub(super) fn held_tools_for(
+        &self,
+        binding: Option<&str>,
+    ) -> Option<(Arc<Vec<Tool>>, Completeness)> {
+        let slot = self.tools_slot(binding);
+        slot.tools_cache.with_cached(|held| {
+            let completeness = Completeness::held(slot.tools_truncated.load(Ordering::SeqCst));
+            held.map(|list| (Arc::clone(list), completeness))
+        })
+    }
+
     /// Snapshot of the tools cached on `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tools_snapshot_for(&self, binding: Option<&str>) -> Arc<Vec<Tool>> {
-        self.tools_slot(binding)
-            .tools_cache
-            .snapshot_shared()
-            .unwrap_or_else(|| Arc::new(Vec::new()))
+        self.without_blocked(
+            self.tools_slot(binding)
+                .tools_cache
+                .snapshot_shared()
+                .unwrap_or_else(|| Arc::new(Vec::new())),
+        )
     }
 
     /// Snapshot of the shared slot's tools.
@@ -191,17 +251,21 @@ impl Backend {
     /// `claim_pooled_entry` via `begin_internal_activity_for`, never the
     /// unclaimed `pooled_entry`: the reaper is otherwise free to remove the slot
     /// and close the transport mid-fetch (R3).
+    ///
+    /// `bound` is `DrainBudget` for every caller but R2's check (F13), which
+    /// passes `CallTimeout`: see [`super::fill_check`] for what that adds.
     async fn get_cached_list_for<T, S, F>(
         &self,
         binding: Option<&str>,
         select: S,
         family: ListFamily,
         extra_headers: &[(String, String)],
+        bound: FillBound,
         parse: F,
     ) -> Result<Arc<Vec<T>>>
     where
         S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
-        F: Fn(Value, &super::pool::PooledEntry) -> Result<Vec<T>>,
+        F: Fn(Value) -> Result<(Vec<T>, Option<PreparedTools>)>,
     {
         let key = self.pool_key_for(binding);
         let identity_key = match &key {
@@ -228,25 +292,59 @@ impl Backend {
             None => &[],
         };
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
-        let lease = self.begin_internal_activity_for(&key);
+        let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
         select(&entry)
             .get_or_fetch_shared_then(
                 self.cache_ttl,
                 || async {
-                    let transport = self.ensure_entry_started(&key).await?;
-                    let (merged, truncated) = drain_list_pages(
-                        transport.as_ref(),
-                        &self.name,
-                        &family,
-                        fetch_headers,
-                        identity_key,
-                    )
-                    .await?;
-                    let items = match merged {
-                        Some(result) => parse(result, &entry)?,
-                        None => Vec::new(),
+                    // F13: breaker, cooldown, token, in that order, before the
+                    // guard is armed, so a refusal here never stamps.
+                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
+                    if family.stale_hit
+                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+                    {
+                        return Err(Error::BackendUnavailable(format!(
+                            "{}: a stale tools refresh failed within the last {}s",
+                            self.name,
+                            LIST_FILL_COOLDOWN.as_secs()
+                        )));
+                    }
+                    admit_fill(&entry, &self.name, bound, family.cooldown)?;
+                    let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
+                    let drained = run_bounded(&entry, &self.name, bound, async {
+                        let transport = self.ensure_entry_started(&key).await?;
+                        let (merged, truncated) = drain_list_pages(
+                            transport.as_ref(),
+                            &self.name,
+                            &family,
+                            fetch_headers,
+                            identity_key,
+                        )
+                        .await?;
+                        let (items, prepared) = match merged {
+                            Some(result) => parse(result)?,
+                            None => (Vec::new(), None),
+                        };
+                        Ok((items, truncated, prepared))
+                    })
+                    .await;
+                    let end = match &drained {
+                        Ok(_) => FillEnd::Drained,
+                        Err(e) => match super::fill_check::Replay::of(e) {
+                            None if super::fill_check::is_transport_failure(e) => {
+                                FillEnd::Unreplayable
+                            }
+                            transport => FillEnd::Failed { transport },
+                        },
                     };
+                    if family.stale_hit && drained.is_err() {
+                        *refresh_failed() = Some(tokio::time::Instant::now());
+                    }
+                    if let Some(guard) = guard.as_mut() {
+                        guard.end(end);
+                    }
+                    let (items, truncated, prepared) = drained?;
 
                     debug!(
                         backend = %self.name,
@@ -256,13 +354,33 @@ impl Backend {
                         "Backend metadata cached"
                     );
 
-                    Ok((items, truncated))
+                    Ok((items, (truncated, guard, prepared)))
                 },
-                |truncated| {
+                |(truncated, guard, prepared)| {
                     // Written only once the store is accepted, and on every
                     // accepted store, so a complete fill clears it (design D).
                     if let Some(flag) = family.truncated_flag {
                         flag(&entry).store(truncated, Ordering::SeqCst);
+                    }
+                    // Only this accepted store's own set and verdicts (F13,
+                    // #1441).
+                    if let Some(prepared) = prepared {
+                        *entry.resend_permitted.write() = prepared.resend_permitted;
+                        let listing = if truncated {
+                            super::descriptor_gate::Listing::Truncated
+                        } else {
+                            super::descriptor_gate::Listing::Complete
+                        };
+                        self.commit_verdicts(
+                            identity_key.unwrap_or(""),
+                            listing,
+                            prepared.verdicts,
+                        );
+                    }
+                    // The only place a guard reaches `Stored`: a voided store
+                    // drops it unrun, still `Drained`, and so stamps (F13).
+                    if let Some(mut guard) = guard {
+                        guard.end(FillEnd::Stored);
                     }
                 },
             )
@@ -274,6 +392,12 @@ impl Backend {
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_tools_for_binding(None, &[]).await
+    }
+
+    /// Startup warm-up's fill: recorded on the breaker, never admitted or
+    /// charged a token (#1300). Warm-start is its only caller.
+    pub(crate) async fn warm_tools(&self) -> Result<Arc<Vec<Tool>>> {
+        self.tools_fill(None, &[], FillBound::Warmup, false).await
     }
 
     /// The tool catalogue THIS CALLER's pool slot serves.
@@ -298,6 +422,24 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
+        let tools = self
+            .tools_fill(binding, extra_headers, FillBound::DrainBudget, false)
+            .await?;
+        Ok(self.without_blocked(tools))
+    }
+
+    /// [`Self::get_tools_for_binding`] under an explicit bound; R2's check
+    /// passes `CallTimeout` through [`Self::tools_for_check`]. The list is
+    /// returned as the slot stored it, withheld names included: the check
+    /// compares it by pointer with what the slot holds, and re-checks the
+    /// name against the blocked set itself.
+    async fn tools_fill(
+        &self,
+        binding: Option<&str>,
+        extra_headers: &[(String, String)],
+        bound: FillBound,
+        stale_hit: bool,
+    ) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_for(
             binding,
             |entry| &entry.tools_cache,
@@ -306,24 +448,67 @@ impl Backend {
                 kind: "tools",
                 list_key: "tools",
                 truncated_flag: Some(tools_truncated_flag),
+                cooldown: true,
+                stale_hit,
             },
             extra_headers,
-            |result, entry| {
-                let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
+            bound,
+            |result| {
+                // Entry by entry: one malformed entry must neither fail the
+                // fill nor hide its siblings from judging; a named one that
+                // does not parse is withheld (#1441).
+                let (mut tools, unparseable) = match result.get("tools").and_then(Value::as_array) {
+                    Some(raw) => super::descriptor_gate::parse_listed(raw),
+                    None => (
+                        serde_json::from_value::<ToolsListResult>(result)?.tools,
+                        Vec::new(),
+                    ),
+                };
                 // Discovery is where the explicit annotations are still readable,
-                // and it always precedes a `tools/call` (ADR-012 A1). Written
-                // THROUGH THE LEASE THIS FILL ALREADY HOLDS, not through a second
-                // `tools_slot(binding)` lookup: a revocation that removes the slot
-                // mid-fetch would otherwise resurrect the pre-revocation retry set
-                // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
-                // it, and keeps the set on the slot whose catalogue derived it — a
-                // backend-wide one would let one identity's fill decide another
-                // identity's retry policy.
-                *entry.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
-                Ok(tools)
+                // and it always precedes a `tools/call` (ADR-012 A1). The resend
+                // set and the verdicts travel with THIS fill's result and are
+                // published by its accepted store only, so a voided fill can
+                // neither restore a revoked resend nor commit a block (F13,
+                // #1441). Judged here, on the raw list, before any redaction.
+                let mut prepared = prepare_tool_metadata(
+                    &self.name,
+                    self.flagged_tool_pins(),
+                    super::Judging::Judge,
+                    &mut tools,
+                );
+                prepared.verdicts.add_unparseable(unparseable);
+                Ok((tools, Some(prepared)))
             },
         )
         .await
+    }
+
+    /// The caller's tool list for R2's check, and whether it is the slot's
+    /// whole catalogue (design §2 step 2).
+    ///
+    /// A leading caller's fill is bounded by `timeout`, a waiter's by
+    /// `timeout` plus `LIST_FILL_WAIT_GRACE`. Only a list the slot still holds
+    /// (`Arc::ptr_eq`, read under its guard) is `Complete` or `Truncated`, so
+    /// a voided store is `Unknown`. Beside `tools_slot` so neither widens.
+    pub(crate) async fn tools_for_check(
+        &self,
+        binding: Option<&str>,
+        headers: &[(String, String)],
+        stale_hit: bool,
+    ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
+        let limit = self.config.timeout;
+        let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
+        let tools = tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
+            .await
+            .unwrap_or_else(|_| Err(super::fill_check::list_timeout(&self.name, limit)))?;
+        let slot = self.tools_slot(binding);
+        let completeness = slot.tools_cache.with_cached(|current| match current {
+            Some(held) if Arc::ptr_eq(held, &tools) => {
+                Completeness::held(slot.tools_truncated.load(Ordering::SeqCst))
+            }
+            _ => Completeness::Unknown,
+        });
+        Ok((tools, completeness))
     }
 
     /// Record the tools whose backend-declared annotations grant resend
@@ -409,9 +594,17 @@ impl Backend {
                 kind: "resources",
                 list_key: "resources",
                 truncated_flag: None,
+                cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
-            |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+            FillBound::DrainBudget,
+            |result| {
+                Ok((
+                    serde_json::from_value::<ResourcesListResult>(result)?.resources,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -454,13 +647,14 @@ impl Backend {
                 kind: "resource_templates",
                 list_key: "resourceTemplates",
                 truncated_flag: None,
+                cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
-            |result, _| {
-                Ok(
-                    serde_json::from_value::<ResourcesTemplatesListResult>(result)?
-                        .resource_templates,
-                )
+            FillBound::DrainBudget,
+            |result| {
+                let templates = serde_json::from_value::<ResourcesTemplatesListResult>(result)?;
+                Ok((templates.resource_templates, None))
             },
         )
         .await
@@ -504,9 +698,17 @@ impl Backend {
                 kind: "prompts",
                 list_key: "prompts",
                 truncated_flag: None,
+                cooldown: false,
+                stale_hit: false,
             },
             extra_headers,
-            |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
+            FillBound::DrainBudget,
+            |result| {
+                Ok((
+                    serde_json::from_value::<PromptsListResult>(result)?.prompts,
+                    None,
+                ))
+            },
         )
         .await
     }
@@ -525,115 +727,20 @@ impl Backend {
 
 /// One `*/list` family as the shared cache fill sees it.
 #[derive(Clone, Copy)]
-struct ListFamily {
-    method: &'static str,
+pub(super) struct ListFamily {
+    pub(super) method: &'static str,
     kind: &'static str,
     /// The result's array key; `resourceTemplates` differs from its `kind`.
-    list_key: &'static str,
+    pub(super) list_key: &'static str,
     /// Only the tools family records truncation (MIK 7570 PAGING.1 design D).
     truncated_flag: Option<fn(&super::pool::PooledEntry) -> &AtomicBool>,
-}
-
-/// Drain every `nextCursor` page into one result, then let the caller parse
-/// it ONCE: the tools `parse` rewrites `resend_permitted`, so a per-page
-/// parse would keep only the last page's retry set. Page 1 sends no params,
-/// so a single-page backend sees byte-identical traffic. Returns the merged
-/// result (`None` if page 1 had none) and whether the drain stopped early.
-///
-/// A page error fails the whole fill, keeping the last complete catalogue
-/// (design E). A structural stop (page cap, repeated `nextCursor`, the drain
-/// budget) keeps the fresh pages: retrying cannot complete them (D, F, G).
-async fn drain_list_pages(
-    transport: &dyn crate::transport::Transport,
-    backend: &str,
-    family: &ListFamily,
-    headers: &[(String, String)],
-    identity_key: Option<&str>,
-) -> Result<(Option<Value>, bool)> {
-    let started = tokio::time::Instant::now();
-    let mut merged: Option<Value> = None;
-    let mut cursor: Option<String> = None;
-    let mut sent: HashSet<String> = HashSet::new();
-    let mut stop: Option<&'static str> = None;
-    let mut kept = 0usize;
-    for page in 0.. {
-        if page == LIST_MAX_PAGES {
-            stop = Some("page_cap");
-            break;
-        }
-        if page > 0 && started.elapsed() >= CACHE_LIST_DRAIN_BUDGET {
-            stop = Some("fill_budget");
-            break;
-        }
-        let params = cursor.clone().map(|c| json!({ "cursor": c }));
-        // A `*/list` is in the side-effect-free allowlist
-        // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried fetch
-        // cannot duplicate an upstream effect.
-        let permission = crate::transport::ResendPermission::Permitted;
-        let response = transport
-            .request_with_headers(family.method, params, headers, identity_key, permission)
-            .await?;
-        if let Some(error) = response.error {
-            return Err(Error::json_rpc(error.code, error.message));
-        }
-        let Some(mut result) = response.result else {
-            if page == 0 {
-                break;
-            }
-            // Neither `result` nor `error` mid-drain says nothing about the
-            // list's shape: a transient page failure, so keep the last
-            // complete catalogue (design E).
-            return Err(Error::json_rpc(
-                -32603,
-                format!("{} page {} returned no result", family.method, page + 1),
-            ));
-        };
-        let next = result
-            .as_object_mut()
-            .and_then(|m| m.remove("nextCursor"))
-            .and_then(|v| v.as_str().map(str::to_owned));
-        if let Some(acc) = merged.as_mut() {
-            let items = result
-                .get_mut(family.list_key)
-                .and_then(Value::as_array_mut)
-                .map(std::mem::take)
-                .unwrap_or_default();
-            // Page 1 may omit the key and still carry `nextCursor`; create
-            // the array so later pages' items are not dropped.
-            if let Some(list) = acc
-                .as_object_mut()
-                .map(|m| m.entry(family.list_key).or_insert_with(|| json!([])))
-                .and_then(Value::as_array_mut)
-            {
-                list.extend(items);
-            }
-        } else {
-            merged = Some(result);
-        }
-        kept += 1;
-        let Some(next) = next else { break };
-        if !sent.insert(next.clone()) {
-            stop = Some("cursor_repeat");
-            break;
-        }
-        cursor = Some(next);
-    }
-    if let Some(reason) = stop {
-        telemetry_metrics::counter!(
-            "mcp_backend_list_truncated_total",
-            "backend" => backend.to_owned(),
-            "reason" => reason
-        )
-        .increment(1);
-        tracing::warn!(
-            backend,
-            method = family.method,
-            reason,
-            pages_kept = kept,
-            "Backend list drain stopped early; catalogue truncated"
-        );
-    }
-    Ok((merged, stop.is_some()))
+    /// Only the tools family keeps a failure cooldown (F13): a resources or
+    /// prompts failure must never make a tools fill fail fast.
+    cooldown: bool,
+    /// A stale hit's refresh (A4): it honours `tools_refresh_failed_at` at
+    /// admission, so a caller waiting inside the fill does not retry a
+    /// failure the cooldown already covers, and it stamps that on failure.
+    stale_hit: bool,
 }
 
 /// The tools family's truncated flag; the other three families keep their

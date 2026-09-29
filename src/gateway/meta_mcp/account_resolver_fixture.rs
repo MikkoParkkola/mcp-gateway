@@ -128,9 +128,13 @@ pub(super) const RECONNECT_GENERATION: &str = "0123456789abcdef0123456789abcdef"
 const DISPLAY_EMAIL: &str = "shared-display@display.invalid";
 const DISPLAY_NAME: &str = "Shared Display Name";
 
-/// 64 zeros, matching the descriptor-revision width the store commits.
+/// The live revision of the installed descriptors. Every seeded grant carries
+/// it, so only a test that means to cross the #2249 descriptor fence does. Both
+/// descriptor ids share it: the revision covers the declared fields, never the
+/// map key, and [`descriptor`] differs only in the key.
 pub(super) fn descriptor_revision() -> String {
-    "0".repeat(64)
+    crate::personal_accounts::descriptor_revision(&descriptor(WORK))
+        .expect("the fixture descriptor has a revision")
 }
 
 /// A fixture identity. Supplied to the dispatch entry directly: this is a
@@ -148,7 +152,11 @@ pub(super) fn identity(subject: &str) -> VerifiedIdentity {
 /// A structurally complete `personal_managed` descriptor, with the same field
 /// set the existing config tests use. Values are synthetic `.invalid` hosts and
 /// the client secret stays an unresolved `env:` reference.
-pub(super) fn descriptor(id: &str) -> AccountDescriptor {
+///
+/// Identical for every id: the id is the `accounts.descriptors` map key the
+/// caller inserts it under, so two ids differ in the key alone and share one
+/// descriptor revision.
+pub(super) fn descriptor(_id: &str) -> AccountDescriptor {
     AccountDescriptor {
         mode: DescriptorMode::PersonalManaged,
         provider: "google".to_string(),
@@ -157,7 +165,7 @@ pub(super) fn descriptor(id: &str) -> AccountDescriptor {
         authorization_endpoint: Some(format!("{OAUTH_ISSUER}/o/oauth2/v2/auth")),
         token_endpoint: Some(format!("{OAUTH_ISSUER}/token")),
         revocation_endpoint: None,
-        client_id: Some(format!("synthetic-google-client-{id}")),
+        client_id: Some("synthetic-google-client".to_string()),
         client_secret_ref: Some("env:FIXTURE_ACCOUNT_CLIENT_SECRET".to_string()),
         redirect_uri: Some("https://gateway.example.invalid/oauth/callback".to_string()),
         scopes: Some(vec![
@@ -477,6 +485,9 @@ pub(super) fn custody_with_steps(
 pub(super) struct Dispatch {
     pub(super) headers: Vec<(String, String)>,
     pub(super) identity_key: Option<String>,
+    /// The JSON-RPC method. F13 lists a cold slot before a `tools/call`, so
+    /// positive assertions read the `tools/call` records only.
+    pub(super) method: String,
 }
 
 impl Dispatch {
@@ -496,6 +507,11 @@ pub(super) struct Dispatches {
     /// A11: what the backend answers the next dispatches with, in order.
     /// Empty means today's success, which is what every pre-A11 case relies on.
     answers: Mutex<std::collections::VecDeque<Answer>>,
+    /// The script answers the cold-slot `tools/list` too (F13 A11-c cells).
+    lists_scripted: std::sync::atomic::AtomicBool,
+    /// Run once, as the next `tools/call` is answered (F13: empties the slot
+    /// between a bridged exchange's rounds).
+    on_call: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// One scripted backend answer (A11 cells).
@@ -522,6 +538,17 @@ fn http_status_error(status: u16) -> crate::Error {
 
 impl Dispatches {
     /// Answer the next dispatches with these HTTP statuses (A11 cells).
+    /// Run `hook` once, as the next `tools/call` is answered.
+    pub(super) fn on_next_call(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.on_call.lock() = Some(Box::new(hook));
+    }
+
+    /// Let the script answer `tools/list` as well as `tools/call`.
+    pub(super) fn script_lists(&self) {
+        self.lists_scripted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub(super) fn answer_with(&self, statuses: &[u16]) {
         let answers = statuses.iter().copied().map(Answer::Status);
         self.answers.lock().extend(answers);
@@ -536,8 +563,21 @@ impl Dispatches {
         self.calls.lock().len()
     }
 
-    pub(super) fn calls(&self) -> Vec<Dispatch> {
+    /// Every dispatch, whatever its method (#2231's listings).
+    pub(super) fn all(&self) -> Vec<Dispatch> {
         self.calls.lock().clone()
+    }
+
+    /// The `tools/call` dispatches, in order. `count()` still counts every
+    /// method, so a refusal proved by `count() == 0` also rules out the
+    /// gateway's own cold-slot `tools/list` (F13).
+    pub(super) fn calls(&self) -> Vec<Dispatch> {
+        self.calls
+            .lock()
+            .iter()
+            .filter(|d| d.method == "tools/call")
+            .cloned()
+            .collect()
     }
 
     /// The single dispatch expected by a positive case; panics loudly if the
@@ -549,6 +589,17 @@ impl Dispatches {
     }
 }
 
+/// The backend's answer: its one tool `read` (a free map) for the cold-slot
+/// `tools/list` F13 sends before judging a call, `ok` for everything else.
+fn answer(method: &str) -> crate::protocol::JsonRpcResponse {
+    let result = if method == "tools/list" {
+        json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]})
+    } else {
+        json!({"content": [{"type": "text", "text": "ok"}]})
+    };
+    crate::protocol::JsonRpcResponse::success(crate::protocol::RequestId::Number(1), result)
+}
+
 struct CapturingTransport {
     dispatches: Arc<Dispatches>,
 }
@@ -557,7 +608,7 @@ struct CapturingTransport {
 impl crate::transport::Transport for CapturingTransport {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         // Recorded too: a dispatch that carried NO per-request headers is still
@@ -565,16 +616,14 @@ impl crate::transport::Transport for CapturingTransport {
         self.dispatches.calls.lock().push(Dispatch {
             headers: Vec::new(),
             identity_key: None,
+            method: method.to_string(),
         });
-        Ok(crate::protocol::JsonRpcResponse::success(
-            crate::protocol::RequestId::Number(1),
-            json!({"content": [{"type": "text", "text": "ok"}]}),
-        ))
+        Ok(answer(method))
     }
 
     async fn request_with_headers(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
@@ -583,21 +632,33 @@ impl crate::transport::Transport for CapturingTransport {
         self.dispatches.calls.lock().push(Dispatch {
             headers: extra_headers.to_vec(),
             identity_key: identity_key.map(str::to_string),
+            method: method.to_string(),
         });
-        match self.dispatches.answers.lock().pop_front() {
-            Some(Answer::Status(status)) => return Err(http_status_error(status)),
-            Some(Answer::Result(result)) => {
-                return Ok(crate::protocol::JsonRpcResponse::success(
-                    crate::protocol::RequestId::Number(1),
-                    result,
-                ));
-            }
-            None => {}
+        if method == "tools/call"
+            && let Some(hook) = self.dispatches.on_call.lock().take()
+        {
+            hook();
         }
-        Ok(crate::protocol::JsonRpcResponse::success(
-            crate::protocol::RequestId::Number(1),
-            json!({"content": [{"type": "text", "text": "ok"}]}),
-        ))
+        // The scripted answers are for `tools/call`; the cold-slot
+        // `tools/list` R2 sends first (F13) keeps the fixture's catalogue.
+        if method != "tools/list"
+            || self
+                .dispatches
+                .lists_scripted
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            match self.dispatches.answers.lock().pop_front() {
+                Some(Answer::Status(status)) => return Err(http_status_error(status)),
+                Some(Answer::Result(result)) => {
+                    return Ok(crate::protocol::JsonRpcResponse::success(
+                        crate::protocol::RequestId::Number(1),
+                        result,
+                    ));
+                }
+                None => {}
+            }
+        }
+        Ok(answer(method))
     }
 
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
@@ -614,5 +675,22 @@ impl crate::transport::Transport for CapturingTransport {
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
 pub(super) use gateway::{
-    Bind, Descriptors, execute, execute_bridged, external_cfg, gateway, slots,
+    Bind, Descriptors, caller_as, execute, execute_as, execute_bridged, execute_bridged_keyed,
+    external_cfg, gateway, gateway_in, slots,
 };
+
+// #2190: the direct-route tests live in `router`; this is their one door in.
+#[path = "account_direct_bridge.rs"]
+pub(crate) mod direct_bridge;
+
+// #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
+#[path = "account_sole_operator_mcp_tests.rs"]
+mod sole_operator_mcp_tests;
+
+// #2231: the catalogue and forward reads, for the same principals as #1961.
+#[path = "account_catalogue_sole_operator_tests.rs"]
+mod catalogue_sole_operator_tests;
+
+// #2326: tool discovery omits a required backend for a caller without identity.
+#[path = "account_tool_discovery_required_tests.rs"]
+mod tool_discovery_required_tests;

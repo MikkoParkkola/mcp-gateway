@@ -23,7 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
-/// A backend that answers `tools/list` with an empty catalogue and anything
+/// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
     calls: Arc<AtomicUsize>,
@@ -37,10 +37,15 @@ impl Transport for Scripted {
         method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
         let id = RequestId::Number(1);
+        // F13: a cold `tools/call` lists the backend first. The list names the
+        // tool the rows call, and it is not a call, so `calls` skips it.
+        if method == "tools/list" {
+            let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
+            return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(match (method, self.error) {
-            ("tools/list", _) => JsonRpcResponse::success(id, json!({"tools": []})),
             (_, Some(code)) => JsonRpcResponse::error(Some(id), code, "backend says no"),
             _ => JsonRpcResponse::success(
                 id,
@@ -152,6 +157,7 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
     }
 }
 
@@ -535,8 +541,8 @@ async fn backend_503_32005_is_recorded_as_error() {
 }
 
 /// F20 on the direct route (added by #1092 after the F20 design): a stalled
-/// audit disk withholds the result with 503 within the bound, instead of
-/// pinning a runtime worker.
+/// audit disk withholds the result with 503 while the write is still held
+/// (only the bound can do that), instead of pinning a runtime worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_append_on_a_stalled_disk_is_bounded() {
     let fx = fixture(Setup {
@@ -546,15 +552,42 @@ async fn direct_append_on_a_stalled_disk_is_bounded() {
     .await;
     let bound = Duration::from_millis(200);
     let release = fx.log.stall_next_write_for_test(bound);
-    let start = std::time::Instant::now();
+    // A 503 with the write still held is the bound: an unbounded append
+    // would wait for the write and succeed.
     let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
-    assert!(
-        start.elapsed() < bound * 5,
-        "bounded: {:?}",
-        start.elapsed()
-    );
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], -32005, "{body}");
     assert!(fx.log.is_stalled());
     release.release();
+}
+
+/// #2283. Under `FailClosed`, a refusal that answers `id: null` still owes the
+/// caller the id it sent when the audit write fails and the answer becomes 503.
+async fn failed_audit_503_echoes_the_request_id(
+    backend: &str,
+    auth: Option<AuthConfig>,
+    caller: Caller,
+) {
+    let fx = fixture(Setup {
+        auth,
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    fx.log.fail_next_append_for_test();
+    let (status, body) = post(&fx, backend, &tools_call("t"), &caller).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], -32005, "{body}");
+    assert_eq!(body["id"], 5, "the request id was dropped: {body}");
+}
+
+#[tokio::test]
+async fn failed_audit_503_keeps_the_request_id_on_a_scope_refusal() {
+    failed_audit_503_echoes_the_request_id("beta", Some(key_for_alpha(None)), Caller::Key).await;
+}
+
+#[tokio::test]
+async fn failed_audit_503_keeps_the_request_id_on_an_unrecognised_backend() {
+    // Unscoped, so the backend lookup is reached, not the scope refusal.
+    failed_audit_503_echoes_the_request_id("nope", None, Caller::Anonymous).await;
 }

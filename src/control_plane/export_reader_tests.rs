@@ -76,7 +76,8 @@ fn export_rescans_once_when_a_listed_file_vanishes() {
     EXPORT_PASSES.with(|c| c.set(0));
     let sink = CollectingSink::new();
     let out = exp.poll(&sink).unwrap();
-    assert_eq!(out.forwarded, 3, "entries lost to the vanish");
+    // Plus the genesis open record (#2275).
+    assert_eq!(out.forwarded, 4, "entries lost to the vanish");
     assert_eq!(passes(), 2, "exactly one rescan");
 }
 
@@ -111,9 +112,10 @@ fn export_reports_busy_when_the_log_changes_twice() {
     }
     assert_eq!(passes(), 2, "one rescan, then busy");
     assert!(sink.delivered().is_empty());
+    // Plus the genesis open record (#2275).
     assert_eq!(
         exp.poll(&sink).unwrap().forwarded,
-        3,
+        4,
         "the next poll recovers"
     );
 }

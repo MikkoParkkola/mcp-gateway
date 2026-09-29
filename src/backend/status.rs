@@ -38,9 +38,12 @@ impl Backend {
     /// nothing. Expressed as the configured number of failures rather than a
     /// state write, so the breaker's own accounting - open event, failure
     /// count, the half-open timer - stays the single description of why it is
-    /// open.
+    /// open. The trip is not warm-up's own, so it sets the provenance flag
+    /// under the flag's lock and a warm-up success cannot reset it (#2219).
     pub(crate) fn trip_circuit_breaker(&self, reason: &str) {
         let entry = self.shared_entry();
+        let mut not_warmup_trip = entry.request_failed_since_close.lock();
+        *not_warmup_trip = true;
         let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
         for _ in 0..threshold {
             entry

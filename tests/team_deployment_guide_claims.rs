@@ -90,7 +90,7 @@ fn load(yaml: &str, env: &str) -> mcp_gateway::Result<Config> {
     let path = dir.path().join("gateway.yaml");
     write(
         &path,
-        &format!("env_files: [\"{}\"]\n{yaml}", env_path.display()),
+        &format!("env_files: ['{}']\n{yaml}", env_path.display()),
     );
     Config::load(Some(&path))
 }

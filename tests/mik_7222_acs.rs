@@ -114,8 +114,18 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (mut stream, _) = listener.accept().await.expect("accept");
+        // Read the request first: closing with it unread makes Windows reset
+        // the connection (10053) before the client sees the response.
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !request.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => request.extend_from_slice(&chunk[..n]),
+            }
+        }
         let body = b"not-json";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

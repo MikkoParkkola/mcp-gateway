@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 
 use super::rotation::{
     EV_EXPIRED, EV_SEALED, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping, now_secs,
-    open_after_seal, record_head, recover, seal_of,
+    open_after_seal, path_id, record_head, recover, seal_of,
 };
 use super::segments::{self, HighWater, Segment};
 use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
@@ -27,7 +27,7 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
     };
     let writer = std::fs::OpenOptions::new().write(true).open(path)?;
     let (ours, theirs) = (file.metadata()?, writer.metadata()?);
-    if file_id(&theirs) != file_id(&ours) || theirs.len() != ours.len() {
+    if file_id(&writer)? != file_id(file)? || theirs.len() != ours.len() {
         return Err(e);
     }
     writer.set_len(good)
@@ -56,8 +56,8 @@ impl TransparencyLogger {
         let path = self.path();
         // Every append checks for a rotated or deleted path, on every
         // writer; a synced (governance) append always re-reads the tail.
-        let moved = match std::fs::metadata(&path) {
-            Ok(meta) => file_id(&meta) != inner.seg.id,
+        let moved = match path_id(&path) {
+            Ok(id) => id != inner.seg.id,
             Err(e) if e.kind() == io::ErrorKind::NotFound => true,
             Err(e) => return Err(e),
         };
@@ -119,10 +119,15 @@ impl TransparencyLogger {
     /// past a deleted active file (2.8, 2.13).
     fn rebuild(&self, inner: &mut Inner, path: &Path, g: &ExclusiveFileLock) -> io::Result<()> {
         let r = recover(path, &self.config, g, self.now())?;
+        // A finding this writer already holds is never forgotten (#2294).
+        let known = inner.seg.hwm_missing_at;
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
+        if let Some(at) = known {
+            inner.seg.hwm_missing_at = Some(inner.seg.hwm_missing_at.map_or(at, |e| e.min(at)));
+        }
         Ok(())
     }
 
@@ -314,12 +319,13 @@ impl TransparencyLogger {
             &segments::list_segments(path)?,
             Some(&hw),
             now,
+            inner.seg.hwm_missing_at,
         )?;
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
-        inner.seg.id = file_id(&inner.file.metadata()?);
+        inner.seg.id = file_id(&inner.file)?;
         self.mark_hwm(inner, path, true);
         telemetry_metrics::counter!("mcp_audit_rotations_total").increment(1);
         if self.config.rotation.on_disk_full == OnDiskFull::ExpireOldest
@@ -424,7 +430,7 @@ impl TransparencyLogger {
         self.hooks
             .reserve_released
             .store(true, std::sync::atomic::Ordering::Release);
-        let on_active = std::fs::metadata(path).is_ok_and(|m| file_id(&m) == inner.seg.id);
+        let on_active = path_id(path).is_ok_and(|id| id == inner.seg.id);
         if !on_active {
             self.rebuild(inner, path, g)?;
         }

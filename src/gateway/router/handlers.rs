@@ -126,11 +126,10 @@ fn missing_task_error(id: crate::protocol::RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(Some(id), -32602, "no such task")
 }
 
-/// The stable identity of a caller with no session.
-///
-/// Empty when the caller is unauthenticated: that is not an identity, and the
-/// controls that key on this refuse rather than pool every anonymous caller
-/// into one bucket.
+/// The owner key of a stateless task: the validated API-key credential. Only
+/// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
+/// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
+/// when the caller is unauthenticated: that is not an identity.
 fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
     client.map_or_else(String::new, |c| {
         if c.authenticated && !c.principal.is_empty() {
@@ -1390,25 +1389,22 @@ async fn meta_mcp_dispatch(
                 if let Some(ref fw) = state.firewall {
                     let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                    // The key the per-caller controls are scored on. A session
-                    // when there is one; otherwise the validated credential.
-                    //
-                    // Never the display name: it is operator-configured, two
-                    // API keys may share one, and every unauthenticated caller
-                    // presents the same one — so scoring on it lets one caller
-                    // poison another's sequence history or trigger its blocks.
-                    // Empty means no identity at all, which the firewall
-                    // refuses rather than scores.
-                    let control_identity = if session_id.is_empty() {
-                        session_owner_key(client.as_ref())
-                    } else {
-                        session_id.clone()
-                    };
-                    // Renew this identity's reclaim deadline on every call, so
-                    // a sweep only reclaims state nobody has touched for
-                    // `IDLE_TTL`. An empty identity is never tracked: the
-                    // firewall refuses it rather than scoring it, so it holds
-                    // no per-identity state to reclaim.
+                    // The key the per-caller controls score on: the caller's
+                    // `CallerKey` on both eras; the session id only when there
+                    // is no key at all (authentication off). Never the display
+                    // name: operator-chosen, shared by API keys and by every
+                    // anonymous caller, it would let one caller poison
+                    // another's history. Empty is no identity: refused.
+                    let mut control_identity = super::identity::caller_key(
+                        grant_subject.as_ref(),
+                        cert_identity.as_ref(),
+                        client.as_ref(),
+                    );
+                    if control_identity.is_empty() {
+                        control_identity.clone_from(&session_id);
+                    }
+                    // Renew the reclaim deadline on every call (`IDLE_TTL`). An
+                    // empty identity holds no per-identity state: not tracked.
                     if let Some(ref lifecycle) = state.session_lifecycle
                         && !control_identity.is_empty()
                     {
@@ -1579,6 +1575,7 @@ async fn meta_mcp_dispatch(
                         cert_identity: cert_identity.as_ref(),
                         api_key_name,
                         agent_id,
+                        agent_declared,
                         grant_subject: grant_subject.clone(),
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
                         input_capabilities: declared_capabilities,

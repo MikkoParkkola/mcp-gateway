@@ -57,7 +57,7 @@ fn sections(doc: &str) -> BTreeSet<u32> {
 /// The highest item number published so far. Item numbers are public
 /// identifiers and never renumbered, so deleting the last item (row and
 /// section together) must fail too, not just shrink the range.
-const PUBLISHED_MAX: u32 = 70;
+const PUBLISHED_MAX: u32 = 100;
 
 /// The Change cell of every summary row, by item number.
 fn summary_cells(doc: &str) -> BTreeMap<u32, String> {
@@ -217,75 +217,184 @@ fn numbers_in(text: &str) -> BTreeSet<u32> {
     out
 }
 
-/// The text between `after` and the next `until` in the intro.
-fn intro_span(after: &str, until: &str) -> &'static str {
-    let intro = DOC.split("## What changed").next().unwrap();
-    let start = intro
-        .find(after)
-        .unwrap_or_else(|| panic!("intro lost `{after}`"))
-        + after.len();
-    let rest = &intro[start..];
-    &rest[..rest
-        .find(until)
-        .unwrap_or_else(|| panic!("intro lost `{until}`"))]
+/// The guide, line endings normalised: a Windows checkout reads it with CRLF.
+static GUIDE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| DOC.replace("\r\n", "\n"));
+
+/// What a startup marker's clause says the item does at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Clause {
+    PrintsNotice,
+    NoNotice,
+    RefusesToStart,
+    FailsBackend,
+    FailsCapabilityFile,
 }
 
-/// Entries of the `NOTICE_4_0_0_ITEMS` slice, counted from the source text:
-/// each entry starts on its own line indented four spaces, as a string
-/// literal or a `super::...::ITEM` constant; continuation lines start at
-/// column 0 and comments are skipped.
-fn notice_entries_in_source() -> usize {
-    let src = include_str!("../src/commands/upgrade_notice_items.rs");
-    let body = src
-        .split("NOTICE_4_0_0_ITEMS: &[&str] = &[")
-        .nth(1)
-        .expect("slice");
-    let body = &body[..body.find("\n];").expect("slice end")];
-    body.lines()
-        .filter(|l| l.starts_with("    \"") || l.starts_with("    super::"))
-        .count()
+impl Clause {
+    /// The clause's words, and its place in a marker: notice first, then the
+    /// refusal, then a failed backend, then a failed capability file.
+    const ALL: [(Self, &'static str, u8); 5] = [
+        (Self::PrintsNotice, "prints a notice", 0),
+        (Self::NoNotice, "no notice", 0),
+        (Self::RefusesToStart, "refuses to start", 1),
+        (Self::FailsBackend, "fails a backend", 2),
+        (Self::FailsCapabilityFile, "fails a capability file", 3),
+    ];
 }
 
-/// The intro's lists: the two refuses-start lists agree, every listed number
-/// is a real section, the notice list is as long as the notice the binary
-/// prints, and every section is either in the notice list or explained in
-/// the no-notice paragraph.
+/// The marker every item section starts with: its startup behaviour.
+const MARKER: &str = "**Startup:** ";
+
+/// Parse a marker's text (after `**Startup:** `) into its clauses.
+///
+/// Each item states its own startup behaviour in its own section, so adding an
+/// item touches only that section and its summary row. The intro used to list
+/// item numbers for each behaviour, and every change that added an item edited
+/// the same intro lines, so each merge conflicted with every open change.
+fn parse_marker(text: &str) -> Result<Vec<Clause>, String> {
+    let mut clauses = Vec::new();
+    let mut last_place = None;
+    for part in text.split("; ") {
+        let (clause, place, rest) = Clause::ALL
+            .iter()
+            .find_map(|&(clause, words, place)| {
+                part.strip_prefix(words).map(|rest| (clause, place, rest))
+            })
+            .ok_or_else(|| format!("unrecognised clause {part:?}"))?;
+        match rest.strip_prefix(", ") {
+            Some(detail) if detail.trim().is_empty() => {
+                return Err(format!("empty text after the comma in {part:?}"));
+            }
+            Some(_) => {}
+            None if rest.is_empty() => {}
+            None => return Err(format!("text must follow a comma in {part:?}")),
+        }
+        if part.contains(';') {
+            return Err(format!("free text may not contain ';': {part:?}"));
+        }
+        if last_place.is_some_and(|last| place <= last) {
+            return Err(format!("clause out of order or repeated: {part:?}"));
+        }
+        last_place = Some(place);
+        clauses.push(clause);
+    }
+    let effect = clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::RefusesToStart | Clause::FailsBackend | Clause::FailsCapabilityFile
+        )
+    });
+    let notice = clauses
+        .iter()
+        .any(|c| matches!(c, Clause::PrintsNotice | Clause::NoNotice));
+    if !notice && !effect {
+        return Err(format!("no notice clause and no refusal in {text:?}"));
+    }
+    Ok(clauses)
+}
+
+/// Item `n`'s marker text: the first non-blank line after its heading.
+fn marker_of(doc: &str, n: u32) -> Result<&str, String> {
+    let line = section_body(doc, n)
+        .lines()
+        .skip(1)
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    line.strip_prefix(MARKER)
+        .ok_or_else(|| format!("item {n} does not start with `{MARKER}`: {line:?}"))
+}
+
 #[test]
-fn intro_lists_cover_every_item() {
-    let sections = sections(DOC);
-    let refuses = numbers_in(intro_span("unless one of items ", " refuses it"));
-    let bold = numbers_in(intro_span("**Items ", " refuse the gateway's start"));
-    assert_eq!(refuses, bold, "the two refuses-start lists differ");
+fn every_section_starts_with_a_valid_startup_marker() {
+    let mut refusing = 0;
+    for n in sections(&GUIDE) {
+        let text = marker_of(&GUIDE, n).unwrap_or_else(|e| panic!("{e}"));
+        let clauses = parse_marker(text).unwrap_or_else(|e| panic!("item {n}: {e}"));
+        let body = section_body(&GUIDE, n);
+        assert_eq!(
+            body.matches(MARKER).count(),
+            1,
+            "item {n} has more than one startup marker"
+        );
+        refusing += usize::from(clauses.contains(&Clause::RefusesToStart));
+    }
     assert!(
-        refuses.len() >= 21,
-        "the refuses-start list shrank to {refuses:?}"
+        refusing > 0,
+        "no item refuses the start: the parser found nothing"
     );
-    let notice = numbers_in(intro_span("notice to stderr listing\nitems ", " below"));
-    assert_eq!(
-        notice.len(),
-        notice_entries_in_source(),
-        "the intro's notice list and NOTICE_4_0_0_ITEMS differ in length"
-    );
-    let explained = intro_span("The rest of the list has no startup notice.", "**Items ");
-    let no_notice = numbers_after_item(explained);
-    let both: Vec<_> = notice.intersection(&no_notice).collect();
-    assert!(
-        both.is_empty(),
-        "items listed both with a startup notice and without one: {both:?}"
-    );
-    for n in refuses.iter().chain(&notice).chain(&no_notice) {
+}
+
+#[test]
+fn marker_grammar() {
+    for ok in [
+        "prints a notice",
+        "no notice",
+        "no notice, a reason",
+        "refuses to start",
+        "prints a notice; refuses to start, only for a bad `MODE`",
+        "no notice, decided per backend; fails a backend, with one warning",
+        "no notice, decided per capability file; fails a capability file, with an error",
+    ] {
         assert!(
-            sections.contains(n),
-            "the intro lists item {n}, which has no section"
+            parse_marker(ok).is_ok(),
+            "{ok:?} must parse: {:?}",
+            parse_marker(ok)
         );
     }
-    let unexplained: Vec<_> = sections
-        .iter()
-        .filter(|n| !notice.contains(n) && !no_notice.contains(n))
-        .collect();
+    for bad in [
+        "",
+        "prints notices",
+        "refuses to start; prints a notice",
+        "prints a notice; no notice",
+        "fails a backend; fails a backend",
+        "no notice,",
+        "no notice, ",
+        "no noticeX",
+        "no notice, a; b",
+    ] {
+        assert!(parse_marker(bad).is_err(), "{bad:?} must be refused");
+    }
+}
+
+/// The intro names no item: behaviour lives in each item's own marker.
+#[test]
+fn intro_enumerates_no_items() {
+    let intro = GUIDE.split("## What changed").next().unwrap();
     assert!(
-        unexplained.is_empty(),
-        "items with no startup notice and no reason in the intro: {unexplained:?}"
+        !intro.lines().any(|l| l.starts_with("- Item ")),
+        "the intro lists items again"
+    );
+    let named = numbers_after_item(intro);
+    assert!(named.is_empty(), "the intro names items {named:?}");
+    for pointer in [
+        "the items below",
+        "listed under the bold heading",
+        "The rest of the list",
+    ] {
+        assert!(
+            !intro.contains(pointer),
+            "the intro still points at a list: {pointer:?}"
+        );
+    }
+}
+
+/// Every item that existed when the markers replaced the intro lists keeps the
+/// classification the intro gave it. Frozen: items added later are not in it.
+#[test]
+fn migrated_markers_match_the_frozen_classification() {
+    let fixture = include_str!("fixtures/upgrading_startup_markers_4_0.txt").replace("\r\n", "\n");
+    let mut seen = BTreeSet::new();
+    for line in fixture.lines().filter(|l| !l.starts_with('#')) {
+        let (n, expected) = line.split_once('\t').expect("N<TAB>marker");
+        let n: u32 = n.parse().expect("item number");
+        assert!(seen.insert(n), "item {n} is in the fixture twice");
+        let actual = marker_of(&GUIDE, n).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(actual, expected, "item {n}'s startup marker changed");
+    }
+    assert!(
+        seen.len() >= 74,
+        "the frozen classification lost items: {}",
+        seen.len()
     );
 }
 
@@ -343,6 +452,8 @@ const SUPERSEDED: &[(u32, u32)] = &[
     (33, 44),
     (40, 41),
     (43, 49),
+    (35, 96),
+    (54, 96),
 ];
 
 #[test]
@@ -427,4 +538,23 @@ fn walkthrough_commands_and_checks_are_real() {
         }
     }
     assert!(cited >= 10, "found only {cited} rehearsal checks cited");
+}
+
+/// #2266: the owner rule has its own item, and it says who is accepted and the fix.
+#[test]
+fn owner_rule_item_has_a_row_a_section_and_the_fix() {
+    assert!(
+        summary_rows(DOC).contains(&96),
+        "item 96 has no summary row"
+    );
+    let body = section_body(DOC, 96);
+    for want in [
+        "chown 1001",
+        "chmod 600",
+        "root",
+        "Kubernetes",
+        "Docker Compose",
+    ] {
+        assert!(body.contains(want), "item 96 must mention `{want}`");
+    }
 }

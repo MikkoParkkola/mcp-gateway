@@ -80,6 +80,8 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+#[cfg(test)]
+mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
 mod interim_promotion;
@@ -273,7 +275,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
-            agent_declared: None,
+            agent_declared: self.agent_declared,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
@@ -1029,38 +1031,52 @@ impl MetaMcp {
         self.firewall = firewall;
     }
 
-    /// Firewall-scan an aggregated tool-list / search response value in place
-    /// (OWASP ASI01 tool-poisoning). Backend-supplied `description` strings are
-    /// scanned for prompt injection and have embedded credentials redacted
-    /// before the discovery response reaches the client.
+    /// Inspect a `gateway_list_tools` / `gateway_search_tools` result once, on
+    /// the canonical value before it is serialised into `content[].text`
+    /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
+    /// escaped copy hides a quoted key or a split injection phrase from them.
+    /// A Block (or no admitting target) refuses the call; otherwise credentials
+    /// are redacted in place. The router or delivery pass still inspects the
+    /// served form: a name alone cannot prove this pass ran (a backend tool may
+    /// share the name), so neither pass is skipped.
     ///
-    /// No-op when the firewall is absent or response scanning is disabled — the
-    /// same gate the `tools/call` path uses ([`Firewall::check_response`]
-    /// short-circuits), so behavior is unchanged when the feature/config is off.
+    /// # Errors
+    /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
     #[cfg(feature = "firewall")]
-    pub(super) fn scan_tool_list_value(&self, value: &mut serde_json::Value) {
+    pub(super) fn inspect_discovery_value(&self, value: &mut serde_json::Value) -> Result<()> {
+        use crate::security::firewall::FirewallAction;
         let Some(ref fw) = self.firewall else {
-            return;
+            return Ok(());
         };
         let verdict = fw.check_response(
             "meta:tools/list",
-            "meta-mcp",
+            "gateway",
             "tools/list",
             value,
             "meta-mcp",
         );
-        if verdict.action == crate::security::firewall::FirewallAction::Warn {
+        if !verdict.allowed || verdict.action == FirewallAction::Block {
             tracing::warn!(
                 findings = verdict.findings.len(),
-                "Firewall: meta tools/list response warning"
+                "Firewall: discovery response blocked"
+            );
+            return Err(Error::ResponseFirewallRefused);
+        }
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(
+                findings = verdict.findings.len(),
+                "Firewall: discovery response warning"
             );
         }
+        Ok(())
     }
 
-    /// No-op tool-list scan when the `firewall` feature is disabled.
+    /// No discovery inspection when the `firewall` feature is disabled.
     #[cfg(not(feature = "firewall"))]
-    #[allow(clippy::unused_self)]
-    pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(super) fn inspect_discovery_value(&self, _value: &mut serde_json::Value) -> Result<()> {
+        Ok(())
+    }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
@@ -1253,25 +1269,6 @@ impl MetaMcp {
     pub(crate) fn meta_route_isolation_refused(&self, backend: &crate::backend::Backend) -> bool {
         self.enforce_oauth_isolation_for(backend, &backend.name, false)
             .is_err()
-    }
-
-    /// The caller's per-user credential for `server`: headers and cache binding.
-    ///
-    /// ONE resolution per request per backend, returning BOTH halves, because
-    /// the isolation verdict and the slot selection must not disagree about who
-    /// the caller is (design §4.3's residual) — and because resolving twice
-    /// would mint twice.
-    ///
-    /// Context-taking convenience over
-    /// [`Self::caller_credential_for_identity`], which holds the contract and
-    /// serves the routes that are dispatched without a caller context.
-    pub(crate) async fn caller_credential_for(
-        &self,
-        server: &str,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> (Vec<(String, String)>, Option<String>) {
-        self.caller_credential_for_identity(server, caller.verified_identity)
-            .await
     }
 
     /// The credential-aware sibling of [`Self::meta_route_isolation_refused`],
@@ -2338,7 +2335,7 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers(caller.scope(), session_id).await,
+            "gateway_list_servers" => self.list_servers(caller, session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
@@ -2602,7 +2599,7 @@ impl MetaMcp {
 // ============================================================================
 
 #[cfg(test)]
-mod account_resolver_fixture;
+pub(crate) mod account_resolver_fixture;
 #[cfg(test)]
 mod account_resolver_gate;
 #[cfg(test)]

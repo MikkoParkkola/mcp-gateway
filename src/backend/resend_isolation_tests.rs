@@ -145,6 +145,7 @@ fn permitted(backend: &Backend, binding: &str) -> std::collections::HashSet<Stri
         .pooled_entry(&PoolKey::PerUser {
             binding: binding.to_string(),
         })
+        .unwrap()
         .resend_permitted
         .read()
         .clone()
@@ -213,11 +214,7 @@ async fn a_per_identity_fill_never_reaches_the_shared_resend_set() {
         .await
         .expect("alpha catalogue fill");
 
-    let shared = backend
-        .pooled_entry(&PoolKey::Shared)
-        .resend_permitted
-        .read()
-        .clone();
+    let shared = backend.shared_entry().resend_permitted.read().clone();
     assert!(
         shared.is_empty(),
         "a per-identity fill populated the shared resend set, so a caller with \

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::warn;
 
-use super::rotation::{EV_EXPIRED, EV_OPENED, EV_SEALED};
+use super::rotation::{EV_EXPIRED, EV_HWM_MISSING, EV_OPENED, EV_SEALED, HWM_MISSING_AT};
 use super::segments::{self, HighWater};
 use super::{
     MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string, recompute_entry_hash,
@@ -255,7 +255,11 @@ pub(crate) fn verify_segments(
         })
         .run(&files, hw.as_ref(), mode);
         let files_after = log_files(path)?;
-        let stable = seqs(&files) == seqs(&files_after);
+        // A `.hwm` written during the pass (a new log's first append) is a
+        // moved log too: the records read may be newer than the missing mark.
+        let hwm_appeared =
+            hw.is_none() && segments::read_hwm(path, secret, &config.key_id).is_some();
+        let stable = seqs(&files) == seqs(&files_after) && !hwm_appeared;
         match result {
             // A file listed a moment ago vanished: a rotation renamed it.
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -312,6 +316,15 @@ struct Stream<'a> {
     /// The oldest survivor's link to an expired segment, checked at the end
     /// because its anchoring expiry record lives in a newer segment.
     anchor: Option<(u64, String, u64)>,
+    /// The oldest survivor opens with an open record: this log went through
+    /// segment handling, so `.hwm` is expected even with no sealed sibling
+    /// left (#2242).
+    opened_oldest: bool,
+    /// The oldest survivor opens segment 0 at genesis with counter 1: a log
+    /// holding only that record crashed before its first `.hwm` (#2275).
+    genesis_open: bool,
+    /// Earliest counter at which a restart found `.hwm` missing (#2294).
+    hwm_missing: Option<u64>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -339,6 +352,9 @@ impl<'a> Stream<'a> {
             result: VerifyResult::default(),
             expiries: BTreeMap::new(),
             anchor: None,
+            opened_oldest: false,
+            genesis_open: false,
+            hwm_missing: None,
         }
     }
 
@@ -407,6 +423,12 @@ impl<'a> Stream<'a> {
                     Some(EV_SEALED) => {
                         sealed_here =
                             Some(field_u64(&entry, "next_segment_seq").unwrap_or(expected + 1));
+                    }
+                    Some(EV_HWM_MISSING) => self.note_hwm_missing(counter),
+                    Some(EV_OPENED) => {
+                        if let Some(at) = field_u64(&entry, HWM_MISSING_AT) {
+                            self.note_hwm_missing(at);
+                        }
                     }
                     Some(EV_EXPIRED) => {
                         if let (Some(k), Some(lc), Some(fh)) = (
@@ -477,6 +499,7 @@ impl Stream<'_> {
                 }
                 return Ok(()); // a pre-D6 segment 0 starts at genesis
             }
+            self.opened_oldest = true;
             Self::check_open_seq(entry, counter, expected, file)?;
             let prev_hash = field_str(entry, "prev_entry_hash")
                 .unwrap_or_default()
@@ -496,7 +519,7 @@ impl Stream<'_> {
                         ),
                     ));
                 }
-                None => {}
+                None => self.genesis_open = counter == 1,
             }
             self.prev = Some((counter.saturating_sub(1), prev_hash));
             return Ok(());
@@ -642,6 +665,10 @@ impl Stream<'_> {
         Ok(Ok(()))
     }
 
+    fn note_hwm_missing(&mut self, at: u64) {
+        self.hwm_missing = Some(self.hwm_missing.map_or(at, |e| e.min(at)));
+    }
+
     /// End-of-stream checks: the expiry anchor and tail completeness.
     fn finish(
         &mut self,
@@ -672,10 +699,26 @@ impl Stream<'_> {
                 }
             }
         }
+        if let Some(at) = self.hwm_missing {
+            let msg = format!(
+                "{EV_HWM_MISSING} at counter {at}: a restart found the high-water mark \
+                 missing or a record it could not verify, so tail loss or an edit before \
+                 it cannot be ruled out"
+            );
+            match mode {
+                VerifyMode::Live => return Err((Some(at), msg)),
+                VerifyMode::Archive => self.result.warnings.push(format!("archive mode: {msg}")),
+            }
+        }
         let sealed_present = files.iter().any(|(s, _)| s.is_some());
         let last = self.prev.as_ref().map_or(0, |p| p.0);
+        // Disk-full expiry can take the last sealed segment, so the open
+        // record is the evidence then. An active cut to empty leaves none and
+        // reads as a fresh log; only an external anchor catches that (#2276).
+        // A cut back to the genesis open record alone is the same case: it
+        // matches a crash before the first `.hwm`, so it is exempt (#2275).
         let gap = match hw {
-            None if sealed_present => {
+            None if sealed_present || (self.opened_oldest && !(self.genesis_open && last == 1)) => {
                 Some("high-water mark missing: tail loss cannot be ruled out".to_string())
             }
             Some(h) if last < h.counter => Some(format!(

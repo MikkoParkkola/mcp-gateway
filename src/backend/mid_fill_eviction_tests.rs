@@ -116,7 +116,7 @@ async fn race(session_mode: SessionMode, revoke: bool) -> (Arc<Backend>, usize) 
         .expect("alpha's fill never reached the wire");
 
     let evicted = if revoke {
-        backend.evict_identity_slots(&prefix("alpha")).await
+        backend.evict_identity_slots(&prefix("alpha"))
     } else {
         0
     };

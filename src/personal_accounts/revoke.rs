@@ -137,9 +137,15 @@ pub(crate) trait AccountRevocation: Send + Sync {
         material: Option<RevocationMaterial>,
     ) -> ProviderOutcome;
 
-    /// Whether `account` holds a live grant now. A store read only: it never
-    /// refreshes, mints, or calls the provider.
-    async fn connected(&self, account: &AccountKey) -> Result<bool, CustodyError>;
+    /// Whether `account` holds a live grant now, connected under
+    /// `descriptor_revision`: a grant from another revision is refused at
+    /// dispatch (#2249), so it does not count (#2327). A store read only: it
+    /// never refreshes, mints, or calls the provider.
+    async fn connected(
+        &self,
+        account: &AccountKey,
+        descriptor_revision: &str,
+    ) -> Result<bool, CustodyError>;
 }
 
 #[async_trait::async_trait]
@@ -157,9 +163,13 @@ where
         CustodyHandle::invalidate(self, account).await
     }
 
-    async fn connected(&self, account: &AccountKey) -> Result<bool, CustodyError> {
+    async fn connected(
+        &self,
+        account: &AccountKey,
+        descriptor_revision: &str,
+    ) -> Result<bool, CustodyError> {
         match CustodyHandle::resolve(self, account).await {
-            Ok(_) => Ok(true),
+            Ok(lease) => Ok(lease.descriptor_revision == descriptor_revision),
             Err(CustodyError::Account(
                 AccountServiceError::ConnectOffer
                 | AccountServiceError::Revoked

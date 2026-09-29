@@ -112,26 +112,45 @@ impl Redactor {
     /// A redacted key keeps its entry and gets a unique name (`#2`, `#3`, ...
     /// on collision).
     pub fn scan_and_redact(&self, value: &mut Value) -> Vec<Finding> {
+        self.scan_and_redact_unless(value, &|_| false)
+    }
+
+    /// [`Self::scan_and_redact`], leaving a string value untouched when
+    /// `exempt` accepts it. Only values are exempt; object keys are always
+    /// scanned. `exempt` runs only on a value that would otherwise be redacted.
+    pub fn scan_and_redact_unless(
+        &self,
+        value: &mut Value,
+        exempt: &dyn Fn(&str) -> bool,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
-        self.scan_recursive(value, &mut findings);
+        self.scan_recursive(value, exempt, &mut findings);
         findings
     }
 
-    fn scan_recursive(&self, value: &mut Value, findings: &mut Vec<Finding>) {
+    fn scan_recursive(
+        &self,
+        value: &mut Value,
+        exempt: &dyn Fn(&str) -> bool,
+        findings: &mut Vec<Finding>,
+    ) {
         match value {
             Value::String(s) => {
-                if let Some(redacted) = self.redact_text(s, Site::Value, findings) {
+                if self.set.is_match(s)
+                    && !exempt(s)
+                    && let Some(redacted) = self.redact_text(s, Site::Value, findings)
+                {
                     *s = redacted;
                 }
             }
             Value::Array(arr) => {
                 for item in arr.iter_mut() {
-                    self.scan_recursive(item, findings);
+                    self.scan_recursive(item, exempt, findings);
                 }
             }
             Value::Object(map) => {
                 for val in map.values_mut() {
-                    self.scan_recursive(val, findings);
+                    self.scan_recursive(val, exempt, findings);
                 }
                 // Keys are backend-controlled text the client sees too (#2114).
                 if map.keys().any(|key| self.set.is_match(key)) {
@@ -530,5 +549,55 @@ mod tests {
             "a 40-char token survives truncation whole: {:?}",
             findings[0].matched
         );
+    }
+
+    // ── #2210: a real token is redacted wherever it sits ────────────────────
+
+    /// A token glued after letters or digits is still a credential. Split with
+    /// `concat!` so no literal token sits here.
+    #[test]
+    fn a_token_glued_after_letters_or_digits_is_redacted() {
+        for token in [
+            concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789"),
+            concat!("gh", "s_abcdefghijklmnopqrstuvwxyz0123456789"),
+            concat!("xo", "xb-1234567890abcdef"),
+        ] {
+            for glued in [
+                format!("abc{token}"),
+                format!("9{token}"),
+                format!("x-{token}"),
+            ] {
+                let mut v = json!({ "t": glued });
+                let findings = redactor().scan_and_redact(&mut v);
+                assert_eq!(findings.len(), 1, "{glued}: {findings:?}");
+                assert!(!v["t"].as_str().unwrap().contains(token), "{glued}");
+            }
+        }
+    }
+
+    /// A token followed by more token characters is still a credential.
+    #[test]
+    fn a_token_followed_by_a_suffix_is_redacted() {
+        let token = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
+        for glued in [
+            format!("{token}_suffix"),
+            format!("{token}-more"),
+            format!("{token}Z9"),
+        ] {
+            let mut v = json!({ "t": glued });
+            let findings = redactor().scan_and_redact(&mut v);
+            assert_eq!(findings.len(), 1, "{glued}: {findings:?}");
+            assert!(!v["t"].as_str().unwrap().contains(token), "{glued}");
+        }
+    }
+
+    /// Two real tokens sharing one space are both still redacted.
+    #[test]
+    fn delimited_tokens_sharing_a_separator_are_both_redacted() {
+        let a = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
+        let b = concat!("gh", "o_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        let mut v = json!({ "t": format!("{a} {b}") });
+        redactor().scan_and_redact(&mut v);
+        assert_eq!(v["t"], "[REDACTED:credential] [REDACTED:credential]");
     }
 }

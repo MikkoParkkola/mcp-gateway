@@ -55,14 +55,15 @@ async fn mint_write_success_is_ok() {
 }
 
 // F20 T6: the mint audit goes through the bounded append, so a
-// stalled disk refuses the mint within the bound (no durable record,
-// no credential) instead of pinning a runtime worker.
+// stalled disk refuses the mint while the write is still held (no durable
+// record, no credential) instead of pinning a runtime worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
     let (_file, logger) = open_logger();
     let bound = std::time::Duration::from_millis(200);
     let release = logger.stall_next_write_for_test(bound);
-    let start = std::time::Instant::now();
+    // AuditFailed with the write still held is the bound: an unbounded
+    // append would wait for the write and succeed.
     let result = audit_identity_propagation(
         Some(&logger),
         "idp_mint",
@@ -72,11 +73,6 @@ async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
         None,
     )
     .await;
-    assert!(
-        start.elapsed() < bound * 5,
-        "bounded: {:?}",
-        start.elapsed()
-    );
     assert!(
         matches!(result, Err(PropagationError::AuditFailed(_))),
         "{result:?}"
@@ -146,6 +142,17 @@ async fn mint_write_failure_is_fail_closed() {
     let exe = std::env::current_exe().expect("current test binary path");
     let file = NamedTempFile::new().expect("tempfile");
     let path = file.path().to_string_lossy().to_string();
+    // A new log's open() writes its genesis record (#2275); open it here,
+    // outside the size limit, so the child's open() only reads.
+    drop(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.clone(),
+            key_id: "test".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("parent creates the log"),
+    );
     let script =
         format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
     let output = std::process::Command::new("sh")
