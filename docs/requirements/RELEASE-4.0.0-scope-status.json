@@ -119,7 +119,7 @@
         "tests/task_expiry_http_lifecycle.rs",
         "docs/internal/requirements/scope-grading-2026-09-12.md"
       ],
-      "note": "PENDING 2026-09-26 (evidence re-read at 137ab7acf): POST /mcp/{name} (src/gateway/router/mod.rs:390 -> backend_handlers.rs) has no task handling although the test spec requires both routes, and supplying requested input is refused outright (src/gateway/router/handlers/tasks.rs:378-382). Graded 2026-09-12. cargo test --test mik_7272_task_1_acs: test result: ok. 20 passed; 0 failed; 0 ignored; and cargo test --test task_expiry_http_lifecycle: test result: ok. 1 passed; 0 failed; 0 ignored. Clause coverage: public-route dispatch by dispatch::ac_task_1_1_a_created_task_id_resolves_immediately; polling payloads by ac_task_1_2_each_status_carries_its_own_payload_and_no_other; input by dispatch::ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result and dispatch::ac_task_1_3_an_input_response_with_no_outstanding_request_is_refused; cooperative cancellation gated to the pinned revision by ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method; terminal outcomes by ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string and ac_task_1_6_an_is_error_tool_result_is_completed_and_not_failed; extension negotiation by capabilities::ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer; expiry by a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_the_store."
+      "note": "PENDING 2026-09-29, re-derived from the test row as amended by operator ruling #2268 (MIK-7596.OWNER.1 governs): the lifecycle runs through POST /mcp only, and POST /mcp/{backend} must refuse task access with -32601. The per-backend half is covered by lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp (tests/mik_7272_task_1_acs.rs, added with the #2268 fix; CI evidence pending): the task owner, holding a running task created on /mcp, gets -32601 \"use /mcp\" for tasks/get, tasks/result, tasks/update, tasks/cancel and subscriptions/listen with taskIds on /mcp/mock, the backend sees no further dispatch, and /mcp still serves the uncancelled task. Per-backend task serving is 4.1 work (#2303). Remaining blocker: supplying requested input is still refused (tasks_update in src/gateway/router/handlers/tasks.rs rejects any non-empty inputResponses with -32602). Superseded 2026-09-26 note: POST /mcp/{name} had no task handling although the test spec then required both routes. Graded 2026-09-12. cargo test --test mik_7272_task_1_acs: test result: ok. 20 passed; 0 failed; 0 ignored; and cargo test --test task_expiry_http_lifecycle: test result: ok. 1 passed; 0 failed; 0 ignored. Clause coverage: public-route dispatch by dispatch::ac_task_1_1_a_created_task_id_resolves_immediately; polling payloads by ac_task_1_2_each_status_carries_its_own_payload_and_no_other; input by dispatch::ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result and dispatch::ac_task_1_3_an_input_response_with_no_outstanding_request_is_refused; cooperative cancellation gated to the pinned revision by ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method; terminal outcomes by ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string and ac_task_1_6_an_is_error_tool_result_is_completed_and_not_failed; extension negotiation by capabilities::ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer; expiry by a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_the_store."
     },
     {
       "id": "MIK-7311.LIFECYCLE.2",
@@ -1026,7 +1026,7 @@
         "docs/UPGRADING-4.0.md",
         "docs/design/2026-09-26-f1-direct-route-tasks-refusal.md"
       ],
-      "note": "Graded 2026-09-27 (F1, #1442, merged in #1453 as 46161901e). Red-first CI Tests run 36270945741 (throwaway #1450, tests only): the four refusal cells failed on 'reached the backend' (tasks/get, tasks/cancel, tasks/update, subscriptions/listen with taskIds); the forwarding control and the 403-order cell passed. Green CI run 36275265621 at 92dac2fb3: 40 jobs passed, 3 skipped. Mutants: tasks/get forward restored (#1454, run 36271263350) reddened caller_b_tasks_get_for_a_task_never_reaches_backend; tasks/cancel forward restored (#1455, run 36271265917) reddened caller_b_tasks_cancel_for_a_task_never_reaches_backend. Two independent reviews on design and final code. UPGRADING-4.0 item 67."
+      "note": "Graded 2026-09-27 (F1, #1442, merged in #1453 as 46161901e). Red-first CI Tests run 36270945741 (throwaway #1450, tests only): the four refusal cells failed on 'reached the backend' (tasks/get, tasks/cancel, tasks/update, subscriptions/listen with taskIds); the forwarding control and the 403-order cell passed. Green CI run 36275265621 at 92dac2fb3: 40 jobs passed, 3 skipped. Mutants: tasks/get forward restored (#1454, run 36271263350) reddened caller_b_tasks_get_for_a_task_never_reaches_backend; tasks/cancel forward restored (#1455, run 36271265917) reddened caller_b_tasks_cancel_for_a_task_never_reaches_backend. Two independent reviews on design and final code. UPGRADING-4.0 item 67. 2026-09-29: operator ruling #2268 keeps this refusal for 4.0 over the LIFECYCLE.1 both-routes wording; LIFECYCLE.1 now asserts the same refusal from the lifecycle side (lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp). Per-caller ownership on this route is 4.1 (#2303)."
     },
     {
       "id": "GH1941.SIGN.1",
@@ -1179,6 +1179,17 @@
       ],
       "resolved": "2026-09-28",
       "authority": "maintainer decision under delegated authority; two independent reviews"
+    },
+    {
+      "id": "owner_1_governs_direct_route_tasks",
+      "status": "resolved",
+      "selection": "MIK-7596.OWNER.1 governs for 4.0: POST /mcp/{backend} keeps refusing tasks/* and subscriptions/listen naming taskIds with -32601, and the MIK-7311.LIFECYCLE.1 test row exercises the lifecycle through POST /mcp only and asserts that refusal.",
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-scope-tests.md"
+      ],
+      "resolved": "2026-09-29",
+      "authority": "operator ruling on #2268",
+      "consequence": "Per-caller task ownership on the per-backend route moves to 4.1 (#2303)."
     }
   ]
 }
