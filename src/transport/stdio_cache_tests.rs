@@ -41,11 +41,7 @@ fn only_npm_invoking_commands_get_a_cache() {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert!(out.contains_key("npm_config_cache"), "{cmd} was missed");
     }
-    for cmd in [
-        "uvx meilisearch-mcp",
-        "vikunja-mcp",
-        "sh -c 'x'",
-    ] {
+    for cmd in ["uvx meilisearch-mcp", "vikunja-mcp", "sh -c 'x'"] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert!(
             out.is_empty(),
