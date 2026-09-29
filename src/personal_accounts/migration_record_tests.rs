@@ -245,3 +245,16 @@ fn a_migrated_grant_is_the_first_revision_of_a_new_authorization() {
     assert_eq!(record.token_type, "Bearer");
     assert_eq!(record.access_token, "live-3x-access-token");
 }
+
+/// #2255: an expiry already in the past with no refresh token is REFUSED. The
+/// grant would be committed Connected and could never serve: it is expired, and
+/// nothing can refresh it.
+#[test]
+fn an_expired_record_with_no_refresh_token_is_refused() {
+    let mut token = legacy("expired-3x-access-token");
+    token.expires_at = Some(1);
+    assert!(
+        build(&token, Some(&declared(&["read"]))).is_err(),
+        "an expired, unrefreshable credential must not migrate"
+    );
+}
