@@ -1960,8 +1960,8 @@ async fn concurrent_stops_wait_for_one_teardown() {
 // the same drop-reaps-child property for the REAL StdioTransport, including its
 // reader task's deliberate Weak handle.
 #[cfg(unix)]
-struct RealChildWedgedClose {
-    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+pub(super) struct RealChildWedgedClose {
+    pub(super) child: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 
 #[cfg(unix)]
@@ -2009,12 +2009,12 @@ fn process_state(pid: u32) -> Option<String> {
 }
 
 #[cfg(unix)]
-fn is_alive(pid: u32) -> bool {
+pub(super) fn is_alive(pid: u32) -> bool {
     process_state(pid).is_some_and(|s| !s.starts_with('Z'))
 }
 
 #[cfg(unix)]
-async fn spawn_probe_child() -> (tokio::process::Child, u32) {
+pub(super) async fn spawn_probe_child() -> (tokio::process::Child, u32) {
     let child = tokio::process::Command::new("sleep")
         .arg("300")
         .kill_on_drop(true)

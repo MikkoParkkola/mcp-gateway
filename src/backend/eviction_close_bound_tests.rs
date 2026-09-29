@@ -78,7 +78,10 @@ async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
         .await
         .expect("eviction stalled on a close() that never completes");
 
-    assert_eq!(evicted, 2, "both slots must be evicted past the stuck close");
+    assert_eq!(
+        evicted, 2,
+        "both slots must be evicted past the stuck close"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "each close must be bounded by close_stage; took {:?}",
@@ -120,4 +123,52 @@ async fn a_wedged_close_does_not_stall_the_idle_reaper() {
         started.elapsed()
     );
     assert!(!backend.pool.contains_key(&slot("idle:alpha")));
+}
+
+/// GIVEN a revoked caller's idle slot whose transport owns a real child
+/// process and whose `close()` never completes
+/// WHEN the grant reload evicts the slot and the close runs out its budget
+/// THEN the child is still reaped: eviction held the last handle, and dropping
+/// it kills the `kill_on_drop` child, so no process outlives the revocation
+/// holding the revoked caller's credentials.
+///
+/// Real time, not a paused clock: the reap is done by the OS and tokio's orphan
+/// queue. Same ownership shape as `a_close_that_times_out_still_reaps_the_child`.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_timed_out_eviction_close_still_reaps_the_child() {
+    use super::pool_tests::{RealChildWedgedClose, is_alive, spawn_probe_child};
+
+    let (child, pid) = spawn_probe_child().await;
+    let mut backend = per_user_backend("wedged-child");
+    Arc::get_mut(&mut backend)
+        .expect("sole owner before the test starts")
+        .budgets
+        .close_stage = CLOSE_STAGE;
+    // Inline on purpose: a local binding would keep a second handle alive.
+    backend.set_pooled_transport_for_test(
+        &slot("rev:alpha"),
+        Arc::new(RealChildWedgedClose {
+            child: tokio::sync::Mutex::new(Some(child)),
+        }),
+    );
+
+    let evicted = tokio::time::timeout(
+        Duration::from_secs(10),
+        backend.evict_identity_slots("rev:"),
+    )
+    .await
+    .expect("eviction stalled on a close() that never completes");
+    assert_eq!(evicted, 1);
+
+    for _ in 0..40 {
+        if !is_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+    panic!("child {pid} outlived a timed-out eviction close by 2s");
 }
