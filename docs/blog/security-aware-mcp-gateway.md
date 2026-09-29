@@ -95,7 +95,7 @@ Rule AX-010 lives in `src/validator/rules/tool_poisoning.rs` and has 19 tests. I
 HIGH patterns, with examples of why each is there:
 
 - **Filesystem paths**: `~/.ssh`, `~/.aws`, `~/.cursor`, `id_rsa`, `id_ed25519`, `.env`, `/etc/passwd`, `/etc/shadow`. Word-boundary regex for `passwd`/`shadow` to avoid false positives inside words like `encompasses`. This is the Invariant Labs payload, verbatim.
-- **Instruction-embedding markers**: `<IMPORTANT>`, `</IMPORTANT>`, `very very important`, `do not mention`, `do not tell`, `before calling this tool`, `sidenote`, `side note`. These are the patterns that tell the agent to treat the following text as user-level instructions.
+- **Instruction-embedding markers**: `<IMPORTANT>`, `</IMPORTANT>`, `very very important`, `do not mention`, `do not tell`, `before calling this tool, read` (and include, copy, load, cat, fetch, open; the bare phrase is a warning), `sidenote`, `side note`. These are the patterns that tell the agent to treat the following text as user-level instructions.
 - **Exfiltration markers**: `upload to`, `send to http`, and a regex for `curl .* https?://` within 200 chars. The `sidenote` exfiltration channel is a specific Invariant pattern; the curl regex catches the direct version.
 - **Base64 in exfil context**: a regex that matches `base64` only when adjacent to verbs like `encode`, `send`, `upload`, `post`, or `exfiltrate`. A benign description like "decodes base64 input" passes cleanly. This is important, because a blunt `base64` match would reject real tools.
 
