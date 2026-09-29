@@ -78,14 +78,18 @@ impl SignatureChainConfig {
         running: Option<&Self>,
         reloaded: Option<&Self>,
     ) -> Option<&'static str> {
-        match (running, reloaded) {
-            (None, None) => None,
-            (Some(a), Some(b)) if a.signing_key != b.signing_key => Some("signing_key"),
-            (Some(a), Some(b)) if a.key_id != b.key_id => Some("key_id"),
-            (Some(a), Some(b)) if a.emit != b.emit => Some("emit"),
-            (Some(_), Some(_)) => None,
-            _ => Some("signing_key"),
-        }
+        let (a, b) = match (running, reloaded) {
+            (None, None) => return None,
+            (Some(a), Some(b)) => (a, b),
+            _ => return Some("signing_key"),
+        };
+        [
+            ("signing_key", a.signing_key != b.signing_key),
+            ("key_id", a.key_id != b.key_id),
+            ("emit", a.emit != b.emit),
+        ]
+        .into_iter()
+        .find_map(|(field, changed)| changed.then_some(field))
     }
 }
 
