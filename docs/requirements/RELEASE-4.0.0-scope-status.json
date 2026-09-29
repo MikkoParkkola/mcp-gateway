@@ -1035,17 +1035,11 @@
     },
     {
       "id": "GH1941.SIGN.1",
-      "status": "met",
-      "stage": "met",
+      "status": "pending",
+      "stage": "built",
       "blocked_on": "none",
-      "evidence": [
-        "scripts/release/sign-release-assets.sh",
-        "scripts/release/verify-release-assets.sh",
-        "scripts/release/check_release_assets.py",
-        "scripts/release/refuse-published-release.sh",
-        ".github/workflows/release.yml"
-      ],
-      "note": "Met 2026-09-29 (#1941 closed, merged in #2218 as 59f802b19). Each release binary is built with cargo auditable and ships an SPDX SBOM; every binary, SBOM and SHA256SUMS.txt carries a keyless cosign bundle whose identity is pinned to release.yml at the tag; the release stays a draft until every served asset verifies, and refuse-published-release.sh refuses to upload onto a published release. CI asserts the wiring (test_workflow_wiring_mutations.py, test_check_release_assets.py, test_sign_release_assets.py, test_refuse_published_release.py); green CI run 36505555255. Functional proof is the v4.0.0 tag's release run.\n\n--- prior note follows ---\nPending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [],
+      "note": "PENDING 2026-09-29, one conjunct unmet. #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles for every binary, SBOM and SHA256SUMS.txt, verifies the downloaded DRAFT assets (.github/workflows/release.yml:432-434) and refuses uploads onto a published release (:357-361). The criterion also requires the job to re-check the PUBLISHED release afterwards; release.yml ends at `gh release edit --draft=false` (:440) with no post-publication download and verify, and no wiring test for one. Returns to met when that step and its wiring check land (#2402). #1941 was closed before this was noticed.\n\n--- prior note follows ---\nPending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1942.HARDEN.1",
