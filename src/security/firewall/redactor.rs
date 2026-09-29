@@ -36,52 +36,115 @@ pub struct Redactor {
     regexes: Vec<Regex>,
     /// Human-readable description for each pattern (same index as the regex vec).
     descriptions: Vec<&'static str>,
+    /// Where each pattern may match (same index as the regex vec).
+    boundaries: Vec<Boundary>,
 }
 
-/// (pattern, description) pairs.
+/// Where a credential pattern counts as a match.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Boundary {
+    /// Anywhere in the text.
+    Free,
+    /// Only with no letter or digit before it and no token character after it
+    /// (or the text's edge). Random base64url ciphertext holds these shapes by
+    /// chance (#2210): a GitHub-token run appears in about 1 in 20,000
+    /// continuation envelopes. A '-' or '_' before the prefix still borders it,
+    /// so a token glued after one (`x-ghp_…`) is redacted; the cost is a shape
+    /// that ends a run right after one of them, roughly 1 in 10^7 to 10^8 envelopes.
+    Token,
+}
+
+/// Characters of an opaque token or a URL-safe base64 value.
+fn is_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// Whether `text[start..end]` has no letter or digit before it and no token
+/// character after it (or the edge on either side).
+fn bordered(text: &str, start: usize, end: usize) -> bool {
+    !text[..start]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && !text[end..].chars().next().is_some_and(is_token_char)
+}
+
+/// (pattern, description, boundary) triples.
 ///
 /// 13 credential patterns covering AWS keys, GitHub tokens (4 variants),
 /// Slack tokens, generic API keys, JWTs, private keys, bearer tokens,
 /// database connection strings, `OpenAI` project keys, and Ethereum private keys.
-const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
+const CREDENTIAL_PATTERNS: &[(&str, &str, Boundary)] = &[
     // AWS
-    (r"(?:AKIA|ASIA)[A-Z0-9]{16}", "AWS Access Key ID"),
+    (
+        r"(?:AKIA|ASIA)[A-Z0-9]{16}",
+        "AWS Access Key ID",
+        Boundary::Free,
+    ),
     // GitHub — personal access token
-    (r"ghp_[A-Za-z0-9]{36}", "GitHub Personal Access Token"),
+    (
+        r"ghp_[A-Za-z0-9]{36}",
+        "GitHub Personal Access Token",
+        Boundary::Token,
+    ),
     // GitHub — OAuth token
-    (r"gho_[A-Za-z0-9]{36}", "GitHub OAuth Token"),
+    (
+        r"gho_[A-Za-z0-9]{36}",
+        "GitHub OAuth Token",
+        Boundary::Token,
+    ),
     // GitHub — App installation token
-    (r"ghs_[A-Za-z0-9]{36}", "GitHub App Token"),
+    (r"ghs_[A-Za-z0-9]{36}", "GitHub App Token", Boundary::Token),
     // GitHub — refresh token
-    (r"ghr_[A-Za-z0-9]{36}", "GitHub Refresh Token"),
+    (
+        r"ghr_[A-Za-z0-9]{36}",
+        "GitHub Refresh Token",
+        Boundary::Token,
+    ),
     // Slack tokens (bot, user, app, etc.)
-    (r"xox[bprs]-[A-Za-z0-9-]{10,}", "Slack Token"),
+    (
+        r"xox[bprs]-[A-Za-z0-9-]{10,}",
+        "Slack Token",
+        Boundary::Token,
+    ),
     // Generic API key in key=value / key: value form
     (
         r#"(?i)(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=]{20,}['"]"#,
         "Generic API Key in key=value",
+        Boundary::Free,
     ),
     // JWT — three base64url segments separated by dots
     (
         r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
         "JSON Web Token",
+        Boundary::Free,
     ),
     // PEM private key header (RSA / EC / DSA or generic)
     (
         r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----",
         "Private Key",
+        Boundary::Free,
     ),
     // Bearer token in response body text
-    (r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer Token"),
+    (
+        r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}",
+        "Bearer Token",
+        Boundary::Free,
+    ),
     // Database connection strings (postgres, mysql, mongodb, redis)
     (
         r"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}",
         "Database Connection String",
+        Boundary::Free,
     ),
     // OpenAI project API keys (sk-proj-...)
-    (r"sk-proj-[A-Za-z0-9_-]{40,}", "OpenAI Project API Key"),
+    (
+        r"sk-proj-[A-Za-z0-9_-]{40,}",
+        "OpenAI Project API Key",
+        Boundary::Free,
+    ),
     // Ethereum private key (0x + 64 hex nibbles = 32 bytes)
-    (r"0x[a-fA-F0-9]{64}", "Ethereum Private Key"),
+    (r"0x[a-fA-F0-9]{64}", "Ethereum Private Key", Boundary::Free),
 ];
 
 impl Redactor {
@@ -91,8 +154,10 @@ impl Redactor {
     ///
     /// Panics at startup if any pattern is invalid regex — programming error.
     pub fn new() -> Self {
-        let patterns: Vec<&str> = CREDENTIAL_PATTERNS.iter().map(|(p, _)| *p).collect();
-        let descriptions: Vec<&'static str> = CREDENTIAL_PATTERNS.iter().map(|(_, d)| *d).collect();
+        let patterns: Vec<&str> = CREDENTIAL_PATTERNS.iter().map(|(p, _, _)| *p).collect();
+        let descriptions: Vec<&'static str> =
+            CREDENTIAL_PATTERNS.iter().map(|(_, d, _)| *d).collect();
+        let boundaries: Vec<Boundary> = CREDENTIAL_PATTERNS.iter().map(|(_, _, b)| *b).collect();
         let regexes: Vec<Regex> = patterns
             .iter()
             .map(|p| Regex::new(p).expect("Credential pattern must compile"))
@@ -102,6 +167,7 @@ impl Redactor {
             set: RegexSet::new(&patterns).expect("Credential pattern set must compile"),
             regexes,
             descriptions,
+            boundaries,
         }
     }
 
@@ -134,7 +200,7 @@ impl Redactor {
                     self.scan_recursive(val, findings);
                 }
                 // Keys are backend-controlled text the client sees too (#2114).
-                if map.keys().any(|key| self.set.is_match(key)) {
+                if map.keys().any(|key| self.is_match(key)) {
                     self.redact_keys(map, findings);
                 }
             }
@@ -147,15 +213,24 @@ impl Redactor {
     /// matched span replaced, or `None` when nothing matched. Surrounding text
     /// is preserved ("token: <secret> rest" -> "token: [REDACTED:credential] rest").
     fn redact_text(&self, text: &str, site: Site, findings: &mut Vec<Finding>) -> Option<String> {
-        let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
+        let matched = self.matched(text);
         if matched.is_empty() {
             return None;
         }
         let mut redacted = text.to_owned();
         for &idx in &matched {
-            redacted = self.regexes[idx]
-                .replace_all(&redacted, "[REDACTED:credential]")
+            let boundary = self.boundaries[idx];
+            let next = self.regexes[idx]
+                .replace_all(&redacted, |caps: &regex::Captures<'_>| {
+                    let m = caps.get(0).expect("group 0 always matches");
+                    if boundary == Boundary::Free || bordered(&redacted, m.start(), m.end()) {
+                        "[REDACTED:credential]".to_owned()
+                    } else {
+                        m.as_str().to_owned()
+                    }
+                })
                 .into_owned();
+            redacted = next;
         }
         // A key finding shows the redacted key: a bare 40-char token would
         // otherwise survive the truncation whole into the audit log.
@@ -176,6 +251,28 @@ impl Redactor {
         Some(redacted)
     }
 
+    /// Indices of the patterns with at least one match that counts.
+    ///
+    /// A `Token` pattern's match holds only token characters, so a bordered
+    /// match can never start inside a rejected one: filtering `find_iter`
+    /// misses nothing.
+    fn matched(&self, text: &str) -> Vec<usize> {
+        self.set
+            .matches(text)
+            .into_iter()
+            .filter(|&idx| {
+                self.boundaries[idx] == Boundary::Free
+                    || self.regexes[idx]
+                        .find_iter(text)
+                        .any(|m| bordered(text, m.start(), m.end()))
+            })
+            .collect()
+    }
+
+    fn is_match(&self, text: &str) -> bool {
+        !self.matched(text).is_empty()
+    }
+
     /// Rename credential-bearing keys without losing an entry. Clean keys keep
     /// their names; each redacted key takes its redacted text, or the first
     /// free `<text>#n`, so two keys never collapse into one. A per-name counter
@@ -184,7 +281,7 @@ impl Redactor {
         let entries = std::mem::take(map);
         let mut taken: HashSet<String> = entries
             .keys()
-            .filter(|key| !self.set.is_match(key))
+            .filter(|key| !self.is_match(key))
             .cloned()
             .collect();
         let mut next: HashMap<String, usize> = HashMap::new();
@@ -549,6 +646,33 @@ mod tests {
             assert!(findings.is_empty(), "{inner}: {findings:?}");
             assert_eq!(v["requestState"], text);
         }
+    }
+
+    /// An envelope can start or end with the token shape: an edge on one side
+    /// and an envelope character on the other still does not border it.
+    #[test]
+    fn a_token_shape_at_either_end_of_a_run_is_not_a_credential() {
+        let inner = concat!("gh", "s_abcdefghijklmnopqrstuvwxyz0123456789");
+        for text in [
+            format!("{inner}Wm3-Qe_8rT1"),
+            format!("q7Zx-_9Kd2{inner}"),
+            format!("say {inner}Wm3"),
+            format!("q7Zx{inner} ok"),
+        ] {
+            let mut v = json!({ "requestState": text });
+            let findings = redactor().scan_and_redact(&mut v);
+            assert!(findings.is_empty(), "{text}: {findings:?}");
+            assert_eq!(v["requestState"], text);
+        }
+    }
+
+    /// The accepted residual: a shape ending a run right after '-' or '_' is
+    /// read as a credential, the price of redacting `x-<token>` keys.
+    #[test]
+    fn a_token_shape_ending_a_run_after_a_hyphen_is_redacted() {
+        let text = concat!("q7Zx-_9Kd2-", "gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
+        let mut v = json!({ "t": text });
+        assert_eq!(redactor().scan_and_redact(&mut v).len(), 1);
     }
 
     /// Two real tokens sharing one space are both still redacted.

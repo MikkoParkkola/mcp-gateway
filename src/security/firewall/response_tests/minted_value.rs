@@ -18,7 +18,8 @@ use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPol
 /// `concat!` so the source never holds a token-shaped literal.
 const ENVELOPE: &str = concat!(
     "q7Zx-_9Kd2",
-    "gh", "p_abcdefghijklmnopqrstuvwxyz0123456789",
+    "gh",
+    "p_abcdefghijklmnopqrstuvwxyz0123456789",
     "Wm3-Qe_8rT1vLp0aB9"
 );
 
