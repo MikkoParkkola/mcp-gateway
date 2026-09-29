@@ -80,6 +80,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 86
 - Item 87
 - Item 88
+- Item 94
 - Item 95
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
@@ -209,7 +210,7 @@ without it.**
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
-| 94 | Reserved: lands with #2209 | None yet |
+| 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 
 
@@ -2436,6 +2437,41 @@ A rule whose own `backends` list is empty is a different case, covered in item 3
 **Action:** a client that requests scopes must request only ones its matching rule allows. A
 requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
 gets 403 `access_denied`, whose message reads as though no policy matched.
+
+## 94. Per-caller firewall limits key on the caller, on every route
+
+The firewall's per-caller controls (the call budget, the tenant guard and anomaly detection) now
+key on who the caller is, on the meta route and the per-backend `/mcp/{name}` route alike:
+
+- A caller with a resolved identity (an OIDC or key-server login, a trusted-proxy or Access
+  identity, an mTLS certificate, or an OAuth agent) is keyed on that identity. Otherwise an
+  authenticated API key is keyed on the key. The identity wins over the key, so one person keeps
+  one budget across keys and token exchanges.
+- An OAuth-agent or mTLS caller on a modern (2026-07-28) `POST /mcp` was refused by these
+  controls as having no identity. It is now counted and scored.
+- On the per-backend `/mcp/{name}` route every caller of one backend shared one budget, one tenant
+  count and one anomaly history. Each caller now has its own, and it is the same one the caller
+  has on `/mcp`.
+- A legacy session no longer gets a fresh budget or tenant count: an authenticated caller is
+  keyed on its identity, not its session. A caller with no identity at all (authentication off)
+  is keyed on its session, or on the backend on `/mcp/{name}`, as before.
+- The three controls share that one key, so anomaly detection also follows the caller rather than
+  the session: a caller with two sessions open at once feeds one sequence history, and each call is
+  scored against the caller's previous call on either session.
+- The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
+  one session at a time, so that is that session's budget and tenant count.
+- An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
+  certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
+  CA issuing unique CNs. A certificate with neither is not an identity.
+- The default config has no behaviour change: the budget, the tenant guard and anomaly detection
+  are off by default.
+
+What you will observe once, at deploy: every per-caller budget, tenant count and anomaly history
+starts fresh, because the keys they are stored under changed. Limits are counted again from zero,
+and anomaly detection warms up again for each caller.
+
+**Action:** none required. If you issue client certificates without a SAN URI, check that your CA
+issues unique CNs, since two certificates with one CN share their limits.
 
 ## 95. List fills count toward the breaker and the rate limiter
 

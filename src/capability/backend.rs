@@ -36,6 +36,7 @@ use super::{
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
+mod definition_access;
 mod initial_scan;
 
 /// Ordered capability store with an O(1) name-to-index lookup layer.

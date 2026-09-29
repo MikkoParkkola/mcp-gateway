@@ -378,3 +378,22 @@ async fn a_warm_up_success_does_not_clear_a_breaker_tripped_by_a_discovery_fill(
     backend.warm_tools().await.expect("warm-up lists");
     assert_eq!(state(&backend), CircuitState::Open);
 }
+
+/// #2219: a breaker the health probe tripped (`trip_circuit_breaker`, the
+/// unserved escalation) is not warm-up's own trip, so a warm-up success must
+/// leave it Open. Red on base: the probe's trip set no provenance flag.
+#[tokio::test]
+async fn a_warm_up_success_does_not_clear_a_breaker_the_health_probe_tripped() {
+    let lister = Lister::new(Mode::Serve);
+    let backend = backend(
+        InputSchemaEnforcement::Closed,
+        &hair_trigger(Duration::from_secs(3600)),
+        &lister,
+    );
+    backend.trip_circuit_breaker_for_test();
+    assert_eq!(state(&backend), CircuitState::Open);
+    let before = lister.lists();
+    backend.warm_tools().await.expect("warm-up lists");
+    assert_eq!(lister.lists(), before + 1, "the warm-up did not list");
+    assert_eq!(state(&backend), CircuitState::Open);
+}
