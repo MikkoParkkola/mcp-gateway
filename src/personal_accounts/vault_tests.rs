@@ -691,3 +691,37 @@ fn a_lease_from_another_descriptor_revision_is_fenced_after_refresh() {
         );
     });
 }
+
+/// The binding a dispatch keys its caches on comes from the released lease, so
+/// a re-consented account (new generation) can never read the previous
+/// grant's cached result.
+#[test]
+fn a_reconsented_grant_gets_a_new_binding() {
+    let alice = identity();
+    let account = key_for(Principal::Verified(&alice));
+    let old = unexpired_grant(ALICE_TOKEN);
+    let mut renewed = unexpired_grant(ALICE_TOKEN);
+    renewed.generation = "0123456789abcdef0123456789abcdef".into();
+    renewed.authorization_epoch = 2;
+
+    let binding_for = |grant: GrantRecord| {
+        let tmp = tempfile::TempDir::new().expect("root");
+        seed(tmp.path(), &[(account.clone(), grant)]);
+        block_on(async {
+            let (vault, _) = strategy(tmp.path(), false);
+            let (first, _) = vault
+                .prepare(Principal::Verified(&alice), &backend())
+                .await
+                .expect("the seeded grant leases");
+            let (again, _) = vault
+                .prepare(Principal::Verified(&alice), &backend())
+                .await
+                .expect("the same grant leases again");
+            assert_eq!(first.cache_binding, again.cache_binding, "stable per grant");
+            first.cache_binding
+        })
+    };
+    let before = binding_for(old.clone());
+    assert!(before.contains(&old.generation), "{before}");
+    assert_ne!(before, binding_for(renewed));
+}
