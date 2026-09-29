@@ -307,6 +307,10 @@ mod eviction_close_cap_tests;
 mod identity_slot_probe_tests;
 
 #[cfg(test)]
+#[path = "start_failure_slot_tests.rs"]
+mod start_failure_slot_tests;
+
+#[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
 
