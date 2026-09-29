@@ -204,9 +204,9 @@
       "findings": [
         {
           "id": "S3.FINDING.CATALOGUE_NOT_ACCOUNT_SCOPED",
-          "summary": "gateway_list_servers is not account-scoped: both API keys receive the same catalogue, including the other account's backend and the personally-bound backend neither may invoke. Credential isolation holds; what crosses the boundary is metadata (backend names and descriptions). Note that meta_route_isolation_refused (src/gateway/meta_mcp/mod.rs:1119) exists to omit isolation-refused backends from list paths, and this list path does not consult it.",
+          "summary": "RESOLVED. At the first recording gateway_list_servers was not account-scoped: both API keys receive the same catalogue, including the other account's backend and the personally-bound backend neither may invoke. Credential isolation holds; what crosses the boundary is metadata (backend names and descriptions). Note that meta_route_isolation_refused (src/gateway/meta_mcp/mod.rs:1119) exists to omit isolation-refused backends from list paths, and this list path did not consult it.",
           "carried_as": "rows S3.ALICE_CATALOGUE_IS_HERS and S3.BOB_CATALOGUE_IS_HIS. The original characterisation row fired when 4.0.0-beta.1 began scoping the catalogue per key (UPGRADING-4.0 item 15); these rows now assert that scoping, so a build that stops scoping makes them FAIL.",
-          "owner_decision_needed": true
+          "owner_decision_needed": false
         },
         {
           "id": "S3.FINDING.REFUSAL_SPELLED_TWICE",
