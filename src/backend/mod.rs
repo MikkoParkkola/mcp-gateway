@@ -291,6 +291,10 @@ mod slot_eviction_tests;
 mod grant_reload_eviction_tests;
 
 #[cfg(test)]
+#[path = "eviction_close_bound_tests.rs"]
+mod eviction_close_bound_tests;
+
+#[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
 
