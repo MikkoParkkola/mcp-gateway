@@ -104,6 +104,10 @@ impl Fixture {
 
     fn attempts(&self) -> Vec<Value> {
         read_events(&self.directory.path().join("transparency.ndjson"))
+            .into_iter()
+            // Skip the log's genesis housekeeping record (#2275).
+            .filter(|e| e["event"] != "audit_segment_opened")
+            .collect()
     }
 
     fn assert_counts(&self, expected: usize) {
@@ -728,7 +732,8 @@ fn firewall_delivery_attempt_preserves_existing_invocation_and_hash_chain() {
         "new attempt must extend the same chain: {}",
         verified.error_message.unwrap_or_default()
     );
-    assert_eq!(verified.entries_checked, 2);
+    // Plus the genesis housekeeping record (#2275).
+    assert_eq!(verified.entries_checked, 3);
 }
 
 /// MIK-7407.RESPONSE.5; FWR-15 handle one append Err without replay or output change.
@@ -794,7 +799,8 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
     assert_eq!(logger.append_attempts_for_test(), 3);
     let events = fixture.attempts();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["counter"], 1);
+    // Counter 1 is the genesis open record (#2275).
+    assert_eq!(events[0]["counter"], 2);
     assert_attempt(&events[0], &next);
     fixture.assert_counts(2);
 }

@@ -67,7 +67,7 @@ fn basic_write_and_verify_passes() {
     // THEN: verify passes with correct count
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok, "verify must pass: {:?}", result.error_message);
-    assert_eq!(result.entries_checked, 3);
+    assert_eq!(result.entries_checked, 4);
 }
 
 // ── Test 2: modifying response_hash breaks verification ───────────────────
@@ -159,14 +159,16 @@ fn recovery_continues_chain_correctly() {
 
     // THEN: the chain is intact and counters are sequential
     let entries = read_entries(tmp.path());
-    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.len(), 4);
+    // Counter 1 is the genesis open record (#2275).
     assert_eq!(entries[0]["counter"], 1u64);
     assert_eq!(entries[1]["counter"], 2u64);
     assert_eq!(entries[2]["counter"], 3u64);
+    assert_eq!(entries[3]["counter"], 4u64);
 
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok, "recovered chain must pass verification");
-    assert_eq!(result.entries_checked, 3);
+    assert_eq!(result.entries_checked, 4);
 }
 
 // ── Test 6: HMAC signature is present when secret is configured ───────────
@@ -257,7 +259,7 @@ fn verify_and_show_after_mixed_sessions() {
     // Chain must verify
     let verify = verify_log(tmp.path()).unwrap();
     assert!(verify.ok);
-    assert_eq!(verify.entries_checked, 5);
+    assert_eq!(verify.entries_checked, 6);
 
     // Show must filter correctly
     let even = show_session_entries(tmp.path(), "even").unwrap();
@@ -333,7 +335,7 @@ fn intact_signed_log_passes_signed_verify() {
         "intact signed log must verify: {:?}",
         result.error_message
     );
-    assert_eq!(result.entries_checked, 2);
+    assert_eq!(result.entries_checked, 3);
 }
 
 // HMAC.1: stripping the sig cannot bypass the check under a configured secret.

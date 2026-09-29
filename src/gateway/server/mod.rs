@@ -3865,8 +3865,8 @@ mod tests {
 
         assert_eq!(
             collecting.delivered().len(),
-            1,
-            "recovered poll must forward the pending log entry"
+            2,
+            "recovered poll must forward the genesis open record (#2275) and the pending entry"
         );
     }
 

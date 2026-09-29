@@ -105,7 +105,7 @@ fn age_rotation_survives_restart() {
     let l = TransparencyLogger::open(Arc::clone(&c)).unwrap();
     append(&l, 0);
     l.set_clock_offset(61);
-    append(&l, 1); // pre-D6 segment 0 counts its age from open: rotates
+    append(&l, 1); // segment 0 counts its age from open: rotates
     assert_eq!(list_segments(&path).unwrap().len(), 1);
     drop(l);
     // Reopen: the age comes from the open record, not the process start.

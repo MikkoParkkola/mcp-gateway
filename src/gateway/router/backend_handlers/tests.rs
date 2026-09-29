@@ -186,7 +186,9 @@ mod identity_propagation_audit {
             .expect("log file readable")
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("valid JSON line"))
+            // Skip the log's genesis housekeeping record (#2275).
+            .filter(|e| e.get("action").is_some())
             .collect()
     }
 
