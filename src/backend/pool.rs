@@ -127,6 +127,8 @@ pub(crate) struct PooledEntry {
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
+    /// A `PerUser` slot's admission (#2300); dropped with the entry.
+    identity_lease: Option<super::identity_slots::SlotLease>,
 }
 
 /// RAII marker for one in-flight client request against a pool slot.
@@ -217,6 +219,7 @@ impl PooledEntry {
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
+            identity_lease: None,
         }
     }
 
@@ -293,23 +296,27 @@ impl Backend {
     /// out the `Arc`, or the two are simply not ordered. Anything that must be
     /// atomic with respect to removal belongs in `under_guard`.
     ///
-    /// Telemetry stays OUTSIDE the guard: `self.pool.len()` walks every shard, so
-    /// calling it while holding one is asking for trouble.
+    /// Telemetry (creation only, MIK-6735 fix 3) stays OUTSIDE the guard:
+    /// `self.pool.len()` walks every shard.
     ///
-    /// Logs + gauges the live slot count on creation only (MIK-6735 fix 3) —
-    /// minimal observability into per-user pool growth without a per-request
-    /// cost on the (overwhelmingly more common) cache-hit path.
+    /// # Errors
+    /// `IdentitySlotsExhausted` when a new `PerUser` slot is refused (#2300).
     fn pooled_entry_with<R>(
         &self,
         key: &PoolKey,
         under_guard: impl FnOnce(&Arc<PooledEntry>) -> R,
-    ) -> (Arc<PooledEntry>, R) {
+    ) -> crate::Result<(Arc<PooledEntry>, R)> {
         let mut created = false;
         let (entry, out) = {
-            let slot = self.pool.entry(key.clone()).or_insert_with(|| {
-                created = true;
-                Arc::new(PooledEntry::new(&self.name, &self.failsafe_config))
-            });
+            let slot = match self.pool.entry(key.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(slot) => slot.into_ref(),
+                dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                    let mut entry = PooledEntry::new(&self.name, &self.failsafe_config);
+                    entry.identity_lease = self.admit(key)?;
+                    created = true;
+                    vacant.insert(Arc::new(entry))
+                }
+            };
             let entry = Arc::clone(slot.value());
             let out = under_guard(&entry);
             (entry, out)
@@ -324,7 +331,7 @@ impl Backend {
             .set(live);
             tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
         }
-        (entry, out)
+        Ok((entry, out))
     }
 
     /// Fetch (or lazily create) the pooled entry for `key`. The `Arc` is cloned
@@ -333,8 +340,8 @@ impl Backend {
     /// Callers that intend to USE the slot's transport want
     /// [`Backend::claim_pooled_entry`] instead: this one hands back an entry the
     /// evictor is still free to remove.
-    pub(super) fn pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
-        self.pooled_entry_with(key, |_| ()).0
+    pub(super) fn pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
+        self.pooled_entry_with(key, |_| ()).map(|(entry, ())| entry)
     }
 
     /// Fetch (or lazily create) the entry for `key` AND claim one in-flight slot
@@ -351,12 +358,12 @@ impl Backend {
     /// Lock order is shard → transport, matching every other nesting in this
     /// module (`shared_transport`, `stop_all`), so no cycle exists. The read
     /// guard is scoped to the claim itself and never survives to an `.await`.
-    fn claim_pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+    fn claim_pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
         self.pooled_entry_with(key, |entry| {
             let _transport = entry.transport.read();
             entry.in_flight.fetch_add(1, Ordering::SeqCst);
         })
-        .0
+        .map(|(entry, ())| entry)
     }
 
     /// The canonical shared slot's `PooledEntry`. Inserted at construction and
@@ -484,30 +491,21 @@ impl Backend {
         self.pool.get(key).is_some()
     }
 
-    /// Close an evicted transport off the caller's path, bounded by
-    /// `close_stage` (#2245): even a bounded close in line holds a grant reload
-    /// one budget per wedged slot. `stop` drains the task with the replaced-
-    /// transport cleanups; a timeout drops the last handle (`kill_on_drop`).
+    /// Close an evicted transport off the caller's path (#2245), capped in
+    /// count and counted when abandoned (#2300, `IdentitySlots::spawn_close`).
+    /// `stop` drains the task with the replaced-transport cleanups.
     fn close_evicted(&self, cleanups: &mut super::CleanupState, transport: Arc<dyn Transport>) {
         let (backend, budget) = (self.name.clone(), self.budgets.close_stage);
-        let handle = tokio::spawn(async move {
-            let close = tokio::time::timeout(budget, transport.close());
-            if close.await.is_err() {
-                tracing::warn!(
-                    %backend,
-                    budget_secs = budget.as_secs(),
-                    "Evicted transport did not close within its budget; abandoning the close"
-                );
-            }
-        });
-        cleanups.handles.retain(|h| !h.is_finished());
-        cleanups.handles.push(handle);
+        if let Some(handle) = self.identity_slots.spawn_close(backend, budget, transport) {
+            cleanups.handles.retain(|h| !h.is_finished());
+            cleanups.handles.push(handle);
+        }
     }
 
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
-    /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
-    /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
-    /// number of slots closed (MIK-6735 POOL.2).
+    /// scheduling a bounded background close of their transports. The canonical
+    /// [`PoolKey::Shared`] slot is never evicted. Returns the number of slots
+    /// evicted, not closed: a close may still be running (MIK-6735 POOL.2).
     pub fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
         let cutoff = idle_ttl.as_secs();
 
@@ -568,24 +566,22 @@ impl Backend {
 
     #[cfg(test)]
     pub(crate) fn set_transport_for_test(&self, transport: Arc<dyn Transport>) {
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         *entry.transport.write() = Some(transport);
     }
 
-    /// Test-only: inject a transport into a specific pool slot so isolation
-    /// tests can seed distinct per-user sessions (MIK-6735 POOL.4).
+    /// Test-only: seed one slot's transport (MIK-6735 POOL.4).
     #[cfg(test)]
     pub(crate) fn set_pooled_transport_for_test(
         &self,
         key: &PoolKey,
         transport: Arc<dyn Transport>,
     ) {
-        let entry = self.pooled_entry(key);
+        let entry = self.pooled_entry(key).expect("test slot admitted");
         *entry.transport.write() = Some(transport);
     }
 
-    /// Test-only: clone the transport `Arc` stored in a specific pool slot, so
-    /// isolation tests can assert distinct instances via `Arc::ptr_eq`.
+    /// Test-only: one slot's transport, for `Arc::ptr_eq` isolation checks.
     #[cfg(test)]
     pub(crate) fn pooled_transport_for_test(&self, key: &PoolKey) -> Option<Arc<dyn Transport>> {
         self.pool
@@ -593,9 +589,8 @@ impl Backend {
             .and_then(|entry| entry.value().transport.read().clone())
     }
 
-    /// Test-only: the consecutive and lifetime unserved probe counts, which
-    /// rows 10 to 11b assert are two different values with two different reset
-    /// rules.
+    /// Test-only: the consecutive and lifetime unserved probe counts (rows
+    /// 10 to 11b: two values, two reset rules).
     #[cfg(test)]
     pub(crate) fn unserved_counts_for_test(&self) -> (u64, u64) {
         (
@@ -631,7 +626,7 @@ impl Backend {
     /// trip one identity's slot without touching another's.
     #[cfg(test)]
     pub(crate) fn trip_circuit_breaker_for_test_key(&self, key: &PoolKey) {
-        let entry = self.pooled_entry(key);
+        let entry = self.pooled_entry(key).expect("test slot admitted");
         let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
         for _ in 0..threshold {
             entry
@@ -652,11 +647,11 @@ impl Backend {
     /// Mark the start of a client request against `key`, returning a guard that
     /// protects the slot from being stopped until dropped. The only caller-facing
     /// way to write the idle clock.
-    pub(super) fn begin_activity(&self, key: &PoolKey) -> ActivityGuard {
+    pub(super) fn begin_activity(&self, key: &PoolKey) -> crate::Result<ActivityGuard> {
         self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-        let entry = self.claim_pooled_entry(key);
+        let entry = self.claim_pooled_entry(key)?;
         entry.touch();
-        ActivityGuard::adopt_claimed(entry, true)
+        Ok(ActivityGuard::adopt_claimed(entry, true))
     }
 
     /// Hold the shared slot's transport open for internal work without claiming
@@ -673,6 +668,7 @@ impl Backend {
     /// caller sees a spurious `BackendUnavailable` for a backend that is fine.
     pub(super) fn begin_internal_activity(&self) -> ActivityGuard {
         self.begin_internal_activity_for(&PoolKey::Shared)
+            .expect("the shared slot is never refused admission")
     }
 
     /// The slot-scoped form of [`Self::begin_internal_activity`].
@@ -683,8 +679,12 @@ impl Backend {
     /// hands back an entry `evict_idle_per_user_entries` is still free to
     /// remove, which would close the transport under the fetch
     /// (MIK-7334.CATALOGUE.1 R3).
-    pub(super) fn begin_internal_activity_for(&self, key: &PoolKey) -> ActivityGuard {
-        ActivityGuard::adopt_claimed(self.claim_pooled_entry(key), false)
+    pub(super) fn begin_internal_activity_for(
+        &self,
+        key: &PoolKey,
+    ) -> crate::Result<ActivityGuard> {
+        self.claim_pooled_entry(key)
+            .map(|e| ActivityGuard::adopt_claimed(e, false))
     }
 
     /// Stop this backend's process if it has been unused past

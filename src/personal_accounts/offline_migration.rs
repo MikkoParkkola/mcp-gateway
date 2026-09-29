@@ -178,6 +178,29 @@ fn resolve_legacy_backend_name(
     }
 }
 
+/// The resource 3.x hashed this backend's token file over (#2262).
+///
+/// 3.x built its OAuth client with the backend's `http_url` as the resource, so
+/// the file is keyed on that URL, not on the descriptor resource. The backend
+/// is looked up by the name the file was written under; a backend renamed since
+/// 3.x is no longer configured under that name, so the one backend bound to
+/// the descriptor stands in for it. `None` when neither is an HTTP backend,
+/// and the caller falls back to the descriptor resource.
+fn legacy_resource(
+    gateway_config: &crate::config::Config,
+    backend_name: &str,
+    descriptor_id: &str,
+) -> Option<String> {
+    let http_url = |name: &str| match &gateway_config.backends.get(name)?.transport {
+        crate::config::TransportConfig::Http { http_url, .. } => Some(http_url.clone()),
+        _ => None,
+    };
+    http_url(backend_name).or_else(|| {
+        let bound = resolve_legacy_backend_name(gateway_config, descriptor_id, None).ok()?;
+        http_url(&bound)
+    })
+}
+
 fn migrate_from(
     gateway_config: &crate::config::Config,
     overlay: &crate::config::EnvOverlay,
@@ -224,7 +247,9 @@ fn migrate_from(
 
     let backend_name =
         resolve_legacy_backend_name(gateway_config, descriptor_id, legacy_backend_name)?;
-    let registered = legacy.load_client_id(&backend_name, &key_descriptor.resource);
+    let hashed_over = legacy_resource(gateway_config, &backend_name, descriptor_id)
+        .unwrap_or_else(|| key_descriptor.resource.clone());
+    let registered = legacy.load_client_id(&backend_name, &hashed_over);
     let request = storage::migration_entry::MigrationRequest {
         key_descriptor: &key_descriptor,
         descriptor: &descriptor,
@@ -232,11 +257,12 @@ fn migrate_from(
         // entry point cannot derive a second and different one.
         bound_backend: &backend_name,
         legacy_backend_name: None,
+        legacy_resource: &hashed_over,
         legacy_issuer,
         registered_client_id: registered.as_deref(),
     };
     let source = legacy
-        .token_path(&backend_name, &key_descriptor.resource)
+        .token_path(&backend_name, &hashed_over)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default()

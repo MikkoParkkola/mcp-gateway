@@ -51,7 +51,10 @@ impl DirectFailure<'_> {
             }
             _ => error,
         };
-        record_client_failure(self.state, self.client);
+        // A full slot table says nothing about this caller (#2300).
+        if !matches!(error, crate::Error::IdentitySlotsExhausted { .. }) {
+            record_client_failure(self.state, self.client);
+        }
         error!(backend = %self.name, error = %error, "Backend request failed");
         let (code, text) = (error.to_rpc_code(), refusal_text(&error));
         let response = match upstream_rejection(&error) {

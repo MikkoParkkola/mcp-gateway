@@ -1,4 +1,4 @@
-sha256: bd8bf613ef4ff9cfac794636f29ae1eec5bcb295d47a86497a9a577156aa8058
+sha256: 4d3f460ec0e0ddf6215965c31d6b1a12813b2e7535e87015a17d2c817f98c116
 fulcrum: "1.0"
 name: linear_attach_url
 description: "Attach an external URL (GitHub PR, commit, doc) to a Linear issue. Shows as rich link in issue sidebar."
@@ -52,7 +52,6 @@ providers:
               title: $title
               subtitle: $subtitle
               iconUrl: $iconUrl
-              createAsUser: "mcp-gateway"
             }) {
               success
               attachment { id url title subtitle }
@@ -64,6 +63,9 @@ providers:
           title: "{title}"
           subtitle: "{subtitle}"
           iconUrl: "{iconUrl}"
+        # createAsUser intentionally omitted: Linear accepts it only from an
+        # OAuth application, and this capability authenticates with an API
+        # key (#2256; same constraint as linear_create_issue, #165).
 
 cache:
   strategy: none

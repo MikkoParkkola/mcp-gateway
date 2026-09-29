@@ -91,6 +91,10 @@ fn refusal(context: &str, error: &CustodyError) -> PropagationError {
 /// store in both. Nothing here is a seam for a second resolution path.
 #[async_trait::async_trait]
 pub(crate) trait AccountCustody: Send + Sync {
+    /// The current lease, read without refreshing: no provider call and no
+    /// durable write.
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError>;
+
     /// Refresh when the durable grant has expired, then hand back the lease.
     async fn refresh_if_expired(
         &self,
@@ -113,6 +117,10 @@ where
     P: RefreshProvider + 'static,
     O: CredentialReleaseObserver + 'static,
 {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        CustodyHandle::resolve(self, account).await
+    }
+
     async fn refresh_if_expired(
         &self,
         account: &AccountKey,
@@ -141,6 +149,11 @@ where
 pub(crate) struct VaultStrategy {
     custody: Arc<dyn AccountCustody>,
     descriptor: AccountDescriptor,
+    /// The live descriptor's `descriptor_revision`, computed at install from
+    /// the configuration this gateway validated. A grant stored under any other
+    /// revision was connected under a descriptor the operator has since changed
+    /// (#2249), and is refused as reconnect-required.
+    descriptor_revision: String,
     /// Whether this deployment may fall back to the sole-operator principal
     /// when a request carries no verified identity.
     ///
@@ -162,11 +175,13 @@ impl VaultStrategy {
     pub(crate) fn new(
         custody: Arc<dyn AccountCustody>,
         descriptor: AccountDescriptor,
+        descriptor_revision: String,
         sole_operator: bool,
     ) -> Self {
         Self {
             custody,
             descriptor,
+            descriptor_revision,
             sole_operator,
         }
     }
@@ -254,11 +269,24 @@ impl VaultStrategy {
             PropagationError::Refuse(format!("account identity binding refused: {error}"))
         })?;
 
+        // The descriptor fence runs BEFORE the refresh (#2249). A refresh would
+        // talk to the provider with the new descriptor's client and could
+        // rotate or durably fence the grant, so reverting the config edit would
+        // no longer restore it. The read below moves nothing.
+        let current = self
+            .custody
+            .resolve(&account)
+            .await
+            .map_err(|error| refusal("managed account is not usable", &error))?;
+        self.fence_changed_descriptor(&current)?;
         let lease = self
             .custody
             .refresh_if_expired(&account)
             .await
             .map_err(|error| refusal("managed account is not usable", &error))?;
+        // Again on the lease actually released: the grant may have been
+        // replaced between the read and the refresh.
+        self.fence_changed_descriptor(&lease)?;
         let binding = cache_binding(&account, &lease)?;
         // The lease alone authorizes nothing. This is the recheck against
         // current durable state, and the only point a credential exists.
@@ -287,6 +315,21 @@ impl VaultStrategy {
             cache_binding: binding,
         };
         Ok((credential, lease))
+    }
+
+    /// Refuse a grant stored under a descriptor revision other than the live
+    /// one. Nothing is written: the fence is a function of the stored revision
+    /// and the installed configuration, so reverting the edit restores service
+    /// and reconnecting (which stores the live revision) clears it.
+    fn fence_changed_descriptor(&self, lease: &CredentialLease) -> Result<(), PropagationError> {
+        if lease.descriptor_revision == self.descriptor_revision {
+            return Ok(());
+        }
+        Err(PropagationError::AccountReconnectRequired(format!(
+            "managed account '{}' was connected under a different account configuration; \
+             reconnect the account to grant the current one",
+            self.descriptor.descriptor_id
+        )))
     }
 
     /// Re-run the REAL release recheck for a lease released earlier in this

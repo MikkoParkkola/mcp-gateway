@@ -114,3 +114,40 @@ fn may_invoke_allocation_does_not_scale_with_definition_size() {
          for a tiny one: the definition is being copied per call (#2110)"
     );
 }
+
+fn counts_bytes_for(meta: &MetaMcp) -> u64 {
+    let caller = anonymous_caller();
+    let ((_, servers), measured) = measure(|| meta.admitted_counts(caller.scope(), None));
+    // The capability backend must be counted, or its branch never ran.
+    assert_eq!(servers, 1, "admitted_counts skipped the capability backend");
+    measured.bytes
+}
+
+/// `admitted_counts` runs on every `initialize` and `tools/list`. It must
+/// read capability names, not clone each tool (description and schemas).
+#[test]
+fn admitted_counts_allocation_does_not_scale_with_definition_size() {
+    if isolate(&test_path(
+        "admitted_counts_allocation_does_not_scale_with_definition_size",
+    )) {
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (small, _) = rt.block_on(meta_with(&dir.path().join("small"), "x"));
+    let (big, _) = rt.block_on(meta_with(&dir.path().join("big"), &"x".repeat(PAD)));
+
+    counts_bytes_for(&small);
+    counts_bytes_for(&big);
+    let small_bytes = counts_bytes_for(&small);
+    let big_bytes = counts_bytes_for(&big);
+
+    assert!(
+        big_bytes < small_bytes + (PAD as u64) / 4,
+        "admitted_counts allocated {big_bytes} B with a {PAD} B definition vs {small_bytes} B \
+         with a tiny one: tool definitions are being cloned per listing (#2110)"
+    );
+}
