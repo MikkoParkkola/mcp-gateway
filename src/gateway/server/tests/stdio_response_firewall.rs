@@ -139,6 +139,10 @@ fn assert_refused(body: &Value) {
     assert!(!body.to_string().contains(&canary()), "leaked: {body}");
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "every call site passes an owned json! literal"
+)]
 fn call(tool: &str, arguments: Value) -> Value {
     json!({ "name": tool, "arguments": arguments })
 }
