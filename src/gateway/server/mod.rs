@@ -20,6 +20,8 @@ mod identity_grants;
 mod listener;
 mod persistence;
 #[cfg(test)]
+mod remote_provenance_start_tests;
+#[cfg(test)]
 mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -614,6 +616,9 @@ impl Gateway {
                 "a freshly built registry refused a backend registration"
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
+        }
+        if let Some(warning) = config.remote_provenance_warning() {
+            warn!("{warning}");
         }
 
         Ok(Self {

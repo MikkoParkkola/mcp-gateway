@@ -113,7 +113,7 @@ backend" and "fails a capability file" first.**
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
 | 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
-| 89 | Reserved: lands with #2195 | None yet |
+| 89 | A remote backend that runs without signed provenance is named in a startup warning and in `doctor` | None; to verify these backends, set `require_for_remote_backends` and add signed metadata |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
@@ -2559,6 +2559,21 @@ In 4.0 both listeners stop the same way (#2147):
 **Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
 orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) above
 twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
+
+## 89. Remote backends without signed provenance are named at startup and in `doctor`
+
+**Startup:** no notice
+
+Signed provenance for remote backends stays off by default. With it off, an enabled HTTP, A2A or
+WebSocket backend that has no entry under `security.remote_server_signing.backends` runs without
+a provenance check. The gateway now logs one warning at startup naming each such backend, and
+`doctor` reports the same text as a `remote_provenance` warning. A backend that has an entry is
+verified when the config loads, as before, and is not named. The warning is printed once per
+start, not on a hot reload; run `doctor` after a reload that adds a remote backend (#1943).
+
+**Action:** none. To verify these backends, set
+`security.remote_server_signing.require_for_remote_backends: true` and add signed metadata for
+each of them.
 
 ## 90. A request header naming an unserved protocol version is refused
 

@@ -1060,11 +1060,18 @@
     },
     {
       "id": "GH1943.PROV.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Provenance is enforced only when require_for_remote_backends is set (src/security/remote_provenance.rs:21-23) and nothing reports that it is off. Tracked in #1943. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        "src/config/remote_provenance_posture.rs",
+        "src/config/remote_provenance_posture_tests.rs",
+        "src/gateway/server/remote_provenance_start_tests.rs",
+        "src/commands/doctor/provenance.rs",
+        "tests/remote_provenance_warning.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Met by #2195. With remote HTTP/A2A/WebSocket backends enabled and require_for_remote_backends off, one startup WARN names every backend without signed metadata (Config::remote_provenance_warning, logged by the Gateway constructor that HTTP and stdio starts share: building_a_gateway_warns_about_an_unverified_remote_backend, a_stdio_start_warns_about_an_unverified_remote_backend), and doctor reports the same text as a remote_provenance warning (an_unverified_remote_backend_is_a_warning_with_the_startup_text, doctor_reports_an_unverified_remote_backend). No default changes (provenance_is_not_required_by_default); whether it should become the default is #2186. Red-first CI run 36469192873 (#2189): the 9 new tests failed at their assertions. Mutation batch throwaway/mutants-2195, run 36471967733: 6/6 RED. UPGRADING-4.0 item 89. Two independent design reviews (SHIP, SHIP) and two implementation reviews (SHIP-WITH-FIXES with fixes applied, SHIP)."
     },
     {
       "id": "GH1944.CHAIN.1",
