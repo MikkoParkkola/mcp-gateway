@@ -123,7 +123,7 @@ backend" and "fails a capability file" first.**
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
-| 99 | Reserved: lands with #2295 | None yet |
+| 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
@@ -941,7 +941,7 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
-- **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
+- **Windows checks ACLs instead of mode bits** (item 99).
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.
 
@@ -2668,7 +2668,7 @@ the mode. The check runs before the mode rules, on the same handle as the read.
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.
-- **Windows is not checked.** Owner rules there are tracked in #1718.
+- **Windows** is covered by item 99.
 
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
@@ -2712,6 +2712,62 @@ it: SIEM export and the NDJSON file sink forward it, the export metrics count it
 **Action:** where a SIEM rule, export consumer or script matches caller events, skip records
 whose `event` is `audit_segment_opened`. Chain and counter checks need no change: the sequence
 starts at 1 with no gap.
+
+## 99. Windows checks secret and trust files, and creates them owner-only
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only on Windows, for a secret file another account can read or change, or a trust file it can change
+
+In 3.x and early 4.0 a Windows gateway created these files with the directory's inherited ACL and
+read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
+the unix mode rules:
+
+- **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
+  files, credential files) are created owner-only: one grant to the gateway's account, nothing
+  inherited. A read is refused when another account is granted access, the owner is someone
+  else, or the DACL inherits or is NULL. A DACL that is not marked protected is refused as
+  inheriting even when it holds no inherited entry: an old-style ACL, which some tools show as
+  protected, is refused too. The repair below marks it protected.
+- **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the
+  control-plane `grants.json` and `policies.json`) may be read by others but never changed by
+  them. A read, and an append to the journal, is refused when another account can write, or the
+  owner is not the gateway's account, SYSTEM or Administrators.
+- A secret file is refused on a volume that keeps no ACLs (FAT, exFAT): Windows accepts the
+  owner-only descriptor there and discards it, so the create is refused: no secret is written;
+  the empty file is removed, and a refusal that could not remove it says so. Keep the config,
+  keys and token files on NTFS or ReFS.
+- The check and the read use one handle. Like unix, a link is followed and its target judged; a
+  directory or other non-regular file is refused.
+- The refusal names every rule broken and prints the PowerShell lines that repair it, for the
+  file's class. `load_client_id` reads a public OAuth client id and is the one exception: it is
+  not checked.
+
+Repair a **secret file** (owner-only, one grant to the gateway's account; `<sid>` is that
+account's SID, which the refusal prints):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+Repair a **trust file** (the gateway's account, SYSTEM and Administrators keep full control,
+Everyone keeps read, so no legitimate reader is locked out and every foreign write is removed):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+When the file has another owner, run the lines as an administrator with `takeown /F '<path>'`
+first and `icacls '<path>' /setowner '*<sid>'` last; the refusal prints them in that order.
+A path with characters outside letters, digits, space and `\ : . _ - ( )` gets a description of
+the same repair instead of commands.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** if a file is refused, run the printed lines in PowerShell (as an
+administrator when it says the file has another owner) and retry.
 
 ## 100. Proven identifiers are compared verbatim
 

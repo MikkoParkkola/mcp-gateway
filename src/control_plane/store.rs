@@ -1109,14 +1109,9 @@ fn write_atomic(target: &Path, bytes: &[u8], fault: FaultPoint) -> std::io::Resu
     let tmp = target.with_extension("json.tmp");
 
     {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.create(true).write(true).truncate(true);
-        set_owner_only(&mut opts);
-        let mut f = opts.open(&tmp)?;
-        // `mode` on OpenOptions only applies when creating; a stale temp keeps
-        // its old mode and would survive the rename. Force 0600 explicitly so
-        // the final collection is always owner-only.
-        force_owner_only(&f)?;
+        // A stale temp would keep its old mode or DACL through the rename, so
+        // the helper replaces it: the final collection is always owner-only.
+        let mut f = crate::config_persistence::create_private_replacing(&tmp)?;
         f.write_all(bytes)?;
         if fault == FaultPoint::AfterTempWrite {
             return Err(injected_fault());
@@ -1150,31 +1145,6 @@ fn injected_fault() -> std::io::Error {
         std::io::ErrorKind::Interrupted,
         "injected write-phase fault",
     )
-}
-
-/// Restrict a new file to owner read/write (`0600`) on unix.
-#[cfg(unix)]
-fn set_owner_only(opts: &mut std::fs::OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-    opts.mode(0o600);
-}
-
-/// No-op on non-unix: file permissions are managed by the platform ACLs.
-#[cfg(not(unix))]
-fn set_owner_only(_opts: &mut std::fs::OpenOptions) {}
-
-/// Force an already-open file to owner-only (`0600`) on unix, regardless of the
-/// mode it was created with (handles a pre-existing temp file).
-#[cfg(unix)]
-fn force_owner_only(f: &std::fs::File) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))
-}
-
-/// No-op on non-unix.
-#[cfg(not(unix))]
-fn force_owner_only(_f: &std::fs::File) -> std::io::Result<()> {
-    Ok(())
 }
 
 // ── OS advisory file lock ────────────────────────────────────────────────────────
