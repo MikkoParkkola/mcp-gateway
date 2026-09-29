@@ -2475,7 +2475,7 @@ impl MetaMcp {
                     // key must not be readmitted. `BackendFailed` is the only
                     // variant raised from the backend call itself; `NotAdmitted`
                     // was refused above the dispatch, and `Deadline`,
-                    // `RequestBudgetExhausted`, `Refused` and `Delivery` all
+                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and `MalformedInterim` all
                     // leave the backend parked on a question that was never
                     // answered, and a backend that stopped to ask has not
                     // acted yet — the premise the `Ok` arm below rests on too.
@@ -2983,7 +2983,7 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
-        // Identity-only: these callers never serve the sole operator yet (#2231).
+        // Identity-only by construction; production reads pass a proof (#2231).
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
         self.resolve_propagation_credential_held(server, caller)
             .await
@@ -3099,7 +3099,7 @@ impl MetaMcp {
         let managed_vault = self
             .account_strategies
             .managed_vault(descriptor_id.as_deref());
-        let principal = self.caller_principal(descriptor_id.as_deref(), caller);
+        let principal = self.principal_for_server(server, caller);
         let subject_id = principal.map_or_else(|| audit_subject(None), Principal::stable_actor_id);
         let audience = idp_cfg.audience.as_str();
 

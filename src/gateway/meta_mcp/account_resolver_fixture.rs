@@ -563,6 +563,11 @@ impl Dispatches {
         self.calls.lock().len()
     }
 
+    /// Every dispatch, whatever its method (#2231's listings).
+    pub(super) fn all(&self) -> Vec<Dispatch> {
+        self.calls.lock().clone()
+    }
+
     /// The `tools/call` dispatches, in order. `count()` still counts every
     /// method, so a refusal proved by `count() == 0` also rules out the
     /// gateway's own cold-slot `tools/list` (F13).
@@ -670,8 +675,8 @@ impl crate::transport::Transport for CapturingTransport {
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
 pub(super) use gateway::{
-    Bind, Descriptors, execute, execute_as, execute_bridged, execute_bridged_keyed, external_cfg,
-    gateway, gateway_in, slots,
+    Bind, Descriptors, caller_as, execute, execute_as, execute_bridged, execute_bridged_keyed,
+    external_cfg, gateway, gateway_in, slots,
 };
 
 // #2190: the direct-route tests live in `router`; this is their one door in.
@@ -681,3 +686,7 @@ pub(crate) mod direct_bridge;
 // #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
 #[path = "account_sole_operator_mcp_tests.rs"]
 mod sole_operator_mcp_tests;
+
+// #2231: the catalogue and forward reads, for the same principals as #1961.
+#[path = "account_catalogue_sole_operator_tests.rs"]
+mod catalogue_sole_operator_tests;
