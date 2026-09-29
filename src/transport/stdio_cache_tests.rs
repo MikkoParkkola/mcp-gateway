@@ -110,12 +110,15 @@ fn each_runner_gets_the_variable_it_reads() {
         ("npx -y pkg", "npm_config_cache"),
         ("bunx pkg", "BUN_INSTALL_CACHE_DIR"),
         ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER"),
-        ("pnpm dlx pkg", "npm_config_store_dir"),
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert_eq!(out.len(), 1, "{cmd}: {out:?}");
         assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
     }
+    let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
+    assert_eq!(out.len(), 2, "{out:?}");
+    assert!(out["pnpm_config_store_dir"].contains("pkg-cache"));
+    assert_eq!(out["pnpm_config_store_dir"], out["npm_config_store_dir"]);
     let mut env = HashMap::new();
     env.insert("BUN_INSTALL_CACHE_DIR".to_string(), "/mine".to_string());
     let out = isolated_package_manager_env("thing", "bunx pkg", env);

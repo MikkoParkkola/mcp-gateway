@@ -87,30 +87,39 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     command: &str,
     mut backend_env: HashMap<String, String, S>,
 ) -> HashMap<String, String, S> {
-    let Some(var) = cache_var_for(command) else {
-        return backend_env;
-    };
-    if backend_env.contains_key(var) {
+    let vars = cache_vars_for(command);
+    if vars.is_empty() {
         return backend_env;
     }
     let dir = crate::config_persistence::gateway_data_dir()
         .join("pkg-cache")
-        .join(cache_component(backend_name));
-    backend_env.insert(var.to_string(), dir.to_string_lossy().into_owned());
+        .join(cache_component(backend_name))
+        .to_string_lossy()
+        .into_owned();
+    for var in vars {
+        // An operator-set value wins.
+        backend_env
+            .entry((*var).to_string())
+            .or_insert_with(|| dir.clone());
+    }
     backend_env
 }
 
-/// The variable a runner reads for its cache directory. pnpm keeps installs in
-/// its content store, which `npm_config_store_dir` relocates; its separate
-/// metadata cache stays shared.
-fn cache_var_for(command: &str) -> Option<&'static str> {
-    let program = command.split_whitespace().next()?;
+/// The variables a runner reads for its cache directory. pnpm keeps installs
+/// in its content store, which `store_dir` relocates; its separate metadata
+/// cache stays shared. Current pnpm (12.x) reads only `pnpm_config_*` and
+/// prints `undefined` for `npm_config_store_dir`; older pnpm reads
+/// `npm_config_*`. Both are set so either generation is isolated.
+fn cache_vars_for(command: &str) -> &'static [&'static str] {
+    let Some(program) = command.split_whitespace().next() else {
+        return &[];
+    };
     match program.rsplit('/').next().unwrap_or(program) {
-        "npx" | "npm" => Some("npm_config_cache"),
-        "bunx" => Some("BUN_INSTALL_CACHE_DIR"),
-        "yarn" => Some("YARN_CACHE_FOLDER"),
-        "pnpm" => Some("npm_config_store_dir"),
-        _ => None,
+        "npx" | "npm" => &["npm_config_cache"],
+        "bunx" => &["BUN_INSTALL_CACHE_DIR"],
+        "yarn" => &["YARN_CACHE_FOLDER"],
+        "pnpm" => &["pnpm_config_store_dir", "npm_config_store_dir"],
+        _ => &[],
     }
 }
 
