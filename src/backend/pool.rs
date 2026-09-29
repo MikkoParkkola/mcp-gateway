@@ -446,7 +446,7 @@ impl Backend {
                 }
             };
             if let Some(transport) = idle_transport {
-                let _ = transport.close().await;
+                self.close_evicted(transport).await;
             }
         }
 
@@ -480,6 +480,20 @@ impl Backend {
     #[cfg(test)]
     pub(crate) fn pool_has_slot_for_test(&self, key: &PoolKey) -> bool {
         self.pool.get(key).is_some()
+    }
+
+    /// Close a transport an eviction took out of the pool, bounded by
+    /// `close_stage` as at shutdown: `close()` has no deadline of its own, and
+    /// one wedged backend must not stall a grant reload or the reaper (#2245).
+    async fn close_evicted(&self, transport: Arc<dyn Transport>) {
+        let close = tokio::time::timeout(self.budgets.close_stage, transport.close());
+        if close.await.is_err() {
+            tracing::warn!(
+                backend = %self.name,
+                budget_secs = self.budgets.close_stage.as_secs(),
+                "Evicted transport did not close within its budget; abandoning the close"
+            );
+        }
     }
 
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
@@ -518,7 +532,7 @@ impl Backend {
             if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
-                    let _ = transport.close().await;
+                    self.close_evicted(transport).await;
                 }
                 closed += 1;
             }
