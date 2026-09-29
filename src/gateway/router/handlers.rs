@@ -459,7 +459,7 @@ pub(super) async fn meta_mcp_handler(
     let logger = state.meta_mcp.transparency_logger.clone();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
         logger,
-        meta_mcp_dispatch(state, http_request),
+        Box::pin(meta_mcp_dispatch(state, http_request)),
     );
 
     if offers_event_stream {

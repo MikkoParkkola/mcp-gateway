@@ -2922,7 +2922,7 @@ impl Gateway {
             super::meta_mcp::grant_audit::slot_rpc(
                 meta_mcp.transparency_logger.as_ref(),
                 id.clone(),
-                Self::dispatch_tools_call(
+                Box::pin(Self::dispatch_tools_call(
                     meta_mcp,
                     tool_policy,
                     &mut request,
@@ -2930,7 +2930,7 @@ impl Gateway {
                     client,
                     &mut signing_context,
                     &request_shape,
-                ),
+                )),
             )
             .await
         } else {

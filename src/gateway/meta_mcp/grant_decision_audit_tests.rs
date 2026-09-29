@@ -32,11 +32,13 @@ pub(super) struct Who {
     identity: Option<VerifiedIdentity>,
 }
 
+/// A key caller carries the grant subject the grant rule derives for it
+/// (`api_key`, name): the capability executor checks the owner against it.
 pub(super) fn api_key(name: &str) -> Who {
     Who {
         kind: CredentialKind::ApiKey,
         api_key_name: Some(name.to_string()),
-        grant_subject: None,
+        grant_subject: Some(GrantSubject::new("api_key", name, Some(name.to_string()))),
         identity: None,
     }
 }
