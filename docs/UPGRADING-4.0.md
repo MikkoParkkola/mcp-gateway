@@ -58,12 +58,12 @@ backend" and "fails a capability file" first.**
 | 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
-| 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
+| 34 | The inbound WebSocket listener is gone; `server.ws_port` is ignored with a warning | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `runAsUser`, `runAsGroup` or `fsGroup` override other than 1001; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
-| 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
+| 39 | `server.request_timeout` is ignored with a warning; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
@@ -123,7 +123,7 @@ backend" and "fails a capability file" first.**
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
-| 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
+| 99 | Windows: the config, OAuth token and client files, and generated mTLS certificates and keys are created owner-only; those and the secret files it only reads (env files, `file:` targets, TLS keys and credential files) are refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 | 101 | Reserved: lands with #2294 | None yet |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
@@ -769,12 +769,20 @@ The error is printed on one line. Fix the spelling of each named key, or delete 
 check runs on `gateway_reload_config` and on file-watch reloads: a refused reload keeps the running
 config and reports the error.
 
-- **`backends.<name>.idle_timeout` is refused.** It was retired in 3.x and only warned. It never
-  had an effect. The error names it and says why. Delete it, or use `stop_when_idle_for` on a
-  backend declared with a `command`.
-- **`backends.<name>.circuit_breaker` is refused.** `examples/circuit-breaker.yaml` showed it
-  until 4.0, but nothing read it: every backend's breaker has always used
-  `failsafe.circuit_breaker`. Delete the block; tune the global settings instead.
+- **Retired keys load and warn once; they are not refused (#2360).** `backends.<name>.idle_timeout`
+  was retired in 3.x and never had an effect. `backends.<name>.circuit_breaker` was never read:
+  every backend's breaker uses `failsafe.circuit_breaker`. `server.ws_port` (item 34) and
+  `server.request_timeout` (item 39) also warn and are ignored. Each warning names the key and says
+  why, for example `` `backends.x.idle_timeout` is ignored since 4.0: backend idle hibernation was
+  never implemented, ... ``. Delete the keys when convenient; use `stop_when_idle_for` on a
+  `command` backend for idle shutdown, and tune `failsafe.circuit_breaker` for breakers. A retired
+  key is matched only at its own place: `server.idle_timeout` is refused like a misspelling.
+- **Keys whose own name starts with `_` or `x-` are annotations (#2360).** They load wherever
+  this key check applies and are never read. A few sections reject every extra key while they are
+  parsed (for example `auth.dashboard_session`), and an annotation there still fails the load. Annotations are never read, so notes such as `_legacy_env: {...}` or a top-level `x-anchors:` block keep
+  working. No setting starts with either prefix, so such a key is never a misspelling, and it is
+  never bound: `key_server: {_enabled: true}` leaves the key server off. Entries of maps you name
+  yourself (`env`, `headers`, backend names) are data, not keys, and are unaffected.
 - **A backend that names two transports is refused.** `command` and `http_url` together loaded as
   a stdio backend and ignored `http_url`, `streamable_http` and any `a2a_*` key. The error names
   each ignored key and the key that selected the transport. Keep one transport per backend.
@@ -885,18 +893,19 @@ restart, not on a config reload.
 - **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
   from the optional Secret `mcp-gateway-metrics` (key `token`).
 
-## 34. The inbound WebSocket listener is removed, and `server.ws_port` fails the load
+## 34. The inbound WebSocket listener is removed, and `server.ws_port` is ignored
 
-**Startup:** prints a notice; refuses to start
+**Startup:** prints a notice
 
 In 3.x, `server.ws_port` spawned a WebSocket listener beside the HTTP server. It only echoed
 text frames back: it never served MCP, sat outside the Origin/Host guard and had no
 authentication, so no client could reach a tool through it.
 
 - **The listener is gone.** Clients connect via stdio or HTTP (`POST /mcp`).
-- **`server.ws_port` in the config file is a retired key and refuses the load**, on start and on
-  reload, with `server.ws_port` is retired: the inbound WebSocket listener was removed in 4.0;
-  ... Remove server.ws_port. Delete the key. Like every `MCP_GATEWAY_*` variable,
+- **`server.ws_port` in the config file is a retired key: it loads, opens no listener, and warns
+  once**, on start and on reload, with `server.ws_port` is ignored since 4.0: the inbound
+  WebSocket listener was removed in 4.0 and no WebSocket listener is opened; ... Remove
+  server.ws_port. Delete the key. (Before #2360 it refused the load.) Like every `MCP_GATEWAY_*` variable,
   `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
 - **Outbound WebSocket is a backend transport** (`ws_url`, see §47). Only the inbound listener is
   removed.
@@ -1054,21 +1063,23 @@ The shipped deployments keep starting (item 21):
 - **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
   publish.
 
-## 39. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
+## 39. `server.request_timeout` is ignored, and `server.max_body_size` is enforced
 
-**Startup:** prints a notice; refuses to start, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+**Startup:** prints a notice; refuses to start, only while `server.max_body_size` is `0`
 
 In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
 backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
 other route, webhooks included, used the framework's 2 MiB default.
 
-- **`server.request_timeout` is removed and now stops startup; delete it.** It never did
-  anything. Set per-backend `timeout` to bound calls. The load fails, on start and on reload,
-  and the error includes:
+- **`server.request_timeout` is removed and ignored; delete it.** It never did anything. Set
+  per-backend `timeout` to bound calls. The config still loads, on start and on reload, and the
+  gateway warns once:
 
   ```text
-  `server.request_timeout` is retired: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  `server.request_timeout` is ignored since 4.0: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
   ```
+
+  (Before #2360 this refused the load.)
 - **`server.max_body_size` is now enforced on every route**, read once at startup
   (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
   count.
@@ -1264,7 +1275,10 @@ Wherever a whole-value secret takes `env:NAME`, it now also takes `file:/absolut
 field is read once, at startup.
 
 - **The path must be absolute.** `~`, relative paths and `${VAR}` inside the path are not expanded;
-  `file:secrets/token` fails with `... is not an absolute path.`
+  `file:secrets/token` fails with `... is not an absolute path.` A descriptor's `client_secret_ref`
+  is checked at load too, although its file is read only at use: an empty or relative `file:` path
+  refuses to start with `client_secret_ref file: must name an absolute path`, where a 4.0 beta
+  started and failed at the first token refresh.
 - **The file is held to the item 35 rule**: a file other users can read or change fails the load,
   and so does a group-readable file this process owns. It must be UTF-8 and at most 64 KiB.
 - **Exactly one trailing newline is stripped** (`\n` or `\r\n`), as `kubectl create secret
@@ -2752,10 +2766,13 @@ In 3.x and early 4.0 a Windows gateway created these files with the directory's 
 read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
 the unix mode rules:
 
-- **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
-  files, credential files) are created owner-only: one grant to the gateway's account, nothing
-  inherited. A read is refused when another account is granted access, the owner is someone
-  else, or the DACL inherits or is NULL. A DACL that is not marked protected is refused as
+- **Secret files** (config, env files, `file:` targets, TLS private keys, OAuth token and client
+  files, credential files). The gateway creates the config file, OAuth token and client files,
+  and generated mTLS certificates and keys owner-only: one grant to the gateway's account,
+  nothing inherited. Env files, `file:` targets, TLS keys you supply and credential files are
+  inputs it only reads: it checks them and never fixes their ACL. A read of any secret file is
+  refused when another account is granted access, the owner is someone else, or the DACL
+  inherits or is NULL. A DACL that is not marked protected is refused as
   inheriting even when it holds no inherited entry: an old-style ACL, which some tools show as
   protected, is refused too. The repair below marks it protected.
 - **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the

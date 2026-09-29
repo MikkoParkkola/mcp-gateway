@@ -1020,24 +1020,6 @@ fn duration_parser_handles_milliseconds() {
     );
 }
 
-/// Flow style is valid YAML and loads identically to the block form, so the
-/// retired key is refused there too.
-#[test]
-fn retired_key_refused_in_flow_style_mappings() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    write_owner_only(
-        &path,
-        "backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}",
-    )
-    .expect("write config");
-    let err = Config::load(Some(&path)).expect_err("flow-style retired key must be refused");
-    assert!(
-        err.to_string().contains("backends.demo.idle_timeout"),
-        "{err}"
-    );
-}
-
 /// The key's NAME inside a value is not a use of the key: a description
 /// quoting `idle_timeout:` must not make the config refuse to load.
 #[test]

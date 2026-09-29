@@ -636,7 +636,7 @@ mod cli {
     async fn gh462_setup_empty_discovery_without_client() {
         invalid_empty_discovery(false).await;
     }
-
+    #[cfg(unix)] // Windows `dirs::home_dir()` ignores HOME/USERPROFILE
     #[tokio::test]
     async fn gh462_valid_config_control_reaches_empty_discovery() {
         let home = tempfile::tempdir().unwrap();
@@ -773,9 +773,9 @@ mod cli {
 
     valid_cli_case!(gh462_add_missing, false, false);
     valid_cli_case!(gh462_add_valid, false, true);
-    #[cfg(feature = "config-export")]
+    #[cfg(all(unix, feature = "config-export"))] // same HOME reason
     valid_cli_case!(gh462_setup_missing, true, false);
-    #[cfg(feature = "config-export")]
+    #[cfg(all(unix, feature = "config-export"))]
     valid_cli_case!(gh462_setup_valid, true, true);
 
     // GH462.CONFIG.6: binary isolation enables non-vacuous secret/override checks.
@@ -811,7 +811,7 @@ mod cli {
             }
         };
     }
-
     reference_cli_case!(gh462_add_references, false);
+    #[cfg(unix)]
     reference_cli_case!(gh462_setup_references, true);
 }

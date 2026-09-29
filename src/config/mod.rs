@@ -7,6 +7,7 @@
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
 pub(crate) mod account_bindings;
+mod account_refs;
 mod backend_debug;
 mod config_file;
 mod env_overlay;
@@ -590,17 +591,24 @@ impl Config {
             )
             .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         }
-        let secret_refs = match expansion {
+        let (mut secret_refs, mut files) = match expansion {
             Expansion::Resolve => {
-                let (refs, files) = config.expand_env_vars(&overlay)?;
+                let refs = config.expand_env_vars(&overlay)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
-                overlay.record_secret_files(files);
                 refs
             }
-            Expansion::Literal => BTreeSet::new(),
+            Expansion::Literal => (BTreeSet::new(), SecretFileDigests::new()),
         };
         config.validate_with_env(&overlay)?;
+        // Account secrets are recorded only once the block has passed
+        // validation, and not at all when nothing will read them (#2248).
+        if expansion == Expansion::Resolve {
+            let (names, account_files) = config.record_account_refs();
+            secret_refs.extend(names);
+            files.extend(account_files);
+            overlay.record_secret_files(files);
+        }
         Ok(Evaluated {
             config,
             overlay: std::sync::Arc::new(overlay),
@@ -717,23 +725,6 @@ impl Config {
         // never reported and the route kept the one it was built with (#2251).
         if let Some(token) = &self.server.metrics_token {
             let _names_only = record(token, &mut seen);
-        }
-        // Record names only. Leave `env:` spellings in place so a rewrite cannot
-        // persist decoded account key material.
-        if let Some(accounts) = &self.accounts {
-            for reference in accounts.keys.values() {
-                let _names_only = record(reference, &mut seen);
-            }
-            // Adapter signing references, recorded the same way and for the
-            // same reason as the account keys above: NAMES only, and the
-            // `env:` spelling stays in the config so a rewrite cannot persist
-            // signing material. Until now an adapter secret was the one
-            // startup-only secret this set did not mention, so a reload that
-            // compares these names across overlays could not report a rotated
-            // adapter secret that no running holder can take.
-            for adapter in &accounts.adapters {
-                let _names_only = record(&adapter.hmac_secret_ref, &mut seen);
-            }
         }
         (seen, files)
     }
@@ -2296,6 +2287,10 @@ mod cleartext_credential_guard {
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
+
+#[cfg(test)]
+#[path = "account_secret_order_tests.rs"]
+mod account_secret_order_tests;
 
 #[cfg(test)]
 #[path = "account_consumer_config_tests.rs"]
