@@ -311,9 +311,7 @@ async fn evict_idle_per_user_entries_reaps_idle_users_but_spares_shared() {
             .store(0, Ordering::Relaxed);
     }
 
-    let closed = backend
-        .evict_idle_per_user_entries(Duration::from_secs(1))
-        .await;
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(closed, 1, "only the per-user slot is reaped");
     assert!(
         backend
@@ -920,9 +918,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .last_used
         .store(0, Ordering::Relaxed);
 
-    let closed = backend
-        .evict_idle_per_user_entries(Duration::from_secs(1))
-        .await;
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(
         closed, 0,
         "a per-user slot with work in flight must not be evicted"
@@ -941,9 +937,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .last_used
         .store(0, Ordering::Relaxed);
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
         "eviction resumes once the request completes"
     );
@@ -1232,9 +1226,7 @@ async fn a_leased_slot_is_never_evicted() {
         .store(0, Ordering::Relaxed);
 
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         0,
         "the evictor removed a slot with a live lease on it"
     );
@@ -1255,9 +1247,7 @@ async fn a_leased_slot_is_never_evicted() {
         .store(0, Ordering::Relaxed);
 
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
         "once the lease is released the slot must become evictable again, \
          or in_flight leaks and the slot is immortal"

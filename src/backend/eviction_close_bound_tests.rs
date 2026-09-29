@@ -6,10 +6,10 @@
 //! revocation and the next reload) or the reaper, not even for one budget per
 //! wedged slot.
 //!
-//! Paused clock: the wedged close never wakes, so the runtime auto-advances
-//! time to the next timer. An unbounded close in line hits the outer `STALL`
-//! guard, which reports the stall instead of hanging; a bounded one in line
-//! costs `close_stage` per slot, which the elapsed check rejects.
+//! Both eviction entry points are plain `fn`s, so the compiler already rules
+//! out an in-line await on a close; these tests pin what eviction still does
+//! past a wedged close: every slot leaves the pool, and the close is detached
+//! yet owned (drained by `stop`, and a stdio child is still reaped).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -25,7 +25,6 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
 const CLOSE_STAGE: Duration = Duration::from_millis(100);
-const STALL: Duration = Duration::from_secs(60);
 
 /// A transport whose `close()` never completes, as a real close blocked on a
 /// writer mutex held by a stuck write does.
@@ -70,25 +69,16 @@ fn backend_with_wedged_slots(bindings: &[&str]) -> Arc<Backend> {
 
 /// GIVEN two revoked callers' idle slots whose transports never close
 /// WHEN the grant reload evicts the subject's slots
-/// THEN the eviction returns without waiting out even one close budget,
-/// having evicted both, so the reload goes on to the next backend and subject.
+/// THEN both are evicted, so the reload goes on to the next backend and subject.
 #[tokio::test(start_paused = true)]
 async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
     let backend = backend_with_wedged_slots(&["rev:alpha", "rev:beta"]);
 
-    let started = tokio::time::Instant::now();
-    let evicted = tokio::time::timeout(STALL, backend.evict_identity_slots("rev:"))
-        .await
-        .expect("eviction stalled on a close() that never completes");
+    let evicted = backend.evict_identity_slots("rev:");
 
     assert_eq!(
         evicted, 2,
         "both slots must be evicted past the stuck close"
-    );
-    assert!(
-        started.elapsed() < CLOSE_STAGE,
-        "eviction must not wait on the closes; took {:?}",
-        started.elapsed()
     );
     for binding in ["rev:alpha", "rev:beta"] {
         assert!(
@@ -100,7 +90,7 @@ async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
 
 /// GIVEN an expired per-user slot whose transport never closes
 /// WHEN the idle reaper runs
-/// THEN it returns without waiting on the close and the slot is gone.
+/// THEN the slot is gone.
 #[tokio::test(start_paused = true)]
 async fn a_wedged_close_does_not_stall_the_idle_reaper() {
     let backend = backend_with_wedged_slots(&["idle:alpha"]);
@@ -111,20 +101,9 @@ async fn a_wedged_close_does_not_stall_the_idle_reaper() {
         .last_used
         .store(0, Ordering::Relaxed);
 
-    let started = tokio::time::Instant::now();
-    let closed = tokio::time::timeout(
-        STALL,
-        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
-    )
-    .await
-    .expect("the reaper stalled on a close() that never completes");
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
 
     assert_eq!(closed, 1, "the expired slot must be evicted");
-    assert!(
-        started.elapsed() < CLOSE_STAGE,
-        "the reaper must not wait on the close; took {:?}",
-        started.elapsed()
-    );
     assert!(!backend.pool.contains_key(&slot("idle:alpha")));
 }
 
@@ -156,12 +135,7 @@ async fn a_timed_out_eviction_close_still_reaps_the_child() {
         }),
     );
 
-    let evicted = tokio::time::timeout(
-        Duration::from_secs(10),
-        backend.evict_identity_slots("rev:"),
-    )
-    .await
-    .expect("eviction stalled on a close() that never completes");
+    let evicted = backend.evict_identity_slots("rev:");
     assert_eq!(evicted, 1);
 
     for _ in 0..40 {
@@ -214,7 +188,7 @@ async fn stop_drains_a_close_that_eviction_detached() {
         Arc::new(SlowClose(Arc::clone(&closed))),
     );
 
-    assert_eq!(backend.evict_identity_slots("rev:").await, 1);
+    assert_eq!(backend.evict_identity_slots("rev:"), 1);
     backend.stop().await.expect("stop");
 
     assert!(

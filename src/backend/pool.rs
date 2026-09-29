@@ -411,9 +411,12 @@ impl Backend {
     /// TOCTOU the reaper's atomic `remove_if` never had: with the removal now
     /// unconditional, the write guard is the only remaining mutual exclusion
     /// against a claim landing mid-eviction.
-    pub async fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
+    ///
+    /// Not `async` on purpose (#2245): eviction must never wait on a close,
+    /// so each close runs detached (`close_evicted`).
+    pub fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
         // First pass: collect matching keys without holding a shard guard
-        // across the async close(), mirroring the reaper's two-pass shape.
+        // across the removals, mirroring the reaper's two-pass shape.
         let candidates: Vec<PoolKey> = self
             .pool
             .iter()
@@ -508,11 +511,11 @@ impl Backend {
     /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
     /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
     /// number of slots closed (MIK-6735 POOL.2).
-    pub async fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
+    pub fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
         let cutoff = idle_ttl.as_secs();
 
         // First pass: collect candidate keys without holding a guard across the
-        // async close(). Skip the shared slot outright.
+        // removals. Skip the shared slot outright.
         let candidates: Vec<PoolKey> = self
             .pool
             .iter()

@@ -3555,7 +3555,7 @@ fn spawn_idle_reaper(
             }
 
             for backend in backends.all() {
-                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL).await;
+                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL);
                 if closed > 0 {
                     debug!(
                         backend = %backend.name,
