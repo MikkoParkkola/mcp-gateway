@@ -1365,6 +1365,8 @@ impl Gateway {
                 &self.config.capabilities.name,
                 executor,
             ));
+            // The scan below runs in the background; readiness waits on it.
+            cap_backend.begin_initial_scan();
             meta_mcp.set_capabilities(Arc::clone(&cap_backend));
 
             let capability_dirs = self.config.capabilities.directories.clone();
