@@ -725,3 +725,24 @@ fn a_waiver_does_not_disable_an_explicit_mapping() {
     validate_agent_identity(&identity, &config)
         .expect_err("a namespace waiver overrode an explicit per-principal mapping");
 }
+
+// ── Proven identifiers are compared verbatim (#2243) ──────────────────────
+
+/// A padded JWT `sub` is a different principal, not a spelling of `admin`.
+#[test]
+fn padded_jwt_subject_is_not_trimmed_onto_another_principal() {
+    let identity = extract_agent_identity(&HeaderMap::new(), None, None, Some(" admin "));
+    assert_eq!(identity.proven_id(), Some(" admin "));
+}
+
+/// The same holds for the mTLS rung, SAN URI and CN alike.
+#[test]
+fn padded_mtls_subject_is_not_trimmed_onto_another_principal() {
+    let san = cert(&[" spiffe://cluster/admin "], None);
+    let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&san), None);
+    assert_eq!(identity.proven_id(), Some(" spiffe://cluster/admin "));
+
+    let cn = cert(&[], Some(" admin "));
+    let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&cn), None);
+    assert_eq!(identity.proven_id(), Some(" admin "));
+}
