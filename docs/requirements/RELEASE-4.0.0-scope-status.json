@@ -1224,7 +1224,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. U2 is the hebb de-fork spike MIK-7219; whether its other-repository work leaves this ledger awaits an operator ruling."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only."
     },
     {
       "id": "MIK-7211.PARENT.5",
@@ -1503,6 +1503,20 @@
       "consequence": "Follow-up Linear MIK-7627 (related to MIK-7116, no 4.0 tag or milestone) carries MIN.3/5/6 and the kill-gate measurement. Tension recorded, not resolved by this decision: scope-update.md:148-150 also names response attribution, which MIN.1 keeps in 4.0.0.",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-update.md",
+        "docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md",
+        "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ]
+    },
+    {
+      "id": "portfolio_halves_outside_4_0",
+      "status": "resolved",
+      "resolved": "2026-09-30",
+      "authority": "operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator): the other-repository work goes to separate follow-ups and mcp-gateway 4.0 does not wait for it",
+      "selection": "The other-repository halves of MIK-7211 AC.2-4, the other-repository discover AC of MIK-7217 (Linear MCP728.DISCOVER.2: hebb, nab, trvl, metacognition, throttla) and the U2 hebb de-fork spike MIK-7219 are not mcp-gateway 4.0.0 criteria; they move to MIK-7628 (MIK-7211 halves with MIK-7219) and MIK-7629 (MIK-7217). MIK-7211.PARENT.1 keeps U1 and U5 only. The gateway rows MIK-7211.PARENT.1, 5, 6, 7 and MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1, ERA.1-3 stay 4.0.0 criteria.",
+      "rationale": "The operator ruling above. docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:21 already scopes this release to the gateway alone, with other portfolio surfaces owned by RFC-0060; docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md:92 splits MIK-7217's broader obligations explicitly. This ledger gates an mcp-gateway tag and cannot grade other repositories.",
+      "consequence": "MIK-7628 and MIK-7629 are related to their parent tickets and carry no 4.0 tag or milestone.",
+      "evidence": [
+        "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md",
         "docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
       ]

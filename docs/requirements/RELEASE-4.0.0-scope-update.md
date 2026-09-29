@@ -131,7 +131,7 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7116.MIN.1 | Tool responses carry a tenant attribution alongside the existing ContextDataClass, and the attribution is recorded in the audit trail whether or not it triggers a block (MIK-7116). | SECURITY |
 | MIK-7116.MIN.2 | A caller that has read sensitive data attributed to tenant A is flagged (observe mode) or, when blocking is switched on, blocked from reading sensitive data attributed to tenant B; a test proves the verdict and the audit entries for both the read and the verdict (MIK-7116). | SECURITY |
 | MIK-7116.MIN.4 | The tenant guard's false-positive rate is measured against a fixture corpus before blocking is enabled by default, and the guard ships observe-only first (MIK-7116). | SECURITY |
-| MIK-7211.PARENT.1 | The RFC-0060 spike sub-issues U1, U2 and U5 are closed with a recorded answer, not a plan to get one (MIK-7211 AC.1). | VALIDATION |
+| MIK-7211.PARENT.1 | The RFC-0060 spike sub-issues U1 and U5 are closed with a recorded answer, not a plan to get one (MIK-7211 AC.1; U2 moved to MIK-7628). | VALIDATION |
 | MIK-7211.PARENT.5 | The compatibility window is recorded as a decision in RFC-0060 with U1's measured data cited, replacing the unmeasured assumption (MIK-7211 AC.5). | VALIDATION |
 | MIK-7211.PARENT.6 | No surface emits cacheScope public on a response computed from session-scoped state, enforced by a type or a lint that is named in the closing record (MIK-7211 AC.6). | SAFETY |
 | MIK-7211.PARENT.7 | Every session-keyed behaviour in the gateway has a named stateless replacement in one inventory before any session code is removed (MIK-7211 AC.7). | VALIDATION |
@@ -192,12 +192,12 @@ test files and ignored tests are not completed feature evidence.
 
 Ruling C1 is recorded in `docs/requirements/RELEASE-4.0.0-operator-decisions.md`, section "Operator rulings given in chat" (added by #2385).
 
-- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: trvl, hebb, nab, metacognition, throttla) is not a row here; whether it leaves this ledger awaits an operator ruling.
+- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: trvl, hebb, nab, metacognition, throttla) moved to MIK-7629: decision `portfolio_halves_outside_4_0` (operator ruling C5).
 - MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A, plus MIK-7272.OWNER.1-5 and LIFE.1 above (the SUB4.STDIO.OWNER and SUB4.BRIDGE.LIFE ACs; ids shortened to the ledger's TICKET.COMPONENT.N form).
-- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows (MET) plus MIK-7211.PARENT.1, 5, 6 and 7 above. Gateway halves of AC.2-4: AC.2 -> MIK-7217.DISCOVER.1a/1b, AC.3 -> MIK-7272.RESULT.1, AC.4 -> NFR.COMPAT.1, all MET. The other-repository halves of AC.2-4 are not rows here; whether they leave this ledger awaits an operator ruling.
+- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows (MET) plus MIK-7211.PARENT.1, 5, 6 and 7 above. Gateway halves of AC.2-4: AC.2 -> MIK-7217.DISCOVER.1a/1b, AC.3 -> MIK-7272.RESULT.1, AC.4 -> NFR.COMPAT.1, all MET. The other-repository halves of AC.2-4 moved to MIK-7628: decision `portfolio_halves_outside_4_0` (operator ruling C5).
 - MIK-7324 (coverage and mutation): NFR.BUILD.1 C5/C6 plus MIK-7324.COV.3 above.
 - MIK-7216 (idempotency, sub-issue of MIK-7211): IDEM.2 -> MIK-7212.MRTR.10b, IDEM.3 -> MIK-7212.MRTR.10a, IDEM.4 -> MIK-7272.SUB.4 (keyless stdio calls admitted per operator ruling C4 unless server.idempotency_key is required; no HTTP exemption), IDEM.7 -> MIK-7212.MRTR.10a and NFR.COMPAT.1, all MET; IDEM.1, 5 and 6 are rows above.
-- MIK-7219 (U2 hebb de-fork spike): required by MIK-7211.PARENT.1; its other-repository work awaits the same operator ruling.
+- MIK-7219 (U2 hebb de-fork spike): moved to MIK-7628 with the MIK-7211 other-repository halves; MIK-7211.PARENT.1 no longer requires it.
 - MIK-7407 (response firewall): the MIK-7407.RESPONSE.* rows added by #2387.
 - MIK-7481 (container never started in CI): NFR.PKG.1 (MET), whose row names MIK-7481 as owner; the smoke runs on the scan image (.github/workflows/docker.yml:293-294, scripts/ci/smoke-image.sh), carried from #568 (c8803f066).
 - MIK-7116 (data minimisation): MIK-7116.TENANT.1 (baseline) plus MIK-7116.MIN.1, MIN.2 and MIN.4 above. MIN.3, MIN.5 and MIN.6 are not 4.0.0 criteria: decision `mik_7116_min_kill_gate` in RELEASE-4.0.0-scope-status.json (operator ruling 2026-09-30); they are tracked in Linear MIK-7627, gated on the post-release MIN.KILL week.
