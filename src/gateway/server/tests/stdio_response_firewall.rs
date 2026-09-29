@@ -164,6 +164,14 @@ async fn stdio_refuses_blocked_responses_with_one_inspection() {
             "tools/call",
             call("gateway_search", json!({ "query": "echo" })),
         ),
+        // Not a discovery tool: the marker must not skip its inspection.
+        (
+            "tools/call",
+            call(
+                "gateway_invoke",
+                json!({ "server": "demo", "tool": TOOL, "arguments": {} }),
+            ),
+        ),
     ];
     for (method, params) in cases {
         let (body, inspected) = stdio.send(method, params.clone()).await;
