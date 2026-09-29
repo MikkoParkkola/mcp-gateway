@@ -212,7 +212,7 @@ without it.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
-| 96 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
+| 96 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2395,7 +2395,7 @@ answered as before.
 In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
 query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
 any client could name itself onto the allowlist. Only a proven principal satisfies them now: the
-mTLS client-certificate subject (first SAN URI, else CN) or the `sub` of an agent token the
+mTLS client-certificate subject (first non-empty SAN URI, else CN) or the `sub` of an agent token the
 gateway validated. The unsigned JWT claim is no longer read; the header and query label are kept
 for telemetry and cost attribution.
 
@@ -2459,7 +2459,7 @@ key on who the caller is, on the meta route and the per-backend `/mcp/{name}` ro
   scored against the caller's previous call on either session.
 - The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
   one session at a time, so that is that session's budget and tenant count.
-- An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
+- An mTLS caller is identified by its certificate's first non-empty SAN URI, else its CN; a renewed
   certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
   CA issuing unique CNs. A certificate with neither is not an identity.
 - The default config has no behaviour change: the budget, the tenant guard and anomaly detection
@@ -2494,6 +2494,26 @@ backend that is down at startup opens its breaker before traffic arrives.
 
 **Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
 caches warm (`meta_mcp.warm_start`).
+
+## 96. Proven identifiers are compared verbatim
+
+In 3.x, a proven identifier (the `sub` of an agent token the gateway validated, or an mTLS
+client certificate's SAN URI or CN) was trimmed of surrounding whitespace before it keyed
+anything. Grant subjects and per-caller firewall keys were also cut to 512 characters, and
+took only a certificate's first SAN URI. A proven `" admin "` therefore resolved as the
+distinct principal `admin`, and two ids that share a 512-character prefix shared grants and a
+firewall budget.
+
+In 4.0 a proven identifier keys grants, `known_agents`, `principal_labels` and per-caller
+firewall limits exactly as proven: no trimming and no cap. An empty value is skipped. Grants and
+firewall limits pick a certificate's subject by the agent-identity rule: the first non-empty SAN
+URI, else the CN.
+
+**Action:** a grant or allowlist entry that names the bare id no longer matches a padded proven
+id; reissue the credential without the padding. A certificate whose first SAN URI is empty now
+keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
+firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
+API-key owner, not on these subjects.
 
 ## Upgrading from 3.5.x: a walkthrough
 
