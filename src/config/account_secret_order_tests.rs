@@ -30,7 +30,7 @@ fn a_disabled_accounts_block_reads_no_secret_file() {
     crate::gateway::test_helpers::write_owner_only(
         &config_path,
         format!(
-            "accounts:\n  schema_version: accounts.v1\n  enabled: false\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {store:?}\n  authority_dir: {authority:?}\n  current_key_id: current\n  keys:\n    current: \"file:{key}\"\n",
+            "accounts:\n  schema_version: accounts.v1\n  enabled: false\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {store:?}\n  authority_dir: {authority:?}\n  current_key_id: current\n  keys:\n    current: 'file:{key}'\n",
             store = dir.path().join("store"),
             authority = dir.path().join("authority"),
             key = key.display(),
