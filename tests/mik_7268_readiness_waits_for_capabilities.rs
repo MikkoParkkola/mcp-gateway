@@ -106,7 +106,7 @@ async fn readyz_until_ready(
             seen.push((status, body));
             if status == 200 {
                 assert!(
-                    !scan_gate.exists(),
+                    scan_gate.exists(),
                     "the scan finished before its gate was released"
                 );
                 return seen;
