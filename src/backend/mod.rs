@@ -263,14 +263,14 @@ pub(crate) struct CleanupState {
 }
 
 // The cells read counters from a local Prometheus render.
-#[cfg(all(test, feature = "metrics"))]
-mod f13_fill_tests;
 #[cfg(test)]
 #[path = "blocked_names_tests.rs"]
 mod blocked_names_tests;
 #[cfg(test)]
 #[path = "descriptor_withholding_tests.rs"]
 mod descriptor_withholding_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod f13_fill_tests;
 #[cfg(test)]
 mod list_paging_tests;
 #[cfg(test)]

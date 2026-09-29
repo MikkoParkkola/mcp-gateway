@@ -431,8 +431,7 @@ async fn a_voided_fill_does_not_restore_a_revoked_resend() {
     let unsafe_now = json!({"name": "edit", "inputSchema": {"type": "object"}});
     let (fill, ()) = tokio::join!(backend.get_tools_for_binding(None, &[]), async {
         lister.started.notified().await;
-        backend
-            .remember_listed_tools(None, false, &[unsafe_now]);
+        backend.remember_listed_tools(None, false, &[unsafe_now]);
         lister.release.notify_one();
     });
     let _ = fill;

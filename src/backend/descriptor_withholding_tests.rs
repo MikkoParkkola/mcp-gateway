@@ -68,7 +68,7 @@ struct Upstream {
     tools: Mutex<Vec<Value>>,
     hold: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Answer `tools/list` with neither a result nor an error, which the
-    /// drain reads as an empty catalogue without parsing one.
+    /// drain refuses as an unreadable page (F13 design E).
     blank: Mutex<bool>,
 }
 
@@ -283,11 +283,14 @@ async fn t9_a_superseded_fill_cannot_clear_a_newer_withholding() {
         refused(&backend, POISONED),
         "the delayed clean fill cleared the newer withholding"
     );
-    // A later fill that parses nothing must not commit the superseded fill's
-    // verdicts on its behalf.
+    // A later fill that parses nothing fails, and must not commit the
+    // superseded fill's verdicts on its behalf.
     *upstream.blank.lock().unwrap() = true;
     backend.invalidate_tools_cache();
-    backend.get_tools_shared().await.expect("an empty fill");
+    assert!(
+        backend.get_tools_shared().await.is_err(),
+        "an unreadable page must fail the fill"
+    );
     assert!(
         refused(&backend, POISONED),
         "an empty fill applied the superseded fill's verdicts"
