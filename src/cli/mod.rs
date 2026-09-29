@@ -28,6 +28,7 @@
 //! ```
 
 pub mod completion;
+pub mod dashboard_link;
 pub mod identity;
 pub mod invoke;
 pub mod output;
@@ -311,11 +312,7 @@ pub enum Command {
     },
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
-    DashboardLink {
-        /// Gateway base URL (default as for `stats`).
-        #[arg(short, long)]
-        url: Option<String>,
-    },
+    DashboardLink(dashboard_link::DashboardLinkArgs),
 
     /// Lint capability YAMLs against agent-UX best practices
     ///
