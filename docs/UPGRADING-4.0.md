@@ -2518,7 +2518,7 @@ the mode. The check runs before the mode rules, on the same handle as the read.
 - **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
   and still loads.
 - **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
-  `chmod 600` it. The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
+  `chmod 600` it if it holds a secret (leave a certificate or CRL readable). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.
