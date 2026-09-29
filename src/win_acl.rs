@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io;
 use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
+use std::os::windows::fs::OpenOptionsExt as _;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::path::{Path, PathBuf};
 
@@ -30,9 +31,9 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_DISPOSITION_INFO,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FILE_TYPE_DISK, FileDispositionInfo, FileIdInfo, GetDriveTypeW,
-    GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, FileDispositionInfo, FileIdInfo,
+    GetDriveTypeW, GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW,
     GetVolumeInformationByHandleW, GetVolumePathNameW, MOVEFILE_REPLACE_EXISTING,
     MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, SetFileInformationByHandle, VOLUME_NAME_DOS,
 };
@@ -345,8 +346,10 @@ thread_local! {
     /// Per thread, so parallel tests never observe each other's creations.
     pub(crate) static AFTER_CREATE: std::cell::Cell<Option<AfterCreateHook>> =
         const { std::cell::Cell::new(None) };
-    /// Makes private creates on this thread see a volume without ACLs (W-T15d).
-    pub(crate) static NO_ACLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Makes private creates on this thread see a volume without ACLs, and
+    /// runs at the refusal before cleanup (W-T15d, W-T15e).
+    pub(crate) static NO_ACLS: std::cell::Cell<Option<fn(&Path)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 pub(crate) fn after_create(path: &Path, file: Option<&File>) {
@@ -386,16 +389,18 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
         lpSecurityDescriptor: sd.as_ptr(),
         bInheritHandle: 0,
     };
-    let share_mode = match share {
-        Share::Exclusive => 0,
-        Share::LockSidecar => FILE_SHARE_READ | FILE_SHARE_WRITE,
+    // Only an unshared handle takes DELETE: a sidecar's readers share no
+    // delete, so a creator holding it would lock them out.
+    let (share_mode, delete) = match share {
+        Share::Exclusive => (0, DELETE),
+        Share::LockSidecar => (FILE_SHARE_READ | FILE_SHARE_WRITE, 0),
     };
     // SAFETY: contract 1/5/6 — as above; the result is checked against
     // INVALID_HANDLE_VALUE (never null) before it is owned.
     let raw = unsafe {
         CreateFileW(
             w.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE | READ_CONTROL | DELETE,
+            GENERIC_READ | GENERIC_WRITE | READ_CONTROL | delete,
             share_mode,
             &raw const attrs,
             CREATE_NEW,
@@ -410,32 +415,31 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
     let file = File::from(unsafe { OwnedHandle::from_raw_handle(raw) });
     // A volume without ACLs drops the descriptor and still reports success, so
     // the file would be open to every account. Refuse before any byte is
-    // written. The empty file is marked for deletion through this handle
-    // (`DELETE` above) before it closes, so no other opener can keep it; a
-    // failed mark is returned, never ignored.
+    // written, and delete the empty file: through this handle when it is
+    // unshared, else by a DELETE reopen. A failed deletion is reported.
     let keeps = volume_keeps_acls(&file);
     #[cfg(test)]
-    let keeps = if NO_ACLS.with(std::cell::Cell::get) {
-        Ok(false)
-    } else {
-        keeps
+    let keeps = match NO_ACLS.with(std::cell::Cell::get) {
+        Some(hook) => {
+            hook(path);
+            Ok(false)
+        }
+        None => keeps,
     };
     if !matches!(keeps, Ok(true)) {
-        let mark = FILE_DISPOSITION_INFO { DeleteFile: true };
-        // SAFETY: contract 1/6 — a live handle; `mark` outlives the call and
-        // its exact size is passed; BOOL checked.
-        let marked = unsafe {
-            SetFileInformationByHandle(
-                file.as_raw_handle(),
-                FileDispositionInfo,
-                (&raw const mark).cast(),
-                u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>()).unwrap_or(u32::MAX),
-            )
-        } != 0;
-        let cleanup = if marked {
-            String::new()
+        let doomed = if share == Share::Exclusive {
+            Ok(file)
         } else {
-            format!("; the empty file could not be removed: {}", last())
+            drop(file);
+            std::fs::OpenOptions::new()
+                .access_mode(DELETE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+        };
+        let cleanup = match doomed.and_then(|doomed| mark_deleted(&doomed)) {
+            Ok(()) => String::new(),
+            Err(error) => format!("; the empty file could not be removed: {error}"),
         };
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -693,6 +697,23 @@ pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
     volume_keeps_acls(dir)
 }
 
+/// Set the delete disposition on `file`, opened with `DELETE`.
+fn mark_deleted(file: &File) -> io::Result<()> {
+    let mark = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let size = u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>()).unwrap_or(u32::MAX);
+    // SAFETY: contract 1/6 — a live handle; `mark` outlives the call and its
+    // exact size is passed; BOOL checked.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const mark).cast(),
+            size,
+        )
+    };
+    if ok == 0 { Err(last()) } else { Ok(()) }
+}
+
 /// True when the open `handle` is a disk object (a file or directory), not a
 /// pipe, console or other device.
 pub(crate) fn is_disk_object(handle: &File) -> bool {
@@ -750,46 +771,5 @@ pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::wide;
-    use std::path::Path;
-
-    fn text(w: &[u16]) -> String {
-        assert_eq!(w.last(), Some(&0), "wide() output is NUL-terminated");
-        String::from_utf16(&w[..w.len() - 1]).unwrap()
-    }
-
-    // W-T27a: at or past CreateDirectoryW's 248-unit limit a path reaches
-    // Win32 in verbatim form (UNC as `\\?\UNC\`), as `std::fs` sends it; an
-    // already-verbatim or short path reaches it unchanged.
-    #[test]
-    fn wt27a_long_paths_reach_win32_verbatim() {
-        let long = "d".repeat(250);
-        let edge = |n: usize| format!(r"C:\{}", "e".repeat(n));
-        let cases = [
-            (format!(r"C:\{long}\f"), format!(r"\\?\C:\{long}\f")),
-            (format!("C:/{long}/f"), format!(r"\\?\C:\{long}\f")),
-            (
-                format!(r"\\srv\share\{long}"),
-                format!(r"\\?\UNC\srv\share\{long}"),
-            ),
-            (format!(r"\\?\C:\{long}"), format!(r"\\?\C:\{long}")),
-            (r"C:\short\f".to_owned(), r"C:\short\f".to_owned()),
-            // The threshold counts the terminating NUL: 246 units stay, 247 do not.
-            (edge(243), edge(243)),
-            (edge(244), format!(r"\\?\{}", edge(244))),
-            (format!(r"\\.\C:\{long}"), format!(r"\\?\C:\{long}")),
-            // Long as written, short once `..` resolves: the resolved form.
-            (format!(r"C:\{long}\..\f"), r"C:\f".to_owned()),
-        ];
-        for (input, want) in cases {
-            let got = text(&wide(Path::new(&input)).unwrap());
-            assert_eq!(got, want, "WT-ASSERT W-T27a: {input}");
-        }
-        let relative = text(&wide(Path::new(&long)).unwrap());
-        assert!(
-            relative.starts_with(r"\\?\") && relative.ends_with(&format!(r"\{long}")),
-            "WT-ASSERT W-T27a: relative long path became {relative}"
-        );
-    }
-}
+#[path = "win_acl_tests.rs"]
+mod tests;

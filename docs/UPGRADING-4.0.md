@@ -2607,7 +2607,8 @@ the unix mode rules:
   owner is not the gateway's account, SYSTEM or Administrators.
 - A secret file is refused on a volume that keeps no ACLs (FAT, exFAT): Windows accepts the
   owner-only descriptor there and discards it, so the create is refused: no secret is written;
-  the empty file is removed. Keep the config, keys and token files on NTFS or ReFS.
+  the empty file is removed, and a refusal that could not remove it says so. Keep the config,
+  keys and token files on NTFS or ReFS.
 - The check and the read use one handle. Like unix, a link is followed and its target judged; a
   directory or other non-regular file is refused.
 - The refusal names every rule broken and prints the PowerShell lines that repair it, for the

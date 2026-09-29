@@ -434,23 +434,79 @@ mod win_privileged {
     }
 }
 
-// W-T15d: a create the volume check refuses leaves no file behind. The check's
-// answer is forced here, so this runs unprivileged on NTFS; the real FAT and
-// exFAT volumes are W-T15c.
-#[test]
-fn wt15d_refused_private_create_leaves_no_file() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("refused.key");
-    crate::win_acl::NO_ACLS.with(|forced| forced.set(true));
-    let result = create_file_private(&path, Share::Exclusive);
-    crate::win_acl::NO_ACLS.with(|forced| forced.set(false));
+// W-T15d/e: a create the volume check refuses leaves no file behind. The
+// check's answer is forced (the hook runs at the refusal, before cleanup), so
+// these run unprivileged on NTFS; the real FAT and exFAT volumes are W-T15c.
+fn refuse_create(path: &Path, share: Share, hook: fn(&Path)) -> io::Error {
+    crate::win_acl::NO_ACLS.with(|forced| forced.set(Some(hook)));
+    let result = create_file_private(path, share);
+    crate::win_acl::NO_ACLS.with(|forced| forced.set(None));
     let err = result.expect_err("WT-ASSERT W-T15d: created on a volume without ACLs");
     assert_eq!(
         err.kind(),
         io::ErrorKind::PermissionDenied,
         "WT-ASSERT W-T15d: {err}"
     );
-    assert!(!path.exists(), "WT-ASSERT W-T15d: refused file left behind");
+    err
+}
+
+fn gone(path: &Path) -> bool {
+    matches!(std::fs::metadata(path), Err(e) if e.kind() == io::ErrorKind::NotFound)
+}
+
+fn open_shared(path: &Path, share: u32) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(share)
+        .open(path)
+}
+
+thread_local! {
+    static HELD: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
+}
+
+// W-T15d: an unshared create is deleted through its own handle, which no
+// other opener can join, even one that shares everything.
+#[test]
+fn wt15d_refused_private_create_leaves_no_file() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("refused.key");
+    let err = refuse_create(&path, Share::Exclusive, |path| {
+        let joined =
+            open_shared(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).map(drop);
+        assert_eq!(
+            joined.as_ref().err().and_then(io::Error::raw_os_error),
+            Some(32),
+            "WT-ASSERT W-T15d: another opener joined the refused handle"
+        );
+    });
+    assert!(
+        !err.to_string().contains("could not be removed"),
+        "WT-ASSERT W-T15d: {err}"
+    );
+    assert!(gone(&path), "WT-ASSERT W-T15d: refused file left behind");
+}
+
+// W-T15e: a sidecar create is deleted by a DELETE reopen; a reader holding it
+// without delete sharing makes that fail, and the failure is reported.
+#[test]
+fn wt15e_refused_sidecar_is_removed_or_reported() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("refused.lock");
+    refuse_create(&path, Share::LockSidecar, |_| {});
+    assert!(gone(&path), "WT-ASSERT W-T15e: refused sidecar left behind");
+    let err = refuse_create(&path, Share::LockSidecar, |path| {
+        let held = open_shared(path, FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .expect("WT-FIXTURE W-T15e: a sharing reader opens");
+        HELD.with(|slot| *slot.borrow_mut() = Some(held));
+    });
+    HELD.with(|slot| drop(slot.borrow_mut().take()));
+    assert!(
+        err.to_string()
+            .contains("the empty file could not be removed"),
+        "WT-ASSERT W-T15e: a failed removal was not reported: {err}"
+    );
 }
 
 // #2305: a device handle is refused as not regular, for both classes and by
