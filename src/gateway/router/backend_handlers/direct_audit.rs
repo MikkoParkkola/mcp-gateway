@@ -28,7 +28,7 @@ pub(super) struct DirectCall {
     otel_trace_id: Option<String>,
     who: AuditWho,
     /// The id of the incoming request: a refusal answers `id: null`, and the
-    /// FailClosed 503 must still echo what the caller sent.
+    /// `FailClosed` 503 must still echo what the caller sent.
     request_id: Option<RequestId>,
 }
 
