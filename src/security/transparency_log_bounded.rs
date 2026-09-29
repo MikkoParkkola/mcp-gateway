@@ -41,6 +41,9 @@ pub(crate) struct Bound {
     /// Appends refused at once because the log was stalled (D3-a).
     #[cfg(test)]
     pub(crate) refused_under_stall: std::sync::atomic::AtomicUsize,
+    /// D3-a R4: one-shot fault for the next append of this `kind`.
+    #[cfg(test)]
+    pub(crate) fail_next_kind: std::sync::Mutex<Option<String>>,
     /// [`AUDIT_APPEND_TIMEOUT`]; tests shorten it.
     pub(crate) limit: std::sync::Mutex<Duration>,
     /// Runs once when a timeout is noticed, before the stall lock is taken.
@@ -57,6 +60,8 @@ impl Default for Bound {
             closures_entered: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             refused_under_stall: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_next_kind: std::sync::Mutex::new(None),
             limit: std::sync::Mutex::new(AUDIT_APPEND_TIMEOUT),
             #[cfg(test)]
             before_mark: std::sync::Mutex::new(None),
@@ -228,5 +233,35 @@ impl TransparencyLogger {
             .expect("stall lock")
             .in_flight
             .is_some()
+    }
+}
+
+#[cfg(test)]
+impl TransparencyLogger {
+    /// Instance-local one-shot I/O fault for the next append whose `kind`
+    /// field equals `kind`; other appends pass (D3-a R4).
+    pub(crate) fn fail_next_append_of_kind_for_test(&self, kind: &str) {
+        *self.bound.fail_next_kind.lock().expect("fault lock") = Some(kind.to_string());
+    }
+
+    /// Bounded appends refused at once because the log was stalled (D3-a):
+    /// lets a cell prove a spawned write took the bounded path.
+    pub(crate) fn refused_under_stall_for_test(&self) -> usize {
+        self.bound.refused_under_stall.load(Ordering::SeqCst)
+    }
+
+    /// Whether an injected fault fails this append: the kind-scoped one-shot,
+    /// the instance one-shot, or the persistent fault.
+    pub(super) fn injected_fault(
+        &self,
+        fields: &serde_json::Map<String, serde_json::Value>,
+    ) -> bool {
+        let kind = fields.get("kind").and_then(serde_json::Value::as_str);
+        let mut armed = self.bound.fail_next_kind.lock().expect("fault lock");
+        let kind_hit = kind.is_some() && armed.as_deref() == kind && armed.take().is_some();
+        drop(armed);
+        kind_hit
+            || self.fail_next_append.swap(false, Ordering::AcqRel)
+            || self.fail_appends.load(Ordering::Acquire)
     }
 }

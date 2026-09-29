@@ -456,9 +456,9 @@ pub(super) async fn meta_mcp_handler(
         .is_some_and(|accept| accept.contains("text/event-stream"));
 
     // D3-a: one grant-decision slot spans signing, admission and dispatch.
-    let meta = Arc::clone(&state.meta_mcp);
+    let logger = state.meta_mcp.transparency_logger.clone();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
-        meta.transparency_logger.as_ref(),
+        logger,
         meta_mcp_dispatch(state, http_request),
     );
 

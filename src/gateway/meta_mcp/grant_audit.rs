@@ -9,8 +9,10 @@
 //! records before the answer leaves, failing closed under `FailClosed`.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use axum::response::IntoResponse as _;
 use serde_json::{Map, Value};
 
 use crate::identity_grants::{IdentityGrantAuditEvent, IdentityGrantDecisionReason};
@@ -151,18 +153,23 @@ fn spawn_write(logger: &Arc<TransparencyLogger>, notes: Vec<GrantNote>) {
     });
 }
 
-/// Append one record per selected note, bounded (F20).
+/// Append one record per selected note, bounded (F20). Every record is
+/// attempted; the first failure is reported after the batch.
 async fn write_records(
     logger: &Arc<TransparencyLogger>,
     notes: &[GrantNote],
 ) -> std::io::Result<()> {
+    let mut first_failure = None;
     for note in select_records(notes) {
         let (fields, envelope) = (note.fields.clone(), note.envelope());
-        logger
+        let written = logger
             .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
-            .await?;
+            .await;
+        if let Err(error) = written {
+            first_failure.get_or_insert(error);
+        }
     }
-    Ok(())
+    first_failure.map_or(Ok(()), Err)
 }
 
 /// Run `future` inside a grant-decision slot, or inside the one already open.
@@ -187,7 +194,14 @@ pub(super) async fn with_grant_slot<F: Future>(
     };
     let output = GRANT_SLOT.scope(Arc::clone(&guard.notes), future).await;
     let notes = std::mem::take(&mut *guard.notes.lock().expect("grant slot lock"));
-    let written = write_records(logger, &notes).await.or_else(|error| {
+    // The batch is owned by its own task, so a caller cancelled while the
+    // flush waits cannot drop records that were never submitted.
+    let writer = Arc::clone(logger);
+    let flush = tokio::spawn(async move { write_records(&writer, &notes).await });
+    let written = flush
+        .await
+        .unwrap_or_else(|join| Err(std::io::Error::other(join.to_string())));
+    let written = written.or_else(|error| {
         tracing::error!(%error, "grant decision record write failed");
         match logger.failure_policy() {
             AuditFailurePolicy::FailClosed => Err(Error::AuditUnavailable),
@@ -268,12 +282,14 @@ pub(crate) async fn slot_result<T>(
 
 /// A JSON-RPC answer paired with `extra`, replaced by -32005 when the
 /// slot's write failed.
-pub(crate) async fn slot_rpc<X>(
+pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     logger: Option<&Arc<TransparencyLogger>>,
     id: RequestId,
-    future: impl Future<Output = (JsonRpcResponse, X)>,
+    future: impl Future<Output = (JsonRpcResponse, X)> + Send + 'a,
 ) -> (JsonRpcResponse, X) {
-    match with_grant_slot(logger, Box::pin(future)).await {
+    // Erased, so an opener's future type stays shallow (E0275 at the stdio spawn).
+    let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
+    match with_grant_slot(logger, future).await {
         ((response, extra), Ok(())) => (response, extra),
         ((_, extra), Err(error)) => (
             JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
@@ -282,23 +298,28 @@ pub(crate) async fn slot_rpc<X>(
     }
 }
 
-/// An HTTP answer, replaced by a 503 carrying -32005 when the slot's write
-/// failed. The request id is not in reach here, so the error names none.
-pub(crate) async fn slot_http<R: axum::response::IntoResponse>(
-    logger: Option<&Arc<TransparencyLogger>>,
-    future: impl Future<Output = R>,
+/// An HTTP answer, replaced by a 503 carrying -32005 under the replaced
+/// answer's request id when the slot's write failed.
+pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
+    logger: Option<Arc<TransparencyLogger>>,
+    future: impl Future<Output = R> + Send + 'a,
 ) -> axum::response::Response {
-    match with_grant_slot(logger, Box::pin(future)).await {
-        (response, Ok(())) => response.into_response(),
-        (_, Err(error)) => {
-            let body = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
-            (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                axum::Json(body),
-            )
-                .into_response()
-        }
-    }
+    let future: Pin<Box<dyn Future<Output = R> + Send + 'a>> = Box::pin(future);
+    let (response, written) = with_grant_slot(logger.as_ref(), future).await;
+    let Err(error) = written else {
+        return response.into_response();
+    };
+    let body = axum::body::to_bytes(response.into_response().into_body(), usize::MAX).await;
+    let id = body
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|answer| serde_json::from_value::<RequestId>(answer["id"].clone()).ok());
+    let body = JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string());
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        axum::Json(body),
+    )
+        .into_response()
 }
 
 impl super::MetaMcp {
@@ -310,8 +331,11 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let logger = self.transparency_logger.as_ref();
-        let future = self.invoke_tool_in_slot(args, session_id, caller);
-        slot_result(logger, Box::pin(future)).await
+        // Erased: the dispatch futures recurse (a chain step is an
+        // invocation), and a concrete type here overflows auto-trait checks.
+        let future: Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> =
+            Box::pin(self.invoke_tool_in_slot(args, session_id, caller));
+        slot_result(logger, future).await
     }
 
     /// The dispatch check, unless signing prepared this call: then only
@@ -343,11 +367,9 @@ impl super::MetaMcp {
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
-        let future = async {
-            let answer = self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band);
-            (answer.await, ())
-        };
-        slot_rpc(logger, id, future).await.0
+        let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
+            Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
+        slot_rpc(logger, id, async { (answer.await, ()) }).await.0
     }
 }
 

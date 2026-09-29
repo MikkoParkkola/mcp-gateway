@@ -199,9 +199,6 @@ pub struct TransparencyLogger {
     fail_next_append: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     append_attempts: std::sync::atomic::AtomicUsize,
-    /// D3-a R4: one-shot fault for the next append of this `kind`.
-    #[cfg(test)]
-    fail_next_kind: std::sync::Mutex<Option<String>>,
     /// Persistent I/O fault: every append fails while set (D1-T17).
     #[cfg(test)]
     fail_appends: std::sync::atomic::AtomicBool,
@@ -310,8 +307,6 @@ impl TransparencyLogger {
             #[cfg(test)]
             append_attempts: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
-            fail_next_kind: std::sync::Mutex::new(None),
-            #[cfg(test)]
             fail_appends: std::sync::atomic::AtomicBool::new(false),
             failure_policy: crate::security::audit::AuditFailurePolicy::BestEffort,
             degraded: std::sync::atomic::AtomicBool::new(false),
@@ -326,22 +321,6 @@ impl TransparencyLogger {
     pub(crate) fn fail_next_append_for_test(&self) {
         self.fail_next_append
             .store(true, std::sync::atomic::Ordering::Release);
-    }
-
-    /// Instance-local one-shot I/O fault for the next append whose `kind`
-    /// field equals `kind`; other appends pass (D3-a R4).
-    #[cfg(test)]
-    pub(crate) fn fail_next_append_of_kind_for_test(&self, kind: &str) {
-        *self.fail_next_kind.lock().expect("fault lock") = Some(kind.to_string());
-    }
-
-    /// Bounded appends refused at once because the log was stalled (D3-a):
-    /// lets a cell prove a spawned write took the bounded path.
-    #[cfg(test)]
-    pub(crate) fn refused_under_stall_for_test(&self) -> usize {
-        self.bound
-            .refused_under_stall
-            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -535,16 +514,7 @@ impl TransparencyLogger {
         {
             self.append_attempts
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            let kind = fields.get("kind").and_then(serde_json::Value::as_str);
-            let mut armed = self.fail_next_kind.lock().expect("fault lock");
-            let kind_hit = kind.is_some() && armed.as_deref() == kind && armed.take().is_some();
-            drop(armed);
-            if kind_hit
-                || self
-                    .fail_next_append
-                    .swap(false, std::sync::atomic::Ordering::AcqRel)
-                || self.fail_appends.load(std::sync::atomic::Ordering::Acquire)
-            {
+            if self.injected_fault(&fields) {
                 return Err(io::Error::other("injected transparency append failure"));
             }
         }
