@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2248: an `accounts` block's `file:` secrets are read only once the block
-//! has passed structural validation, and never while it is disabled. A
-//! disabled store resolves no secret at runtime, so reading its files at load
-//! only opened files nothing would use.
+//! has passed structural validation, and not at all for a disabled block with
+//! no adapter: that block resolves no secret at runtime, so reading its files
+//! at load only opened files nothing would use. An adapter runs with the store
+//! disabled, so its references are still recorded (`tests/openwebui_adapter_config.rs`).
 //!
 //! The observable is the set of `file:` secrets the evaluation recorded as
 //! read: a recorded path is a file the load opened and read.
