@@ -32,6 +32,8 @@ mod stdio_initialize_order;
 
 mod stdio_sole_operator;
 
+mod stdio_catalogue_sole_operator;
+
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;
 
