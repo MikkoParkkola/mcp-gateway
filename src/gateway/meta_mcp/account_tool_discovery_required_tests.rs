@@ -225,5 +225,9 @@ async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() 
         .list_servers(&caller_as(None, Some("operator")), None)
         .await
         .expect("list_servers answers"));
-    assert_eq!(operator["tools_count"], 1, "operator: {operator}");
+    assert_eq!(
+        operator["tools_count"],
+        seeded.len(),
+        "operator: {operator}"
+    );
 }
