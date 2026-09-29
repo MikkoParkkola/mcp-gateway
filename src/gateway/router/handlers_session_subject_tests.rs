@@ -282,6 +282,13 @@ async fn same_subject_other_presented_token_new_session() {
             "the same subject under another presented token resumed the session on {method}"
         );
     }
+    let other = caller(Some("agent-a"), Some("token-two"));
+    let (status, _) = send(&state, request(other, "DELETE", Some(&a))).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "another token deleted the session"
+    );
     assert!(
         resumes(
             &state,
