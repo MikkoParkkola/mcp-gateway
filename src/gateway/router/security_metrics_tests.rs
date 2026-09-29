@@ -18,21 +18,37 @@ fn scrape<F: std::future::Future>(f: F) -> (F::Output, String) {
     (out, handle.render())
 }
 
-/// The value of the series `name{labels}`, 0 when absent.
-fn series(rendered: &str, name: &str, labels: &str) -> u64 {
-    let prefix = format!("{name}{{{labels}}} ");
-    rendered
-        .lines()
-        .find_map(|l| l.strip_prefix(&prefix))
-        .map_or(0, |v| v.trim().parse().expect("counter value"))
+/// Sample lines of `name`: `# HELP`/`# TYPE` lines never start with it.
+fn samples<'a>(rendered: &'a str, name: &str) -> impl Iterator<Item = &'a str> {
+    let prefix = format!("{name}{{");
+    rendered.lines().filter(move |l| l.starts_with(&prefix))
 }
 
-/// Sum of every `name` series whose labels contain `needle`.
+/// A sample's value. The exposition format writes numbers as floats.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn value(line: &str) -> u64 {
+    let v: f64 = line
+        .rsplit(' ')
+        .next()
+        .unwrap_or_default()
+        .parse()
+        .expect("sample value");
+    v as u64
+}
+
+/// The value of the `name` series carrying every `k="v"` pair in `labels`
+/// (comma separated, in any order), 0 when absent.
+fn series(rendered: &str, name: &str, labels: &str) -> u64 {
+    samples(rendered, name)
+        .find(|l| labels.split(',').all(|pair| l.contains(pair)))
+        .map_or(0, value)
+}
+
+/// Sum of every `name` sample whose line contains `needle`.
 fn sum_where(rendered: &str, name: &str, needle: &str) -> u64 {
-    rendered
-        .lines()
-        .filter(|l| l.starts_with(&format!("{name}{{")) && l.contains(needle))
-        .filter_map(|l| l.rsplit(' ').next()?.parse::<u64>().ok())
+    samples(rendered, name)
+        .filter(|l| l.contains(needle))
+        .map(value)
         .sum()
 }
 
@@ -133,7 +149,7 @@ async fn rate_limit_is_not_an_auth_failure() {
         statuses.contains(&StatusCode::TOO_MANY_REQUESTS),
         "{statuses:?}"
     );
-    assert!(!text.contains(AUTH), "{text}");
+    assert_eq!(sum_where(&text, AUTH, ""), 0, "{text}");
 }
 
 /// A refused dashboard bootstrap link is an auth failure of its own kind.
@@ -301,13 +317,10 @@ async fn metric_labels_carry_no_caller_data() {
         let _ = raw(&fx, "POST", "/mcp/alpha", Some("wrong-SECRET")).await;
     });
     assert!(
-        text.contains(DENY) && text.contains(AUTH),
+        sum_where(&text, DENY, "") > 0 && sum_where(&text, AUTH, "") > 0,
         "nothing counted: {text}"
     );
-    for line in text
-        .lines()
-        .filter(|l| l.starts_with(DENY) || l.starts_with(AUTH))
-    {
+    for line in samples(&text, DENY).chain(samples(&text, AUTH)) {
         for leak in ["alpha-client", "beta", "SECRET", "/mcp", "\"t\""] {
             assert!(!line.contains(leak), "{leak} in {line}");
         }

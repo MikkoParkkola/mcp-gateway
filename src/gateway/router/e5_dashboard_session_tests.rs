@@ -659,9 +659,18 @@ async fn expired_session_refusal_is_counted() {
         });
     });
     let text = handle.render();
+    let counted: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("mcp_auth_failures_total{"))
+        .collect();
+    assert_eq!(
+        counted.len(),
+        1,
+        "one refusal, one series; the bearer request is not a failure: {text}"
+    );
+    assert!(counted[0].contains(r#"kind="session_expired""#), "{text}");
     assert!(
-        text.lines()
-            .any(|l| l == r#"mcp_auth_failures_total{kind="session_expired"} 1"#),
+        matches!(counted[0].rsplit(' ').next(), Some("1" | "1.0")),
         "{text}"
     );
 }
