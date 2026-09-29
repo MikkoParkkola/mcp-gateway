@@ -211,10 +211,12 @@ async fn e8m_http_replay_relinks_with_the_new_nonce() {
     assert_eq!(replayed["nonce"], "chain-e8m-2", "{replayed}");
 }
 
-/// E8d (direct route): with HMAC signing off the direct route serves the
-/// call; its idempotent replay emits `src: replay` with the new nonce.
+/// E8d (direct route): the live call carries a live origin link. Its replay
+/// is served from the direct idempotency store, which can also hold a
+/// gateway-authored side-effect notice and records no origin, so in inc2 the
+/// replay is never linked (A3 R3, fail-safe).
 #[tokio::test]
-async fn e8d_direct_replay_relinks_with_the_new_nonce() {
+async fn e8d_direct_live_linked_and_replay_not() {
     let backend = BackendFixture::start(backend_result()).await;
     let mut config = chain_config(&backend.url);
     config["security"]["message_signing"]["enabled"] = json!(false);
@@ -222,7 +224,7 @@ async fn e8d_direct_replay_relinks_with_the_new_nonce() {
     let mut gateway = HttpGateway::start(config).await;
     gateway.client = bearer_client();
     let session = gateway.initialize().await;
-    let mut links = Vec::new();
+    let mut responses = Vec::new();
     for (id, chain) in [("e8d-1", "chain-e8d-1"), ("e8d-2", "chain-e8d-2")] {
         let request = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
             "name": signing_gateway::TOOL, "arguments": {},
@@ -239,16 +241,17 @@ async fn e8d_direct_replay_relinks_with_the_new_nonce() {
             .json()
             .await
             .expect("direct route JSON");
-        links.push(origin(&response).clone());
+        responses.push(response);
     }
     assert_eq!(
         backend.calls().len(),
         1,
-        "the second call must replay: {links:?}"
+        "the second call must replay: {responses:?}"
     );
-    assert_eq!(links[0]["src"], "live");
-    assert_eq!(links[1]["src"], "replay");
-    assert_eq!(links[1]["nonce"], "chain-e8d-2");
+    let live = origin(&responses[0]);
+    assert_eq!(live["src"], "live", "{live}");
+    assert_eq!(live["nonce"], "chain-e8d-1", "{live}");
+    assert!(unchained(&responses[1]), "{}", responses[1]);
 }
 
 /// A bare `serve --stdio` child: one JSON-RPC frame per line each way.

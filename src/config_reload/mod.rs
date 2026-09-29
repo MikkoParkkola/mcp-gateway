@@ -1804,23 +1804,21 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = self.load_off_worker().await?;
-        if let Some(field) = self
-            .live_config
-            .running()
-            .security
-            .message_signing
-            .restart_changed_field(
-                &evaluated.config.security.message_signing,
-                self.env.startup(),
-                &evaluated.overlay,
-            )
-            .map_err(|error| error.to_string())?
+        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
+        let (env, overlay) = (self.env.startup(), &evaluated.overlay);
+        let signing = (running.message_signing)
+            .restart_changed_field(&proposed.security.message_signing, env, overlay)
+            .map_err(|error| error.to_string())?;
+        let chain = crate::config::SignatureChainConfig::restart_changed_field(
+            running.signature_chain.as_ref(),
+            proposed.security.signature_chain.as_ref(),
+        );
+        if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
+            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
         {
-            // Before even the empty-patch path: equal effective key bytes can
-            // conceal a configured-reference edit, and env-only reloads publish
-            // there too. This refusal changes no live state or backend object.
+            // Before the empty-patch path; this refusal changes no live state.
             return Err(format!(
-                "config reload refused: security.message_signing.{field} requires restart"
+                "config reload refused: security.{field} requires restart"
             ));
         }
         // Measured against the overlay startup captured, so a requirement stays

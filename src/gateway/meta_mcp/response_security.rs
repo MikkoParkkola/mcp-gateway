@@ -23,7 +23,6 @@ impl MetaMcp {
     }
 
     /// Enable ASI07 origin-link emission.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn set_chain_signer(
         &mut self,
         signer: crate::security::signature_chain::ChainSigner,
@@ -92,22 +91,7 @@ pub(crate) enum DeliveryInspection {
     AlreadyInspected,
 }
 
-/// Where a final result came from, as decided by the dispatch outcome. Only
-/// backend results and replays of them are eligible for an origin link.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "construction sites set it with the emission")
-)]
-pub(crate) enum ChainSource {
-    /// A real backend result reached the provenance stamp.
-    Backend,
-    /// A sync-admission replay of a stored backend result.
-    Replay,
-    /// Gateway-authored output: dispatch-error wrappers, meta-only tools.
-    #[default]
-    NotEligible,
-}
+pub(crate) use crate::protocol::ChainSource;
 
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
 pub(crate) struct ResponseDeliveryContext<'a> {
@@ -177,8 +161,16 @@ impl super::MetaMcp {
             context.mutation,
             inspection,
         );
-        // The origin link goes here: after the firewall, before the v2 HMAC.
-        let _ = (context.chain_source, context.chain_nonce);
+        // After the firewall, before the v2 HMAC: the link covers the final
+        // content and the MAC covers the link.
+        let invoke_nonce =
+            (context.signing).and_then(super::signing::SigningInvocationContext::invoke_nonce);
+        self.emit_origin_link(
+            &mut response,
+            context.chain_source,
+            context.chain_nonce,
+            invoke_nonce,
+        );
 
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.
@@ -322,6 +314,79 @@ impl super::MetaMcp {
         #[cfg(not(feature = "firewall"))]
         let _ = (challenge, targets, correlation);
         Ok(())
+    }
+}
+
+impl super::MetaMcp {
+    /// Attach this gateway's origin link to an eligible success result: on
+    /// every one under `emit: always`, else only when the request carried a
+    /// chain nonce. The gateway_invoke nonce is a fallback value, never a
+    /// trigger. A result that cannot carry a link is refused, not delivered
+    /// unlinked.
+    fn emit_origin_link(
+        &self,
+        response: &mut crate::protocol::JsonRpcResponse,
+        source: ChainSource,
+        chain_nonce: Option<&str>,
+        invoke_nonce: Option<&str>,
+    ) {
+        use crate::security::signature_chain::{LinkSource, attach_origin_link};
+        let Some((signer, emit)) = &self.chain_signer else {
+            return;
+        };
+        let src = match source {
+            ChainSource::Backend => LinkSource::Live,
+            ChainSource::Replay => LinkSource::Replay,
+            ChainSource::NotEligible => return,
+        };
+        let triggered = *emit == crate::config::ChainEmit::Always || chain_nonce.is_some();
+        let Some(result) = response.result.as_mut() else {
+            return;
+        };
+        if response.error.is_some() || !triggered {
+            return;
+        }
+        let nonce = chain_nonce.or(invoke_nonce);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if attach_origin_link(signer, result, src, nonce, ts).is_err() {
+            *response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+                response.id.take(),
+                -32001,
+                "Result cannot carry a signature chain link",
+            );
+        }
+    }
+}
+
+/// Whether context integrity replaced or transformed this result (A3 R2): its
+/// own metadata records `enforcement_applied`. Such a result is no longer the
+/// backend's answer and is never chain-eligible. A backend forging the key can
+/// only make its own result ineligible.
+pub(crate) fn context_integrity_enforced(result: &serde_json::Value) -> bool {
+    result
+        .pointer("/_context_integrity/policy/enforcement_applied")
+        .is_some_and(|applied| applied.as_bool() != Some(false))
+}
+
+impl super::MetaMcp {
+    /// Link a direct-route `tools/call` result after its idempotency settle, so
+    /// the stored body never carries a link. Only a backend success the
+    /// response gates passed through is eligible; a replay from the direct
+    /// store is not (it records no origin).
+    pub(crate) fn link_direct(
+        &self,
+        response: &mut crate::protocol::JsonRpcResponse,
+        chain_nonce: Option<&str>,
+    ) {
+        let passed = response.error.is_none()
+            && !response.delivery_refusal
+            && (response.result.as_ref()).is_some_and(|result| !context_integrity_enforced(result));
+        if passed {
+            self.emit_origin_link(response, ChainSource::Backend, chain_nonce, None);
+        }
     }
 }
 

@@ -48,11 +48,6 @@ impl std::fmt::Debug for SignatureChainConfig {
     }
 }
 
-// The implementation commit wires both into config loading and reload.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "stub until the signature chain is wired")
-)]
 impl SignatureChainConfig {
     /// Resolve the secret reference, validate the seed and key id, and build
     /// the signer. The decoded seed lives only inside the signer; errors name

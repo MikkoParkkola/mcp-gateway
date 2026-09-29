@@ -239,6 +239,54 @@ fn exceeds(value: &Value, cap: usize) -> bool {
     serde_json::to_writer(&mut CappedSink { len: 0, cap }, value).is_err()
 }
 
+/// `_meta` key that carries the chain on a result.
+pub(crate) const CHAIN_META: &str = "io.mcp-gateway/signature-chain";
+
+/// Remove a chain from `result._meta`, dropping a `_meta` the removal empties.
+/// Applied to every backend result: only this gateway may put a chain there.
+pub(crate) fn strip_chain(result: &mut Value) {
+    if let Some(members) = result.as_object_mut()
+        && let Some(Value::Object(meta)) = members.get_mut("_meta")
+        && meta.remove(CHAIN_META).is_some()
+        && meta.is_empty()
+    {
+        members.remove("_meta");
+    }
+}
+
+/// Sign this gateway's origin link over `result` and insert it as a one-link
+/// chain in `result._meta`. Refuses an unhashable result or a link over the
+/// per-link cap; `result` is unchanged on refusal.
+pub(crate) fn attach_origin_link(
+    signer: &ChainSigner,
+    result: &mut Value,
+    src: LinkSource,
+    nonce: Option<&str>,
+    ts: u64,
+) -> std::result::Result<(), ChainRefusal> {
+    let out = content_digest(result)?;
+    let link = signer.sign(LinkFields {
+        up: Upstream::None,
+        src,
+        input: None,
+        out: Some(out),
+        prev: None,
+        nonce: nonce.map(str::to_owned),
+        ts,
+    });
+    let link = serde_json::to_value(link).map_err(|_| ChainRefusal::Schema)?;
+    if exceeds(&link, MAX_LINK_BYTES) {
+        return Err(ChainRefusal::Size);
+    }
+    let members = result.as_object_mut().ok_or(ChainRefusal::Unhashable)?;
+    let meta = members
+        .entry("_meta")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let meta = meta.as_object_mut().ok_or(ChainRefusal::Schema)?;
+    meta.insert(CHAIN_META.to_owned(), Value::Array(vec![link]));
+    Ok(())
+}
+
 fn is_digest(value: Option<&String>) -> bool {
     value.is_none_or(|hex| {
         hex.len() == 64

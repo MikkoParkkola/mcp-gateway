@@ -88,51 +88,7 @@ impl std::fmt::Debug for CallerCredential {
     }
 }
 
-/// Render-guard non-bypassability (MIK-5854 / MIK-6690).
-///
-/// `GuardedValue` wraps a tool result that has passed the context-integrity
-/// render guard. Its inner field is private to this module, so the ONLY ways to
-/// obtain one are the two named, greppable constructors below. Because
-/// [`MetaMcp::invoke_tool_traced`] returns `Result<GuardedValue>`, the compiler
-/// rejects any `return Ok(...)` that has not produced a `GuardedValue` — a
-/// future code path cannot emit un-guarded tool content from the chokepoint
-/// without consciously calling one of these constructors (which review/grep
-/// will catch).
-mod guarded {
-    use serde_json::Value;
-
-    /// A tool result that has passed (or is exempt from) the render guard.
-    pub(super) struct GuardedValue(Value);
-
-    impl GuardedValue {
-        /// Seal a value that has just been through `apply_context_integrity`.
-        /// Call this ONLY immediately after the guard runs on live dispatch.
-        pub(super) fn sealed_by_guard(value: Value) -> Self {
-            Self(value)
-        }
-
-        /// Seal a value served from cache. Cached results were guarded at store
-        /// time (the cache is populated only after `apply_context_integrity`),
-        /// so re-serving them is in-policy without re-running the guard.
-        pub(super) fn from_cache(value: Value) -> Self {
-            Self(value)
-        }
-
-        /// Apply gateway-authored, non-content augmentation (trace id,
-        /// predictions, cost warnings, signature) while preserving guard status.
-        /// The closure must only add gateway metadata, never new tool content.
-        #[must_use]
-        pub(super) fn augment(self, f: impl FnOnce(Value) -> Value) -> Self {
-            Self(f(self.0))
-        }
-
-        /// Unwrap at the single delivery boundary.
-        pub(super) fn into_inner(self) -> Value {
-            self.0
-        }
-    }
-}
-
+mod guarded;
 use guarded::GuardedValue;
 
 use super::super::meta_mcp_helpers::{
@@ -1332,6 +1288,17 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        let sourced = self.invoke_tool_sourced(args, session_id, caller).await;
+        sourced.map(|(value, _)| value)
+    }
+
+    /// [`Self::invoke_tool`] plus the result's chain eligibility (A3).
+    pub(super) async fn invoke_tool_sourced(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<(Value, crate::protocol::ChainSource)> {
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
         if let Some(log) = &self.transparency_logger {
             log.admit().await?;
@@ -1345,17 +1312,20 @@ impl MetaMcp {
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
             let (result, dispatch_failure) = audit::with_dispatch_scope(traced).await;
             // Single delivery boundary: unwrap the guard-sealed result.
-            let result = result.map(GuardedValue::into_inner);
+            let (result, source) = match result.map(GuardedValue::into_parts) {
+                Ok((value, source)) => (Ok(value), source),
+                Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible),
+            };
             // One record per call, refusals and failures included (D1-d).
-            self.audit_invocation(
+            let audited = self.audit_invocation(
                 args,
                 session_id,
                 caller,
                 &trace_id_clone,
                 result,
                 dispatch_failure,
-            )
-            .await
+            );
+            audited.await.map(|value| (value, source))
         })
         .await
     }
@@ -1383,19 +1353,18 @@ impl MetaMcp {
     /// `row_count`).
     fn maybe_stamp_provenance(
         &self,
-        value: Value,
+        mut value: Value,
         server: &str,
         tool: &str,
         api_key_name: Option<&str>,
         cache: crate::trust::CacheOutcome,
         client_claim: Option<&crate::trust::ClientClaim>,
     ) -> Value {
+        // Only this gateway may put a signature chain on a result (ASI07).
+        crate::security::signature_chain::strip_chain(&mut value);
         let Some(ref signer) = self.provenance_signer else {
-            // Stamping disabled: the gateway authors no receipt, so any
-            // `_meta.provenance` here was injected by the backend. Strip it so a
-            // naive reader cannot mistake a backend-forged receipt for a
-            // gateway-signed one (MIK-6909). Honest backends set no such key, so
-            // this stays a no-op and the off path remains byte-identical.
+            // Stamping off: any `_meta.provenance` is backend-injected. Strip
+            // it so it cannot pass as a gateway receipt (MIK-6909).
             return strip_backend_provenance(value);
         };
         let backend_ok = !value
@@ -2129,6 +2098,11 @@ impl MetaMcp {
         // `clippy::large_futures` at every call site.
         // #1962: a drop during the dispatch settles the key as uncertain.
         arm_for_dispatch(idem_reservation.as_mut());
+        // A3 R1: only an MCP backend's own answer can be chain-eligible; a
+        // capability's `Ok` also covers its local refusals and inner cache.
+        let mcp_backend = !self
+            .get_capabilities()
+            .is_some_and(|cap| server == cap.name);
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,
@@ -2152,6 +2126,7 @@ impl MetaMcp {
         ))
         .await;
 
+        let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
             Ok(value) => {
                 // When the capability backend returns a tool-level error
@@ -2557,6 +2532,7 @@ impl MetaMcp {
             trace_id,
         };
         result = self.gate_payload(&call, result)?;
+        answered &= !super::response_security::context_integrity_enforced(&result);
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -2677,7 +2653,8 @@ impl MetaMcp {
         // `result` passed apply_context_integrity earlier on this path; the steps
         // since then add only gateway-authored metadata. Seal at the delivery
         // boundary so the return type proves the guard ran.
-        Ok(GuardedValue::sealed_by_guard(final_result))
+        let sealed = GuardedValue::sealed_by_guard(final_result);
+        Ok(if answered { sealed.backend() } else { sealed })
     }
 
     /// Record an outcome against both backend and per-capability error budgets.

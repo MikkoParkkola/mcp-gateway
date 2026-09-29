@@ -38,12 +38,10 @@ pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 pub(crate) const ATTESTATION_META: &str = "io.mcp-gateway/attestation";
 
 /// The `params._meta` key carrying a client's chain nonce (ASI07).
-#[cfg_attr(not(test), expect(dead_code, reason = "read by the route wiring"))]
 pub(crate) const CHAIN_NONCE_META: &str = "io.mcp-gateway/chain-nonce";
 
 /// Read and validate the request chain nonce: a string of 1..=256 bytes.
 /// `Err` carries the rejected key for a `-32602`.
-#[cfg_attr(not(test), expect(dead_code, reason = "read by the route wiring"))]
 pub(crate) fn chain_nonce_from_params(
     params: Option<&Value>,
 ) -> std::result::Result<Option<String>, &'static str> {
@@ -57,6 +55,32 @@ pub(crate) fn chain_nonce_from_params(
         }
         Some(_) => Err(CHAIN_NONCE_META),
     }
+}
+
+/// Take the chain nonce off a raw JSON-RPC request, before sanitization can
+/// rewrite or reject its bytes (A3 R6''). See [`take_chain_nonce_params`].
+pub(crate) fn take_chain_nonce(request: &mut Value) -> crate::Result<Option<String>> {
+    take_chain_nonce_params(request.get_mut("params"))
+}
+
+/// Remove the chain nonce from `params._meta`, and an emptied `_meta` with it.
+/// The value is validated as [`chain_nonce_from_params`] does; a malformed one
+/// is a `-32602`.
+pub(crate) fn take_chain_nonce_params(params: Option<&mut Value>) -> crate::Result<Option<String>> {
+    let Some(params) = params else {
+        return Ok(None);
+    };
+    let nonce = chain_nonce_from_params(Some(&*params)).map_err(|key| {
+        crate::Error::json_rpc(-32602, format!("malformed request fields: {key}"))
+    })?;
+    if let Some(members) = params.as_object_mut()
+        && let Some(Value::Object(meta)) = members.get_mut("_meta")
+        && meta.remove(CHAIN_NONCE_META).is_some()
+        && meta.is_empty()
+    {
+        members.remove("_meta");
+    }
+    Ok(nonce)
 }
 
 /// The out-of-band fields of a `tools/call` — the retry pair, and the
@@ -192,6 +216,10 @@ impl RetryFields {
                 None
             }
         };
+
+        if let Err(key) = chain_nonce_from_params(Some(params)) {
+            malformed.push(key);
+        }
 
         Self {
             input_responses,

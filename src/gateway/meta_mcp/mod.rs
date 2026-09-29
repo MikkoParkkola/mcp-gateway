@@ -2304,13 +2304,23 @@ impl MetaMcp {
             return error_response_preserving_status(id, &error);
         }
 
+        // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
+        let mut source = crate::protocol::ChainSource::NotEligible;
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
             "gateway_list_servers" => self.list_servers(caller, session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
+            "gateway_invoke" => {
+                let sourced = self
+                    .invoke_tool_sourced(&arguments, session_id, caller)
+                    .await;
+                sourced.map(|(value, origin)| {
+                    source = origin;
+                    value
+                })
+            }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
             "gateway_webhook_status" => self.webhook_status(),
@@ -2372,7 +2382,7 @@ impl MetaMcp {
             }
         };
 
-        match result {
+        let mut response = match result {
             Ok(content) => match shape {
                 // MRTR.11a: an interim round must not be pretty-printed into
                 // `content[0].text`. `wrap_tool_success` states `is_error:
@@ -2399,7 +2409,11 @@ impl MetaMcp {
                 ResultShape::Native => JsonRpcResponse::success(id, content),
             },
             Err(e) => error_response_preserving_status(id, &e),
+        };
+        if response.error.is_none() && response.result.is_some() {
+            response.chain_source = source;
         }
+        response
     }
 }
 

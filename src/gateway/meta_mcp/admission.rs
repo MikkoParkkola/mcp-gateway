@@ -63,8 +63,51 @@ impl SyncLease {
         {
             result.remove("_signature");
         }
-        lease.complete_secured(&secured);
+        // A link binds one delivery's nonce and time; a replay mints its own.
+        if let Some(result) = secured.get_mut("result") {
+            crate::security::signature_chain::strip_chain(result);
+        }
+        let chain = match response.chain_source {
+            crate::protocol::ChainSource::Backend => StoredChain::Backend,
+            _ => StoredChain::NotEligible,
+        };
+        let stored = StoredDelivery {
+            response: secured,
+            chain,
+        };
+        lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
+}
+
+/// What a sync admission stores: the secured response plus its server-owned
+/// chain eligibility, which the response's own serialization never carries.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredDelivery {
+    response: Value,
+    /// Absent in records written before the chain existed: never eligible.
+    #[serde(default)]
+    chain: StoredChain,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StoredChain {
+    Backend,
+    #[default]
+    NotEligible,
+}
+
+/// Decode a stored delivery; a bare response is a record from before the
+/// envelope and replays without a link.
+fn stored_response(bytes: &[u8]) -> Option<JsonRpcResponse> {
+    if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
+        let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
+        if stored.chain == StoredChain::Backend {
+            response.chain_source = crate::protocol::ChainSource::Replay;
+        }
+        return Some(response);
+    }
+    serde_json::from_slice(bytes).ok()
 }
 
 pub(crate) enum SyncAdmission {
@@ -206,8 +249,9 @@ impl MetaMcp {
                 playbook: None,
             })),
             Ok(Admission::Replay(bytes)) => {
-                let mut response: JsonRpcResponse = serde_json::from_slice(&bytes)
-                    .map_err(|_| Error::json_rpc(409, "Secured execution result is unavailable"))?;
+                let mut response = stored_response(&bytes).ok_or_else(|| {
+                    Error::json_rpc(409, "Secured execution result is unavailable")
+                })?;
                 response.id = Some(request_id.clone());
                 Ok(SyncAdmission::Replay(response))
             }

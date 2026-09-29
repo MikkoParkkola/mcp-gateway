@@ -57,10 +57,6 @@ module = "src/security/transparency_log_append.rs"
 reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
 
 [[coverage.not_a_control]]
-module = "src/security/signature_chain.rs"
-reason = "ASI07 chain signing and verification with no caller yet; it becomes a control row when the invoke paths enforce it (design increment 2)"
-
-[[coverage.not_a_control]]
 module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
 
@@ -245,6 +241,13 @@ reason = "requires a modern-protocol frame; -32601 also answers a method the bui
 # a backend response to inspect, a tool call to make, or a configuration the
 # probe cannot assume, and a probe that cannot tell a disabled control from an
 # absent one proves nothing about either.
+
+[[control]]
+id = "signature-chain-strip"
+description = "a signature chain a backend puts on its result is stripped before delivery; only this gateway's own origin link reaches the client"
+source = "src/security/signature_chain.rs"
+probe = "none"
+reason = "the negative half needs a backend that forges a chain; a live install has none to aim at, so the strip is pinned by the chain_strip and chain_direct tests"
 
 [[control]]
 id = "request-firewall"

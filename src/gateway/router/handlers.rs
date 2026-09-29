@@ -639,16 +639,14 @@ async fn meta_mcp_dispatch(
         );
         (id, Some(rx))
     };
-    // This handler is not a stream reader. Holding the subscription would make
-    // a server-to-client prompt look deliverable to a caller with no live SSE
-    // stream: the send succeeds into a receiver nobody polls, and the caller
-    // waits out the 120-second response timeout instead of being told there is
-    // nobody to ask.
+    // Not a stream reader: a held subscription fakes a deliverable prompt.
     drop(session_rx);
 
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
         crate::gateway::meta_mcp::signing::SigningInvocationContext::capture(&mut request)
     });
+    // Off the request before sanitization can rewrite its bytes (ASI07 A3).
+    let chain_nonce = crate::protocol::mrtr::take_chain_nonce(&mut request);
     // Optionally sanitize input
     let mut request = if state.sanitize_input {
         match sanitize_json_value(&request) {
@@ -667,17 +665,19 @@ async fn meta_mcp_dispatch(
         request
     };
 
-    if let Some(context) = signing_context.as_mut()
-        && let Err(error) = context.restore(&mut request)
-    {
-        return build_error_response(
-            None,
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        );
-    }
+    let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(&mut request));
+    let chain_nonce = match restored.and(chain_nonce) {
+        Ok(nonce) => nonce,
+        Err(error) => {
+            return build_error_response(
+                None,
+                error.to_rpc_code(),
+                crate::gateway::meta_mcp::signing::wire_error_message(&error),
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
 
     // Detect client POST-back responses (has "result" or "error" but no "method").
     // These are replies to server-to-client requests such as `sampling/createMessage`.
@@ -1908,8 +1908,8 @@ async fn meta_mcp_dispatch(
         },
         mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
         signing: signing_context.as_ref(),
-        chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
-        chain_nonce: None,
+        chain_source: response.chain_source,
+        chain_nonce: chain_nonce.as_deref(),
     };
     response = (state.meta_mcp)
         .finalize_response_after_inspection(response, &delivery, delivery_inspection)
@@ -1926,10 +1926,8 @@ async fn meta_mcp_dispatch(
     .increment(1);
 
     // A confirmation or delivery refusal is the gate working, not the client
-    // misbehaving. It is excluded from BOTH arms, not just the failure one:
-    // `record_client_success` resets the consecutive-failure count, so
-    // treating a refusal as a success would clear a breaker the caller had
-    // genuinely tripped.
+    // misbehaving: excluded from BOTH arms, since a success would clear a
+    // breaker the caller genuinely tripped.
     if let Some(ref client) = client
         && !response.excludes_client_accounting()
     {
