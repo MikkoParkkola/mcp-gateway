@@ -232,7 +232,7 @@ fn transport_label(transport: &TransportConfig) -> String {
         TransportConfig::Http { http_url, .. } => format!("http: {}", redact_url_for_diagnostics(http_url)),
         TransportConfig::WebSocket { ws_url, .. } => format!("websocket: {}", redact_url_for_diagnostics(ws_url)),
         #[cfg(feature = "a2a")]
-        TransportConfig::A2a { a2a_url, .. } => format!("a2a: {a2a_url}"),
+        TransportConfig::A2a { a2a_url, .. } => format!("a2a: {}", redact_url_for_diagnostics(a2a_url)),
     }
 }
 
