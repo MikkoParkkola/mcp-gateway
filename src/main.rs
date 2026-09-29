@@ -657,9 +657,6 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     }
 
     let config_path = serve_config_path(&cli);
-    // Found once here and handed to the loader, so the file watched is the
-    // file loaded (#1868). Not `config_path`: that also picks the governance
-    // store and allows admin config writes, which stay as they were.
     let (discovered, load_path) = discovered_config::resolve(config_path.as_deref());
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
@@ -723,8 +720,6 @@ async fn run_server(cli: Cli) -> ExitCode {
     // meta_mcp.enabled=true would be a network-facing fail-open). Only the
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
-    // See `run_stdio_server`: discovery runs once, here, and only when no
-    // config was named.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
     let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
