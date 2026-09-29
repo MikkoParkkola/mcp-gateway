@@ -290,7 +290,9 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
     let events: Vec<Value> = std::fs::read_to_string(path)
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        // Skip the log's genesis housekeeping record (#2275).
+        .filter(|e| e["event"] != "audit_segment_opened")
         .collect();
     assert_eq!(events.len(), 1, "exactly one event per delivery attempt");
     let event = events.into_iter().next().unwrap();
@@ -344,7 +346,8 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
         "actual attempt hash chain: {:?}",
         chain.error_message
     );
-    assert_eq!(chain.entries_checked, 1);
+    // Plus the genesis housekeeping record (#2275).
+    assert_eq!(chain.entries_checked, 2);
     assert!(chain.error_at_counter.is_none());
     for forbidden in [KEY, NONCE, BODY] {
         assert!(!event.to_string().contains(forbidden));

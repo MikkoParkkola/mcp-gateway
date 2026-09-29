@@ -7,9 +7,11 @@
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
 pub(crate) mod account_bindings;
+mod backend_debug;
 mod config_file;
 mod env_overlay;
 mod features;
+mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
 mod secret_file;
@@ -41,21 +43,23 @@ pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
 pub(crate) use secret_ref::is_template_syntax;
 
-// New items (F18), not widened ones: the one mode-checked read for files
-// outside `config`.
-pub(crate) use secret_file::{CheckedFile, read_checked_file};
+// New items (F18): the one mode-checked read for files outside `config`.
+#[cfg(windows)]
+pub(crate) use secret_file::Protects;
+pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
     CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdempotencyConfig,
-    IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
+    IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig,
+    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
+    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
+    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecurityConfig, StreamingConfig, TasksConfig, ToolContractConfig,
+    WebhookConfig, api_key_digest_spec,
 };
 pub(crate) use features::{api_key_expired, parse_api_key_digest};
 
@@ -353,7 +357,7 @@ impl Config {
             let detail = match error.kind() {
                 #[cfg(unix)]
                 std::io::ErrorKind::PermissionDenied => {
-                    "The current process must own the file or have narrowly scoped read access, and every containing directory must permit traversal. The official container runs as UID/GID 1001; create an owner-only deployment copy before transferring it with `install -m 600 <source> <deployment-copy>` and `chown 1001:1001 <deployment-copy>`, or grant equivalent group/ACL access. Do not make a credential-bearing config world-readable."
+                    "The current process or root must own the file, and every containing directory must permit traversal. The official container runs as UID/GID 1001; create an owner-only deployment copy before transferring it with `install -m 600 <source> <deployment-copy>` and `chown 1001:1001 <deployment-copy>`; the owner must be that user or root. Do not make a credential-bearing config world-readable."
                 }
                 #[cfg(not(unix))]
                 std::io::ErrorKind::PermissionDenied => {
@@ -708,6 +712,12 @@ impl Config {
         if let Some(token) = self.key_server.admin_token.as_mut() {
             subst(token, &mut seen);
         }
+        // Names and digests only: `resolve_metrics_token` reads the reference
+        // itself, so the spelling stays. Without this a rotated token was
+        // never reported and the route kept the one it was built with (#2251).
+        if let Some(token) = &self.server.metrics_token {
+            let _names_only = record(token, &mut seen);
+        }
         // Record names only. Leave `env:` spellings in place so a rewrite cannot
         // persist decoded account key material.
         if let Some(accounts) = &self.accounts {
@@ -780,6 +790,7 @@ impl Config {
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
+        flagged_tools::validate_flagged_tool_pins(&self.backends)?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
         self.security.validate_sections(self.auth.enabled)?;
@@ -1288,7 +1299,9 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
-    /// Graceful shutdown timeout.
+    /// Graceful shutdown timeout: how long the HTTP listener gives open
+    /// requests after the signal before it cuts them, and then how long the
+    /// in-flight drain may wait (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
     /// Maximum request body size (bytes) on every route. Read once at startup:
@@ -1652,6 +1665,11 @@ pub struct BackendConfig {
     /// fully-trusted internal backends. Default: `false`.
     #[serde(default)]
     pub passthrough: bool,
+    /// Tools served although their description fails the tool-poisoning
+    /// check (AX-010), each pinned to the descriptor digest the gateway logs
+    /// when it withholds the tool. A changed description is withheld again.
+    #[serde(default)]
+    pub allow_flagged_tools: std::collections::BTreeMap<String, String>,
     /// Undeclared tool-call argument keys: `closed` (default), `standard`, `off`.
     pub input_schema_enforcement: InputSchemaEnforcement,
     /// Permit this backend to carry credentials over cleartext `http://` or
@@ -1689,39 +1707,6 @@ pub struct BackendConfig {
     pub account: Option<String>,
 }
 
-// Manual `Debug` that redacts the credential-injection rules (CWE-532, mirrors
-// PR #323). A derived `Debug` would recurse into `secrets` and print the
-// injected credential material verbatim into any trace or error context; only
-// the rule count is surfaced.
-impl std::fmt::Debug for BackendConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BackendConfig")
-            .field("description", &self.description)
-            .field("enabled", &self.enabled)
-            .field("transport", &self.transport)
-            .field("stop_when_idle_for", &self.stop_when_idle_for)
-            .field("timeout", &self.timeout)
-            // `env` and `headers` values routinely carry credentials
-            // (Authorization bearers, API keys, env-injected secrets). The
-            // field names are neutral, so the name-based leak lint cannot see
-            // them — redact to counts here, matching `secrets` below.
-            .field("env", &format!("<{} vars>", self.env.len()))
-            .field("headers", &format!("<{} headers>", self.headers.len()))
-            .field("oauth", &self.oauth)
-            .field("secrets", &format!("<{} rules>", self.secrets.len()))
-            .field("passthrough", &self.passthrough)
-            .field("input_schema_enforcement", &self.input_schema_enforcement)
-            .field(
-                "allow_cleartext_credentials",
-                &self.allow_cleartext_credentials,
-            )
-            .field("runtime_profile", &self.runtime_profile)
-            .field("identity_propagation", &self.identity_propagation)
-            .field("account", &self.account)
-            .finish()
-    }
-}
-
 impl Default for BackendConfig {
     fn default() -> Self {
         Self {
@@ -1736,6 +1721,7 @@ impl Default for BackendConfig {
             secrets: Vec::new(),
             passthrough: false,
             input_schema_enforcement: InputSchemaEnforcement::Closed,
+            allow_flagged_tools: std::collections::BTreeMap::new(),
             allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,

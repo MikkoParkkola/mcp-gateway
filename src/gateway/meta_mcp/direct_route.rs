@@ -50,6 +50,8 @@ impl MetaMcp {
         authentication: super::Authentication,
         params: Option<&Value>,
     ) -> Result<Option<crate::idempotency::GuardOutcome>> {
+        #[cfg(test)]
+        RESERVATION_ATTEMPTS.with(|count| count.set(count.get() + 1));
         let Some(cache) = self.idempotency_cache.as_ref() else {
             return Ok(None);
         };
@@ -84,5 +86,83 @@ impl MetaMcp {
         let discriminator =
             crate::protocol::mrtr::RetryFields::from_params(params).key_discriminator();
         crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
+    }
+
+    /// #1962: arm a direct-route reservation for its backend dispatch, so a
+    /// caller that disconnects mid-call does not free the key.
+    pub(crate) fn arm_direct_dispatch(
+        reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    ) {
+        super::invoke::arm_for_dispatch(reservation);
+    }
+
+    /// The audit subject a credential for `server` is resolved under: the
+    /// same string the credential resolver records, for a route
+    /// that writes its own record (the direct route, #2190).
+    pub(crate) fn audit_subject_for(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> String {
+        self.principal_for(server, caller).map_or_else(
+            || crate::identity_propagation::audit_subject(None),
+            crate::personal_accounts::identity::Principal::stable_actor_id,
+        )
+    }
+
+    /// Whether the credential resolver has a principal to mint for `server`
+    /// under (#2310). Without one it mints nothing: a non-required backend
+    /// keeps its static credential (IDP.5).
+    pub(crate) fn has_principal_for(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> bool {
+        self.principal_for(server, caller).is_some()
+    }
+
+    fn principal_for<'a>(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'a>,
+    ) -> Option<crate::personal_accounts::identity::Principal<'a>> {
+        let descriptor_id = self
+            .backends
+            .get(server)
+            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        self.caller_principal(descriptor_id.as_deref(), caller)
+    }
+}
+
+// T9 (test plan "Shared fixture"): counts every reservation attempt into
+// `direct_route_idempotency`, whatever the outcome, so a fixture can assert
+// on it without `backend_handlers.rs` growing past its size baseline.
+#[cfg(test)]
+thread_local! {
+    static RESERVATION_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+impl MetaMcp {
+    /// Reservation attempts on this thread since the last reset (T9).
+    pub(crate) fn reservation_attempts() -> usize {
+        RESERVATION_ATTEMPTS.with(std::cell::Cell::get)
+    }
+
+    /// Reset the T9 counter for this thread.
+    pub(crate) fn reset_reservation_attempts() {
+        RESERVATION_ATTEMPTS.with(|count| count.set(0));
+    }
+
+    /// Test-only entry to `invoke_tool` for router cells that must drive a
+    /// meta-layer exchange (a bridged input round) on the same `MetaMcp` an
+    /// HTTP fixture serves (MIK-7597 T3c). Compiled only under `cfg(test)`.
+    pub(crate) async fn invoke_tool_for_test(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
+        self.invoke_tool(args, session_id, caller).await
     }
 }

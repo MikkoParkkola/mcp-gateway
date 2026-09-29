@@ -666,6 +666,10 @@ pub(super) use gateway::{
     gateway, gateway_in, slots,
 };
 
+// #2190: the direct-route tests live in `router`; this is their one door in.
+#[path = "account_direct_bridge.rs"]
+pub(crate) mod direct_bridge;
+
 // #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
 #[path = "account_sole_operator_mcp_tests.rs"]
 mod sole_operator_mcp_tests;

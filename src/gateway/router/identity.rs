@@ -13,6 +13,8 @@ use axum::http::{HeaderMap, StatusCode};
 use tracing::warn;
 
 use crate::config::KeyServerOidcConfig;
+#[cfg(feature = "firewall")]
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::OidcVerifier;
@@ -283,19 +285,79 @@ pub(crate) fn grant_subject_from_verified_identity(
 }
 
 fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubject> {
-    let subject = identity
-        .san_uris
-        .first()
-        .and_then(|value| trimmed_non_empty(value))
-        .or_else(|| identity.common_name.as_deref().and_then(trimmed_non_empty))
-        .or_else(|| trimmed_non_empty(&identity.display_name))?;
+    // Authorization keeps the display-name fallback; the control key does not
+    // (see `caller_key`).
+    let subject =
+        cert_subject_id(identity).or_else(|| trimmed_non_empty(&identity.display_name))?;
     let label = trimmed_non_empty(&identity.display_name);
 
-    Some(GrantSubject::new("mtls", subject, label))
+    Some(GrantSubject::new(MTLS_AUTHORITY, subject, label))
 }
 
+/// The authority every certificate-derived grant subject carries.
+const MTLS_AUTHORITY: &str = "mtls";
+
+/// A certificate's subject, verbatim: its first non-empty SAN URI, else its CN
+/// — the rule `select_mtls_subject` applies for agent identity, so one
+/// certificate is one principal on both paths (#2285). `None` when it has
+/// neither — never its display name, which can be a constant every such
+/// certificate shares.
+fn cert_subject_id(identity: &CertIdentity) -> Option<String> {
+    identity
+        .san_uris
+        .iter()
+        .map(String::as_str)
+        .chain(identity.common_name.as_deref())
+        .find(|value| !value.is_empty())
+        .map(String::from)
+}
+
+/// The key the per-caller firewall controls (anomaly, tenant, budget) score on:
+/// the hardened design's `CallerKey`.
+///
+/// `Subject(authority, id)` when the caller resolved a grant subject, else
+/// `Credential(digest)` for an authenticated API key, else empty (no identity;
+/// the firewall refuses rather than pools). A subject outranks the credential,
+/// so one person keeps one bucket across credentials and token exchanges.
+///
+/// Length-prefixed, with a tag per variant, so no two distinct callers can
+/// encode to one key. A certificate subject is re-derived from the certificate
+/// itself so the display-name fallback `caller_grant_subject` keeps for
+/// authorization can never become a shared key.
+#[cfg(feature = "firewall")]
+pub(super) fn caller_key(
+    subject: Option<&GrantSubject>,
+    cert: Option<&CertIdentity>,
+    client: Option<&AuthenticatedClient>,
+) -> String {
+    if let Some(subject) = subject {
+        let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
+        let id = if from_cert {
+            cert.and_then(cert_subject_id)
+        } else {
+            Some(subject.subject.clone())
+        };
+        if let Some(id) = id {
+            return format!(
+                "subject:{}:{}:{}:{id}",
+                subject.authority.len(),
+                subject.authority,
+                id.len()
+            );
+        }
+    }
+    client
+        .filter(|c| c.authenticated && !c.principal.is_empty())
+        .map_or_else(String::new, |c| {
+            format!("credential:{}:{}", c.principal.len(), c.principal)
+        })
+}
+
+/// The verified agent JWT `sub` is the subject verbatim, as on the OIDC path:
+/// never trimmed or truncated, so `" admin "` stays a different principal from
+/// `admin` (#2279). Only the display label is trimmed.
 fn grant_subject_from_oauth_agent(identity: &OAuthAgentIdentity) -> Option<GrantSubject> {
-    let subject = trimmed_non_empty(&identity.client_id)?;
+    let subject = Some(identity.client_id.clone()).filter(|id| !id.is_empty())?;
     let label = trimmed_non_empty(&identity.agent_name);
 
     Some(GrantSubject::new("agent_oauth", subject, label))
@@ -313,3 +375,7 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "identity_header_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "caller_key_tests.rs"]
+mod caller_key_tests;

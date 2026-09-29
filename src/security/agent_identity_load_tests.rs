@@ -69,3 +69,90 @@ fn a_declared_known_agent_loads_when_dormant_or_under_the_hatch() {
     config_with(false, false).validate().expect("dormant");
     config_with(true, true).validate().expect("C29");
 }
+
+// ── #2244: faults that used to surface only at request time ─────────────────
+
+fn require_id_config(hatch: bool) -> Config {
+    let mut config = Config::default();
+    config.security.agent_identity = AgentIdentityConfig {
+        enabled: true,
+        require_id: true,
+        allow_unverified_agent_identity: hatch,
+        ..AgentIdentityConfig::default()
+    };
+    config
+}
+
+/// `require_id` with no proof source and no hatch refuses every call; refuse
+/// the config instead.
+#[test]
+fn require_id_without_any_proof_source_fails_config_load() {
+    let error = require_id_config(false)
+        .validate()
+        .expect_err("unsatisfiable require_id")
+        .to_string();
+    assert!(error.contains("require_id"), "{error}");
+}
+
+/// Any one way to satisfy it loads: agent JWT, mTLS, or the hatch.
+#[test]
+fn require_id_loads_when_some_proof_source_can_satisfy_it() {
+    let mut jwt = require_id_config(false);
+    jwt.agent_auth.enabled = true;
+    jwt.validate().expect("agent JWT");
+    let mut mtls = require_id_config(false);
+    mtls.mtls.enabled = true;
+    mtls.validate().expect("mTLS");
+    require_id_config(true).validate().expect("hatch");
+}
+
+/// The hatch weakens identity, so the gateway says so when it loads.
+#[test]
+fn the_unverified_hatch_warns_at_load() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl Write for Buf {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().write(bytes)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let buf = Buf::default();
+    let sink = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || sink.clone())
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        require_id_config(true).validate().expect("hatch loads");
+    });
+    let logs = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("allow_unverified_agent_identity"), "{logs}");
+}
+
+/// Lookup is first-match, so a second row for one principal would be dead
+/// config; refuse it.
+#[test]
+fn duplicate_principal_labels_fail_config_load() {
+    let row = |labels: &[&str]| PrincipalLabels {
+        source: ProofSource::VerifiedJwtSubject,
+        id: "runner".to_string(),
+        labels: labels.iter().map(|l| (*l).to_string()).collect(),
+    };
+    let mut config = Config::default();
+    config.security.agent_identity.principal_labels = vec![row(&["a"]), row(&["b"])];
+    let error = config
+        .validate()
+        .expect_err("duplicate principal_labels")
+        .to_string();
+    assert!(
+        error.contains("principal_labels") && error.contains("runner"),
+        "{error}"
+    );
+}

@@ -631,8 +631,10 @@ function authHeaders() {
   return h;
 }
 
-async function apiFetch(url, opts = {}) {
-  opts.headers = { ...authHeaders(), ...opts.headers };
+// `poll` marks the 5-second refresh: the server checks it but never lets it
+// extend a dashboard session, so an unattended tab still times out.
+async function apiFetch(url, opts = {}, poll = false) {
+  opts.headers = { ...authHeaders(), ...(poll ? { 'X-Mcp-Gateway-Poll': '1' } : {}), ...opts.headers };
   const r = await fetch(url, opts);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
@@ -735,9 +737,9 @@ function actionBadge(action) {
 }
 
 // Dashboard
-async function refreshDashboard() {
+async function refreshDashboard(poll = false) {
   try {
-    const d = await apiFetch('/ui/api/status');
+    const d = await apiFetch('/ui/api/status', {}, poll);
     document.getElementById('d-servers').textContent = d.server_count ?? '-';
     document.getElementById('d-tools').textContent = d.tool_count ?? '-';
     document.getElementById('d-uptime').textContent = fmtUptime(d.uptime_secs);
@@ -754,14 +756,14 @@ async function refreshDashboard() {
 }
 
 // Control Plane
-async function refreshControlPlane() {
+async function refreshControlPlane(poll = false) {
   const status = document.getElementById('cp-status');
   if (status) {
     status.textContent = 'Refreshing...';
     status.style.color = '';
   }
   try {
-    const d = await apiFetch('/ui/api/control-plane');
+    const d = await apiFetch('/ui/api/control-plane', {}, poll);
     renderControlPlane(d);
     if (status) status.textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
@@ -1793,9 +1795,9 @@ function esc(s) {
 }
 
 // Auto-refresh
-function refreshAll() {
-  refreshDashboard();
-  if (location.hash.replace('#', '') === 'control-plane') refreshControlPlane();
+function refreshAll(poll = false) {
+  refreshDashboard(poll);
+  if (location.hash.replace('#', '') === 'control-plane') refreshControlPlane(poll);
 }
 
 // Initial load
@@ -1803,7 +1805,7 @@ onHash();
 refreshAll();
 
 // Poll every 5 seconds
-setInterval(refreshAll, 5000);
+setInterval(() => refreshAll(true), 5000);
 </script>
 </body>
 </html>

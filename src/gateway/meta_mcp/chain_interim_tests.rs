@@ -11,11 +11,11 @@ use serde_json::{Value, json};
 use super::CONFIRMATION_INPUT_KEY;
 use super::chain_interim::{
     ChainResumePlan, MAX_CHAIN_ROUNDS, classify_step_result, drive_chain, malformed_interim_error,
-    plan_chain_resume, seal_chain_stop, step_retry_for,
+    plan_chain_resume, presented_resume, seal_chain_stop, step_retry_for,
 };
 use crate::Result;
 use crate::protocol::continuation::{ContinuationPurpose, ContinuationState, Payload};
-use crate::protocol::mrtr::InputRequired;
+use crate::protocol::mrtr::{InputRequired, RetryFields};
 
 const NOW: u64 = 1_780_000_000;
 const CALLER: &str = "fingerprint-of-the-caller-who-started-the-chain";
@@ -712,4 +712,20 @@ async fn a_step_outside_the_chain_is_refused_rather_than_indexed() {
         error.to_string().contains("outside the chain"),
         "a step past the end was refused for some other reason: {error}"
     );
+}
+
+/// #2254. Answers without the `requestState` this gateway issued are not a
+/// retry of anything it asked: presenting them must refuse, not run the chain
+/// fresh and drop them.
+#[tokio::test]
+async fn answers_without_a_request_state_are_refused_not_dropped() {
+    let state = ContinuationState::new();
+    let retry = RetryFields {
+        input_responses: Some(json!({"q": {"action": "accept"}})),
+        ..RetryFields::default()
+    };
+
+    let refused = presented_resume(&state, &retry, &three_step_chain(), None, NOW).await;
+
+    assert!(refused.is_err(), "stray answers let the chain run fresh");
 }

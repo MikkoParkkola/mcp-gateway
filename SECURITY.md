@@ -62,16 +62,14 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
 
 ### Known limitations
 
-- **Windows file permissions**: the task store and the personal-account store are
-  owner-only on Windows (ADR-016: one Windows-only module calls the Win32 security API). Other
-  files holding secrets — the config with its
-  admin token, generated mTLS private keys, stored OAuth tokens — are created
-  owner-only (`0600`) on Unix. Windows has no equivalent in the Rust standard
-  library: the file inherits the ACL of the directory it is written to, and
-  the gateway warns once per process when it writes such a file. **On Windows,
-  put the config and any key material in a directory only the gateway's account
-  can read.** Moving these writers onto the stores' owner-only creation is
-  tracked in #1718.
+- **Windows file permissions**: on Windows (ADR-016: one Windows-only module calls the Win32
+  security API) the gateway creates the task store, the personal-account store and every file
+  holding a secret — the config with its admin token, generated mTLS private keys, stored OAuth
+  tokens — owner-only, with a protected DACL from the first instant. A volume that keeps no ACLs
+  (FAT, exFAT) is refused rather than written. Reads refuse a secret file another account can
+  read or change and a trust file another account can change, and print the PowerShell repair
+  (UPGRADING-4.0 item 99). A file already on disk is only checked when it is read; the check
+  does not rewrite it.
 
 ### Security Testing
 

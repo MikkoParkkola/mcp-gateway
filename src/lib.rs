@@ -169,3 +169,6 @@ mod log_filter_tests;
 
 #[cfg(test)]
 pub(crate) mod test_log_capture;
+
+#[cfg(all(test, unix))]
+pub(crate) mod test_fifo;

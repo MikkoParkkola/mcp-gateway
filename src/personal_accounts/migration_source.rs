@@ -132,7 +132,11 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     {
         let found = crate::private_fs::privacy_refusals(&file);
         if !found.is_empty() {
-            let detail = windows_remediation(&shown, &found);
+            let detail = crate::private_fs::windows_remediation(
+                &shown,
+                &found,
+                crate::config::Protects::Secrecy,
+            );
             return Err(not_private(shown, &detail));
         }
     }
@@ -186,83 +190,6 @@ fn not_private(path: String, detail: &str) -> SourceRefusal {
         let _ = detail;
         SourceRefusal::NotPrivate { path }
     }
-}
-
-/// Which rules failed, and the PowerShell lines that repair them, one per
-/// line. Paths are PowerShell single-quoted literals (no expansion), with every
-/// single-quote character PowerShell recognises doubled, so no path can end
-/// the literal. The gateway account is named by its SID, which stays right in
-/// an elevated prompt run as another account. The DACL is replaced in ONE
-/// write with a protected DACL holding only the gateway account's grant, so no
-/// intermediate state exposes the file. With a foreign owner the lines need an
-/// administrator prompt: take ownership, write the DACL as owner, then give
-/// ownership to the gateway account.
-#[cfg(windows)]
-fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) -> String {
-    use crate::private_fs::PrivacyRefusal as P;
-    use std::fmt::Write as _;
-    let Some(me) = crate::private_fs::user_sid_string() else {
-        return format!(" ({found:?})");
-    };
-    let literal: String = path
-        .chars()
-        .flat_map(|c| {
-            let quote = matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}');
-            std::iter::once(c).chain(quote.then_some(c))
-        })
-        .collect();
-    let foreign_owner = found.iter().any(|r| matches!(r, P::ForeignOwner(_)));
-    // Allowlist first: a line an administrator runs elevated is printed only
-    // for a path made of characters that can never end or escape a literal.
-    // The quote doubling above is the second layer, not the gate.
-    if !runnable_path(path) {
-        let mut out = format!(
-            " ({found:?}). The path holds characters outside letters, digits, space and \
-             \\ : . _ - ( ), so no command is printed for it. To repair it"
-        );
-        if foreign_owner {
-            let _ = write!(
-                out,
-                ", as an administrator, make the account with SID {me} its owner, then"
-            );
-        }
-        let _ = write!(
-            out,
-            " open its Security settings, disable inheritance and remove every entry, \
-             and grant Full control to the account with SID {me} alone."
-        );
-        return out;
-    }
-    let mut out = format!(" ({found:?}). To repair it, run these lines in Windows PowerShell");
-    if foreign_owner {
-        out.push_str(" as an administrator, because the file has another owner");
-    }
-    out.push_str(":\n");
-    // With a foreign owner, the elevated account first takes ownership itself
-    // (an owner may always write the DACL), writes the DACL, and only then
-    // hands ownership to the gateway account. Handing it over first could
-    // leave the elevated account with no right to write the DACL.
-    if foreign_owner {
-        let _ = writeln!(out, "takeown /F '{literal}'");
-    }
-    let _ = writeln!(
-        out,
-        "$acl = New-Object System.Security.AccessControl.FileSecurity; \
-         $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;{me})', 'Access'); \
-         (Get-Item -LiteralPath '{literal}').SetAccessControl($acl)"
-    );
-    if foreign_owner {
-        let _ = writeln!(out, "icacls '{literal}' /setowner '*{me}'");
-    }
-    out
-}
-
-/// The characters a printed, runnable repair line may carry in its path.
-#[cfg(windows)]
-fn runnable_path(path: &str) -> bool {
-    path.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, ' ' | '\\' | ':' | '.' | '_' | '-' | '(' | ')')
-    })
 }
 
 #[cfg(test)]

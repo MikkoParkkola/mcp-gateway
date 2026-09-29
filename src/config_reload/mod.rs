@@ -622,9 +622,7 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
 /// `server.public_url` and `control_plane.role_mapping` are re-read per request
 /// (see `router::well_known`, `router::origin_guard`, `ui::control_plane`, `auth::live`).
 fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, bool)> {
-    // A macro rather than sixteen hand-written comparisons: the point is that
-    // the list is exhaustive, and a shape that makes adding one a single line
-    // is the shape that stays exhaustive.
+    // A macro so the list stays exhaustive: adding a section is one line.
     macro_rules! sections {
         ($($(#[$attr:meta])* $name:literal => $field:ident),* $(,)?) => {
             vec![$($(#[$attr])* (
@@ -634,8 +632,8 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         };
     }
 
-    sections![
-        "auth" => auth,
+    let mut sections = sections![
+        "auth" => auth, // first: compared below without `dashboard_session`
         "mtls" => mtls,
         "key_server" => key_server,
         "agent_auth" => agent_auth,
@@ -662,7 +660,9 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "accounts" => accounts,
         #[cfg(feature = "cost-governance")]
         "cost_governance" => cost_governance,
-    ]
+    ];
+    sections[0].1 = running.auth.restart_only_json() != wanted.auth.restart_only_json();
+    sections
 }
 
 /// Returns `true` when the TCP-listener address differs.
@@ -1043,8 +1043,8 @@ pub struct ConfigWatcher {
 
 impl ConfigWatcher {
     /// The chain watch, for tests that wait on its ledger and counters.
-    // Only the unix-gated watcher tests read it.
-    #[cfg(all(test, unix))]
+    // Only the linux-gated real-watcher tests read it.
+    #[cfg(all(test, target_os = "linux"))]
     #[expect(
         clippy::used_underscore_binding,
         reason = "the field is named for keeping the watch alive; only tests read it"
@@ -2197,6 +2197,8 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 mod env_poll;
 #[cfg(all(test, target_os = "linux"))]
 mod env_poll_e2e_tests;
+pub(crate) mod grant_audit;
+mod grant_audit_plan;
 mod grant_delta;
 mod grant_reload;
 pub use grant_reload::IdentityGrantSink;
@@ -2213,6 +2215,14 @@ mod grant_change_trigger_tests;
 #[cfg(test)]
 mod grant_reload_trigger_tests;
 
+#[cfg(test)]
+mod grant_audit_crash_tests;
+#[cfg(test)]
+mod grant_audit_journal_tests;
+#[cfg(test)]
+mod grant_audit_reload_tests;
+#[cfg(test)]
+pub(crate) mod grant_audit_tests;
 #[cfg(test)]
 mod reload_load_tests;
 

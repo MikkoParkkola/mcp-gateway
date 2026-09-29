@@ -2602,7 +2602,7 @@ impl MetaMcp {
 // ============================================================================
 
 #[cfg(test)]
-mod account_resolver_fixture;
+pub(crate) mod account_resolver_fixture;
 #[cfg(test)]
 mod account_resolver_gate;
 #[cfg(test)]

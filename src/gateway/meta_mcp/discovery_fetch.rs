@@ -121,6 +121,12 @@ impl MetaMcp {
         headers: &[(String, String)],
     ) -> Option<Arc<Vec<Tool>>> {
         let tools = backend.get_cached_tools_snapshot_for(binding);
+        // A populated shared slot whose every tool is withheld reads empty here;
+        // it must still refresh on TTL, or a description fixed upstream stays
+        // hidden from search forever (#1441).
+        if tools.is_empty() && binding.is_none() && backend.cached_tools_known() {
+            Self::refresh_stale_backend_tools_in_background(backend);
+        }
         if !tools.is_empty() {
             if binding.is_none() {
                 // Shared: serve now, refresh behind. Byte-for-byte as before.

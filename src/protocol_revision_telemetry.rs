@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 #[cfg(unix)]
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -955,11 +954,7 @@ fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temporary = path.with_extension("json.tmp");
     {
-        let mut options = OpenOptions::new();
-        options.create(true).write(true).truncate(true);
-        set_owner_only(&mut options);
-        let mut file = options.open(&temporary)?;
-        force_file_owner_only(&file)?;
+        let mut file = crate::config_persistence::create_private_replacing(&temporary)?;
         file.write_all(&bytes)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
@@ -982,23 +977,6 @@ fn sync_parent_directory(_path: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn set_owner_only(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    options.mode(0o600);
-}
-
-#[cfg(unix)]
-fn force_file_owner_only(file: &std::fs::File) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))
-}
-
-#[cfg(not(unix))]
-fn force_file_owner_only(_file: &std::fs::File) -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn force_directory_owner_only(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
@@ -1008,9 +986,6 @@ fn force_directory_owner_only(path: &Path) -> io::Result<()> {
 fn force_directory_owner_only(_path: &Path) -> io::Result<()> {
     Ok(())
 }
-
-#[cfg(not(unix))]
-fn set_owner_only(_options: &mut OpenOptions) {}
 
 fn global() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
@@ -1602,5 +1577,22 @@ mod tests {
                 .total,
             1
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn window_file_is_owner_only_in_an_open_directory_and_over_a_stale_temp() {
+        // WT-ASSERT 1718-W5: the window is created private, and a stale temp
+        // planted with an open DACL does not carry it into the window file.
+        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+
+        let dir = everyone_full_dir("1718-W5");
+        let path = dir.path().join("window.json");
+        std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
+
+        write_window_atomic(&path, &DurableWindow::empty(1)).unwrap();
+
+        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
+        assert_owner_only("1718-W5", &path, false);
     }
 }

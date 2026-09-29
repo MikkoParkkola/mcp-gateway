@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::journal::{
-    ChangeError, GrantChange, Hooks, JournalEntry, JournalVerb, UNKNOWN_ACTOR, apply_change_with,
-    grant_digest, journal_path, lock_path, parse_journal,
+    ChangeError, GrantChange, Hooks, JOURNAL_VERSION, JournalEntry, JournalVerb, UNKNOWN_ACTOR,
+    apply_change_with, grant_digest, journal_path, lock_path, parse_journal,
 };
 use super::{
     GrantAgent, GrantScope, GrantSubject, IdentityGrant, IdentityGrantFile,
@@ -383,6 +383,26 @@ fn reader_leaves_an_unterminated_tail_for_later() {
         parsed.torn.is_empty(),
         "an unterminated tail is not torn yet"
     );
+}
+
+/// A line in a journal format this build does not know is refused like a
+/// damaged line: never read as a change, always reported.
+#[test]
+fn reader_refuses_a_future_journal_version() {
+    let mut future = sample_entry("e2");
+    future.v = JOURNAL_VERSION + 1;
+    let a = serde_json::to_string(&sample_entry("e1")).unwrap();
+    let b = serde_json::to_string(&future).unwrap();
+    let bytes = format!("{a}\n{b}\n");
+    let parsed = parse_journal(bytes.as_bytes());
+    let ids: Vec<_> = parsed.entries.iter().map(|e| e.entry_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["e1"],
+        "a v{} entry was read as a change",
+        future.v
+    );
+    assert_eq!(parsed.torn.len(), 1, "the future-version line is reported");
 }
 
 #[test]

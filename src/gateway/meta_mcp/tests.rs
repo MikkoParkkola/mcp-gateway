@@ -20,6 +20,8 @@ mod order2_fsm;
 #[path = "empty_session_gate_tests.rs"]
 mod empty_session_gate;
 
+#[path = "context_integrity_evidence_tests.rs"]
+mod context_integrity_evidence;
 #[path = "session_fp_tests.rs"]
 mod session_fp;
 
@@ -6245,5 +6247,7 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
     ));
 }
 
+#[path = "bridge_fallthrough_tests.rs"]
+mod bridge_fallthrough;
 #[path = "list_servers_tools_known_tests.rs"]
 mod list_servers_tools_known;

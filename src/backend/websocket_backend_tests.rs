@@ -193,7 +193,7 @@ async fn t17_a_start_failure_on_the_notify_path_counts_toward_the_breaker() {
     let backend = stdio_backend(MISSING);
     tokio::time::timeout(
         WAIT,
-        backend.notify_with_headers("notifications/cancelled", None, None),
+        backend.notify_with_headers("notifications/cancelled", None, &[], None),
     )
     .await
     .expect("must not hang")

@@ -1,0 +1,2 @@
+# Check out text as LF on every platform: docs/claims tests and hash pins read files byte-exact.
+* text=auto eol=lf

@@ -71,9 +71,9 @@ pub(super) fn is_oversized(e: &io::Error) -> bool {
 pub(super) struct SegState {
     pub(super) seq: u64,
     pub(super) opened_at: u64,
-    /// `(dev, ino)` from `fstat` at open; compared with `stat(path)` on
+    /// The open handle's `file_id` at open; compared with `path_id(path)` on
     /// every append to notice a rotation by another writer (2.8).
-    pub(super) id: (u64, u64),
+    pub(super) id: FileId,
     /// Whether the active file holds more than its open record.
     pub(super) has_records: bool,
     /// Sealed segments beside the active file, as last listed.
@@ -86,37 +86,40 @@ pub(super) fn now_secs(offset: i64) -> u64 {
     u64::try_from(now).unwrap_or(0)
 }
 
+/// A file's identity: (volume, file id). Unix: (`st_dev`, `st_ino`). Windows:
+/// (volume serial, 128-bit id), the only pair `ReFS` keeps unique.
+pub(super) type FileId = (u64, u128);
+
+/// The identity of an open file, read from its handle.
 #[cfg(unix)]
-pub(super) fn file_id(meta: &std::fs::Metadata) -> (u64, u64) {
+pub(super) fn file_id(file: &File) -> io::Result<FileId> {
     use std::os::unix::fs::MetadataExt;
-    (meta.dev(), meta.ino())
+    let meta = file.metadata()?;
+    Ok((meta.dev(), u128::from(meta.ino())))
 }
 
-/// A new active file's creation time is its identity off unix. NTFS
-/// "tunnels" the creation time of a file renamed away onto a new file created
-/// under the same name within seconds, which would hide a rotation from the
-/// other writers; stamping it now keeps the identities apart.
 #[cfg(windows)]
-fn stamp_created(file: &std::fs::File) -> io::Result<()> {
-    use std::os::windows::fs::FileTimesExt;
-    file.set_times(std::fs::FileTimes::new().set_created(std::time::SystemTime::now()))
+pub(super) fn file_id(file: &File) -> io::Result<FileId> {
+    crate::win_acl::file_identity(file)
 }
 
-#[cfg(not(windows))]
-#[allow(clippy::unnecessary_wraps)] // the Windows variant can fail
-const fn stamp_created(_file: &std::fs::File) -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub(super) fn file_id(meta: &std::fs::Metadata) -> (u64, u64) {
-    // No inode off unix: creation time stands in, best effort.
-    let t = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
-    (0, t)
+/// The identity of whatever `path` names now. Windows has no id without a
+/// handle, so the file is opened for attributes only, sharing everything so
+/// a writer's rotate or delete is not blocked.
+pub(super) fn path_id(path: &Path) -> io::Result<FileId> {
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const SHARE_ALL: u32 = 0x7; // FILE_SHARE_READ | WRITE | DELETE
+        OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(SHARE_ALL)
+            .open(path)?
+    };
+    #[cfg(not(windows))]
+    let file = File::open(path)?;
+    file_id(&file)
 }
 
 // ── Record helpers ────────────────────────────────────────────────────────────
@@ -251,7 +254,7 @@ pub(super) fn recover(
             true,
         )?;
     }
-    state.seg.id = file_id(&state.file.metadata()?);
+    state.seg.id = file_id(&state.file)?;
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok(state)
@@ -323,7 +326,6 @@ pub(super) fn open_after_seal(
             .truncate(true)
             .open(path)
             .map_err(segments::ctx("create", path))?;
-        stamp_created(&file)?;
         Ok::<_, io::Error>(file)
     };
     let file_seg = |seq| SegState {
@@ -336,15 +338,20 @@ pub(super) fn open_after_seal(
     let Some(newest) = sealed.last() else {
         let hw_counter = hw.map_or(0, |h| h.counter);
         if hw_counter == 0 {
-            drop(fresh()?);
-            let file = OpenOptions::new()
-                .append(true)
-                .open(path)
-                .map_err(segments::ctx("open", path))?;
+            // Segment 0 opens with a record too, so verify can tell a
+            // never-rotated log from a pre-D6 one and require `.hwm` (#2275).
+            let fields = housekeeping(
+                EV_OPENED,
+                &[("segment_seq", 0.into()), ("segment_opened_at", now.into())],
+            );
+            let hash = write_synced(&mut fresh()?, config, fields, 1, "genesis")?;
             return Ok(Recovered {
-                file,
-                counter: 0,
-                last_entry_hash: "genesis".into(),
+                file: OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .map_err(segments::ctx("open", path))?,
+                counter: 1,
+                last_entry_hash: hash,
                 seg: file_seg(0),
             });
         }

@@ -67,6 +67,7 @@ fn eligible_auth(api_keys: Vec<ApiKeyConfig>) -> AuthConfig {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: true,
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
     }
 }
 
@@ -170,6 +171,31 @@ fn http_single_user_false_is_not_sole_operator() {
         ..Config::default()
     };
     assert_row("http: single_user=false", &config, ServeMode::Http, false);
+}
+
+#[test]
+fn http_bearer_only_is_sole_operator() {
+    let config = Config {
+        auth: AuthConfig {
+            bearer_token: Some("operator-token".to_string()),
+            ..eligible_auth(Vec::new())
+        },
+        ..Config::default()
+    };
+    assert_row("http: bearer only", &config, ServeMode::Http, true);
+}
+
+/// #2241: the bearer and one key are two credentials.
+#[test]
+fn http_bearer_plus_one_key_is_not_sole_operator() {
+    let config = Config {
+        auth: AuthConfig {
+            bearer_token: Some("operator-token".to_string()),
+            ..eligible_auth(vec![api_key("client")])
+        },
+        ..Config::default()
+    };
+    assert_row("http: bearer + one key", &config, ServeMode::Http, false);
 }
 
 #[test]
