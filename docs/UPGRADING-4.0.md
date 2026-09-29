@@ -83,7 +83,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
-- Item 97
+- Item 100
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -216,7 +216,10 @@ without it.**
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
-| 97 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
+| 97 | Reserved: lands with #2286 | None yet |
+| 98 | Reserved: lands with #2293 | None yet |
+| 99 | Reserved: lands with #2295 | None yet |
+| 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2585,7 +2588,7 @@ the mode. The check runs before the mode rules, on the same handle as the read.
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
 
-## 97. Proven identifiers are compared verbatim
+## 100. Proven identifiers are compared verbatim
 
 In 3.x, a proven identifier (the `sub` of an agent token the gateway validated, or an mTLS
 client certificate's SAN URI or CN) was trimmed of surrounding whitespace before it keyed
