@@ -2840,7 +2840,9 @@ record carries its counter as `hwm_missing_at`, so the failure lasts as long as 
 A pre-D6 log (no open record) and a log holding only its genesis open record (a crash before
 the first mark) still get a fresh mark without the record. A crash between the first caller
 record and its first mark is indistinguishable from a cut and is recorded. A changed
-`shared_secret` makes the old mark unreadable and is recorded too.
+`shared_secret` makes the old mark unreadable and is recorded too. So is a torn final line the
+mark already counted (a committed record, not a crash mid-write), and a record recovery cannot
+verify (edited, unlinked or oversized).
 
 **Action:** treat the record as possible tail loss and investigate. To clear the live failure,
 archive the log's files together and let the gateway start a new log. Like the other
