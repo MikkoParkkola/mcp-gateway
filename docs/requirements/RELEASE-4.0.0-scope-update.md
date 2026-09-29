@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 81
+Approved supplemental criteria: 85
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -116,6 +116,10 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | GH1944.CHAIN.1 | A downstream gateway configured to verify a backend's signature chain checks every link against its trusted keys, the pinned origin and last signer, the link-to-link digests and its own nonce, strips and marks a chain that fails, and appends its own link, so a tampered, reordered or dropped hop or a re-signed chain fails verification (ASI07, #1944). | SECURITY |
 | GH1945.COLLUDE.1 | Opt-in verbatim cross-principal relay detection: sensitive content one principal received that another principal then sends onward is reported, or refused under `block`, on the meta route and on the direct route once #1785 lands; one principal never flags itself and relays outside the window are not flagged. ASI10 stays PARTIAL, since other collusion patterns have no sound definition (#1945). | SECURITY |
 | GH1625.BOTREVIEW.1 | Every automated pull-request reviewer finding on pull requests merged to the release line up to the release tip is resolved with a fix commit or an individual written disposition verified at source (no bulk won't-fix), and the #1625 backlog is closed (#1625). | SECURITY |
+| MIK-7406.VERIFY.1 | On the HTTP delivery path a message-signing test recomputes the HMAC over the delivered bytes with the configured key and rejects a tampered byte, not only the signature's shape; MIK-7377.SIGNING.1 stays met on its stdio evidence (MIK-7406). | SAFETY |
+| MIK-7587.WINDOWS.1 | Every area the Windows CI job skipped is classified as a fixed test assumption, a product defect fixed in 4.0 red-first on the Windows job, or unix-only by design (cfg-gated with a reason and documented as a Windows limitation), and the Windows job runs every test target (MIK-7587, #1142). | VALIDATION |
+| MIK-7581.DOCS.1 | README, release notes and CHANGELOG lead with 4.0's headline improvements (MCP 2026-07-28 support and the multi-user/enterprise scope), the multi-user guide opens with the enterprise scope, and every highlight cites its file or test (MIK-7581). | VALIDATION |
+| GH2294.AUDIT.1 | A restart that finds the audit log's high-water mark missing records that finding in the chain instead of re-minting the mark from a truncated tail, and live verification fails on it (#2294). | SAFETY |
 
 ## Boundaries
 
@@ -152,3 +156,11 @@ automated execution-to-evidence binding is a later improvement. The supplemental
 checker enforces reference existence and completeness, not the truth of a test
 report. Reviewers must still assess evidence applicability and quality. Planned
 test files and ignored tests are not completed feature evidence.
+
+### Linear tickets mapped onto existing rows (operator chat ruling C1)
+
+- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows, all MET.
+- MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A.
+- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows, all MET; the other repositories are outside this ledger.
+- MIK-7407 (response firewall): the MIK-7407.RESPONSE.* rows added by #2387.
+- MIK-7406 (response signing): MIK-7377.SIGNING.1 (met) plus MIK-7406.VERIFY.1 above.
