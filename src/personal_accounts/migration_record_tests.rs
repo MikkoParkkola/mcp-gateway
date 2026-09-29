@@ -16,6 +16,8 @@ const GENERATION: &str = "fedcba9876543210fedcba9876543210";
 const CLIENT: &str = "synthetic-migration-client";
 /// 2100-01-01, so a seeded expiry is unambiguously in the future.
 const FAR_FUTURE: u64 = 4_102_444_800;
+/// The clock every case migrates at: 2026-09-29, well before [`FAR_FUTURE`].
+const NOW: u64 = 1_790_000_000;
 
 fn revision() -> String {
     "0".repeat(64)
@@ -45,6 +47,7 @@ fn build(
         CLIENT.to_owned(),
         GENERATION.to_owned(),
         revision(),
+        NOW,
     )
 }
 
@@ -253,8 +256,9 @@ fn a_migrated_grant_is_the_first_revision_of_a_new_authorization() {
 fn an_expired_record_with_no_refresh_token_is_refused() {
     let mut token = legacy("expired-3x-access-token");
     token.expires_at = Some(1);
-    assert!(
-        build(&token, Some(&declared(&["read"]))).is_err(),
+    assert_eq!(
+        build(&token, Some(&declared(&["read"]))),
+        Err(RecordRefusal::ExpiredWithoutRefreshToken),
         "an expired, unrefreshable credential must not migrate"
     );
 }
