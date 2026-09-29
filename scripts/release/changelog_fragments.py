@@ -35,8 +35,13 @@ FRAGMENT = re.compile(r"^(\d+)\.(" + "|".join(TYPES) + r")\.md$")
 # Files in changelog.d/ that are not fragments.
 NOT_FRAGMENTS = {".gitkeep"}
 SKIP_LABEL = "no-changelog"
-# Shipped source: the gateway crate and the workspace crates.
-SOURCE = re.compile(r"^(src|crates/[^/]+/src)/")
+# What ships: the gateway crate, the workspace crates, the container images and
+# the platforms they are built for, the capability catalogue, and the registry
+# and npm package metadata.
+SOURCE = re.compile(
+    r"^(src/|crates/[^/]+/src/|Dockerfile[^/]*$|\.github/workflows/docker[^/]*\.ya?ml$"
+    r"|capabilities/|server\.json$|npm/)"
+)
 
 
 def fragment_name_errors(names: list[str]) -> list[str]:
@@ -63,10 +68,10 @@ def check(
     errors = fragment_name_errors(added)
     if SKIP_LABEL in labels:
         return errors
-    touches_src = any(SOURCE.match(path) for _, path in changes)
-    if touches_src and not any(FRAGMENT.match(n) for n in added):
+    touches_shipped = any(SOURCE.match(path) for _, path in changes)
+    if touches_shipped and not any(FRAGMENT.match(n) for n in added):
         errors.append(
-            f"this PR changes source but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
+            f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
             f"add one (see CONTRIBUTING.md) or apply the '{SKIP_LABEL}' label"
         )
     # Only the release fold, which deletes every fragment it folds in, edits

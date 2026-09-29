@@ -26,6 +26,7 @@ fn policy(id: &str, enforced: bool) -> ControlPlanePolicy {
 
 fn audit_event(event_id: &str, actor: &str, action: ControlPlaneAction) -> ControlPlaneAuditEvent {
     ControlPlaneAuditEvent {
+        grant_change: None,
         event_id: event_id.to_string(),
         actor_id: actor.to_string(),
         action,

@@ -575,6 +575,21 @@ jobs:
           cargo test --all-features --lib -- --ignored --show-output win_privileged::
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  macos-check:
+    name: macOS check
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # macOS is a shipped target, and every test target has to compile for
+      # it: a Linux-only API in a unix-gated test breaks the whole lib suite
+      # on a Mac without any other job noticing.
+      - run: cargo test --all-features --no-run
+
   test:
     name: Tests
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}

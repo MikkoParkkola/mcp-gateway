@@ -115,6 +115,7 @@ fn governance_event_carries_envelope() {
     .stable_actor_id();
     store
         .append_audit(&ControlPlaneAuditEvent {
+            grant_change: None,
             event_id: "e1".to_string(),
             actor_id: actor,
             action: ControlPlaneAction::MutateGrant,

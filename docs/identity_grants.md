@@ -256,9 +256,9 @@ the way to revoke everything.
 
 The file is authoritative on reload. Restoring an older copy, from a backup or
 config management, re-grants everything revoked since that copy was taken. The
-reload log and report show this as a negative `revoked` count. Grant reloads
-are recorded in the tracing log only, not in the governance audit log. A
-gateway running with auth disabled has no actor to attribute them to.
+reload log and report show this as a negative `revoked` count. With auth on,
+grant changes are also governance audit records (see "Change journal"). With
+auth off there is no governance store, and reloads are in the tracing log only.
 
 ### Change journal
 
@@ -270,13 +270,44 @@ command. The OS account is an unauthenticated hint, not an identity. A refused
 change appends nothing. If the grant file is written but the journal append
 fails, the command exits non-zero and says the change may have no
 journal entry. A journal that other users can write to (group or world
-write bit) refuses the change before the grant file is written: check its entries against the grant file or
-restore a trusted copy, then `chmod go-w` it. A grant file that repeats a grant id is refused until the duplicate is
+write bit) refuses the change before the grant file is written: check its
+entries against the grant file or restore a trusted copy, then `chmod go-w` it.
+A grant file that repeats a grant id is refused until the duplicate is
 removed by hand. The CLI holds a lock file
 beside the grant file across the write and the append, so two CLI runs cannot
-interleave. The gateway does not read the journal yet; recording its entries
-in the governance audit log, under the same lock, is tracked in #1869. The
-journal grows by one line per change and is not rotated.
+interleave. The journal grows by one line per change and is not rotated.
+
+### Governance records for grant changes
+
+With auth on, the gateway reads the journal under the same lock on every start
+and grant reload, and writes each change to the governance audit log exactly
+once, across crashes. Every record has actor `unknown` and action
+`mutate_grant`; its `grant_change` field holds the verb, the row digest, expiry,
+the CLI's time and the OS account hint.
+
+- `add`, `replace`, `revoke`: a journalled CLI change.
+- `out_of_band`: the grant file changed with no journal entry (a direct edit).
+  This is detectable, not attributable: the file and the journal have the same
+  trust level, since anyone who can write one can write the other.
+- `loaded` and `loaded_complete`: each start records the active grants it
+  serves, then a closing record with their count, before it accepts a request.
+- `indeterminate`: history cannot be stated exactly (an earlier record was
+  lost, a journal line is torn or in a later format version, or the journal was truncated, replaced or
+  unreadable).
+
+A change that is applied but cannot be recorded stays applied; the reload
+outcome says `grant change UNRECORDED`, and the next reconciliation records
+the gap as `indeterminate`. If the audit plan cannot be written before
+publishing, the reload is refused and the live grants stay; a start that
+cannot record serves no grants. With auth on and grants on, a governance store
+that cannot open refuses the start (UPGRADING-4.0 item 79).
+
+The gateway reads the grant file under the same lock file the CLI uses. On a
+read-only filesystem (a Kubernetes Secret or ConfigMap mount) it reads without
+the lock, since nothing can write there. If it cannot create the lock because
+the directory is missing or this process may not write there, the grant file
+counts as unreadable: with `fail_on_error` the start is refused,
+otherwise no grants are served until a reload can read them.
 
 ## Recommendations
 

@@ -1043,8 +1043,8 @@ pub struct ConfigWatcher {
 
 impl ConfigWatcher {
     /// The chain watch, for tests that wait on its ledger and counters.
-    // Only the unix-gated watcher tests read it.
-    #[cfg(all(test, unix))]
+    // Only the linux-gated real-watcher tests read it.
+    #[cfg(all(test, target_os = "linux"))]
     #[expect(
         clippy::used_underscore_binding,
         reason = "the field is named for keeping the watch alive; only tests read it"
@@ -2197,6 +2197,8 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 mod env_poll;
 #[cfg(all(test, target_os = "linux"))]
 mod env_poll_e2e_tests;
+pub(crate) mod grant_audit;
+mod grant_audit_plan;
 mod grant_delta;
 mod grant_reload;
 pub use grant_reload::IdentityGrantSink;
@@ -2213,6 +2215,14 @@ mod grant_change_trigger_tests;
 #[cfg(test)]
 mod grant_reload_trigger_tests;
 
+#[cfg(test)]
+mod grant_audit_crash_tests;
+#[cfg(test)]
+mod grant_audit_journal_tests;
+#[cfg(test)]
+mod grant_audit_reload_tests;
+#[cfg(test)]
+pub(crate) mod grant_audit_tests;
 #[cfg(test)]
 mod reload_load_tests;
 
