@@ -27,6 +27,9 @@ pub(super) struct DirectCall {
     request_hash: String,
     otel_trace_id: Option<String>,
     who: AuditWho,
+    /// The id of the incoming request: a refusal answers `id: null`, and the
+    /// FailClosed 503 must still echo what the caller sent.
+    request_id: Option<RequestId>,
 }
 
 impl DirectCall {
@@ -54,6 +57,9 @@ impl DirectCall {
             request_hash: sha256_of(params),
             otel_trace_id,
             who: AuditWho::from_request(client, grant_subject),
+            request_id: request
+                .get("id")
+                .and_then(|id| serde_json::from_value(id.clone()).ok()),
         })
     }
 }
@@ -144,12 +150,9 @@ pub(super) async fn record(
         Ok(()) => answer,
         Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
             tracing::error!(server, %error, "direct-route audit write failed; result withheld");
-            let id = body
-                .get("id")
-                .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok());
             let error = crate::Error::AuditUnavailable;
             build_http_error_response(
-                id,
+                call.request_id,
                 error.to_rpc_code(),
                 error.to_string(),
                 StatusCode::SERVICE_UNAVAILABLE,
