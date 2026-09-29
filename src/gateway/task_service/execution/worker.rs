@@ -231,7 +231,10 @@ async fn run_dispatched(
             )
             .await;
         }
-        None => settle_response(&executor, &principal, &id, revision, response).await,
+        None => {
+            let response = inspect_settled(&state, &call, &id, response);
+            settle_response(&executor, &principal, &id, revision, response).await;
+        }
     }
 }
 
@@ -449,6 +452,41 @@ async fn settle_descriptor_refused(
          descriptor does not fit the durable record budget.",
     ));
     executor.settle_cas(principal, id, revision, event).await;
+}
+
+/// The response firewall on a native task result, under the targets the
+/// synchronous call would use (#2351): a refusal is what the task settles on.
+fn inspect_settled(
+    state: &crate::gateway::router::AppState,
+    call: &TaskCall,
+    id: &str,
+    mut response: crate::protocol::JsonRpcResponse,
+) -> crate::protocol::JsonRpcResponse {
+    if response.error.is_some() {
+        return response;
+    }
+    let Some(result) = response.result.as_mut() else {
+        return response;
+    };
+    let backend = crate::gateway::router::backend_tool_targets_for_call(
+        &state.meta_mcp,
+        &call.tool,
+        &call.arguments,
+    );
+    let targets =
+        crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
+    if state
+        .meta_mcp
+        .inspect_task_result(&targets, id, result)
+        .is_err()
+    {
+        response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+            response.id,
+            -32600,
+            "Response blocked by security firewall",
+        );
+    }
+    response
 }
 
 async fn settle_response(

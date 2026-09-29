@@ -1271,11 +1271,9 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
 ///
 /// Backend-supplied tool `description`/metadata strings are scanned for prompt
 /// injection and have embedded credentials redacted in place before the tool
-/// list reaches the client — closing the gap where `tools/list` previously
-/// bypassed all content scanning. Gated on the same firewall config as the
-/// `tools/call` path: [`Firewall::check_response`] is a no-op when the firewall
-/// is absent or response scanning is disabled, so behavior is unchanged when
-/// the feature/config is off.
+/// list reaches the client; a blocking verdict refuses the list. Gated on the
+/// same firewall config as the `tools/call` path, so behavior is unchanged
+/// when the feature/config is off.
 #[cfg(feature = "firewall")]
 fn scan_direct_tools_list_response(
     state: &AppState,
@@ -1283,23 +1281,29 @@ fn scan_direct_tools_list_response(
     client: Option<&AuthenticatedClient>,
     response: &mut JsonRpcResponse,
 ) {
-    let Some(ref fw) = state.firewall else {
-        return;
-    };
-    let Some(ref mut result) = response.result else {
-        return;
-    };
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
+    // The router's one pass, shared with `tools/call`: a Block (or no
+    // admitting target) replaces the list with the refusal, never a redacted
+    // success (#2349). No later pass inspects a direct response.
+    let caller = client.map_or("anonymous", |c| c.name.as_str());
     let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, "tools/list", result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        warn!(
-            backend = %backend_name,
-            findings = verdict.findings.len(),
-            "Firewall: direct tools/list response warning"
-        );
-    }
+    let targets = [ResponsePolicyTarget {
+        server: backend_name.to_owned(),
+        tool: "tools/list".to_owned(),
+    }];
+    let correlation = ResponseCorrelation {
+        session_id: &session_id,
+        caller,
+        external_server: backend_name,
+        external_tool: "tools/list",
+    };
+    let _ = super::response_pass::inspect_tools_call_response(
+        state.firewall.as_deref(),
+        response,
+        &targets,
+        &correlation,
+    );
 }
 
 #[cfg(not(feature = "firewall"))]
