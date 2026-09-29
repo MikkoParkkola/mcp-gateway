@@ -77,6 +77,8 @@ mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
 #[cfg(test)]
+mod direct_sole_operator_tests;
+#[cfg(test)]
 mod direct_tasks_owner_tests;
 #[cfg(test)]
 mod dispatch_parity_tests;

@@ -20,7 +20,7 @@ pub(super) async fn resolve(
     backend: &crate::backend::Backend,
     name: &str,
     inbound_headers: &axum::http::HeaderMap,
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    caller: crate::identity_propagation::CallerProof<'_>,
 ) -> Result<Option<String>, ()> {
     let idp_cfg = backend.identity_propagation_config();
     let binding = if let Some(cfg) = idp_cfg
@@ -36,7 +36,7 @@ pub(super) async fn resolve(
                 if let Err(e) = super::audit_identity_propagation(
                     state.transparency_log.as_ref(),
                     "idp_refuse",
-                    &super::audit_subject(verified_identity),
+                    &state.meta_mcp.audit_subject_for(name, caller),
                     name,
                     Some(cfg.audience.as_str()),
                     Some(reason.as_str()),
@@ -51,7 +51,7 @@ pub(super) async fn resolve(
     } else {
         let (_headers, binding, _held) = state
             .meta_mcp
-            .resolve_propagation_credential_held(name, verified_identity)
+            .resolve_propagation_credential_held(name, caller)
             .await
             .map_err(|_| ())?;
         binding

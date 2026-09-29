@@ -256,27 +256,30 @@ impl MetaMcp {
         let Some(cap) = self.get_capabilities() else {
             return Ok(());
         };
-        if server != cap.name || !cap.has_capability(tool) {
+        if server != cap.name {
             return Ok(());
         }
         // Borrowed, not cloned: this runs per tool on every listing (#2110).
-        let request = cap
-            .with_definition(tool, |cap_def| IdentityGrantRequest {
-                identity: scope
-                    .grant_subject
-                    .cloned()
-                    .or_else(|| Self::grant_subject_from_api_key(scope.api_key_name)),
-                agent_id: scope
-                    .agent_id
-                    .map(crate::security::OwnedProvenAgentId::from),
-                capability: cap_def.name.clone(),
-                tool: Some(tool.to_string()),
-                scope: GrantScope::requested_by(cap_def),
-                exposure: cap_def.metadata.exposure,
-                owner: cap_def.metadata.identity_owner.clone(),
-                now: chrono::Utc::now(),
-            })
-            .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
+        // One lookup, so a reload removing the tool reads as absent (#2236).
+        // Absent is refused, not skipped: a skip here would admit a tool a
+        // reload re-adds before dispatch, and a cached answer for a removed one.
+        let Some(request) = cap.with_definition(tool, |cap_def| IdentityGrantRequest {
+            identity: scope
+                .grant_subject
+                .cloned()
+                .or_else(|| Self::grant_subject_from_api_key(scope.api_key_name)),
+            agent_id: scope
+                .agent_id
+                .map(crate::security::OwnedProvenAgentId::from),
+            capability: cap_def.name.clone(),
+            tool: Some(tool.to_string()),
+            scope: GrantScope::requested_by(cap_def),
+            exposure: cap_def.metadata.exposure,
+            owner: cap_def.metadata.identity_owner.clone(),
+            now: chrono::Utc::now(),
+        }) else {
+            return Err(Error::ToolNotFound(tool.to_string()));
+        };
         let evaluation = self.identity_grants.read().evaluate(&request);
         if evaluation.allowed {
             return Ok(());

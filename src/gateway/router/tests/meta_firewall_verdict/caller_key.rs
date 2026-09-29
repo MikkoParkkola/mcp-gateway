@@ -710,3 +710,6 @@ async fn h20_mcp_name_keys_an_agent_only_caller_on_its_subject() {
     }
     assert_eq!(got, [Delivered, BudgetSpent, Delivered]);
 }
+
+#[path = "caller_key_routes.rs"]
+mod routes;

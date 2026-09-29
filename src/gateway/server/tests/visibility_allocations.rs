@@ -30,7 +30,10 @@ fn test_path(name: &str) -> String {
 
 /// A read-only GET capability, so the admin rule passes it and the call
 /// reaches the identity-grant rule too.
-async fn meta_with(dir: &std::path::Path, description: &str) -> MetaMcp {
+pub(super) async fn meta_with(
+    dir: &std::path::Path,
+    description: &str,
+) -> (MetaMcp, Arc<CapabilityBackend>) {
     std::fs::create_dir_all(dir).unwrap();
     crate::gateway::test_helpers::write_owner_only(
         dir.join("lookup.yaml"),
@@ -63,9 +66,11 @@ auth:
         .load_from_directory(dir.to_str().unwrap())
         .await
         .unwrap();
+    // A silent empty load would make both readings equal and pass vacuously.
+    assert!(backend.has_capability("lookup"), "lookup.yaml did not load");
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    meta.set_capabilities(backend);
-    meta
+    meta.set_capabilities(Arc::clone(&backend));
+    (meta, backend)
 }
 
 fn bytes_for(meta: &MetaMcp) -> u64 {
@@ -94,8 +99,8 @@ fn may_invoke_allocation_does_not_scale_with_definition_size() {
         .build()
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let small = rt.block_on(meta_with(&dir.path().join("small"), "x"));
-    let big = rt.block_on(meta_with(&dir.path().join("big"), &"x".repeat(PAD)));
+    let (small, _) = rt.block_on(meta_with(&dir.path().join("small"), "x"));
+    let (big, _) = rt.block_on(meta_with(&dir.path().join("big"), &"x".repeat(PAD)));
 
     // Warm both once so lazily built state is not billed to either reading.
     bytes_for(&small);
