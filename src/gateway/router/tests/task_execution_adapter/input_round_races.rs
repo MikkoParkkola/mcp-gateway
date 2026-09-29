@@ -119,7 +119,10 @@ async fn an_update_sent_the_instant_the_round_is_visible_succeeds() {
     producer.let_go();
 
     let acked = racing.await.expect("the update task joins");
-    std::assert!(acked.get("error").is_none(), "the seam update succeeds: {acked}");
+    std::assert!(
+        acked.get("error").is_none(),
+        "the seam update succeeds: {acked}"
+    );
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     assert_carries_the_backend_result(&settled);
     std::assert_eq!(mock.calls(), 3);
@@ -129,10 +132,8 @@ async fn an_update_sent_the_instant_the_round_is_visible_succeeds() {
 /// handoff (cancel misses the winner); loser takes the timeout path (-32603).
 #[tokio::test]
 async fn two_completing_updates_make_one_resume_and_the_winner_stays_cancellable() {
-    let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![
-        ask("confirm", STATE_1),
-        done(),
-    ]));
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, _store) = state_with(&mock).await;
     let mut producer = hold_producer(&state);
     let id = task_id(&post(&state, "key-a", create(1, "race-two")).await);
@@ -152,31 +153,34 @@ async fn two_completing_updates_make_one_resume_and_the_winner_stays_cancellable
     // 1 s produce-seam wait.
     gate.wait_for_dispatch().await;
     tokio::time::sleep(Duration::from_millis(1_200)).await;
-    let answers = [
-        first.await.expect("joins"),
-        second.await.expect("joins"),
-    ];
+    let answers = [first.await.expect("joins"), second.await.expect("joins")];
     let accepted = answers.iter().filter(|a| a.get("error").is_none()).count();
     let refused: Vec<_> = answers.iter().filter_map(error_code).collect();
     std::assert_eq!(accepted, 1, "exactly one update resumes: {answers:?}");
-    std::assert_eq!(refused, vec![-32602], "the loser is told no round is outstanding: {answers:?}");
+    std::assert_eq!(
+        refused,
+        vec![-32602],
+        "the loser is told no round is outstanding: {answers:?}"
+    );
 
     let cancelled = cancel(&state, &id).await;
     std::assert!(cancelled.get("error").is_none(), "{cancelled}");
     gate.release_all();
     settle_quiet().await;
     let after = get_task(&state, "key-a", &id).await;
-    std::assert_eq!(status_of(&after), "cancelled", "cancel reached the one worker: {after}");
+    std::assert_eq!(
+        status_of(&after),
+        "cancelled",
+        "cancel reached the one worker: {after}"
+    );
     std::assert_eq!(mock.calls(), 2, "exactly one resume dispatch");
 }
 
 /// Mutant: the wait applied regardless of row state.
 #[tokio::test]
 async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
-    let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![
-        ask("confirm", STATE_1),
-        done(),
-    ]));
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, _store) = state_with(&mock).await;
     let id = task_id(&post(&state, "key-a", create(1, "race-lost")).await);
     gate.wait_for_dispatch().await;
@@ -225,6 +229,8 @@ async fn a_resume_with_the_pool_full_is_refused_and_the_round_stays_open() {
     gate.wait_for_dispatch().await;
     gate.release();
     wait_input_required(&state, &parked_id).await;
+    // The producer returns its permit just after the round is visible.
+    settle_quiet().await;
     // The only worker is now busy with another task.
     let busy = task_id(&post(&state, "key-a", create(2, "pool-b")).await);
     gate.wait_for_dispatch().await;
@@ -246,7 +252,10 @@ async fn a_resume_with_the_pool_full_is_refused_and_the_round_stays_open() {
     gate.release();
     poll_until_terminal(&state, "key-a", &busy).await;
     let retried = post(&state, "key-a", completing(4, &parked_id)).await;
-    std::assert!(retried.get("error").is_none(), "a retry after the pool frees resumes: {retried}");
+    std::assert!(
+        retried.get("error").is_none(),
+        "a retry after the pool frees resumes: {retried}"
+    );
     gate.wait_for_dispatch().await;
     gate.release_all();
     let settled = poll_until_terminal(&state, "key-a", &parked_id).await;
@@ -277,11 +286,17 @@ async fn an_input_round_past_its_ttl_is_cancelled_by_the_expiry_pass() {
             "input_required",
             "an expiring round is cancelled before it is deleted: {seen}"
         );
-        std::assert!(tokio::time::Instant::now() < deadline, "never expired: {seen}");
+        std::assert!(
+            tokio::time::Instant::now() < deadline,
+            "never expired: {seen}"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let late = post(&state, "key-a", completing(2, &id)).await;
-    std::assert!(late.get("error").is_some(), "an expired round takes no answers: {late}");
+    std::assert!(
+        late.get("error").is_some(),
+        "an expired round takes no answers: {late}"
+    );
     std::assert_eq!(mock.calls(), 1);
 }
 
@@ -289,10 +304,8 @@ async fn an_input_round_past_its_ttl_is_cancelled_by_the_expiry_pass() {
 /// spawns a second worker.
 #[tokio::test]
 async fn cancel_aborts_a_worker_resuming_a_state_only_round() {
-    let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![
-        state_only("s-held"),
-        done(),
-    ]));
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![state_only("s-held"), done()]));
     let (state, _store) = state_with(&mock).await;
     let id = task_id(&post(&state, "key-a", create(1, "state-cancel")).await);
     gate.wait_for_dispatch().await;
@@ -300,7 +313,11 @@ async fn cancel_aborts_a_worker_resuming_a_state_only_round() {
     // The worker's own resume of the state-only round, held in the backend.
     gate.wait_for_dispatch().await;
     let working = get_task(&state, "key-a", &id).await;
-    std::assert_eq!(status_of(&working), "working", "a state-only loop stays working: {working}");
+    std::assert_eq!(
+        status_of(&working),
+        "working",
+        "a state-only loop stays working: {working}"
+    );
 
     let cancelled = cancel(&state, &id).await;
     std::assert!(cancelled.get("error").is_none(), "{cancelled}");

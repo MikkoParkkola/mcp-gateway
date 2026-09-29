@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Private durable record; never returned as the public Task wire projection.
 
-use crate::protocol::tasks::{Task, TaskSnapshot};
+use crate::protocol::tasks::{Task, TaskSnapshot, TaskStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 /// widened the loader and added [`UpstreamRecord`]: a `version: 3` write
 /// reaching a binary whose loader still hard-refuses 3 bricks the store.
 /// Bumped to 4 with [`InputRound`], by the same rule.
-pub(super) const RECORD_VERSION: u32 = 3;
+pub(super) const RECORD_VERSION: u32 = 4;
 
 /// The record version that introduced `dispatched`. Spelled separately from
 /// [`RECORD_VERSION`] because it is a fact about one field: a later format bump
@@ -157,6 +157,20 @@ pub(super) struct Record {
     pub(super) backend: String,
     pub(super) revision: u64,
     pub(super) model: TaskSnapshot,
+}
+
+impl Record {
+    /// Store the model; a terminal task drops its input round's continuation
+    /// and answers with it, so nothing a settled task can no longer use stays.
+    pub(super) fn set_model(&mut self, task: &Task) {
+        self.model = task.snapshot();
+        if matches!(
+            task.status(),
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            self.input_round = None;
+        }
+    }
 }
 
 /// An explicitly pre-admitted creation boundary. Tests can construct it while
