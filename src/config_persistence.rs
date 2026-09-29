@@ -610,4 +610,19 @@ mod tests {
             "the reference must survive the rewrite:\n{written}"
         );
     }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_written_config_is_owner_only_even_in_an_open_directory() {
+        // WT-ASSERT 1718-W1: the scratch file is created private, so the rename
+        // hands the config an owner-only DACL, not the directory's.
+        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+
+        let dir = everyone_full_dir("1718-W1");
+        let path = dir.path().join("gateway.yaml");
+
+        write_config_text(&path, "server:\n  port: 1\n").expect("write");
+
+        assert_owner_only("1718-W1", &path, false);
+    }
 }
