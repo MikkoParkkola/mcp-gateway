@@ -147,6 +147,23 @@ fn assert_operator_untouched(dispatches: &Dispatches) {
     );
 }
 
+/// No prompt or resource request of any kind reached the backend. Tool
+/// discovery is left out: its identity-free shared-slot read is #2326.
+fn assert_catalogue_untouched(dispatches: &Dispatches) {
+    for method in [
+        "prompts/list",
+        "prompts/get",
+        "resources/list",
+        "resources/templates/list",
+        "resources/read",
+    ] {
+        assert!(
+            sent(dispatches, method).is_empty(),
+            "{method} reached the backend"
+        );
+    }
+}
+
 /// Script the owner lookup's `resources/list` so `URI` resolves to BACKEND.
 fn script_resource(dispatches: &Dispatches) {
     dispatches.script(&[super::Answer::Result(
@@ -243,12 +260,7 @@ async fn anonymous_caller_on_a_single_user_gateway_reaches_nothing() {
     let (meta, dispatches, _custody) = connected(single_user());
     Box::pin(read_everything(&meta, &dispatches, "", None)).await;
     assert_operator_untouched(&dispatches);
-    for method in ["prompts/get", "resources/read"] {
-        assert!(
-            sent(&dispatches, method).is_empty(),
-            "{method} was forwarded"
-        );
-    }
+    assert_catalogue_untouched(&dispatches);
 }
 
 /// Two keys are two people: neither is served the operator's grant.
@@ -257,12 +269,7 @@ async fn multi_key_caller_reaches_nothing() {
     let (meta, dispatches, _custody) = connected(multi_key());
     Box::pin(read_everything(&meta, &dispatches, "key-b", None)).await;
     assert_operator_untouched(&dispatches);
-    for method in ["prompts/get", "resources/read"] {
-        assert!(
-            sent(&dispatches, method).is_empty(),
-            "{method} was forwarded"
-        );
-    }
+    assert_catalogue_untouched(&dispatches);
 }
 
 /// A verified identity outranks the credential it arrived with: alice and bob
@@ -299,4 +306,24 @@ async fn stdio_operator_lists_the_account_backends_tools() {
         .list_tools(&json!({}), None, &caller_as(None, Some(stdio)))
         .await;
     assert_sent_on(&dispatches, "tools/list", &operator_slot(), OPERATOR_TOKEN);
+}
+
+/// Search on its own resolves the operator too: a search-only regression is
+/// not hidden behind `gateway_list_tools` fetching the same catalogue.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_user_operator_searches_the_account_backends_tools() {
+    let (meta, dispatches, _custody) = connected(single_user());
+    let found = meta
+        .search_tools(
+            &json!({"query": "read"}),
+            None,
+            &caller_as(None, Some("operator")),
+        )
+        .await
+        .expect("search answers");
+    assert_sent_on(&dispatches, "tools/list", &operator_slot(), OPERATOR_TOKEN);
+    assert!(
+        found.to_string().contains(BACKEND),
+        "search must return the account backend's tool: {found}"
+    );
 }
