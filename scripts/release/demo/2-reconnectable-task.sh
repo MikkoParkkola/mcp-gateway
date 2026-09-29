@@ -121,12 +121,13 @@ print(node if node is not None else "<absent>")
 contains() { case "$2" in *"$1"*) echo "$1 present";; *) echo "absent";; esac; }
 submission_count() { wc -l < "$SUBMISSIONS" | tr -d ' '; }
 # The five values TaskStatus can take (src/protocol/tasks.rs:22-33), lower_snake
-# on the wire. The row below asserts membership, not a particular one: what
-# MIK-7311.LIFECYCLE.4 forbids is silence, and either a resumed result or an
-# explicit interrupted outcome satisfies it.
+# on the wire. What MIK-7311.LIFECYCLE.4 forbids is silence: a task reloaded as
+# working/input_required and never settled is silence. Either a resumed result
+# or an explicit interrupted outcome is TERMINAL, so only a terminal status
+# counts as explicit; the caller polls a resumed task to its terminal state.
 explicit_status() { # status -> explicit | <the raw value>
   case "$1" in
-    working|input_required|completed|failed|cancelled) echo "explicit";;
+    completed|failed|cancelled) echo "explicit";;
     *) echo "$1";;
   esac
 }
@@ -202,6 +203,14 @@ echo "after restart -> $(printf '%s' "$AFTER_RESTART" | head -c 400)"
 record "S2.TASK_SURVIVES_A_GATEWAY_RESTART" "$TASK_ID" \
   "$(printf '%s' "$AFTER_RESTART" | jfield result.taskId)"
 RESTART_STATUS="$(printf '%s' "$AFTER_RESTART" | jfield result.status)"
+# A resumed task legitimately reads non-terminal for a while; give it a bounded
+# window to settle WITHOUT any cancel, so a record that is merely reloaded as
+# working stays non-terminal and fails the row below.
+for _ in $(seq 1 45); do
+  [ "$(terminal_status "$RESTART_STATUS")" = "terminal" ] && break
+  sleep 1
+  RESTART_STATUS="$(rpc_sess session-C "tasks/get" "{\"taskId\":\"$TASK_ID\",$META}" "$TASK_ID" | jfield result.status)"
+done
 echo "status after the restart -> $RESTART_STATUS"
 record "S2.STATUS_AFTER_RESTART_IS_EXPLICIT_NOT_SILENCE" "explicit" \
   "$(explicit_status "$RESTART_STATUS")"

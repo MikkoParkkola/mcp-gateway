@@ -81,3 +81,4 @@ rulings, not as approvals of any specific change.
 |---|---|---|---|
 | C1 | 2026-09-29 | "linear tickets tagged for 4.0 are in the scope" | A criterion or open ticket that maps to a Linear ticket tagged for 4.0 ships in 4.0.0; it is met or built, not deferred. |
 | C2 | 2026-09-29 | "why are you trying to de-scope what I have clearly specified?" | No pending 4.0.0 criterion, 4.0-tagged Linear ticket or 4.0 GitHub issue is deferred to 4.1. This supersedes the 2026-09-28 "new features are 4.1" moves of #1942, #1943, #1944 and #1945. |
+| C3 | 2026-09-30 | MIK-7116 parts 3, 5 and 6 come after 4.0, only if the post-release one-week measurement (MIN.KILL) shows they are needed. (Answered through the question tool about 00:08; relayed by the release coordinator; not yet in the extractor's table.) | MIN.3/5/6 leave the 4.0.0 criteria for MIK-7627; MIN.1, MIN.2 (observe mode) and MIN.4 stay. Ledger decision `mik_7116_min_kill_gate`. |

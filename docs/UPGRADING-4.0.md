@@ -66,7 +66,7 @@ backend" and "fails a capability file" first.**
 | 39 | `server.request_timeout` is ignored with a warning; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
-| 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
+| 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit; library users: the `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` modules are removed |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 | 44 | `file:` secret references; a literal starting `file:` is now a reference | Point `file:` at an absolute, owner-only (or group-read via `fsGroup`) file; change a literal secret that starts with `file:` |
 | 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
@@ -1189,6 +1189,8 @@ traffic cannot use up a real sender's budget. The default is 100. `0` means no l
 A sender that bursts above the limit loses events: most providers, GitHub included, do not
 retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0`. The value is
 read at startup; a reload that changes `webhooks` needs a restart.
+
+Library users: the `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` modules are removed. Nothing in the gateway constructed either; drop the imports.
 
 ## 43. With auth on, the audit log is required and fails closed
 
