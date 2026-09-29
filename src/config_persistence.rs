@@ -161,10 +161,13 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
 
     // Write through the handle the exclusive create returned. Reopening by
     // path would reopen the gap the exclusive create just closed.
-    file.write_all(yaml.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|e| cleanup(&e, "write temp"))?;
+    let written = file
+        .write_all(yaml.as_bytes())
+        .and_then(|()| file.sync_all());
+    // Close before cleanup: Windows cannot delete a file held open without
+    // delete sharing.
     drop(file);
+    written.map_err(|e| cleanup(&e, "write temp"))?;
 
     rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
 }
@@ -657,6 +660,7 @@ mod tests {
 
         write_config_text(&path, "server:\n  port: 1\n").expect("write");
 
+        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
         assert_owner_only("1718-W1", &path, false);
     }
 }

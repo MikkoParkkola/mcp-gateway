@@ -356,11 +356,20 @@ pub(crate) fn windows_remediation(
                 ", as an administrator, make the account with SID {me} its owner, then"
             );
         }
-        let _ = write!(
-            out,
-            " open its Security settings, disable inheritance and remove every entry, \
-             and grant Full control to the account with SID {me} alone."
-        );
+        let _ = match what {
+            crate::config::Protects::Secrecy => write!(
+                out,
+                " open its Security settings, disable inheritance and remove every entry, \
+                 and grant Full control to the account with SID {me} alone."
+            ),
+            crate::config::Protects::Integrity => write!(
+                out,
+                " open its Security settings, disable inheritance, remove write, delete, \
+                 change-permissions and take-ownership rights from every account except \
+                 SYSTEM, Administrators and the account with SID {me}, keep read access for \
+                 the others, and grant Full control to the account with SID {me}."
+            ),
+        };
         return out;
     }
     let sddl = match what {

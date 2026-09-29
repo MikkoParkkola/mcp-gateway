@@ -1592,6 +1592,7 @@ mod tests {
 
         write_window_atomic(&path, &DurableWindow::empty(1)).unwrap();
 
+        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
         assert_owner_only("1718-W5", &path, false);
     }
 }

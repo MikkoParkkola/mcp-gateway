@@ -3,8 +3,9 @@
 //! Refuse a file that other local users can read when it holds a secret, or
 //! change when it decides whom the gateway trusts (MIK 7570 CONFIG.2, F18).
 //!
-//! The mode check is Unix only. Windows has no mode bits, and ACL inspection
-//! is out of scope; the upgrade note says so. There the file is read as is.
+//! Unix judges the mode bits on the open handle. Windows has none, so it
+//! judges the handle's DACL and owner by the same two classes (UPGRADING-4.0
+//! item 96).
 
 use std::path::Path;
 
