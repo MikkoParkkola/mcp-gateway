@@ -722,6 +722,10 @@ impl Transport for WebSocketTransport {
             h.abort();
         }
 
+        // The aborted task skips its own cleanup: fail in-flight calls here so
+        // they do not wait out their timeouts.
+        self.inner.pending.clear();
+
         Ok(())
     }
 }
