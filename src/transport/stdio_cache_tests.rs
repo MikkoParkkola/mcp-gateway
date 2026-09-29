@@ -45,7 +45,6 @@ fn only_npm_invoking_commands_get_a_cache() {
         "uvx meilisearch-mcp",
         "vikunja-mcp",
         "sh -c 'x'",
-        "pnpm dlx pkg",
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert!(
@@ -115,6 +114,7 @@ fn each_runner_gets_the_variable_it_reads() {
         ("npx -y pkg", "npm_config_cache"),
         ("bunx pkg", "BUN_INSTALL_CACHE_DIR"),
         ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER"),
+        ("pnpm dlx pkg", "npm_config_store_dir"),
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert_eq!(out.len(), 1, "{cmd}: {out:?}");

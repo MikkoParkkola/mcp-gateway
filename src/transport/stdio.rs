@@ -100,14 +100,16 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     backend_env
 }
 
-/// The variable a runner reads for its cache directory. pnpm has none: its
-/// content store is shared by design, so it is not treated as isolated.
+/// The variable a runner reads for its cache directory. pnpm keeps installs in
+/// its content store, which `npm_config_store_dir` relocates; its separate
+/// metadata cache stays shared.
 fn cache_var_for(command: &str) -> Option<&'static str> {
     let program = command.split_whitespace().next()?;
     match program.rsplit('/').next().unwrap_or(program) {
         "npx" | "npm" => Some("npm_config_cache"),
         "bunx" => Some("BUN_INSTALL_CACHE_DIR"),
         "yarn" => Some("YARN_CACHE_FOLDER"),
+        "pnpm" => Some("npm_config_store_dir"),
         _ => None,
     }
 }
