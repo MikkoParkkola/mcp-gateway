@@ -191,7 +191,7 @@ impl AgentIdentityConfig {
                 .any(|seen| seen.source == entry.source && seen.id == entry.id)
             {
                 return Err(crate::Error::ConfigValidation(format!(
-                    "agent_identity.principal_labels has more than one entry for ({:?}, {:?}); \
+                    "agent_identity.principal_labels has more than one entry for (source: {}, id: {:?}); \
                      merge their labels into one entry",
                     entry.source, entry.id
                 )));
