@@ -132,11 +132,14 @@ impl Gateway {
         self.seen.lock().clone()
     }
 
-    /// A recording slot for a passthrough caller whose forwarded value is
-    /// `value`: the route keys it by the value's SHA-256 hex digest.
+    /// A recording slot for an anonymous passthrough caller whose forwarded
+    /// value is `value`: the route keys it by the value's SHA-256 hex digest,
+    /// charged to the caller's principal (#2300).
     fn passthrough_slot(&self, value: &str) {
         use sha2::Digest as _;
-        let binding = hex::encode(sha2::Sha256::digest(value.as_bytes()));
+        let digest = hex::encode(sha2::Sha256::digest(value.as_bytes()));
+        let principal = crate::identity_propagation::audit_subject(None);
+        let binding = crate::backend::passthrough_binding(&principal, &digest);
         self.backend.set_pooled_transport_for_test(
             &PoolKey::PerUser { binding },
             Arc::new(SlotWire {

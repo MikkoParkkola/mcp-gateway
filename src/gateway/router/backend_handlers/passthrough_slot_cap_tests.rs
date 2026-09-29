@@ -186,7 +186,7 @@ fn api_key(key: &str) -> crate::config::ApiKeyConfig {
         expires_at: None,
         name: format!("{key}-client"),
         rate_limit: 0,
-        backends: vec![],
+        backends: vec!["ledger".to_string()],
         allowed_tools: None,
         denied_tools: None,
         admin: false,
