@@ -11,6 +11,7 @@
 //! signing_allocation_tests;` — the name `tests` is already taken by the inline
 //! test module further down that file.
 
+mod admission_allocations;
 mod alloc_meter;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;

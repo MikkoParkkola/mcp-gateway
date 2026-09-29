@@ -23,7 +23,7 @@ fn call(meta: &MetaMcp, retry: &RetryFields, args: &Value, id: i64) -> Result<Sy
         "backend",
         "tool",
         args,
-        &json!({"wire":"modern"}),
+        || json!({"wire":"modern"}),
         &RequestId::Number(id),
     )
 }
