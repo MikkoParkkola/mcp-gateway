@@ -213,6 +213,7 @@ without it.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -956,7 +957,7 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
-- **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
+- **Windows checks ACLs instead of mode bits** (item 96).
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.
 
@@ -2545,6 +2546,30 @@ backend that is down at startup opens its breaker before traffic arrives.
 
 **Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
 caches warm (`meta_mcp.warm_start`).
+
+## 96. Windows checks secret and trust files, and creates them owner-only
+
+In 3.x and early 4.0 a Windows gateway created these files with the directory's inherited ACL and
+read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
+the unix mode rules:
+
+- **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
+  files, credential files) are created owner-only: one grant to the gateway's account, nothing
+  inherited. A read is refused when another account is granted access, the owner is someone
+  else, or the DACL inherits or is NULL.
+- **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the
+  control-plane `grants.json` and `policies.json`) may be read by others but never changed by
+  them. A read, and an append to the journal, is refused when another account can write, or the
+  owner is not the gateway's account, SYSTEM or Administrators.
+- The check and the read use one handle. Like unix, a link is followed and its target judged; a
+  directory or other non-regular file is refused.
+- The refusal names every rule broken and prints the PowerShell lines that repair it. For a trust
+  file the repair keeps Everyone as a reader, so it locks no legitimate reader out.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** if a file is refused, run the printed lines in PowerShell (as an
+administrator when it says the file has another owner) and retry.
 
 ## Upgrading from 3.5.x: a walkthrough
 
