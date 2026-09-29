@@ -179,39 +179,91 @@ async fn an_admitted_caller_keeps_its_slot_at_the_budget() {
     assert_eq!(before.len(), PER_PRINCIPAL);
 }
 
-/// POST one request carrying passthrough header `i` as the API-key client
-/// whose validated principal is `key`.
-async fn send_as_key(router: &axum::Router, i: usize, key: &str) {
-    let mut request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp/ledger")
-        .header("content-type", "application/json")
-        .header("x-mcp-passthrough-authorization", header_value(i))
-        .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "id": i, "method": "resources/list" }).to_string(),
-        ))
-        .unwrap();
-    request
-        .extensions_mut()
-        .insert(crate::gateway::auth::AuthenticatedClient {
-            name: key.to_string(),
-            principal: key.to_string(),
-            authenticated: true,
-            ..crate::gateway::auth::anonymous_client()
-        });
-    let _ = router.clone().oneshot(request).await.unwrap();
+fn api_key(key: &str) -> crate::config::ApiKeyConfig {
+    crate::config::ApiKeyConfig {
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(key.as_bytes())),
+        expires_at: None,
+        name: format!("{key}-client"),
+        rate_limit: 0,
+        backends: vec![],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+    }
 }
 
-/// GIVEN two API-key callers with no verified identity
-/// WHEN each sends more distinct passthrough headers than a principal may hold
-/// THEN each is charged to its own key's budget, not to the anonymous one.
+/// GIVEN auth on with two API keys, and no verified identity
+/// WHEN each key's caller sends more distinct passthrough headers than a
+/// principal may hold
+/// THEN each key is charged its own budget, not the anonymous one.
 #[tokio::test]
 async fn api_key_callers_each_get_their_own_budget() {
     let backend = passthrough_backend();
-    let (router, _store) = router_with(&backend).await;
+    let auth = crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![api_key("key-one"), api_key("key-two")],
+        ..crate::config::AuthConfig::default()
+    };
+    let (mut state, _store) =
+        crate::gateway::router::tests::test_router_app_state_with_auth(&auth).await;
+    assert!(
+        Arc::get_mut(&mut state)
+            .expect("state is unique")
+            .backends
+            .register(Arc::clone(&backend)),
+        "fixture registration"
+    );
+    let router = create_router(state);
     for key in ["key-one", "key-two"] {
         for i in 0..HEADERS {
-            send_as_key(&router, i, key).await;
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/mcp/ledger")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {key}"))
+                .header("x-mcp-passthrough-authorization", header_value(i))
+                .body(axum::body::Body::from(
+                    json!({ "jsonrpc": "2.0", "id": i, "method": "resources/list" }).to_string(),
+                ))
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{key} was not accepted"
+            );
+        }
+    }
+    assert_eq!(backend.per_user_slots_for_test(), 2 * PER_PRINCIPAL);
+}
+
+/// GIVEN two mutual-TLS callers, each proven by its client certificate and
+/// with no API key or verified identity
+/// WHEN each sends more distinct passthrough headers than a principal may hold
+/// THEN each certificate is charged its own budget, not the anonymous one.
+#[tokio::test]
+async fn certificate_callers_each_get_their_own_budget() {
+    let backend = passthrough_backend();
+    let (router, _store) = router_with(&backend).await;
+    for machine in ["machine-1", "machine-2"] {
+        for i in 0..HEADERS {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/mcp/ledger")
+                .header("content-type", "application/json")
+                .header("x-mcp-passthrough-authorization", header_value(i))
+                .body(axum::body::Body::from(
+                    json!({ "jsonrpc": "2.0", "id": i, "method": "resources/list" }).to_string(),
+                ))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(crate::mtls::identity::CertIdentity {
+                    display_name: machine.to_string(),
+                    ..Default::default()
+                });
+            let _ = router.clone().oneshot(request).await.unwrap();
         }
     }
     assert_eq!(backend.per_user_slots_for_test(), 2 * PER_PRINCIPAL);
