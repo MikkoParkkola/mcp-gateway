@@ -43,6 +43,35 @@ async fn empty_capability_credential_refused_in_every_env_form() {
     }
 }
 
+/// An unresolved capability credential names a listed env file that was not
+/// found, in every env form, as the config loader's own error does.
+#[tokio::test]
+async fn unresolved_capability_credential_names_the_absent_env_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let absent = dir.path().join("absent-cap.env");
+    let overlay = EnvOverlay::from_paths(std::slice::from_ref(&absent));
+    let env = Arc::new(LiveEnv::new(Arc::new(overlay), ResolvedEnvFiles::default()));
+    let executor = CapabilityExecutor::new().with_env(env);
+    for key in [
+        "env:MCP_GW_C4_CAP_MISSING",
+        "{env.MCP_GW_C4_CAP_MISSING}",
+        "MCP_GW_C4_CAP_MISSING",
+    ] {
+        let auth = AuthConfig {
+            key: key.to_string(),
+            ..AuthConfig::default()
+        };
+        let err = executor
+            .fetch_credential(&auth, &CapabilityExecutionContext::default())
+            .await
+            .expect_err("an unset capability credential must be refused");
+        assert!(
+            err.to_string().contains(&absent.display().to_string()),
+            "{key}: the error must name the absent env file: {err}"
+        );
+    }
+}
+
 /// C9 leaves capability YAMLs out of the `file:` secret grammar: a third-party
 /// capability must not read an arbitrary gateway-owned file and send it
 /// upstream. The capability `file:` keeps its own `path.json:field` meaning.
