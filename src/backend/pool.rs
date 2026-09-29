@@ -428,6 +428,8 @@ impl Backend {
 
         let mut evicted = 0;
         for key in candidates {
+            // Under `stop`'s lock: shutdown takes this slot or drains its close.
+            let mut cleanups = self.replaced_transport_cleanups.lock();
             let Some((_, entry)) = self.pool.remove(&key) else {
                 // A concurrent reaper or eviction took it first; it is gone
                 // either way, which is what this call is for.
@@ -446,7 +448,7 @@ impl Backend {
                 }
             };
             if let Some(transport) = idle_transport {
-                self.close_evicted(transport);
+                self.close_evicted(&mut cleanups, transport);
             }
         }
 
@@ -482,19 +484,15 @@ impl Backend {
         self.pool.get(key).is_some()
     }
 
-    /// Close a transport an eviction took out of the pool, off the caller's
-    /// path and bounded by `close_stage` as at shutdown (#2245). `close()` has
-    /// no deadline of its own, and even a bounded close awaited in line would
-    /// hold the grant reload, and every slot it has yet to remove, for one
-    /// budget per wedged slot. Dropping the task's handle on timeout reaps a
-    /// `kill_on_drop` child: eviction took the last one.
-    fn close_evicted(&self, transport: Arc<dyn Transport>) {
+    /// Close an evicted transport off the caller's path, bounded by
+    /// `close_stage` (#2245): even a bounded close in line holds a grant reload
+    /// one budget per wedged slot. `stop` drains the task with the replaced-
+    /// transport cleanups; a timeout drops the last handle (`kill_on_drop`).
+    fn close_evicted(&self, cleanups: &mut super::CleanupState, transport: Arc<dyn Transport>) {
         let (backend, budget) = (self.name.clone(), self.budgets.close_stage);
-        tokio::spawn(async move {
-            if tokio::time::timeout(budget, transport.close())
-                .await
-                .is_err()
-            {
+        let handle = tokio::spawn(async move {
+            let close = tokio::time::timeout(budget, transport.close());
+            if close.await.is_err() {
                 tracing::warn!(
                     %backend,
                     budget_secs = budget.as_secs(),
@@ -502,6 +500,8 @@ impl Backend {
                 );
             }
         });
+        cleanups.handles.retain(|h| !h.is_finished());
+        cleanups.handles.push(handle);
     }
 
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
@@ -524,7 +524,8 @@ impl Backend {
         for key in candidates {
             // Atomically remove only if STILL idle — re-checked inside the shard
             // lock so a request that touched the slot after the first pass keeps
-            // it alive and is never torn down mid-flight.
+            // it alive and is never torn down mid-flight. Cleanup lock: as above.
+            let mut cleanups = self.replaced_transport_cleanups.lock();
             let removed = self.pool.remove_if(&key, |k, entry| {
                 // in_flight is checked INSIDE the shard lock, alongside the
                 // timestamp. A relaxed timestamp alone is not enough: a request
@@ -540,7 +541,7 @@ impl Backend {
             if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
-                    self.close_evicted(transport);
+                    self.close_evicted(&mut cleanups, transport);
                 }
                 closed += 1;
             }

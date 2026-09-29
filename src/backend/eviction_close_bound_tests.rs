@@ -175,3 +175,50 @@ async fn a_timed_out_eviction_close_still_reaps_the_child() {
         .status();
     panic!("child {pid} outlived a timed-out eviction close by 2s");
 }
+
+/// A transport whose `close()` takes a moment and then records that it ran,
+/// as an HTTP close sending its session DELETEs does.
+struct SlowClose(Arc<std::sync::atomic::AtomicBool>);
+
+#[async_trait]
+impl Transport for SlowClose {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        WedgedClose.request(method, params).await
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        self.0.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// GIVEN a revoked caller's idle slot whose close takes a moment
+/// WHEN the slot is evicted and the backend is stopped straight after
+/// THEN `stop` returns only once that close has run: a detached close that
+/// shutdown does not drain is dropped unrun when the runtime exits.
+#[tokio::test(start_paused = true)]
+async fn stop_drains_a_close_that_eviction_detached() {
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let backend = per_user_backend("slow");
+    backend.set_pooled_transport_for_test(
+        &slot("rev:alpha"),
+        Arc::new(SlowClose(Arc::clone(&closed))),
+    );
+
+    assert_eq!(backend.evict_identity_slots("rev:").await, 1);
+    backend.stop().await.expect("stop");
+
+    assert!(
+        closed.load(Ordering::SeqCst),
+        "stop returned before the evicted transport's close ran"
+    );
+}

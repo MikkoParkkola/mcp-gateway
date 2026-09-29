@@ -14,8 +14,7 @@ use super::*;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::transport::Transport;
-use crate::{Error, Result};
+use crate::{Error, Result, transport::Transport};
 
 // ---- MIK-6735: per-user transport/session pool ----
 
@@ -1263,6 +1262,7 @@ async fn a_leased_slot_is_never_evicted() {
         "once the lease is released the slot must become evictable again, \
          or in_flight leaks and the slot is immortal"
     );
+    tokio::time::sleep(Duration::from_millis(50)).await; // the close runs detached (#2245)
     assert!(
         mock.closed.load(Ordering::SeqCst),
         "the evicted slot's transport was never closed"
