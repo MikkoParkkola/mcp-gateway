@@ -697,3 +697,38 @@ fn cert_subject_id_keeps_padding() {
         Some(" spiffe://cluster/admin ")
     );
 }
+
+/// A proven subject longer than the header cap keys whole; truncation would
+/// merge two certificates whose SANs share a 512-character prefix (#2279).
+#[test]
+fn cert_subject_id_keeps_long_san_whole() {
+    let long = format!("spiffe://cluster/{}", "a".repeat(HEADER_IDENTITY_MAX_LEN));
+    let san = crate::mtls::identity::CertIdentity {
+        san_uris: vec![long.clone()],
+        ..Default::default()
+    };
+    assert_eq!(cert_subject_id(&san), Some(long));
+}
+
+/// The verified agent JWT `sub` becomes the grant subject verbatim, as the OIDC
+/// path already does; the label is display-only and still trimmed (#2279).
+#[test]
+fn oauth_agent_grant_subject_keeps_padding() {
+    let identity = OAuthAgentIdentity {
+        quota_principal: None,
+        client_id: " admin ".to_string(),
+        agent_name: " Admin ".to_string(),
+        scopes: Vec::new(),
+        raw_scopes: Vec::new(),
+    };
+    let subject = grant_subject_from_oauth_agent(&identity).expect("non-empty sub");
+    assert_eq!(subject.subject, " admin ");
+    assert_eq!(subject.label.as_deref(), Some("Admin"));
+    assert_eq!(
+        grant_subject_from_oauth_agent(&OAuthAgentIdentity {
+            client_id: String::new(),
+            ..identity
+        }),
+        None
+    );
+}
