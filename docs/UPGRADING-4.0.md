@@ -777,8 +777,9 @@ config and reports the error.
   never implemented, ... ``. Delete the keys when convenient; use `stop_when_idle_for` on a
   `command` backend for idle shutdown, and tune `failsafe.circuit_breaker` for breakers. A retired
   key is matched only at its own place: `server.idle_timeout` is refused like a misspelling.
-- **Keys whose own name starts with `_` or `x-` are annotations (#2360).** They load at any depth
-  and are never read, so notes such as `_legacy_env: {...}` or a top-level `x-anchors:` block keep
+- **Keys whose own name starts with `_` or `x-` are annotations (#2360).** They load wherever
+  this key check applies and are never read. A few sections reject every extra key while they are
+  parsed (for example `auth.dashboard_session`), and an annotation there still fails the load. Annotations are never read, so notes such as `_legacy_env: {...}` or a top-level `x-anchors:` block keep
   working. No setting starts with either prefix, so such a key is never a misspelling, and it is
   never bound: `key_server: {_enabled: true}` leaves the key server off. Entries of maps you name
   yourself (`env`, `headers`, backend names) are data, not keys, and are unaffected.
