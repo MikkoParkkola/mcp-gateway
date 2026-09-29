@@ -25,10 +25,12 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 
 mod annotations;
 mod cached_metadata;
+mod descriptor_gate;
 mod era;
 mod fill_check;
 mod input_keys;
 mod lifecycle;
+mod list_drain;
 mod metadata;
 mod ops;
 mod pool;
@@ -42,6 +44,9 @@ use pool::PoolKey;
 use pool::PooledEntry;
 
 pub(crate) use annotations::prepare_tool_metadata;
+#[cfg(test)]
+pub(crate) use descriptor_gate::descriptor_digest;
+pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::text_absent;
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
@@ -143,6 +148,9 @@ pub struct Backend {
     /// because concurrent restarts are already serialised by the slot's
     /// `start_lock`; this is only about excluding shutdown.
     lifecycle: tokio::sync::RwLock<()>,
+    /// Tools withheld for a blocking tool-poisoning finding, across every
+    /// caller slot, and the log lines already written for them (#1441).
+    descriptor_gate: descriptor_gate::DescriptorGate,
     /// Makes [`Backend::stop`] single-flight.
     ///
     /// Without it, two concurrent callers both run the teardown and whichever
@@ -255,6 +263,12 @@ pub(crate) struct CleanupState {
 }
 
 // The cells read counters from a local Prometheus render.
+#[cfg(test)]
+#[path = "blocked_names_tests.rs"]
+mod blocked_names_tests;
+#[cfg(test)]
+#[path = "descriptor_withholding_tests.rs"]
+mod descriptor_withholding_tests;
 #[cfg(all(test, feature = "metrics"))]
 mod f13_fill_tests;
 #[cfg(test)]

@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
+use crate::protocol::continuation::{Keyring, now_unix_secs};
 use crate::security::response_policy::{
     InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
     ResponsePolicyTarget,
@@ -80,7 +81,12 @@ impl Firewall {
             self.response_observer
                 .redactions
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            findings.extend(self.redactor.scan_and_redact(response));
+            let own = |value: &str| {
+                self.continuations
+                    .as_ref()
+                    .is_some_and(|state| is_own_continuation(state.keyring(), value))
+            };
+            findings.extend(self.redactor.scan_and_redact_unless(response, &own));
         }
         if self.config.prompt_injection_detection {
             #[cfg(test)]
@@ -109,6 +115,13 @@ impl Firewall {
         }
         findings
     }
+}
+
+/// Whether `value` is a continuation this gateway minted and can still open.
+/// Expired, tampered and foreign values are not, so they are redacted as usual.
+/// `open` only reads: it consumes no budget, ledger entry or hold.
+fn is_own_continuation(keyring: &Keyring, value: &str) -> bool {
+    keyring.open(value, now_unix_secs()).is_ok()
 }
 
 /// Audit text for an injection finding while credential redaction is off.
