@@ -12,12 +12,13 @@ on:
   pull_request:
     branches: [main]
 
-# A new push to a pull request cancels that PR's superseded run. Every other
-# event (branch push, tag) gets a group of its own run id, so it is never
-# cancelled, and never queued behind or replaced by another run.
+# A new push to a pull request or a branch supersedes that ref's older run
+# (a pull request's ref is refs/pull/N/merge, so it keeps its own group), so on
+# the release line the latest merge's run is the evidence, not every merge's. A
+# tag run gets a group of its own run id: it is never cancelled or replaced.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/') && format('{0}-{1}', github.ref, github.run_id) || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   REGISTRY: ghcr.io

@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """The feature-combination shards cover exactly the documented matrix.
 
-feature-combos.yml runs the supported feature combinations in a few shards, each shard a
-list of combinations. This fails when a combination is missing from every
-shard, appears twice, or is not in docs/release/v4.0.0-supported-matrix.md
-(and the other way round), so a combination cannot silently drop out.
+feature-combos.yml runs the supported feature combinations in a few shards,
+each shard a list of combinations. This fails when a combination is missing
+from every shard, appears twice, or is not in
+docs/release/v4.0.0-supported-matrix.md (and the other way round), so a
+combination cannot silently drop out.
 """
 from __future__ import annotations
 
