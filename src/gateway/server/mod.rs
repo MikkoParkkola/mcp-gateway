@@ -20,6 +20,8 @@ mod identity_grants;
 mod listener;
 mod persistence;
 #[cfg(test)]
+mod remote_provenance_start_tests;
+#[cfg(test)]
 mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -622,6 +624,9 @@ impl Gateway {
                 "a freshly built registry refused a backend registration"
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
+        }
+        if let Some(warning) = config.remote_provenance_warning() {
+            warn!("{warning}");
         }
 
         Ok(Self {
@@ -2928,15 +2933,20 @@ impl Gateway {
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
         let (response, execution) = if method == "tools/call" {
-            Box::pin(Self::dispatch_tools_call(
-                meta_mcp,
-                tool_policy,
-                &mut request,
-                id,
-                client,
-                &mut signing_context,
-                &request_shape,
-            ))
+            // D3-a: one grant-decision slot spans signing, admission and dispatch.
+            super::meta_mcp::grant_audit::slot_rpc(
+                meta_mcp.transparency_logger.as_ref(),
+                id.clone(),
+                Box::pin(Self::dispatch_tools_call(
+                    meta_mcp,
+                    tool_policy,
+                    &mut request,
+                    id,
+                    client,
+                    &mut signing_context,
+                    &request_shape,
+                )),
+            )
             .await
         } else {
             (

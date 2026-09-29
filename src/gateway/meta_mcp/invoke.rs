@@ -1326,7 +1326,7 @@ impl MetaMcp {
     // Takes the caller context whole rather than five loose parameters: the
     // authorizer travels with the identity it authorizes, so no call site can
     // pass one without the other.
-    pub(super) async fn invoke_tool(
+    pub(super) async fn invoke_tool_in_slot(
         &self,
         args: &Value,
         session_id: Option<&str>,
@@ -1666,12 +1666,7 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
 
-        if !caller
-            .signing
-            .is_some_and(|context| context.prepared_for(server, tool))
-        {
-            self.check_invocation_policy(args, session_id, caller)?;
-        }
+        self.check_or_stamp(args, session_id, caller, (server, tool))?;
 
         let mut arguments = parse_tool_arguments(args)?;
         // `_full` is a gateway directive (opt out of response projection), not

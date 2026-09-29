@@ -15,6 +15,7 @@ mod features;
 mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
+mod remote_provenance_posture;
 mod secret_file;
 mod secret_ref;
 mod strict_keys;
