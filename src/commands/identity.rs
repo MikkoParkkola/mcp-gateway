@@ -661,6 +661,36 @@ mod tests {
         assert!(parse_agent_binding(Some("jwt:  ".to_string()), false).is_err());
     }
 
+    /// A grant the CLI writes for `" admin "` survives the file and matches
+    /// that proven id, not the bare `admin` (#2284).
+    #[tokio::test]
+    async fn a_padded_grant_round_trips_to_its_own_principal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grants.yaml");
+        let mut input = grant_input(path.clone());
+        input.subject = "mtls: admin ".to_string();
+        upsert_local_grant(input).await.unwrap();
+        let store = mcp_gateway::identity_grants::load_identity_grants_file(&path)
+            .await
+            .unwrap();
+
+        let allowed = |id: &str| {
+            let request = IdentityGrantRequest {
+                identity: Some(GrantSubject::new("mtls", id, None)),
+                agent_id: None,
+                capability: "calendar_read_day".to_string(),
+                tool: Some("calendar_read_day".to_string()),
+                scope: GrantScope::Read,
+                exposure: CapabilityExposure::Personal,
+                owner: Some(GrantSubject::new("mtls", id, None)),
+                now: Utc::now(),
+            };
+            store.evaluate(&request).allowed
+        };
+        assert!(allowed(" admin "));
+        assert!(!allowed("admin"));
+    }
+
     #[test]
     fn a_qualified_agent_flag_keys_the_grant_by_source_and_id() {
         for (value, source) in [
