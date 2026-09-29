@@ -36,6 +36,7 @@ use super::{
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
+mod definition_access;
 mod initial_scan;
 
 /// Ordered capability store with an O(1) name-to-index lookup layer.
@@ -422,18 +423,6 @@ impl CapabilityBackend {
     /// Get a specific capability by name — O(1) via the name index.
     pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
         self.capabilities.read().get(name).cloned()
-    }
-
-    /// Run `f` on a capability by name without cloning it. Per-tool
-    /// visibility checks call this for every tool on every `initialize` and
-    /// `tools/list`, where a clone per call was the #2110 p99 regression.
-    /// `f` runs under the read lock, so it must not call back into `self`.
-    pub(crate) fn with_definition<R>(
-        &self,
-        name: &str,
-        f: impl FnOnce(&CapabilityDefinition) -> R,
-    ) -> Option<R> {
-        self.capabilities.read().get(name).map(f)
     }
 
     /// List all capability names in insertion order.
