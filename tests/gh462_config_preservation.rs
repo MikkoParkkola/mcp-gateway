@@ -637,9 +637,7 @@ mod cli {
         invalid_empty_discovery(false).await;
     }
 
-    // unix only: `dirs::home_dir()` is the Windows known-folder profile, which HOME and USERPROFILE
-    // cannot redirect, so the child never reads the seeded home.
-    #[cfg(unix)]
+    #[cfg(unix)] // Windows `dirs::home_dir()` ignores HOME/USERPROFILE
     #[tokio::test]
     async fn gh462_valid_config_control_reaches_empty_discovery() {
         let home = tempfile::tempdir().unwrap();
@@ -776,9 +774,7 @@ mod cli {
 
     valid_cli_case!(gh462_add_missing, false, false);
     valid_cli_case!(gh462_add_valid, false, true);
-    // unix only: `dirs::home_dir()` is the Windows known-folder profile, which HOME and USERPROFILE
-    // cannot redirect, so the child never reads the seeded home.
-    #[cfg(all(unix, feature = "config-export"))]
+    #[cfg(all(unix, feature = "config-export"))] // same HOME reason
     valid_cli_case!(gh462_setup_missing, true, false);
     #[cfg(all(unix, feature = "config-export"))]
     valid_cli_case!(gh462_setup_valid, true, true);
@@ -818,7 +814,6 @@ mod cli {
     }
 
     reference_cli_case!(gh462_add_references, false);
-    // unix only: same home-directory reason as the setup cases above.
     #[cfg(unix)]
     reference_cli_case!(gh462_setup_references, true);
 }

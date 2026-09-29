@@ -69,8 +69,7 @@ fn sh_path(path: &std::path::Path) -> String {
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {
     let log = home.join("calls.log");
     let script = home.join("peer.sh");
-    std::fs::write(&script, PEER.replace("__LOG__", &sh_path(&log)))
-        .expect("write the peer");
+    std::fs::write(&script, PEER.replace("__LOG__", &sh_path(&log))).expect("write the peer");
     let config = BackendConfig {
         enabled: true,
         transport: TransportConfig::Stdio {

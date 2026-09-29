@@ -1031,8 +1031,8 @@ accounts:
   enabled: true
   deployment: single_process
   instance_id: openwebui-adapter-separation
-  store_dir: {}
-  authority_dir: {}
+  store_dir: {1}/store
+  authority_dir: {1}/authority
   current_key_id: primary
   keys:
     primary: env:OWUI_SEP_STORE_KEY
@@ -1046,9 +1046,7 @@ accounts:
         - owui-gateway-key
 ",
         env_path.display(),
-        // Absolute on every platform: a literal `/var/...` is relative on Windows.
-        dir.join("store").display(),
-        dir.join("authority").display(),
+        dir.display(), // dir: `/var/..` is relative on Windows
     )
 }
 
