@@ -41,6 +41,7 @@ use crate::security::http_diagnostics::{
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
+use extra_headers::merge_extra_headers;
 
 /// Origin equality per WHATWG (scheme + host + effective port). Used to enforce
 /// that an SSE-advertised message endpoint is same-origin as the SSE stream
@@ -1035,7 +1036,7 @@ impl HttpTransport {
         // introducing ourselves to. `send_request` refuses the era here for the
         // same reason.
         if let Err(error) = self
-            .send_notification("notifications/initialized", None, None, None)
+            .send_notification("notifications/initialized", None, &[], None, None)
             .await
         {
             debug!(url = %sanitize_url_for_diagnostics(&self.base_url), error = %error, "Initialized notification failed (ignored)");
@@ -1419,16 +1420,7 @@ impl HttpTransport {
                 identity_key,
             )
             .await?;
-        // Per-request identity credential headers (e.g. Authorization: Bearer
-        // <assertion>) override any static header of the same name for this call.
-        for (k, v) in extra_headers {
-            if let (Ok(name), Ok(value)) = (
-                k.parse::<header::HeaderName>(),
-                v.parse::<header::HeaderValue>(),
-            ) {
-                headers.insert(name, value);
-            }
-        }
+        merge_extra_headers(&mut headers, extra_headers);
         // AFTER every merge this path runs. Placed inside `build_mcp_headers`
         // it would be overridden by the loop just above.
         if era == Some(Era::Modern) {
@@ -1591,6 +1583,7 @@ impl HttpTransport {
         &self,
         method: &str,
         params: Option<Value>,
+        extra_headers: &[(String, String)],
         identity_key: Option<&str>,
         era: Option<Era>,
     ) -> Result<()> {
@@ -1610,9 +1603,8 @@ impl HttpTransport {
         let mut headers = self
             .build_mcp_headers(HeaderMode::Notify, identity_key)
             .await?;
-        // This path has no per-request merge, so the builder's return is the
-        // last writer here. Finalising only in `send_request_with_headers`
-        // would leave every notification unshaped.
+        // The caller's credential, as on a request (#2292).
+        merge_extra_headers(&mut headers, extra_headers);
         if era == Some(Era::Modern) {
             finalise_modern_headers(&mut headers, method, notification.params.as_ref())?;
         }
@@ -1841,11 +1833,17 @@ impl Transport for HttpTransport {
         &self,
         method: &str,
         params: Option<Value>,
-        _extra_headers: &[(String, String)],
+        extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
-        self.send_notification(method, params, identity_key, self.outbound_era())
-            .await
+        self.send_notification(
+            method,
+            params,
+            extra_headers,
+            identity_key,
+            self.outbound_era(),
+        )
+        .await
     }
 
     fn is_connected(&self) -> bool {
@@ -1916,6 +1914,7 @@ impl Drop for HttpTransport {
     }
 }
 
+mod extra_headers;
 mod sse_decoder;
 
 #[cfg(test)]
