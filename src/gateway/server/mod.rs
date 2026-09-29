@@ -1730,7 +1730,8 @@ impl Gateway {
         // another; if the gateway is ever reached by more than one identity the
         // isolation the guard would have provided is silently gone. We warn
         // rather than refuse because a genuinely single-user deployment is valid.
-        if self.config.auth.single_user {
+        // Only while the assertion actually holds the guard off (#2241).
+        if self.config.auth.single_user && !multi_user {
             let leaky_backends = leaky_single_user_backends(&self.config);
             if !leaky_backends.is_empty() {
                 warn!(

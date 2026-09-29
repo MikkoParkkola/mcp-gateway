@@ -124,8 +124,9 @@ pub(crate) fn install_account_strategies(
 
     // THE DEPLOYMENT'S MODE, decided ONCE here and handed to every managed
     // strategy. A gateway that authenticates, was explicitly declared
-    // single-user, holds no second API key, has no identity provider and runs
-    // no identity adapter serves its stored OAuth grants under one fixed
+    // single-user, holds one credential at most (API keys and the bearer
+    // token, #2241), has no identity provider and runs no identity adapter
+    // serves its stored OAuth grants under one fixed
     // principal — otherwise a solo install has no principal at all and its
     // per-user credential store is unreachable (MIK-6744.STORE.1, open item O3).
     let sole_operator = sole_operator_asserted(config, mode);
