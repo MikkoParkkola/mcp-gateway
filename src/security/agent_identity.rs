@@ -180,29 +180,7 @@ impl AgentIdentityConfig {
     /// with enforcement on and the hatch off it refuses load rather than
     /// sitting inert until a request finds it. With enforcement off it is
     /// dormant and only warned about.
-    ///
-    /// Also refuses duplicate `principal_labels` keys (lookup is first-match,
-    /// so a later row would be silently dead) and warns whenever the
-    /// unverified-identity hatch is set.
     pub(crate) fn validate(&self) -> crate::Result<()> {
-        for (i, entry) in self.principal_labels.iter().enumerate() {
-            if self.principal_labels[..i]
-                .iter()
-                .any(|seen| seen.source == entry.source && seen.id == entry.id)
-            {
-                return Err(crate::Error::ConfigValidation(format!(
-                    "agent_identity.principal_labels has more than one entry for (source: {}, id: {:?}); \
-                     merge their labels into one entry",
-                    entry.source, entry.id
-                )));
-            }
-        }
-        if self.allow_unverified_agent_identity {
-            tracing::warn!(
-                "agent_identity.allow_unverified_agent_identity is set: a caller-supplied \
-                 label may satisfy require_id and known_agents without proof"
-            );
-        }
         let declared: Vec<&str> = self
             .known_agents
             .iter()

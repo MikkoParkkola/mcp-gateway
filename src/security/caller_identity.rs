@@ -140,12 +140,33 @@ impl CallerIdentityConfig {
 }
 
 impl Config {
-    /// Key-server issuers, agent-identity allowlist entries, then caller
+    /// Key-server issuers, agent-identity allowlist entries and
+    /// `principal_labels` keys, the `require_id` proof source, then caller
     /// identity, whose authority must not collide with any issuer.
     pub(crate) fn validate_identity_sources(&self) -> crate::Result<()> {
         self.key_server.validate()?;
         self.security.agent_identity.validate()?;
         let agent_identity = &self.security.agent_identity;
+        // Lookup is first-match, so a repeated key would leave later rows dead.
+        for (i, entry) in agent_identity.principal_labels.iter().enumerate() {
+            if agent_identity.principal_labels[..i]
+                .iter()
+                .any(|seen| seen.source == entry.source && seen.id == entry.id)
+            {
+                return Err(crate::Error::ConfigValidation(format!(
+                    "agent_identity.principal_labels has more than one entry for (source: {}, id: {:?}); \
+                     merge their labels into one entry",
+                    entry.source, entry.id
+                )));
+            }
+        }
+        // Every load, so a reload that turns the hatch on is announced too.
+        if agent_identity.allow_unverified_agent_identity {
+            tracing::warn!(
+                "agent_identity.allow_unverified_agent_identity is set: a caller-supplied \
+                 label may satisfy require_id and known_agents without proof"
+            );
+        }
         if agent_identity.enabled
             && agent_identity.require_id
             && !agent_identity.allow_unverified_agent_identity
