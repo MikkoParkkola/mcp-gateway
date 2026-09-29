@@ -416,6 +416,34 @@ fn foreign_owner_message_names_file_owner_and_chown_fix() {
 }
 
 #[test]
+fn foreign_owner_message_prints_the_exact_fix_with_real_uid_and_path() {
+    let secret = super::refusal_message(
+        super::SecretFile::TlsKey,
+        Path::new("/srv/k.pem"),
+        Refusal::ForeignOwner,
+        (0o600, FOREIGN, 1002),
+        OWNER,
+    );
+    assert!(
+        secret.ends_with(
+            "Fix: chown 1001 /srv/k.pem && chmod 600 /srv/k.pem (see UPGRADING-4.0 \u{a7}96)."
+        ),
+        "{secret}"
+    );
+    let integrity = super::refusal_message(
+        super::SecretFile::TlsCert,
+        Path::new("/srv/c.pem"),
+        Refusal::ForeignOwner,
+        (0o644, FOREIGN, 1002),
+        OWNER,
+    );
+    assert!(
+        integrity.ends_with("Fix: chown 1001 /srv/c.pem (see UPGRADING-4.0 \u{a7}96)."),
+        "{integrity}"
+    );
+}
+
+#[test]
 fn mode_refusal_message_is_unchanged() {
     let got = super::refusal_message(
         super::SecretFile::Config,

@@ -955,8 +955,9 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   user is. Keeping host ownership with `chmod 640` and group 1001 no longer works: item 96 refuses
   a file a host user owns.
 - **The fix the error names depends on ownership.** On a file the gateway owns it is
-  `chmod 600`. On a file another user owns, `chmod 600` would lock the gateway out, so it names
-  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
+  `chmod 600`. On a root-owned file, `chmod 600` would lock the gateway out, so it names
+  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`. A file
+  any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
