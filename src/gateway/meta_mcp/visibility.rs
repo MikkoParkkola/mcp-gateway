@@ -261,6 +261,8 @@ impl MetaMcp {
         }
         // Borrowed, not cloned: this runs per tool on every listing (#2110).
         // One lookup, so a reload removing the tool reads as absent (#2236).
+        // Absent is refused, not skipped: a skip here would admit a tool a
+        // reload re-adds before dispatch, and a cached answer for a removed one.
         let Some(request) = cap.with_definition(tool, |cap_def| IdentityGrantRequest {
             identity: scope
                 .grant_subject
@@ -276,7 +278,7 @@ impl MetaMcp {
             owner: cap_def.metadata.identity_owner.clone(),
             now: chrono::Utc::now(),
         }) else {
-            return Ok(());
+            return Err(Error::ToolNotFound(tool.to_string()));
         };
         let evaluation = self.identity_grants.read().evaluate(&request);
         if evaluation.allowed {

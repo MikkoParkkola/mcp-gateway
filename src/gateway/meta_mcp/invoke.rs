@@ -3485,16 +3485,13 @@ impl MetaMcp {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
 
+        // The grant was decided at the authorization chokepoint, above the
+        // caches. The definition is resolved again here only for the response
+        // transform below, in one lookup so a reload cannot split it (#2236).
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
-            && cap.has_capability(tool)
+            && let Some(cap_def) = cap.get(tool)
         {
-            // The grant was decided at the authorization chokepoint, above the
-            // caches. The definition is resolved again here only for the
-            // response transform below.
-            let cap_def = cap
-                .get(tool)
-                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
             let result = call_capability_tool_with_identity(
                 &cap,
                 tool,
