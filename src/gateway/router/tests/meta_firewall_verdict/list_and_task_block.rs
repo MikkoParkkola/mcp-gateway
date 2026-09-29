@@ -143,8 +143,8 @@ async fn a_blocked_direct_tool_list_is_refused() {
 
 /// #2350: `gateway_list_tools` (named server, then aggregate),
 /// `gateway_search_tools` and Code Mode `gateway_search` refuse a blocked
-/// listing: the Meta-MCP on the canonical value, the router on the served
-/// form.
+/// listing at the canonical pass in the Meta-MCP; the refusal carries no
+/// result, so the router pass has nothing to inspect.
 #[tokio::test]
 async fn blocked_discovery_listings_are_refused_once() {
     let (state, handler, meta, _store) = leaky_list_state().await;
@@ -167,8 +167,8 @@ async fn blocked_discovery_listings_are_refused_once() {
         let after = (inspections(&handler), inspections(&meta));
         assert_eq!(
             (after.0 - before.0, after.1 - before.1),
-            (1, 1),
-            "{tool}: the canonical value in the Meta-MCP, then the served form"
+            (0, 1),
+            "{tool}: refused at the canonical pass, so no result is left for the router"
         );
     }
 }
@@ -238,6 +238,14 @@ async fn a_blocked_task_result_is_refused_on_tasks_get() {
             post(&state, "/mcp", &h, &body).await.1
         }
     };
+    // Warm the catalogue, so the read-only annotation classifies the tool as
+    // harmless and the task needs no confirmation. The listing itself is
+    // refused (its description carries the credential), after the fetch.
+    let warm = json!({
+        "jsonrpc": "2.0", "id": 0, "method": "tools/call",
+        "params": {"name": "gateway_list_tools", "arguments": {"server": "demo"}}
+    });
+    let _ = post(&state, "/mcp", &[], &warm).await;
     let created = send(
         headers("tools/call", TOOL.to_string()),
         modern(
