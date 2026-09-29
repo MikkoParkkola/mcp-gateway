@@ -1,26 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! D3-a: identity grant decisions are audited, one record per decision on a
-//! personal capability per outer call.
+//! personal capability per outer call (D3-amendment rev 11).
 //!
-//! Signatures only: every body below is a stub, so the D3-a cells compile
-//! and fail on their assertions.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "D3-a stubs: wired into the openers by the next commit"
-    )
-)]
-#![cfg_attr(
-    test,
-    allow(dead_code, reason = "D3-a stubs: not every stub has a caller yet")
-)]
+//! `identity_grant_rule` with `Emit::Audit` notes each decision into a
+//! task-local slot. The outermost opener (`invoke_tool`, the dispatch tail,
+//! the HTTP `/mcp` handler, stdio `tools/call`) selects and writes the
+//! records before the answer leaves, failing closed under `FailClosed`.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use serde_json::{Map, Value};
+
+use crate::identity_grants::{IdentityGrantAuditEvent, IdentityGrantDecisionReason};
+use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::TransparencyLogger;
+use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
+use crate::{Error, Result};
+
+/// The record kind a grant decision is written as.
+const DECISION_KIND: &str = "identity_grant_decision";
+
+type Notes = Arc<Mutex<Vec<GrantNote>>>;
+
+tokio::task_local! {
+    /// The open slot's notes, owned by the outermost opener.
+    static GRANT_SLOT: Notes;
+}
 
 /// One grant decision noted inside a slot, keyed by the check's own inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,28 +40,322 @@ pub(super) struct GrantNote {
     pub(super) trace_id: Option<String>,
     /// Whether the grant allowed the call.
     pub(super) allowed: bool,
+    /// The record's domain fields, projected: the subject without its label.
+    pub(super) fields: Map<String, Value>,
+    /// The evaluated subject id, for the envelope's `who`.
+    pub(super) subject: Option<String>,
 }
 
-/// Run `future` inside a grant-decision slot, or inside the one already open.
-/// The outermost opener writes the selected notes before returning.
-pub(super) async fn with_grant_slot<F: Future>(
-    logger: Option<&Arc<TransparencyLogger>>,
-    future: F,
-) -> F::Output {
-    let _ = logger;
-    future.await
-}
+impl GrantNote {
+    /// Project `event` into a note. The subject keeps `authority` and
+    /// `subject` only: its label is an email and never reaches the log.
+    fn project(server: &str, tool: &str, event: &IdentityGrantAuditEvent) -> Self {
+        let mut fields = Map::new();
+        fields.insert("kind".into(), DECISION_KIND.into());
+        fields.insert("timestamp".into(), event.timestamp.to_rfc3339().into());
+        fields.insert(
+            "reason".into(),
+            serde_json::to_value(&event.reason).unwrap_or_default(),
+        );
+        fields.insert("capability".into(), event.capability.clone().into());
+        fields.insert(
+            "scope".into(),
+            serde_json::to_value(&event.scope).unwrap_or_default(),
+        );
+        if let Some(tool) = &event.tool {
+            fields.insert("tool".into(), tool.clone().into());
+        }
+        if let Some(grant_id) = &event.grant_id {
+            fields.insert("grant_id".into(), grant_id.clone().into());
+        }
+        if let Some(agent_id) = &event.agent_id {
+            fields.insert("agent_id".into(), agent_id.clone().into());
+        }
+        if let Some(subject) = &event.subject {
+            fields.insert(
+                "subject".into(),
+                serde_json::json!({ "authority": subject.authority, "subject": subject.subject }),
+            );
+        }
+        Self {
+            server: server.to_string(),
+            tool: tool.to_string(),
+            trace_id: crate::gateway::trace::current(),
+            allowed: event.allowed,
+            fields,
+            subject: event.subject.as_ref().map(|s| s.subject.clone()),
+        }
+    }
 
-/// Note one decision into the open slot.
-pub(super) fn note_grant_decision(note: GrantNote) {
-    drop(note);
+    fn envelope(&self) -> AuditEnvelope {
+        let who = AuditWho::from_subject(self.subject.as_deref().unwrap_or("anonymous"));
+        AuditEnvelope {
+            trace_id: self.trace_id.clone(),
+            otel_trace_id: None,
+            outcome: if self.allowed {
+                AuditOutcome::Ok
+            } else {
+                AuditOutcome::Denied(-32004)
+            },
+            who,
+        }
+    }
 }
 
 /// The notes that become records: every traced note, and the last untraced
 /// note of a `(server, tool)` with no traced note.
 pub(super) fn select_records(notes: &[GrantNote]) -> Vec<&GrantNote> {
-    let _ = notes;
-    Vec::new()
+    let same = |a: &GrantNote, b: &GrantNote| a.server == b.server && a.tool == b.tool;
+    notes
+        .iter()
+        .enumerate()
+        .filter(|&(i, note)| {
+            note.trace_id.is_some()
+                || (!notes.iter().any(|n| same(n, note) && n.trace_id.is_some())
+                    && !notes[i + 1..].iter().any(|n| same(n, note)))
+        })
+        .map(|(_, note)| note)
+        .collect()
+}
+
+/// Owns a slot's notes: whatever is still pending when it drops (a cancelled
+/// call) is written on a spawned task through the bounded append.
+struct SlotGuard {
+    notes: Notes,
+    logger: Arc<TransparencyLogger>,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        let pending = std::mem::take(&mut *self.notes.lock().expect("grant slot lock"));
+        if !pending.is_empty() {
+            spawn_write(&self.logger, pending);
+        }
+    }
+}
+
+/// Write `notes` on a spawned task, bounded; never on the caller's thread.
+fn spawn_write(logger: &Arc<TransparencyLogger>, notes: Vec<GrantNote>) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        tracing::error!(
+            count = notes.len(),
+            "grant decision records lost: no runtime to write them"
+        );
+        return;
+    };
+    let logger = Arc::clone(logger);
+    handle.spawn(async move {
+        if let Err(error) = write_records(&logger, &notes).await {
+            tracing::error!(%error, "grant decision records could not be written");
+        }
+    });
+}
+
+/// Append one record per selected note, bounded (F20).
+async fn write_records(
+    logger: &Arc<TransparencyLogger>,
+    notes: &[GrantNote],
+) -> std::io::Result<()> {
+    for note in select_records(notes) {
+        let (fields, envelope) = (note.fields.clone(), note.envelope());
+        logger
+            .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
+            .await?;
+    }
+    Ok(())
+}
+
+/// Run `future` inside a grant-decision slot, or inside the one already open.
+/// The outermost opener writes the selected notes before returning; the
+/// second value is that write's verdict: `AuditUnavailable` under
+/// `FailClosed` when it failed.
+pub(super) async fn with_grant_slot<F: Future>(
+    logger: Option<&Arc<TransparencyLogger>>,
+    future: F,
+) -> (F::Output, Result<()>) {
+    let Some(logger) = logger else {
+        return (future.await, Ok(()));
+    };
+    if GRANT_SLOT.try_with(|_| ()).is_ok() {
+        return (future.await, Ok(()));
+    }
+    #[cfg(test)]
+    BOOKKEEPING.with(|b| b.borrow_mut().slots_opened += 1);
+    let guard = SlotGuard {
+        notes: Arc::default(),
+        logger: Arc::clone(logger),
+    };
+    let output = GRANT_SLOT.scope(Arc::clone(&guard.notes), future).await;
+    let notes = std::mem::take(&mut *guard.notes.lock().expect("grant slot lock"));
+    let written = write_records(logger, &notes).await.or_else(|error| {
+        tracing::error!(%error, "grant decision record write failed");
+        match logger.failure_policy() {
+            AuditFailurePolicy::FailClosed => Err(Error::AuditUnavailable),
+            AuditFailurePolicy::BestEffort => Ok(()),
+        }
+    });
+    (output, written)
+}
+
+/// Note `event` for `(server, tool)` into the open slot. Outside every slot
+/// the call is refused (-32005) and the record still written on a spawned
+/// task; under test that panics unless the cell opted in.
+pub(super) fn note_grant_decision(
+    logger: Option<&Arc<TransparencyLogger>>,
+    server: &str,
+    tool: &str,
+    event: &IdentityGrantAuditEvent,
+) -> Result<()> {
+    let Some(logger) = logger else {
+        return Ok(());
+    };
+    if matches!(
+        event.reason,
+        IdentityGrantDecisionReason::PublicCapability
+            | IdentityGrantDecisionReason::SharedCapability
+    ) {
+        return Ok(());
+    }
+    let note = GrantNote::project(server, tool, event);
+    #[cfg(test)]
+    BOOKKEEPING.with(|b| b.borrow_mut().notes_taken += 1);
+    let unslotted = GRANT_SLOT
+        .try_with(|notes| notes.lock().expect("grant slot lock").push(note.clone()))
+        .is_err();
+    if !unslotted {
+        return Ok(());
+    }
+    #[cfg(test)]
+    assert!(
+        UNSLOTTED_ALLOWED.with(std::cell::Cell::get) > 0,
+        "identity grant check outside a grant-decision slot"
+    );
+    tracing::error!(
+        server,
+        tool,
+        "identity grant check outside a grant-decision slot; refused"
+    );
+    spawn_write(logger, vec![note]);
+    Err(Error::AuditUnavailable)
+}
+
+/// Signing prepared this call, so `invoke_tool` skipped its own check: its
+/// trace goes on the prepared (untraced) note for `(server, tool)`.
+pub(super) fn stamp_prepared(server: &str, tool: &str) {
+    let Some(trace) = crate::gateway::trace::current() else {
+        return;
+    };
+    let _ = GRANT_SLOT.try_with(|notes| {
+        let mut notes = notes.lock().expect("grant slot lock");
+        if let Some(note) = notes
+            .iter_mut()
+            .rev()
+            .find(|n| n.trace_id.is_none() && n.server == server && n.tool == tool)
+        {
+            note.trace_id = Some(trace);
+        }
+    });
+}
+
+/// A `Result` answer, refused with -32005 when the slot's write failed.
+pub(crate) async fn slot_result<T>(
+    logger: Option<&Arc<TransparencyLogger>>,
+    future: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let (output, written) = with_grant_slot(logger, future).await;
+    written.and(output)
+}
+
+/// A JSON-RPC answer paired with `extra`, replaced by -32005 when the
+/// slot's write failed.
+pub(crate) async fn slot_rpc<X>(
+    logger: Option<&Arc<TransparencyLogger>>,
+    id: RequestId,
+    future: impl Future<Output = (JsonRpcResponse, X)>,
+) -> (JsonRpcResponse, X) {
+    match with_grant_slot(logger, Box::pin(future)).await {
+        ((response, extra), Ok(())) => (response, extra),
+        ((_, extra), Err(error)) => (
+            JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
+            extra,
+        ),
+    }
+}
+
+/// An HTTP answer, replaced by a 503 carrying -32005 when the slot's write
+/// failed. The request id is not in reach here, so the error names none.
+pub(crate) async fn slot_http<R: axum::response::IntoResponse>(
+    logger: Option<&Arc<TransparencyLogger>>,
+    future: impl Future<Output = R>,
+) -> axum::response::Response {
+    match with_grant_slot(logger, Box::pin(future)).await {
+        (response, Ok(())) => response.into_response(),
+        (_, Err(error)) => {
+            let body = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(body),
+            )
+                .into_response()
+        }
+    }
+}
+
+impl super::MetaMcp {
+    /// D1's own boundary opens a slot too, or reuses the open one (R1).
+    pub(super) async fn invoke_tool(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
+        let logger = self.transparency_logger.as_ref();
+        let future = self.invoke_tool_in_slot(args, session_id, caller);
+        slot_result(logger, Box::pin(future)).await
+    }
+
+    /// The dispatch check, unless signing prepared this call: then only
+    /// the invocation's trace is stamped onto the prepared note.
+    pub(super) fn check_or_stamp(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+        (server, tool): (&str, &str),
+    ) -> Result<()> {
+        if caller
+            .signing
+            .is_some_and(|context| context.prepared_for(server, tool))
+        {
+            stamp_prepared(server, tool);
+            Ok(())
+        } else {
+            self.check_invocation_policy(args, session_id, caller)
+        }
+    }
+
+    /// The tail the request thread and the task worker share: one slot, so a
+    /// plan's decisions flush once, after the whole plan.
+    pub(super) async fn dispatch_below_gate_shaped(
+        &self,
+        target: super::DispatchTarget<'_>,
+        shape: super::ResultShape,
+        confirmed_in_band: bool,
+    ) -> JsonRpcResponse {
+        let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
+        let future = async {
+            let answer = self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band);
+            (answer.await, ())
+        };
+        slot_rpc(logger, id, future).await.0
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BOOKKEEPING: std::cell::RefCell<GrantBookkeeping> =
+        std::cell::RefCell::new(GrantBookkeeping::default());
+    static UNSLOTTED_ALLOWED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Test-only opt-in: while held, a check outside every slot takes the
@@ -63,7 +364,15 @@ pub(super) fn select_records(notes: &[GrantNote]) -> Vec<&GrantNote> {
 pub(super) struct UnslottedCheckAllowed;
 
 #[cfg(test)]
+impl Drop for UnslottedCheckAllowed {
+    fn drop(&mut self) {
+        UNSLOTTED_ALLOWED.with(|n| n.set(n.get() - 1));
+    }
+}
+
+#[cfg(test)]
 pub(super) fn allow_unslotted_check_for_test() -> UnslottedCheckAllowed {
+    UNSLOTTED_ALLOWED.with(|n| n.set(n.get() + 1));
     UnslottedCheckAllowed
 }
 
@@ -77,5 +386,5 @@ pub(super) struct GrantBookkeeping {
 
 #[cfg(test)]
 pub(super) fn grant_bookkeeping_for_test() -> GrantBookkeeping {
-    GrantBookkeeping::default()
+    BOOKKEEPING.with(|b| *b.borrow())
 }

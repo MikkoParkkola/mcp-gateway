@@ -2918,15 +2918,20 @@ impl Gateway {
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
         let (response, execution) = if method == "tools/call" {
-            Box::pin(Self::dispatch_tools_call(
-                meta_mcp,
-                tool_policy,
-                &mut request,
-                id,
-                client,
-                &mut signing_context,
-                &request_shape,
-            ))
+            // D3-a: one grant-decision slot spans signing, admission and dispatch.
+            super::meta_mcp::grant_audit::slot_rpc(
+                meta_mcp.transparency_logger.as_ref(),
+                id.clone(),
+                Self::dispatch_tools_call(
+                    meta_mcp,
+                    tool_policy,
+                    &mut request,
+                    id,
+                    client,
+                    &mut signing_context,
+                    &request_shape,
+                ),
+            )
             .await
         } else {
             (

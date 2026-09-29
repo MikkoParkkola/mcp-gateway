@@ -455,11 +455,12 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|accept| accept.contains("text/event-stream"));
 
-    let dispatch = async {
-        Box::pin(meta_mcp_dispatch(state, http_request))
-            .await
-            .into_response()
-    };
+    // D3-a: one grant-decision slot spans signing, admission and dispatch.
+    let meta = Arc::clone(&state.meta_mcp);
+    let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
+        meta.transparency_logger.as_ref(),
+        meta_mcp_dispatch(state, http_request),
+    );
 
     if offers_event_stream {
         // Scope rather than collect: the client offered a stream, so the first

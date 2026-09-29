@@ -38,6 +38,9 @@ pub(crate) struct Bound {
     /// Blocking closures started, for the one-thread-parked rows.
     #[cfg(test)]
     pub(crate) closures_entered: std::sync::atomic::AtomicUsize,
+    /// Appends refused at once because the log was stalled (D3-a).
+    #[cfg(test)]
+    pub(crate) refused_under_stall: std::sync::atomic::AtomicUsize,
     /// [`AUDIT_APPEND_TIMEOUT`]; tests shorten it.
     pub(crate) limit: std::sync::Mutex<Duration>,
     /// Runs once when a timeout is noticed, before the stall lock is taken.
@@ -52,6 +55,8 @@ impl Default for Bound {
             state: std::sync::Mutex::new(StallState::default()),
             #[cfg(test)]
             closures_entered: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            refused_under_stall: std::sync::atomic::AtomicUsize::new(0),
             limit: std::sync::Mutex::new(AUDIT_APPEND_TIMEOUT),
             #[cfg(test)]
             before_mark: std::sync::Mutex::new(None),
@@ -111,6 +116,10 @@ impl TransparencyLogger {
         // While stalled every append is refused at once, with no wait and no
         // thread; a best-effort caller logs it and serves anyway.
         if self.is_stalled() {
+            #[cfg(test)]
+            self.bound
+                .refused_under_stall
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             return Err(timed_out());
         }
         let limit = cap.map_or(self.append_timeout(), |c| c.min(self.append_timeout()));

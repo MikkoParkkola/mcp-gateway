@@ -26,6 +26,8 @@ fn note(server: &str, tool: &str, trace: Option<&str>, allowed: bool) -> GrantNo
         tool: tool.to_string(),
         trace_id: trace.map(str::to_string),
         allowed,
+        fields: serde_json::Map::new(),
+        subject: None,
     }
 }
 

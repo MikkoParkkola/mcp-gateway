@@ -84,7 +84,7 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
-mod grant_audit;
+pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -2282,7 +2282,7 @@ impl MetaMcp {
         .await
     }
 
-    async fn dispatch_below_gate_shaped(
+    async fn dispatch_below_gate_shaped_in_slot(
         &self,
         target: DispatchTarget<'_>,
         shape: ResultShape,

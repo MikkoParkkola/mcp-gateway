@@ -109,7 +109,13 @@ pub(super) fn only(records: Vec<Value>, what: &str) -> Value {
 pub(super) fn signing(mut meta: MetaMcp) -> MetaMcp {
     meta.enable_message_signing(
         crate::security::message_signing::MessageSigner::new(
-            b"d3a-signing-secret-that-is-at-least-32-bytes".to_vec(),
+            // Generated per run: no cell needs its value, and none is committed.
+            format!(
+                "{}{}",
+                uuid::Uuid::new_v4().simple(),
+                uuid::Uuid::new_v4().simple()
+            )
+            .into_bytes(),
             None,
             "d3a-signing-key".to_owned(),
         ),
