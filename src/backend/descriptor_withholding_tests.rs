@@ -139,8 +139,19 @@ async fn served(backend: &Backend, name: &str) -> bool {
 }
 
 /// A WARN-and-above log capture for the current thread. The cells run on a
-/// current-thread runtime, so every await in the cell stays under it.
+/// current-thread runtime, so every await in the cell stays under it. A
+/// process-wide registry keeps every callsite's interest open, so a warn is
+/// never filtered out, by an interest cached on another thread, before the
+/// scoped subscriber sees it.
 fn capture() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<u8>>>) {
+    static INTEREST: std::sync::Once = std::sync::Once::new();
+    INTEREST.call_once(|| {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::Registry::default()
+                .with(tracing::level_filters::LevelFilter::TRACE),
+        );
+    });
     struct W(Arc<Mutex<Vec<u8>>>);
     impl std::io::Write for W {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
