@@ -229,10 +229,16 @@ fn transport_label(transport: &TransportConfig) -> String {
                 .unwrap_or(command.as_str());
             format!("stdio: {short}")
         }
-        TransportConfig::Http { http_url, .. } => format!("http: {}", redact_url_for_diagnostics(http_url)),
-        TransportConfig::WebSocket { ws_url, .. } => format!("websocket: {}", redact_url_for_diagnostics(ws_url)),
+        TransportConfig::Http { http_url, .. } => {
+            format!("http: {}", redact_url_for_diagnostics(http_url))
+        }
+        TransportConfig::WebSocket { ws_url, .. } => {
+            format!("websocket: {}", redact_url_for_diagnostics(ws_url))
+        }
         #[cfg(feature = "a2a")]
-        TransportConfig::A2a { a2a_url, .. } => format!("a2a: {}", redact_url_for_diagnostics(a2a_url)),
+        TransportConfig::A2a { a2a_url, .. } => {
+            format!("a2a: {}", redact_url_for_diagnostics(a2a_url))
+        }
     }
 }
 
@@ -333,7 +339,10 @@ mod tests {
         .unwrap();
         for label in [transport_label(&ws), transport_label(&http)] {
             assert!(label.contains("host"), "{label}");
-            assert!(!label.contains("pass") && !label.contains("token=x"), "{label}");
+            assert!(
+                !label.contains("pass") && !label.contains("token=x"),
+                "{label}"
+            );
         }
     }
     use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
