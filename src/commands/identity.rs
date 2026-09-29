@@ -293,9 +293,15 @@ fn parse_subject_spec(
     label: Option<String>,
     field_name: &str,
 ) -> Result<GrantSubject, String> {
-    let (authority, subject) = spec.rsplit_once(':').ok_or_else(|| {
-        format!("{field_name} must use AUTHORITY:SUBJECT, for example api_key:alice")
-    })?;
+    // A built-in authority is one word, so the subject after it keeps its
+    // colons (an mTLS SAN URI); an issuer URL splits at the last colon (#2291).
+    let (authority, subject) = ["api_key", "mtls", "agent_oauth"]
+        .into_iter()
+        .find_map(|builtin| Some((builtin, spec.strip_prefix(builtin)?.strip_prefix(':')?)))
+        .or_else(|| spec.rsplit_once(':'))
+        .ok_or_else(|| {
+            format!("{field_name} must use AUTHORITY:SUBJECT, for example api_key:alice")
+        })?;
     Ok(GrantSubject::new(
         non_empty(authority, field_name)?,
         verbatim_id(subject, field_name)?,
