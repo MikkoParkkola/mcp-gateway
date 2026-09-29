@@ -523,6 +523,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
+| [Windows limits](CONTRIBUTING.md#windows-test-coverage) | What the Windows job runs; unix-only behaviors (POSIX mode bits, uid ownership, process reaping) are gated, and Windows uses owner-only DACLs instead (UPGRADING items 68, 99) |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
