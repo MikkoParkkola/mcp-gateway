@@ -93,6 +93,10 @@ fn config_with_two_principals(root: &Path, port: u16, peer: &PeerGuard) -> PathB
         dashboard_session: DashboardSessionConfig::default(),
     };
     doc["auth"] = serde_yaml::to_value(&auth).expect("the auth config serializes");
+    // Auth on requires an audit log (UPGRADING-4.0 item 43).
+    let audit = root.join("audit").join("log.jsonl");
+    doc["security"]["transparency_log"]["enabled"] = true.into();
+    doc["security"]["transparency_log"]["path"] = audit.to_string_lossy().into_owned().into();
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
         serde_yaml::to_string(&doc).expect("the patched config serializes"),
