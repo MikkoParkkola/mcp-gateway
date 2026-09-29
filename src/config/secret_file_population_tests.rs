@@ -36,6 +36,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
+        "src/commands/dashboard_link.rs",
+        "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
+    ),
+    (
         "src/commands/kubernetes.rs",
         "Kubernetes manifests input; public",
     ),

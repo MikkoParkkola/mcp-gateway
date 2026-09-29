@@ -52,11 +52,11 @@ impl Stand {
         self.dir.path().join(name)
     }
 
-    fn identity(&self, stem: &str) -> Option<(PathBuf, PathBuf)> {
-        Some((
+    fn identity(&self, stem: &str) -> (PathBuf, PathBuf) {
+        (
             self.path(&format!("{stem}.crt")),
             self.path(&format!("{stem}.key")),
-        ))
+        )
     }
 
     fn hits(&self) -> usize {
@@ -128,7 +128,7 @@ fn missing(dir: &Path) -> PathBuf {
 #[tokio::test]
 async fn a_client_identity_reaches_a_listener_that_requires_one() {
     let s = stand_in(true).await;
-    let tls = with(Some(s.path("ca.crt")), s.identity("client"));
+    let tls = with(Some(s.path("ca.crt")), Some(s.identity("client")));
     assert_eq!(fetch_link(&s.base, "tok", &tls).await.as_deref(), Ok(LINK));
     assert_eq!(s.hits(), 1);
 }
@@ -150,7 +150,7 @@ async fn without_an_identity_the_listener_refuses_and_the_error_says_why() {
 #[tokio::test]
 async fn an_identity_from_another_ca_is_refused() {
     let s = stand_in(true).await;
-    let tls = with(Some(s.path("ca.crt")), s.identity("stranger"));
+    let tls = with(Some(s.path("ca.crt")), Some(s.identity("stranger")));
     fetch_link(&s.base, "tok", &tls)
         .await
         .expect_err("an untrusted client certificate");
@@ -176,7 +176,7 @@ async fn a_private_ca_is_trusted_only_when_given() {
 #[tokio::test]
 async fn a_server_certificate_from_another_ca_fails_verification() {
     let s = stand_in(true).await;
-    let tls = with(Some(s.path("other-ca.crt")), s.identity("client"));
+    let tls = with(Some(s.path("other-ca.crt")), Some(s.identity("client")));
     let err = fetch_link(&s.base, "tok", &tls)
         .await
         .expect_err("the server does not chain to the given CA");
@@ -190,7 +190,7 @@ async fn a_server_certificate_from_another_ca_fails_verification() {
 async fn a_bad_tls_file_is_named_and_nothing_is_sent() {
     let s = stand_in(true).await;
     let absent = missing(s.dir.path());
-    let identity = s.identity("client");
+    let identity = Some(s.identity("client"));
     for tls in [
         with(Some(absent.clone()), identity.clone()),
         with(
