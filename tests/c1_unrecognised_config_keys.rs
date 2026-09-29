@@ -98,16 +98,13 @@ fn merge_key_refused_under_a_backend() {
     );
 }
 
+/// #2360: a retired key never had an effect, so it loads (with a warning)
+/// instead of taking every backend down.
 #[test]
-fn retired_backend_circuit_breaker_refused_with_explanation() {
-    let message = refusal(
-        "backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n",
-        &["backends.x.circuit_breaker"],
-    );
-    assert!(
-        message.contains("failsafe.circuit_breaker"),
-        "the refusal must point at the breaker that is read; got: {message}"
-    );
+fn retired_backend_circuit_breaker_loads() {
+    let (_dir, _path, result) =
+        load("backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n");
+    result.expect("a retired backend circuit_breaker must load");
 }
 
 /// A non-string key under a backend cannot be matched against the key list;
@@ -146,43 +143,20 @@ fn all_unrecognised_keys_reported_together() {
 }
 
 #[test]
-fn retired_idle_timeout_refused_with_explanation() {
-    let message = refusal(
-        "backends:\n  x:\n    command: y\n    idle_timeout: 10m\n",
-        &["backends.x.idle_timeout"],
-    );
-    assert!(
-        message.contains("idle hibernation was never implemented"),
-        "a retired key's refusal must carry its explanation; got: {message}"
-    );
+fn retired_idle_timeout_loads() {
+    let (_dir, _path, result) = load("backends:\n  x:\n    command: y\n    idle_timeout: 10m\n");
+    let config = result.expect("a retired idle_timeout must load");
+    assert!(config.backends.contains_key("x"));
 }
 
-/// F15: the inbound WebSocket listener was removed; a config still naming its
-/// port must fail to load and say why, not start with the port silently unbound.
+/// F15, #2360: the WebSocket listener stays removed; a config still naming its
+/// port loads and opens no listener, as `ws_port: null` (the old default) does.
 #[test]
-fn retired_server_ws_port_refused_with_explanation() {
-    let message = refusal("server:\n  ws_port: 9000\n", &["server.ws_port"]);
-    for part in [
-        "inbound WebSocket listener was removed in 4.0",
-        "never served MCP",
-        "POST /mcp",
-        "Remove server.ws_port",
-    ] {
-        assert!(
-            message.contains(part),
-            "retired ws_port refusal must say `{part}`; got: {message}"
-        );
+fn retired_server_ws_port_loads() {
+    for yaml in ["server:\n  ws_port: 9000\n", "server:\n  ws_port: null\n"] {
+        let (_dir, _path, result) = load(yaml);
+        result.unwrap_or_else(|e| panic!("{yaml:?} must load: {e}"));
     }
-}
-
-/// F15: `ws_port: null`, the old example default, is refused as retired too.
-#[test]
-fn retired_server_ws_port_null_refused() {
-    let message = refusal("server:\n  ws_port: null\n", &["server.ws_port"]);
-    assert!(
-        message.contains("inbound WebSocket listener was removed in 4.0"),
-        "a null ws_port must carry the retired explanation; got: {message}"
-    );
 }
 
 /// F15: the retirement names `server.ws_port` only; the same leaf under a
@@ -446,30 +420,94 @@ async fn refused_reload_keeps_the_running_config() {
     assert_eq!(live.get().backends["keep"].description, "after");
 }
 
-/// C8: `server.request_timeout` was never enforced; a config still carrying it
-/// must fail to load and point at the per-backend `timeout` that does bound calls.
+/// C8, #2360: `server.request_timeout` was never enforced; it loads and warns.
 #[test]
-fn removed_request_timeout_is_refused() {
-    let message = refusal(
-        "server:\n  request_timeout: 30s\n",
-        &["server.request_timeout"],
+fn removed_request_timeout_loads() {
+    let (_dir, _path, result) = load("server:\n  request_timeout: 30s\n");
+    result.expect("a retired request_timeout must load");
+}
+
+/// #2360: `_` and `x-` keys are the operator's notes, at any depth, and load.
+#[test]
+fn annotation_keys_load() {
+    let (_dir, _path, result) = load(
+        "x-anchors: {a: 1}\n_notes: hi\nserver:\n  _why: local\nbackends:\n  x:\n    command: y\n    \
+         _legacy_env_for_reference:\n      A: \"b\"\n    x-owner: me\n",
     );
-    for part in [
-        "removed in 4.0",
-        "never enforced",
-        "per-backend `timeout`",
-        "Remove server.request_timeout",
-    ] {
+    let config = result.expect("annotation keys must load");
+    assert!(config.backends.contains_key("x"));
+}
+
+/// #2360: a prefixed key is never bound. `_enabled` does not turn anything on.
+#[test]
+fn annotation_key_configures_nothing() {
+    let (_dir, _path, result) = load("key_server:\n  _enabled: true\n");
+    let config = result.expect("an annotation under a section loads");
+    assert!(!config.key_server.enabled);
+}
+
+/// #2360: the operator's shape, many retired keys and a note block, loads.
+#[test]
+fn retired_and_annotation_keys_together_load() {
+    let (_dir, _path, result) = load(
+        "server:\n  request_timeout: 30s\nbackends:\n  a:\n    command: y\n    idle_timeout: 5m\n  \
+         b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n  c:\n    command: z\n    idle_timeout: 10m\n",
+    );
+    result.expect("retired plus annotation keys must load");
+}
+
+/// #2360: typo protection stays for every other key, and a mixed file names
+/// only the refused key.
+#[test]
+fn misspelt_key_beside_ignored_keys_still_refused() {
+    let message = refusal(
+        "server:\n  request_timeout: 30s\nbackends:\n  x:\n    command: y\n    idle_timeout: 5m\n    \
+         idel_timeout: 5m\n    _note: n\n",
+        &["backends.x.idel_timeout"],
+    );
+    for ignored in ["backends.x.idle_timeout", "server.request_timeout", "_note"] {
         assert!(
-            message.contains(part),
-            "retired request_timeout refusal must say `{part}`; got: {message}"
+            !message.contains(ignored),
+            "{ignored} must not be refused; got: {message}"
         );
     }
-    // UPGRADING item 39 quotes the refusal verbatim; a reworded message must
-    // update the guide too.
-    let quote = "`server.request_timeout` is retired: the server-wide request timeout was \
-                 removed in 4.0; it was never enforced. Calls are bounded by the per-backend \
-                 `timeout`. Remove server.request_timeout.";
-    assert!(message.contains(quote), "got: {message}");
-    assert!(include_str!("../docs/UPGRADING-4.0.md").contains(quote));
+}
+
+/// #2360: a retired key is matched at its own place only.
+#[test]
+fn retired_key_in_the_wrong_place_is_refused() {
+    refusal(
+        "key_server:\n  request_timeout: 30s\n",
+        &["key_server.request_timeout"],
+    );
+    refusal("server:\n  idle_timeout: 5m\n", &["server.idle_timeout"]);
+}
+
+/// #2360: classification reads the key itself. `a._b` is one key named
+/// `a._b`, which starts with neither prefix.
+#[test]
+fn a_dotted_key_is_not_an_annotation() {
+    refusal("server:\n  \"a._b\": 1\n", &["server.a._b"]);
+}
+
+/// #2360: a transport conflict is not retired and not a note; still refused.
+#[test]
+fn unselected_transport_key_beside_retired_key_refused() {
+    let message = refusal(
+        "backends:\n  x:\n    command: y\n    http_url: \"http://127.0.0.1:1/mcp\"\n    idle_timeout: 5m\n",
+        &["backends.x.http_url"],
+    );
+    assert!(!message.contains("idle_timeout"), "got: {message}");
+}
+
+/// Flow style is valid YAML and loads like the block form: the retired key
+/// loads there too (#2360), and a misspelling is still refused.
+#[test]
+fn retired_key_loads_in_flow_style_mappings() {
+    let (_dir, _path, result) = load("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}");
+    result.expect("flow-style retired key must load");
+    refusal(
+        "backends: {demo: {command: \"echo hi\", idel_timeout: 10m}}",
+        &["backends.demo.idel_timeout"],
+    );
 }

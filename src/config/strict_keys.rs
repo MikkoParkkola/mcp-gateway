@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A key in the config file that nothing reads is a load error (C1).
 //!
+//! Two kinds of unread key load anyway (#2360): a retired key, which never had
+//! an effect and now warns once, and an annotation, a key whose own name starts
+//! with `_` or `x-`, which no config field does, so it cannot be a misspelling.
+//!
 //! The figment extract tolerates extra keys, so `key_server: {enabeld: true}`
 //! used to load with the key server off. The check runs over the YAML file
 //! alone: the env layer lands `MCP_GATEWAY_*` as root keys, and a strict
@@ -18,8 +22,8 @@ use super::Config;
 use super::config_file::ConfigFile;
 use crate::{Error, Result};
 
-/// Keys that were removed, with the reason. A retired key is refused like any
-/// other, with its explanation in place of "fix the spelling".
+/// Keys that were removed, with the reason. A retired key loads and is ignored,
+/// with one warning carrying its explanation (#2360).
 const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[
     (
         "idle_timeout",
@@ -33,19 +37,39 @@ const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Removed keys outside `backends`, by full dotted path, with the reason.
-const RETIRED_KEYS: &[(&str, &str)] = &[
+/// Removed keys outside `backends`, by path segments, with the reason.
+const RETIRED_KEYS: &[(&[&str], &str)] = &[
     (
-        "server.ws_port",
-        "the inbound WebSocket listener was removed in 4.0; it only echoed frames and \
-         never served MCP. Clients connect over HTTP (POST /mcp). Remove server.ws_port",
+        &["server", "ws_port"],
+        "the inbound WebSocket listener was removed in 4.0 and no WebSocket listener is \
+         opened; it only echoed frames and never served MCP. Clients connect over HTTP \
+         (POST /mcp). Remove server.ws_port",
     ),
     (
-        "server.request_timeout",
+        &["server", "request_timeout"],
         "the server-wide request timeout was removed in 4.0; it was never enforced. \
          Calls are bounded by the per-backend `timeout`. Remove server.request_timeout",
     ),
 ];
+
+/// A key the file carries that nothing reads and that still loads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ignored {
+    /// Removed in 4.0; warned once with the reason.
+    Retired(&'static str),
+    /// A `_` or `x-` key: the operator's own note, never a setting.
+    Annotation,
+}
+
+/// Unread keys that load, by dotted path.
+type IgnoredKeys = BTreeMap<String, Ignored>;
+
+/// Whether a mapping key is an annotation. No config field and no backend key
+/// starts with `_` or `x-` (`annotation_prefixes_name_no_real_key`), so such a
+/// key is never a misspelling of one.
+fn is_annotation(key: &str) -> bool {
+    key.starts_with('_') || key.starts_with("x-")
+}
 
 /// Every key a `backends.<name>` mapping may carry.
 ///
@@ -114,13 +138,40 @@ pub(super) fn refuse_unrecognised_keys(
     let file: Value = Config::yaml(Some(source))
         .extract()
         .map_err(|e| Error::Config(e.to_string()))?;
-    let mut found = ignored_by_serde(loaded, &file)?;
-    let backend = unread_backend_keys(raw);
+    let mut ignored = IgnoredKeys::new();
+    let mut found = ignored_by_serde(loaded, &file, &mut ignored)?;
+    let backend = unread_backend_keys(raw, &mut ignored);
     found.extend(backend.keys().cloned());
+    // Before the refusal, so a file that also carries a typo still says which
+    // keys would have loaded. Once per key per config file: a refused reload is
+    // retried every poll and must not repeat these.
+    log_ignored(path, &ignored);
     if found.is_empty() {
         return Ok(());
     }
     Err(Error::ConfigValidation(refusal(path, &found, &backend)))
+}
+
+/// The warning for a retired key; UPGRADING items 29 and 39 quote it.
+fn retired_warning(key: &str, why: &str) -> String {
+    format!("`{key}` is ignored since 4.0: {why}.")
+}
+
+fn log_ignored(path: &Path, ignored: &IgnoredKeys) {
+    for (key, kind) in ignored {
+        if !super::log_once::first_time(&format!("strict_keys:{}:{key}", path.display())) {
+            continue;
+        }
+        match kind {
+            Ignored::Retired(why) => {
+                tracing::warn!(config = %path.display(), "{}", retired_warning(key, why));
+            }
+            Ignored::Annotation => tracing::debug!(
+                config = %path.display(),
+                "`{key}` is an annotation (`_` or `x-` key) and is not read"
+            ),
+        }
+    }
 }
 
 /// Paths `Config`'s own deserializer skipped that the file spells.
@@ -130,12 +181,32 @@ pub(super) fn refuse_unrecognised_keys(
 /// this pass early and leave the keys after it unchecked. That value also
 /// carries the env layer's `MCP_GATEWAY_*` keys, which are not the file's to
 /// answer for, so only paths present in `file` are reported.
-fn ignored_by_serde(loaded: &Figment, file: &Value) -> Result<BTreeSet<String>> {
+fn ignored_by_serde(
+    loaded: &Figment,
+    file: &Value,
+    ignored: &mut IgnoredKeys,
+) -> Result<BTreeSet<String>> {
     let merged: Value = loaded.extract().map_err(|e| Error::Config(e.to_string()))?;
     let mut found = BTreeSet::new();
     let parsed: std::result::Result<Config, _> = serde_ignored::deserialize(&merged, |key| {
-        if in_file(file, &key).is_some() {
-            found.insert(dotted(&key));
+        if in_file(file, &key).is_none() {
+            return;
+        }
+        // Classified on the real mapping keys, never the dotted rendering: a
+        // key spelt `a._b` is one key named `a._b`, not an annotation.
+        let path = dotted(&key);
+        if let KeyPath::Map { key: leaf, .. } = &key
+            && is_annotation(leaf)
+        {
+            ignored.insert(path, Ignored::Annotation);
+        } else if let Some((_, why)) = segments(&key).and_then(|segs| {
+            RETIRED_KEYS
+                .iter()
+                .find(|(retired, _)| segs.iter().map(String::as_str).eq(retired.iter().copied()))
+        }) {
+            ignored.insert(path, Ignored::Retired(why));
+        } else {
+            found.insert(path);
         }
     });
     // Unreachable while the extract above succeeded on the same value; a
@@ -156,6 +227,22 @@ fn in_file<'v>(file: &'v Value, key: &KeyPath<'_>) -> Option<&'v Value> {
     }
 }
 
+/// The mapping keys from the root to `key`, or `None` through a list index.
+fn segments(key: &KeyPath<'_>) -> Option<Vec<String>> {
+    match key {
+        KeyPath::Root => Some(Vec::new()),
+        KeyPath::Seq { .. } => None,
+        KeyPath::Map { parent, key } => {
+            let mut segs = segments(parent)?;
+            segs.push(key.clone());
+            Some(segs)
+        }
+        KeyPath::Some { parent }
+        | KeyPath::NewtypeStruct { parent }
+        | KeyPath::NewtypeVariant { parent } => segments(parent),
+    }
+}
+
 /// `auth.api_keys[0].bakends`: dots between mapping keys, brackets for an index.
 fn dotted(key: &KeyPath<'_>) -> String {
     match key {
@@ -172,8 +259,9 @@ fn dotted(key: &KeyPath<'_>) -> String {
 }
 
 /// `backends.<name>.<key>` for every key outside [`KNOWN_BACKEND_KEYS`], and
-/// for every key of a transport other than the one the backend selects.
-fn unread_backend_keys(raw: &str) -> BackendFindings {
+/// for every key of a transport other than the one the backend selects. A
+/// retired or annotation key directly under a backend goes to `ignored`.
+fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings {
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
         return BackendFindings::new();
     };
@@ -205,7 +293,13 @@ fn unread_backend_keys(raw: &str) -> BackendFindings {
         for key in keys {
             let path = format!("backends.{name}.{key}");
             if !is_backend_key(key) {
-                found.insert(path, None);
+                if let Some((_, why)) = RETIRED_BACKEND_KEYS.iter().find(|(name, _)| *name == key) {
+                    ignored.insert(path, Ignored::Retired(why));
+                } else if is_annotation(key) {
+                    ignored.insert(path, Ignored::Annotation);
+                } else {
+                    found.insert(path, None);
+                }
             } else if let Some((selector, _, read)) = selected
                 && !read.contains(&key)
                 && TRANSPORTS.iter().any(|(.., other)| other.contains(&key))
@@ -248,10 +342,6 @@ fn refusal(path: &Path, found: &BTreeSet<String>, backend: &BackendFindings) -> 
     let mut misspelt = false;
     for key in found {
         let leaf = key.rsplit('.').next().unwrap_or(key);
-        let retired = RETIRED_BACKEND_KEYS
-            .iter()
-            .find(|(name, _)| key.starts_with("backends.") && *name == leaf)
-            .or_else(|| RETIRED_KEYS.iter().find(|(name, _)| *name == key.as_str()));
         let unselected = backend.get(key).copied().flatten().and_then(|selector| {
             TRANSPORTS
                 .iter()
@@ -264,8 +354,6 @@ fn refusal(path: &Path, found: &BTreeSet<String>, backend: &BackendFindings) -> 
                 " `{key}` is never read: `{selector}` selects the {transport} transport for that \
                  backend. Declare one transport per backend."
             );
-        } else if let Some((_, why)) = retired {
-            let _ = write!(message, " `{key}` is retired: {why}.");
         } else if let Some(feature) = missing_feature(key, leaf) {
             let _ = write!(
                 message,
@@ -286,7 +374,9 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
-    use super::{A2A_BACKEND_KEYS, KNOWN_BACKEND_KEYS};
+    use super::{
+        A2A_BACKEND_KEYS, KNOWN_BACKEND_KEYS, RETIRED_KEYS, is_annotation, retired_warning,
+    };
 
     use crate::config::{BackendConfig, OAuthConfig, TransportConfig};
     use crate::identity_propagation::IdentityPropagationConfig;
@@ -361,6 +451,76 @@ mod tests {
         assert_eq!(
             serialized, listed,
             "KNOWN_BACKEND_KEYS drifted from BackendConfig"
+        );
+    }
+
+    /// #2360: an annotation can never shadow a real key. Covers every backend
+    /// key and every key the default `Config` serializes, at any depth; a
+    /// section that is absent by default is not covered here.
+    #[test]
+    fn annotation_prefixes_name_no_real_key() {
+        fn walk(value: &serde_yaml::Value, path: &str) {
+            if let Some(map) = value.as_mapping() {
+                for (key, child) in map {
+                    let key = key.as_str().unwrap_or_default();
+                    assert!(
+                        !is_annotation(key),
+                        "real key `{path}.{key}` looks like an annotation"
+                    );
+                    walk(child, &format!("{path}.{key}"));
+                }
+            }
+        }
+        for key in KNOWN_BACKEND_KEYS.iter().chain(A2A_BACKEND_KEYS) {
+            assert!(!is_annotation(key), "backend key `{key}`");
+        }
+        let config = serde_yaml::to_value(crate::config::Config::default()).expect("serializes");
+        walk(&config, "");
+    }
+
+    /// #2360: UPGRADING quotes the `request_timeout` warning verbatim.
+    #[test]
+    fn upgrading_quotes_the_request_timeout_warning() {
+        let (_, why) = RETIRED_KEYS
+            .iter()
+            .find(|(path, _)| *path == ["server", "request_timeout"])
+            .expect("request_timeout is retired");
+        let quote = retired_warning("server.request_timeout", why);
+        assert!(
+            include_str!("../../docs/UPGRADING-4.0.md").contains(&quote),
+            "UPGRADING must quote: {quote}"
+        );
+    }
+
+    /// #2360: a retired key warns once, an annotation logs at DEBUG once, and a
+    /// reload of the same file stays quiet. A refused file still warns first.
+    #[test]
+    fn ignored_keys_are_logged_once_even_beside_a_refusal() {
+        use crate::test_log_capture::{count, records};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ok = dir.path().join("ok.yaml");
+        let bad = dir.path().join("bad.yaml");
+        let write = crate::gateway::test_helpers::write_owner_only;
+        write(
+            &ok,
+            "backends:\n  x:\n    command: y\n    idle_timeout: 5m\n    _note: n\n",
+        )
+        .expect("write ok");
+        write(
+            &bad,
+            "backends:\n  x:\n    command: y\n    idle_timeout: 5m\n    idel: 1\n",
+        )
+        .expect("write bad");
+        let logs = records(|| {
+            crate::config::Config::load(Some(&ok)).expect("loads");
+            crate::config::Config::load(Some(&ok)).expect("reloads");
+            crate::config::Config::load(Some(&bad)).expect_err("typo refuses");
+        });
+        let retired = "`backends.x.idle_timeout` is ignored since 4.0";
+        assert_eq!(count(&logs, "WARN", retired), 2, "once per file: {logs:?}");
+        assert_eq!(
+            count(&logs, "DEBUG", "`backends.x._note` is an annotation"),
+            1
         );
     }
 

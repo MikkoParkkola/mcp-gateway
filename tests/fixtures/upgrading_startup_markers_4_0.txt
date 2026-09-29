@@ -30,12 +30,12 @@
 31	prints a notice
 32	prints a notice
 33	prints a notice
-34	prints a notice; refuses to start
+34	prints a notice
 35	no notice, the start is refused with its own error, which names the setting or file; refuses to start
 36	no notice
 37	prints a notice; refuses to start, only above one declared replica
 38	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a credential over plain HTTP on a network bind without mTLS
-39	prints a notice; refuses to start, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+39	prints a notice; refuses to start, only while `server.max_body_size` is `0`
 40	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
 41	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for an API key configured as plaintext `key`
 42	no notice
