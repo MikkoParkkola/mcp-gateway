@@ -1037,16 +1037,15 @@ async fn ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries() {
     )
     .await;
 
+    // #569: the error carries the backend's last round (not `first?`) to resume.
+    let last = Some(Box::new(asking(&[("k", ask("again?"))])));
     assert_eq!(
         outcome,
-        Err(BridgeError::RoundsExhausted),
+        Err(BridgeError::RoundsExhausted { last }),
         "a backend that never stops asking must be cut off by the retry bound"
     );
-    assert_eq!(
-        backend.calls().len(),
-        3,
-        "three retries, so four backend invocations counting the one that produced the first ask"
-    );
+    let calls = backend.calls().len();
+    assert_eq!(calls, 3, "expected three retries");
 
     // The neighbour: three asks in total, answered on the fourth invocation.
     let client = FakeClient::new(accepts(3, &content));
@@ -2047,3 +2046,8 @@ async fn ac_mrtr_7a_the_backend_request_key_is_neither_scanned_nor_delivered() {
         );
     }
 }
+#[path = "mik_7212_mrtr7_bridge_acs/mik_1990.rs"]
+mod mik_1990;
+
+#[path = "mik_7212_mrtr7_bridge/last_round.rs"]
+mod last_round;

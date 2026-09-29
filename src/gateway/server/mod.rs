@@ -310,6 +310,10 @@ pub struct Gateway {
     config: Config,
     /// Path to config file on disk (enables hot-reload when `Some`)
     config_path: Option<std::path::PathBuf>,
+    /// A config file found by discovery rather than named (#1868): watched and
+    /// reloaded, but never used where `config_path` picks a location (the
+    /// governance store) or grants a write (admin config edits).
+    watched_config: Option<std::path::PathBuf>,
     /// Backend registry
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
@@ -617,6 +621,7 @@ impl Gateway {
             data_dir: None,
             config,
             config_path,
+            watched_config: None,
             backends,
             shutdown_tx: None,
             // The environment the config was just validated against, retained:
@@ -638,6 +643,25 @@ impl Gateway {
     pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
         self.env = env;
         self
+    }
+
+    /// Watch and hot-reload `path`, a config file found by discovery (#1868).
+    ///
+    /// This only sets the watched path: the config watcher, the env-file poll
+    /// and the reload context use it when no config path was named. It does
+    /// not change `config_path`, so the governance store location, admin
+    /// config writes and the shadow scan behave exactly as for a gateway
+    /// started without `--config`. A named config path still wins.
+    #[must_use]
+    pub fn with_watched_config(mut self, path: std::path::PathBuf) -> Self {
+        self.watched_config = Some(path);
+        self
+    }
+
+    /// The config file this gateway watches and reloads: the named one, else
+    /// the one discovery found.
+    fn reload_path(&self) -> Option<&std::path::PathBuf> {
+        self.config_path.as_ref().or(self.watched_config.as_ref())
     }
 
     /// Create a gateway from an already evaluated config and the environment it
@@ -1536,7 +1560,7 @@ impl Gateway {
             &control_plane_base.path,
         )
         .await?;
-        if let Some(ref path) = self.config_path {
+        if let Some(path) = self.reload_path() {
             // Ends this context's reload waits on shutdown (#1808): axum's
             // graceful shutdown waits for every handler, and an admin or
             // meta-tool reload waiting on a stalled NFS or FUSE read would
@@ -1968,7 +1992,7 @@ impl Gateway {
         // active. MIK-6750 r4: starting it earlier would let a startup-time
         // reload move `live_config` before the snapshot, surfacing a
         // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+        let _config_watcher: Option<ConfigWatcher> = if let Some(path) = self.reload_path() {
             match ConfigWatcher::start(
                 path.clone(),
                 Arc::clone(&live_config),
@@ -2258,7 +2282,7 @@ impl Gateway {
         )
         .await?;
         // Give stdio the same explicit reload context as HTTP.
-        if let Some(ref path) = self.config_path {
+        if let Some(path) = self.reload_path() {
             let live_config = Arc::new(
                 LiveConfig::new(self.config.clone())
                     .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
@@ -3560,7 +3584,7 @@ fn spawn_idle_reaper(
             }
 
             for backend in backends.all() {
-                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL).await;
+                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL);
                 if closed > 0 {
                     debug!(
                         backend = %backend.name,

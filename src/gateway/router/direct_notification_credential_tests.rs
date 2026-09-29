@@ -132,11 +132,14 @@ impl Gateway {
         self.seen.lock().clone()
     }
 
-    /// A recording slot for a passthrough caller whose forwarded value is
-    /// `value`: the route keys it by the value's SHA-256 hex digest.
+    /// A recording slot for an anonymous passthrough caller whose forwarded
+    /// value is `value`: the route keys it by the value's SHA-256 hex digest,
+    /// charged to the caller's principal (#2300).
     fn passthrough_slot(&self, value: &str) {
         use sha2::Digest as _;
-        let binding = hex::encode(sha2::Sha256::digest(value.as_bytes()));
+        let digest = hex::encode(sha2::Sha256::digest(value.as_bytes()));
+        let principal = crate::identity_propagation::audit_subject(None);
+        let binding = crate::backend::passthrough_binding(&principal, &digest);
         self.backend.set_pooled_transport_for_test(
             &PoolKey::PerUser { binding },
             Arc::new(SlotWire {
@@ -319,7 +322,8 @@ async fn a_minted_notification_carries_each_callers_credential() {
 
 /// W3: a non-required minting backend on a transport that cannot carry the
 /// minted credential refuses the notification rather than send it with the
-/// static one.
+/// static one. The refusal is audited, and decided before minting, so the log
+/// shows no mint for a notification that never left (#2310).
 #[tokio::test]
 async fn a_credential_the_transport_cannot_carry_refuses_the_notification() {
     let gw = gateway(
@@ -332,6 +336,58 @@ async fn a_credential_the_transport_cannot_carry_refuses_the_notification() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(gw.seen(), vec![]);
+    assert_eq!(gw.rows("idp_refuse"), 1);
+    assert_eq!(gw.rows("idp_mint"), 0);
+}
+
+/// #2310: a non-required passthrough credential the transport cannot carry
+/// refuses the notification with one `idp_refuse` row.
+#[tokio::test]
+async fn an_uncarried_passthrough_refusal_is_audited() {
+    let gw = gateway(
+        backend_config(stdio(), PropagationStrategyKind::Passthrough, false),
+        true,
+    )
+    .await;
+    let value = format!("Bearer {}", "caller-own");
+    gw.passthrough_slot(&value);
+    assert_eq!(notify(&gw, None, Some(&value)).await, StatusCode::FORBIDDEN);
+    assert_eq!(gw.seen(), vec![]);
+    assert_eq!(gw.rows("idp_refuse"), 1);
+    assert_eq!(gw.rows("idp_mint"), 0);
+}
+
+/// #2310: on a required backend that cannot carry the credential, a caller
+/// with a principal is refused by the route and an anonymous one by the
+/// resolver; either way exactly one `idp_refuse` row, no `idp_mint`.
+#[tokio::test]
+async fn a_required_uncarried_refusal_is_audited_once_per_caller() {
+    for subject in [Some("alpha"), None] {
+        let gw = gateway(
+            backend_config(stdio(), PropagationStrategyKind::SignedAssertion, true),
+            true,
+        )
+        .await;
+        assert_eq!(notify(&gw, subject, None).await, StatusCode::FORBIDDEN);
+        assert_eq!(gw.seen(), vec![]);
+        assert_eq!(gw.rows("idp_refuse"), 1, "{subject:?}");
+        assert_eq!(gw.rows("idp_mint"), 0, "{subject:?}");
+    }
+}
+
+/// #2310 guard: a caller with no principal mints nothing on a non-required
+/// backend, so its notification keeps the shared, static path (IDP.5) even on
+/// a transport that could not carry a credential.
+#[tokio::test]
+async fn an_anonymous_notification_keeps_the_static_path() {
+    let gw = gateway(
+        backend_config(stdio(), PropagationStrategyKind::SignedAssertion, false),
+        true,
+    )
+    .await;
+    assert_eq!(notify(&gw, None, None).await, StatusCode::ACCEPTED);
+    assert_eq!(gw.seen(), vec![("shared", NOTE.to_string(), None)]);
+    assert_eq!(gw.rows("idp_refuse") + gw.rows("idp_mint"), 0);
 }
 
 /// W4 (moved from #2240): a verified caller whose credential the resolver

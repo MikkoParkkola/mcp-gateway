@@ -14,8 +14,7 @@ use super::*;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::transport::Transport;
-use crate::{Error, Result};
+use crate::{Error, Result, transport::Transport};
 
 // ---- MIK-6735: per-user transport/session pool ----
 
@@ -312,9 +311,7 @@ async fn evict_idle_per_user_entries_reaps_idle_users_but_spares_shared() {
             .store(0, Ordering::Relaxed);
     }
 
-    let closed = backend
-        .evict_idle_per_user_entries(Duration::from_secs(1))
-        .await;
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(closed, 1, "only the per-user slot is reaped");
     assert!(
         backend
@@ -375,7 +372,7 @@ async fn reconcile_after_start_closes_orphaned_transport_when_evictor_wins_race(
     // Simulate ensure_entry_started's in-flight state: an entry was
     // cloned out of the pool (as pooled_entry would) and start_entry
     // just finished building its transport into it.
-    let entry = backend.pooled_entry(&key);
+    let entry = backend.pooled_entry(&key).unwrap();
     let transport = Arc::new(SessionMock::new("A"));
     *entry.transport.write() = Some(Arc::clone(&transport) as Arc<dyn Transport>);
 
@@ -416,7 +413,7 @@ async fn reconcile_after_start_keeps_transport_when_still_registered() {
     let backend = per_user_backend();
     let key = per_user_key("userA");
 
-    let entry = backend.pooled_entry(&key);
+    let entry = backend.pooled_entry(&key).unwrap();
     let transport = Arc::new(SessionMock::new("A"));
     *entry.transport.write() = Some(Arc::clone(&transport) as Arc<dyn Transport>);
 
@@ -560,7 +557,7 @@ async fn client_traffic_defers_stopping() {
         .last_used
         .store(0, Ordering::Relaxed);
 
-    drop(backend.begin_activity(&PoolKey::Shared));
+    drop(backend.begin_activity(&PoolKey::Shared).unwrap());
 
     assert!(
         !backend.stop_if_idle().await,
@@ -578,7 +575,7 @@ async fn in_flight_request_is_never_stopped() {
     backend.set_transport_for_test(transport.clone());
 
     // A request is running...
-    let activity = backend.begin_activity(&PoolKey::Shared);
+    let activity = backend.begin_activity(&PoolKey::Shared).unwrap();
     // ...but it began long ago (a slow upstream call).
     backend
         .pool
@@ -659,7 +656,7 @@ async fn subsecond_deadline_does_not_stop_a_fresh_backend() {
     let backend = stoppable_backend(Duration::from_millis(1));
     let transport = Arc::new(SessionMock::new("fresh"));
     backend.set_transport_for_test(transport.clone());
-    drop(backend.begin_activity(&PoolKey::Shared));
+    drop(backend.begin_activity(&PoolKey::Shared).unwrap());
 
     assert!(
         !backend.stop_if_idle().await,
@@ -912,7 +909,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .store(0, Ordering::Relaxed);
 
     // A request is running against this per-user slot.
-    let activity = backend.begin_activity(&key);
+    let activity = backend.begin_activity(&key).unwrap();
     backend
         .pool
         .get(&key)
@@ -921,9 +918,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .last_used
         .store(0, Ordering::Relaxed);
 
-    let closed = backend
-        .evict_idle_per_user_entries(Duration::from_secs(1))
-        .await;
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(
         closed, 0,
         "a per-user slot with work in flight must not be evicted"
@@ -942,9 +937,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .last_used
         .store(0, Ordering::Relaxed);
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
         "eviction resumes once the request completes"
     );
@@ -1053,7 +1046,7 @@ fn claiming_a_lease_is_excluded_while_the_reaper_holds_the_transport() {
         let claimed = Arc::clone(&claimed);
         let release = Arc::clone(&release);
         std::thread::spawn(move || {
-            let _lease = backend.begin_activity(&PoolKey::Shared);
+            let _lease = backend.begin_activity(&PoolKey::Shared).unwrap();
             claimed.store(true, Ordering::SeqCst);
             // Keep the lease alive so the assertions below see a real count.
             while !release.load(Ordering::SeqCst) {
@@ -1224,18 +1217,17 @@ async fn a_leased_slot_is_never_evicted() {
     let mock = Arc::new(SessionMock::new("A"));
     backend.set_pooled_transport_for_test(&key, Arc::clone(&mock) as Arc<dyn Transport>);
 
-    let lease = backend.begin_activity(&key);
+    let lease = backend.begin_activity(&key).unwrap();
     // begin_activity touches the idle clock, so re-stale it: the lease must be
     // the ONLY thing keeping this slot alive, or the test proves nothing.
     backend
         .pooled_entry(&key)
+        .unwrap()
         .last_used
         .store(0, Ordering::Relaxed);
 
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         0,
         "the evictor removed a slot with a live lease on it"
     );
@@ -1252,17 +1244,23 @@ async fn a_leased_slot_is_never_evicted() {
     // Dropping the guard touches the clock too.
     backend
         .pooled_entry(&key)
+        .unwrap()
         .last_used
         .store(0, Ordering::Relaxed);
 
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
         "once the lease is released the slot must become evictable again, \
          or in_flight leaks and the slot is immortal"
     );
+    // The close runs detached (#2245): poll for it, bounded, not a fixed wait.
+    for _ in 0..200 {
+        if mock.closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(
         mock.closed.load(Ordering::SeqCst),
         "the evicted slot's transport was never closed"
@@ -1337,7 +1335,7 @@ async fn health_recovery_does_not_close_a_transport_a_request_is_using() {
     }));
 
     // Exactly what an in-flight request owns when recovery fires.
-    let lease = backend.begin_activity(&PoolKey::Shared);
+    let lease = backend.begin_activity(&PoolKey::Shared).unwrap();
     let held = backend
         .shared_entry()
         .transport
@@ -1406,7 +1404,7 @@ async fn shutdown_waits_for_a_replaced_transports_cleanup() {
         dropped: Arc::clone(&dropped),
     }));
 
-    let lease = backend.begin_activity(&PoolKey::Shared);
+    let lease = backend.begin_activity(&PoolKey::Shared).unwrap();
     let held = backend
         .shared_entry()
         .transport
@@ -1960,8 +1958,8 @@ async fn concurrent_stops_wait_for_one_teardown() {
 // the same drop-reaps-child property for the REAL StdioTransport, including its
 // reader task's deliberate Weak handle.
 #[cfg(unix)]
-struct RealChildWedgedClose {
-    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+pub(super) struct RealChildWedgedClose {
+    pub(super) child: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 
 #[cfg(unix)]
@@ -1996,7 +1994,7 @@ impl Transport for RealChildWedgedClose {
 // That would report a dead process as orphaned. Process STATE is the honest
 // probe: None = gone, Some("Z...") = dead awaiting reap, anything else = alive.
 #[cfg(unix)]
-fn process_state(pid: u32) -> Option<String> {
+pub(super) fn process_state(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
@@ -2009,12 +2007,12 @@ fn process_state(pid: u32) -> Option<String> {
 }
 
 #[cfg(unix)]
-fn is_alive(pid: u32) -> bool {
+pub(super) fn is_alive(pid: u32) -> bool {
     process_state(pid).is_some_and(|s| !s.starts_with('Z'))
 }
 
 #[cfg(unix)]
-async fn spawn_probe_child() -> (tokio::process::Child, u32) {
+pub(super) async fn spawn_probe_child() -> (tokio::process::Child, u32) {
     let child = tokio::process::Command::new("sleep")
         .arg("300")
         .kill_on_drop(true)
@@ -2061,7 +2059,7 @@ async fn a_close_that_times_out_still_reaps_the_child() {
     );
 
     for _ in 0..40 {
-        if !is_alive(pid) {
+        if super::eviction_close_bound_tests::is_reaped(pid) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

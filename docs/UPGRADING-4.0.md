@@ -86,7 +86,7 @@ backend" and "fails a capability file" first.**
 | 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
-| 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
+| 62 | A bridged input exchange that runs out of rounds returns the backend's last question with a continuation instead of `-32003` | A client that treated `-32003` as final: answer the returned `inputRequests` and resend with the `requestState` it carries, or treat it as unfinished |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
@@ -125,6 +125,8 @@ backend" and "fails a capability file" first.**
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 | 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
+| 101 | Reserved: lands with #2294 | None yet |
+| 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1876,6 +1878,34 @@ custody does not start, and with it the gateway. The file is sealed, so the fiel
 removed by hand. It is removed for an account when that account's token next rotates or the
 user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
 
+## 62. A bridged exchange that runs out of rounds can be resumed
+
+**Startup:** no notice
+
+The gateway asks a 2025-era (legacy) client a backend's questions in-band and retries the
+backend with the answers, for a bounded number of rounds (three). When a backend was still asking after
+the last round, the call failed with `-32003` ("asked for input and the bridged exchange
+could not be completed"). The backend's progress was lost, and a retry started over.
+
+Now the call returns the backend's **last** interim result: its `inputRequests`, and a
+`requestState` holding a gateway-sealed continuation of that round. Resending `tools/call`
+with the answers in `inputResponses` and that `requestState` resumes the exchange where the
+backend stopped. The continuation is bound to the caller like any other (MRTR.2). The last
+round is held to the client's declared capabilities, its per-request capability list and the
+response firewall first, so an undeclared question is still refused with the capability it
+needs. The idempotency key is not settled, as before: a backend that stopped to ask has not
+acted.
+
+For code that uses the library's `mcp_gateway::gateway::input_bridge` module directly:
+`BridgeError` is now `#[non_exhaustive]`; `RoundsExhausted` carries the last round
+(`last`); and a new `Undeclared` variant, itself `#[non_exhaustive]`, reports a last round
+that asks for a capability, mode or method the session never declared. `InputBridge::run`
+never hands back such a round.
+
+Action: a client that treated `-32003` from a bridged call as final now gets a result it can
+answer. If it cannot answer, it can treat the result as unfinished, the same as any
+`input_required` result. Library code that matches on `BridgeError` needs a wildcard arm.
+
 ## 63. Error results are never served from a response cache
 
 **Startup:** no notice
@@ -2118,10 +2148,11 @@ FUSE mounts.
 
 In 4.0:
 
-- A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
-  re-reads every listed env file every 2 seconds and reloads when its content differs from
-  what is loaded. A file that appears later is picked up. A stdio gateway, or one that found
-  its config on its own, watches no files, as before.
+- A gateway serving HTTP from a config file, named with `--config` or `MCP_GATEWAY_CONFIG`
+  or found by discovery, re-reads every listed env file every 2 seconds and reloads when its
+  content differs from what is loaded. A file that appears later is picked up. A stdio
+  gateway watches no files, as before; any gateway that loaded a config file offers the
+  `gateway_reload_config` meta-tool.
 - A lookup error on an env file (a link loop, a directory the gateway cannot search) fails
   the load instead of reading as a missing file.
 - After any failed reload, whatever caused it, the reload is retried every 2 seconds until
@@ -2790,6 +2821,25 @@ id; reissue the credential without the padding. A certificate whose first SAN UR
 keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
 firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
 API-key owner, not on these subjects.
+
+## 102. Per-caller backend slots are capped
+
+**Startup:** no notice
+
+In 3.x, each caller of a backend with `identity_propagation` got its own upstream connection
+(a pool slot, and on a stdio backend its own child process), with no limit. A passthrough
+caller picks its own slot by the credential it sends, so a caller that changed the credential
+on every request could open any number of them.
+
+In 4.0 a backend admits at most 64 caller slots, and one caller at most 8. With auth off,
+every caller is the same anonymous caller and shares one budget of 8. A request that needs a
+new slot past either limit is refused (JSON-RPC `-32000`) and counted in
+`mcp_backend_identity_slots_refused_total`; it is never served on the shared connection. A
+notification is dropped with HTTP 429. Slots free up as idle ones are reclaimed (5 minutes
+idle).
+
+**Action:** with auth off, expect at most 8 passthrough credentials served at once per backend.
+Turn auth on to give each user their own budget of 8.
 
 ## Upgrading from 3.5.x: a walkthrough
 

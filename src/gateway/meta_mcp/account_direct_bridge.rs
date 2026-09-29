@@ -40,6 +40,15 @@ impl DirectAccountGateway {
     /// Served over HTTP under `auth`. A seeded grant's per-user slot is
     /// seeded too, so a dispatch under it stays in process.
     pub(crate) fn new(auth: crate::config::AuthConfig, binding: &Binding) -> Self {
+        Self::new_in(ServeMode::Http, auth, binding)
+    }
+
+    /// [`Self::new`] for a chosen transport; stdio catalogue tests (#2231).
+    pub(crate) fn new_in(
+        mode: ServeMode,
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+    ) -> Self {
         let operator_grant = matches!(binding, Binding::Connected);
         let bind = match binding {
             Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
@@ -61,7 +70,7 @@ impl DirectAccountGateway {
             &Descriptors::same(&[WORK]),
             &custody.installed(),
             &slots,
-            ServeMode::Http,
+            mode,
             auth,
         );
         Self {
@@ -98,6 +107,21 @@ impl DirectAccountGateway {
             .collect()
     }
 
+    /// Every request that reached the backend, as its method, `Authorization`
+    /// header and slot identity key (#2231: listings, not only `tools/call`).
+    pub(crate) fn requests(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        self.dispatches
+            .all()
+            .into_iter()
+            .map(|call| (call.method.clone(), call.authorization(), call.identity_key))
+            .collect()
+    }
+
+    /// Answer the next non-`tools/list` request with `result`.
+    pub(crate) fn answer_next(&self, result: serde_json::Value) {
+        self.dispatches.script(&[Answer::Result(result)]);
+    }
+
     /// The per-user slot the sole operator's seeded grant selects.
     pub(crate) fn operator_binding() -> String {
         expected_identity_key_for(&operator_key(), SEEDED_REVISION)
@@ -110,7 +134,7 @@ impl DirectAccountGateway {
 }
 
 /// The sole operator's key for [`WORK`], built the way custody builds it.
-fn operator_key() -> AccountKey {
+pub(super) fn operator_key() -> AccountKey {
     crate::personal_accounts::identity::account_key(
         Some(crate::personal_accounts::identity::Principal::SoleOperator),
         &key_descriptor(WORK),

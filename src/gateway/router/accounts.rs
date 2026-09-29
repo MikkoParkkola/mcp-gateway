@@ -142,7 +142,7 @@ async fn revoke_for(
     let Ok(material) = revocation.invalidate(&key).await else {
         return envelope::refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None);
     };
-    evict_slots(state, &config, &key, &account_id).await;
+    evict_slots(state, &config, &key, &account_id);
     let audited = audit_identity_propagation(
         state.transparency_log.as_ref(),
         "account_revoke",
@@ -199,6 +199,7 @@ fn own_key(
         .into_iter()
         .find(|compiled| compiled.descriptor_id == account_id)
         .and_then(|compiled| compiled.account)
+        .map(|(descriptor, _revision)| descriptor)
         .ok_or(NoKey::NotFound)?;
     account_key(Some(Principal::Verified(identity)), &descriptor).map_err(|_| NoKey::NotFound)
 }
@@ -207,7 +208,7 @@ fn own_key(
 /// prefix is the stable head of `cache_binding`; response caches need no sweep
 /// because their bindings carry a generation no lease can be issued for again.
 /// Every skipped eviction is logged under an 8-character digest prefix only.
-async fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, account_id: &str) {
+fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, account_id: &str) {
     let Ok(digest) = key.digest() else {
         tracing::warn!(%account_id, "revoke evicted no sessions: account key has no digest");
         return;
@@ -235,6 +236,6 @@ async fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, accoun
             );
             continue;
         };
-        backend.evict_identity_slots(&prefix).await;
+        backend.evict_identity_slots(&prefix);
     }
 }
