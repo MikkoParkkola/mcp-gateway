@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
 
+use super::input_round::Settling;
 use super::settlement::{interrupted_before_dispatch, interrupted_result, strip_http_status};
 use super::upstream::QueryLease;
 use super::{
@@ -228,16 +229,17 @@ async fn run_dispatched(
         .await;
     } else {
         let response = inspect_settled(&state, &call, &id, response);
-        let task = super::input_round::Settling {
-            executor: &executor,
-            state: &state,
-            owned: &intent.owned,
-            call: &call,
-            principal: &principal,
-            id: &id,
+        Settling::new(
+            &executor,
+            &state,
+            &intent.owned,
+            &call,
+            &principal,
+            &id,
             revision,
-        };
-        task.settle_or_ask(response, &mut cancel_rx).await;
+        )
+        .settle_or_ask(response, &mut cancel_rx)
+        .await;
     }
 }
 

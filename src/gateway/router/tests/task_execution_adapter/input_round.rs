@@ -61,6 +61,10 @@ pub(super) fn create(id: i64, key: &str) -> Value {
     declaring_elicitation(task_invoke(id, key, json!({ "q": 1 })))
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "every call site passes an owned json! literal, as in `support`"
+)]
 pub(super) fn update(id: i64, task: &str, responses: Value) -> Value {
     declaring_elicitation(task_method(
         id,

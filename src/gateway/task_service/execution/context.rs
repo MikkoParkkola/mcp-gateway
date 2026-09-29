@@ -134,8 +134,8 @@ impl OwnedCallerContext {
         input_responses: Option<Value>,
     ) -> RetryFields {
         RetryFields {
-            request_state,
             input_responses,
+            request_state,
             ..self.retry.clone()
         }
     }
