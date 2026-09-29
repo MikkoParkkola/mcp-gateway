@@ -350,6 +350,10 @@ thread_local! {
     /// runs at the refusal before cleanup (W-T15d, W-T15e).
     pub(crate) static NO_ACLS: std::cell::Cell<Option<fn(&Path)>> =
         const { std::cell::Cell::new(None) };
+    /// Runs after a refused create's creating handle is released or kept, and
+    /// before the delete: the window a drop-then-remove cleanup opens (W-T15f).
+    pub(crate) static BEFORE_DELETE: std::cell::Cell<Option<fn(&Path)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 pub(crate) fn after_create(path: &Path, file: Option<&File>) {
@@ -437,6 +441,10 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
                 .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
                 .open(path)
         };
+        #[cfg(test)]
+        if let Some(hook) = BEFORE_DELETE.with(std::cell::Cell::get) {
+            hook(path);
+        }
         let cleanup = match doomed.and_then(|doomed| mark_deleted(&doomed)) {
             Ok(()) => String::new(),
             Err(error) => format!("; the empty file could not be removed: {error}"),
