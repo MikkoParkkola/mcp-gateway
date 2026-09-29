@@ -143,6 +143,38 @@ const INJECTION_PATTERNS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Field names of the MCP result and content envelope, and the JSON Schema
+/// names `tools/list` carries. Exact strings only: a key is skipped only if it
+/// is byte-equal to an entry, and every entry is asserted to scan clean
+/// (`every_protocol_key_scans_clean`), so skipping one finds nothing scanning
+/// would have found (#613).
+const PROTOCOL_KEYS: &[&str] = &[
+    "content",
+    "type",
+    "text",
+    "isError",
+    "structuredContent",
+    "_meta",
+    "annotations",
+    "mimeType",
+    "uri",
+    "data",
+    "name",
+    "title",
+    "description",
+    "resource",
+    "blob",
+    "audience",
+    "priority",
+    "lastModified",
+    "nextCursor",
+    "tools",
+    "inputSchema",
+    "outputSchema",
+    "properties",
+    "required",
+];
+
 impl ResponseScanner {
     /// Create a new scanner with default prompt injection patterns.
     ///
@@ -232,7 +264,12 @@ impl ResponseScanner {
             }
             Value::Object(map) => {
                 for (key, val) in map {
-                    // Keys are backend-controlled text the client sees too (#2114).
+                    // Keys are backend-controlled text the client sees too
+                    // (#2114). A protocol field name is known clean (#613).
+                    if PROTOCOL_KEYS.contains(&key.as_str()) {
+                        self.scan_value_recursive(val, matches);
+                        continue;
+                    }
                     matches.extend(self.scan_text(key).into_iter().map(|mut hit| {
                         hit.pattern_description.push_str(" (object key)");
                         hit
@@ -495,35 +532,6 @@ mod tests {
     }
 
     // -- MCP protocol keys (#613) --
-
-    /// Field names of the MCP result and content envelope, and the JSON Schema
-    /// names `tools/list` carries. Exact strings only.
-    const PROTOCOL_KEYS: &[&str] = &[
-        "content",
-        "type",
-        "text",
-        "isError",
-        "structuredContent",
-        "_meta",
-        "annotations",
-        "mimeType",
-        "uri",
-        "data",
-        "name",
-        "title",
-        "description",
-        "resource",
-        "blob",
-        "audience",
-        "priority",
-        "lastModified",
-        "nextCursor",
-        "tools",
-        "inputSchema",
-        "outputSchema",
-        "properties",
-        "required",
-    ];
 
     fn scans(s: &ResponseScanner) -> usize {
         s.scans.load(std::sync::atomic::Ordering::Relaxed)
