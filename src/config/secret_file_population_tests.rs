@@ -142,6 +142,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "audit log writer; reopens only to cut back a torn tail; no secret",
     ),
     (
+        "src/security/transparency_log_hwm_scan.rs",
+        "reads audit log segments for a missing-mark finding; no secret",
+    ),
+    (
         "src/security/transparency_log_rotation.rs",
         "rotates the audit log: seal, rename, open record, reserve; no secret",
     ),
