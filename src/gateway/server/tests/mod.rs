@@ -12,6 +12,7 @@
 //! test module further down that file.
 
 mod alloc_meter;
+mod input_key_allocations;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
 mod visibility_allocations;

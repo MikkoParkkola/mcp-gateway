@@ -71,7 +71,43 @@ impl Backend {
         tool: &'a str,
         arguments: &'a Value,
     ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
+        // Every call used to build the whole fill state machine and clone the
+        // cached tool, even when the answer was already held (#613). The
+        // held answer is decided here; only a miss or stale slot pays for the
+        // fill, whose path below re-checks everything from the start.
+        if let Some(answer) = self.undeclared_key_refusal_held(identity_key, tool, arguments) {
+            return Box::pin(std::future::ready(answer));
+        }
         Box::pin(self.undeclared_key_refusal_inner(identity_key, headers, tool, arguments))
+    }
+
+    /// The answer `undeclared_key_refusal_inner` reaches without a fetch, or
+    /// `None` when it would fetch. Same order: withheld, mode, then a held
+    /// schema on a fresh (or refresh-cooling) slot, judged in place.
+    fn undeclared_key_refusal_held(
+        &self,
+        identity_key: Option<&str>,
+        tool: &str,
+        arguments: &Value,
+    ) -> Option<crate::Result<Option<String>>> {
+        if let Some(refusal) = self.blocked_tool_refusal(identity_key, tool) {
+            return Some(Ok(Some(refusal)));
+        }
+        let mode = self.config.input_schema_enforcement;
+        if mode == InputSchemaEnforcement::Off {
+            return Some(Ok(None));
+        }
+        if !(self.has_cached_tools_for(identity_key) || self.stale_refresh_cooling(identity_key)) {
+            return None;
+        }
+        let (tools, _) = self.held_tools_for(identity_key)?;
+        let found = tools.iter().find(|t| t.name == tool)?;
+        Some(Ok(self.judge_keys(
+            &found.input_schema,
+            tool,
+            arguments,
+            mode,
+        )))
     }
 
     async fn undeclared_key_refusal_inner(
