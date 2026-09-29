@@ -300,7 +300,7 @@ impl Backend {
         // identified request gets its own transport/session/failsafe so users
         // never collide (IDP.7).
         let key = self.pool_key_for(identity_key);
-        let entry = self.pooled_entry(&key);
+        let entry = self.pooled_entry(&key)?;
 
         // Check THIS slot's failsafe, not the backend's.
         entry.failsafe.admit(&self.name).inspect_err(|e| {
@@ -317,7 +317,7 @@ impl Backend {
 
         // Mark CLIENT activity for the idle clock, and hold this slot safe from
         // being stopped for the whole request. Released when the guard drops.
-        let _activity = self.begin_activity(&key);
+        let _activity = self.begin_activity(&key)?;
 
         // Ensure this slot's transport is live.
         let transport = self.start_recorded(&key, &entry, start_time).await?;
@@ -549,7 +549,7 @@ impl Backend {
         // Derive the same slot `request_with_headers` would use for this
         // identity, and gate/record against ITS failsafe (mirrors fix 1).
         let key = self.pool_key_for(identity_key);
-        let entry = self.pooled_entry(&key);
+        let entry = self.pooled_entry(&key)?;
 
         entry.failsafe.admit(&self.name).inspect_err(|e| {
             tracing::warn!(backend = %self.name, ?key, "Notification rejected: {e}");
@@ -563,7 +563,7 @@ impl Backend {
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
         // See `request_with_headers`: client activity marking + stop protection.
-        let _activity = self.begin_activity(&key);
+        let _activity = self.begin_activity(&key)?;
 
         let transport = self.start_recorded(&key, &entry, start_time).await?;
 

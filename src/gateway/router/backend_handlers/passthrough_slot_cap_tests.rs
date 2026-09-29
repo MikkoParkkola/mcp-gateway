@@ -178,3 +178,40 @@ async fn an_admitted_caller_keeps_its_slot_at_the_budget() {
     assert_eq!(backend.per_user_slot_bindings_for_test(), before);
     assert_eq!(before.len(), PER_PRINCIPAL);
 }
+
+/// POST one request carrying passthrough header `i` as the API-key client
+/// whose validated principal is `key`.
+async fn send_as_key(router: &axum::Router, i: usize, key: &str) {
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/ledger")
+        .header("content-type", "application/json")
+        .header("x-mcp-passthrough-authorization", header_value(i))
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": i, "method": "resources/list" }).to_string(),
+        ))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(crate::gateway::auth::AuthenticatedClient {
+            name: key.to_string(),
+            principal: key.to_string(),
+            ..crate::gateway::auth::anonymous_client()
+        });
+    let _ = router.clone().oneshot(request).await.unwrap();
+}
+
+/// GIVEN two API-key callers with no verified identity
+/// WHEN each sends more distinct passthrough headers than a principal may hold
+/// THEN each is charged to its own key's budget, not to the anonymous one.
+#[tokio::test]
+async fn api_key_callers_each_get_their_own_budget() {
+    let backend = passthrough_backend();
+    let (router, _store) = router_with(&backend).await;
+    for key in ["key-one", "key-two"] {
+        for i in 0..HEADERS {
+            send_as_key(&router, i, key).await;
+        }
+    }
+    assert_eq!(backend.per_user_slots_for_test(), 2 * PER_PRINCIPAL);
+}

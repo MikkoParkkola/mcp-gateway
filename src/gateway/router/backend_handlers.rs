@@ -324,6 +324,27 @@ fn passthrough_identity_key(credential: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// The slot binding of a passthrough credential digest, charged to the
+/// caller's principal so one caller cannot hold more than its share of the
+/// backend's slots however many header values it sends (#2300). The principal
+/// is the verified identity, else the validated credential's owner, else the
+/// one anonymous principal every unauthenticated caller shares.
+fn charged_binding(
+    state: &AppState,
+    name: &str,
+    caller: crate::identity_propagation::CallerProof<'_>,
+    client: Option<&AuthenticatedClient>,
+    digest: Option<String>,
+) -> Option<String> {
+    let principal = match (caller.verified(), client) {
+        (None, Some(client)) if !client.principal.is_empty() => {
+            format!("credential:{}", client.principal)
+        }
+        _ => state.meta_mcp.audit_subject_for(name, caller),
+    };
+    digest.map(|digest| crate::backend::passthrough_binding(&principal, &digest))
+}
+
 /// Resolve passthrough headers for the direct backend route (ADR-008 rung 2,
 /// MIK-6746). Reads the caller's own backend credential from a fixed,
 /// gateway-specific inbound header and forwards it to the backend under
@@ -675,8 +696,15 @@ async fn backend_handler_inner(
     // `isolation_guarded` gate below (no id, no tool policy), but refused where
     // this caller's request would be refused for its identity (#2240).
     if method.starts_with("notifications/") {
-        let Ok(notification_key::Resolved { headers, binding }) =
-            notification_key::resolve(&state, &backend, &name, &inbound_headers, caller).await
+        let Ok(notification_key::Resolved { headers, binding }) = notification_key::resolve(
+            &state,
+            &backend,
+            &name,
+            &inbound_headers,
+            caller,
+            client.as_ref(),
+        )
+        .await
         else {
             // Refused as this caller's request would be (#2240): nothing is
             // forwarded, and the client breaker is untouched, as for
@@ -690,6 +718,12 @@ async fn backend_handler_inner(
             Ok(()) => {
                 record_client_success(&state, client.as_ref());
                 (StatusCode::ACCEPTED, Json(json!({})))
+            }
+            // No free caller slot (#2300): dropped, counted at admission, and
+            // answered with no JSON-RPC body, as a notification must be.
+            Err(e @ crate::Error::IdentitySlotsExhausted { .. }) => {
+                warn!(backend = %name, error = %e, "Notification dropped");
+                (StatusCode::TOO_MANY_REQUESTS, Json(json!({})))
             }
             Err(e) => {
                 record_client_failure(&state, client.as_ref());
@@ -809,7 +843,7 @@ async fn backend_handler_inner(
                     // credential, so distinct callers never share a stateful
                     // upstream's session-bound data. `None` on the no-credential
                     // path keeps the shared default bucket (behavior unchanged).
-                    identity_key = binding;
+                    identity_key = charged_binding(&state, &name, caller, client.as_ref(), binding);
                     Ok(headers)
                 }
                 Err(e) => Err(e),

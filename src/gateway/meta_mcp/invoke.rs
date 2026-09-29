@@ -4127,6 +4127,7 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
             },
         ),
         Error::RateLimited(_) => (ErrorCategory::RateLimited, error.to_string()),
+        Error::IdentitySlotsExhausted { .. } => (ErrorCategory::RateLimited, error.to_string()),
         Error::BackendNotFound(name) | Error::ToolNotFound(name) => {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
@@ -4205,9 +4206,8 @@ impl BudgetOutcome {
 
     /// [`Self::of`] for a dispatch that failed.
     pub(super) fn of_error(error: &Error) -> Self {
-        // The gateway's own limiter refused: the backend was never asked.
-        // Matched on the variant, not on its message (F23).
-        if matches!(error, Error::RateLimited(_))
+        // The gateway refused before asking the backend (F23, #2300).
+        if error.is_gateway_throttle()
             || crate::gateway::recovery::is_rate_limited(&error.to_string())
         {
             Self::IgnoredRateLimit
