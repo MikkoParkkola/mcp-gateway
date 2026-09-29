@@ -708,6 +708,17 @@ fn validate_managed(
     {
         return Err(fail("client_secret_ref must be an env: or file: reference"));
     }
+    // A file: path is judged at load, as `config::secret_ref` judges one at
+    // resolution: an empty or relative path would otherwise load and fail only
+    // at the first token refresh (#2263).
+    if let Some(path) = descriptor
+        .client_secret_ref
+        .as_deref()
+        .and_then(|value| value.strip_prefix("file:"))
+        && !std::path::Path::new(path).is_absolute()
+    {
+        return Err(fail("client_secret_ref file: must name an absolute path"));
+    }
     // Absence is the failure; `false` is a valid declaration (Google REST takes
     // no RFC 8707 resource parameter) and must not be reachable by omission.
     if descriptor.send_resource_parameter.is_none() {

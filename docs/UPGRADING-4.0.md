@@ -123,7 +123,7 @@ backend" and "fails a capability file" first.**
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
-| 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
+| 99 | Windows: the config, OAuth token and client files, and generated mTLS certificates and keys are created owner-only; those and the secret files it only reads (env files, `file:` targets, TLS keys and credential files) are refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 | 101 | Reserved: lands with #2294 | None yet |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
@@ -1275,7 +1275,10 @@ Wherever a whole-value secret takes `env:NAME`, it now also takes `file:/absolut
 field is read once, at startup.
 
 - **The path must be absolute.** `~`, relative paths and `${VAR}` inside the path are not expanded;
-  `file:secrets/token` fails with `... is not an absolute path.`
+  `file:secrets/token` fails with `... is not an absolute path.` A descriptor's `client_secret_ref`
+  is checked at load too, although its file is read only at use: an empty or relative `file:` path
+  refuses to start with `client_secret_ref file: must name an absolute path`, where a 4.0 beta
+  started and failed at the first token refresh.
 - **The file is held to the item 35 rule**: a file other users can read or change fails the load,
   and so does a group-readable file this process owns. It must be UTF-8 and at most 64 KiB.
 - **Exactly one trailing newline is stripped** (`\n` or `\r\n`), as `kubectl create secret
@@ -2763,10 +2766,13 @@ In 3.x and early 4.0 a Windows gateway created these files with the directory's 
 read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
 the unix mode rules:
 
-- **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
-  files, credential files) are created owner-only: one grant to the gateway's account, nothing
-  inherited. A read is refused when another account is granted access, the owner is someone
-  else, or the DACL inherits or is NULL. A DACL that is not marked protected is refused as
+- **Secret files** (config, env files, `file:` targets, TLS private keys, OAuth token and client
+  files, credential files). The gateway creates the config file, OAuth token and client files,
+  and generated mTLS certificates and keys owner-only: one grant to the gateway's account,
+  nothing inherited. Env files, `file:` targets, TLS keys you supply and credential files are
+  inputs it only reads: it checks them and never fixes their ACL. A read of any secret file is
+  refused when another account is granted access, the owner is someone else, or the DACL
+  inherits or is NULL. A DACL that is not marked protected is refused as
   inheriting even when it holds no inherited entry: an old-style ACL, which some tools show as
   protected, is refused too. The repair below marks it protected.
 - **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the

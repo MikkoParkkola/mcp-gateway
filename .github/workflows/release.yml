@@ -274,6 +274,8 @@ jobs:
         shell: bash
         run: |
           cp target/${{ matrix.target }}/release/mcp-gateway${{ matrix.suffix }} ${{ matrix.artifact }}${{ matrix.suffix }}
+          # The debug-only commit pause (#2298) must be compiled out of a release binary.
+          if grep -qa MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug commit pause"; exit 1; fi
           if [ "${{ matrix.suffix }}" = "" ]; then
             chmod +x ${{ matrix.artifact }}
           fi

@@ -82,13 +82,13 @@ async fn connections(
 ) -> Option<Vec<(String, bool)>> {
     let mut rows = Vec::new();
     for compiled in account_bindings::compile_descriptors(config).ok()? {
-        let Some((descriptor, _revision)) = compiled.account else {
+        let Some((descriptor, revision)) = compiled.account else {
             continue;
         };
         let key = account_key(Some(Principal::Verified(identity)), &descriptor).ok()?;
         rows.push((
             compiled.descriptor_id,
-            revocation.connected(&key).await.ok()?,
+            revocation.connected(&key, &revision).await.ok()?,
         ));
     }
     Some(rows)

@@ -273,6 +273,13 @@ impl OwnedProvenAgentId {
 pub struct DeclaredAgentLabel<'a>(&'a str);
 
 impl<'a> DeclaredAgentLabel<'a> {
+    /// Rewrap a tag captured earlier from [`AgentIdentity::declared_agent_label`],
+    /// for a context rebuilt after the request (a task worker). Still a label:
+    /// there is no route from it to a [`ProvenAgentId`].
+    pub(crate) fn new(tag: &'a str) -> Self {
+        Self(tag)
+    }
+
     /// The underlying tag, for attribution and audit.
     #[must_use]
     pub fn as_str(self) -> &'a str {

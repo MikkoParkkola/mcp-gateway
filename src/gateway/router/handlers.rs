@@ -1575,6 +1575,7 @@ async fn meta_mcp_dispatch(
                         cert_identity: cert_identity.as_ref(),
                         api_key_name,
                         agent_id,
+                        agent_declared,
                         grant_subject: grant_subject.clone(),
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
                         input_capabilities: declared_capabilities,
