@@ -14,12 +14,7 @@ use super::Config;
 use super::env_overlay::EnvOverlay;
 
 fn write_secret(path: &Path) {
-    std::fs::write(path, "k".repeat(48)).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    crate::gateway::test_helpers::write_owner_only(path, &"k".repeat(48)).unwrap();
 }
 
 /// GIVEN a disabled `accounts` block whose key is a readable `file:` reference
@@ -31,9 +26,9 @@ fn a_disabled_accounts_block_reads_no_secret_file() {
     let key = dir.path().join("account.key");
     write_secret(&key);
     let config_path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &config_path,
-        format!(
+        &format!(
             "accounts:\n  schema_version: accounts.v1\n  enabled: false\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {store:?}\n  authority_dir: {authority:?}\n  current_key_id: current\n  keys:\n    current: \"file:{key}\"\n",
             store = dir.path().join("store"),
             authority = dir.path().join("authority"),
