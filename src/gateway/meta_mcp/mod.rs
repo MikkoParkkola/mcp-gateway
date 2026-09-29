@@ -275,7 +275,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
-            agent_declared: None,
+            agent_declared: self.agent_declared,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,

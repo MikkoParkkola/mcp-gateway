@@ -95,6 +95,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
             None,
             None,
             None,
+            None,
             OWNER.to_owned(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
@@ -368,5 +369,38 @@ async fn an_idle_executor_drains_clean_and_still_runs_the_next_task() {
         quiescent.acquired,
         idle.acquired,
         "the same worker pool is free again; none was retained"
+    );
+}
+
+/// #2259: the task worker's caller audits the creating request's declared
+/// agent label, as the request's own call would have.
+#[tokio::test]
+async fn a_task_worker_keeps_the_declared_agent_label() {
+    let (state, _store) = fixture_state(&auth_disabled()).await;
+    let owned = OwnedCallerContext::new(
+        Arc::downgrade(&state),
+        OwnedRouterAuthorizer::capture(None, None, None),
+        None,
+        None,
+        Some("planner-7".to_owned()),
+        None,
+        None,
+        OWNER.to_owned(),
+        crate::gateway::meta_mcp::Authentication::Anonymous,
+        crate::security::audit::CredentialKind::None,
+        false,
+        Declared::NONE,
+        None,
+        None,
+        None,
+    );
+    let authorizer = owned.authorizer().borrow(&state);
+    let caller = owned.dispatch_context(&state, &authorizer);
+
+    assert_eq!(
+        caller
+            .agent_declared
+            .map(crate::security::DeclaredAgentLabel::as_str),
+        Some("planner-7")
     );
 }
