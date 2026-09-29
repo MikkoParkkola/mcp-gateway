@@ -81,9 +81,10 @@ impl Backend {
         Box::pin(self.undeclared_key_refusal_inner(identity_key, headers, tool, arguments))
     }
 
-    /// The answer `undeclared_key_refusal_inner` reaches without a fetch, or
-    /// `None` when it would fetch. Same order: withheld, mode, then a held
-    /// schema on a fresh (or refresh-cooling) slot, judged in place.
+    /// The answer `undeclared_key_refusal_inner` reaches without a fetch.
+    /// `None` means "take the inner path": the slot is neither fresh nor
+    /// refresh-cooling, no list is held, or the held list lacks `tool`.
+    /// Same order as inner: withheld, mode, then the held schema, judged in place.
     fn undeclared_key_refusal_held(
         &self,
         identity_key: Option<&str>,
