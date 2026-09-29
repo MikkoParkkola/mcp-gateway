@@ -2593,8 +2593,10 @@ In 4.0 a new log (one with no records yet) begins with an `audit_segment_opened`
 `segment_seq` 0, counter 1, `prev_entry_hash` `genesis`. The first caller record is counter 2.
 A log that already holds records is not changed.
 
-The record lets `audit verify` tell a log that stopped before its first high-water mark from a
-log whose tail was cut.
+With the record in place, `audit verify` fails a never-rotated log whose high-water mark is
+missing once any caller record follows the open record, so a tail cut is no longer read as
+clean. A log cut back to the open record alone still reads as a fresh log, as does a deleted
+log; only an anchor kept off the host catches that.
 
 The record is signed and chained like any other, so every consumer that follows the chain gets
 it: SIEM export and the NDJSON file sink forward it, the export metrics count it, and

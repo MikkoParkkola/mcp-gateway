@@ -139,7 +139,7 @@ fn newline_less_valid_record_is_kept() {
     let p = path.clone();
     within_10s(move || drop(open(&p, 12)));
     let all = lines(&path);
-    assert_eq!(all.len(), 3, "record kept, no torn-tail record");
+    assert_eq!(all.len(), 4, "record kept, no torn-tail record");
     assert!(std::fs::read(&path).unwrap().ends_with(b"\n"));
     assert!(verify(&path, false).ok);
 }

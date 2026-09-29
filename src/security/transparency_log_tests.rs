@@ -105,8 +105,9 @@ fn deleted_middle_entry_breaks_verification() {
     // WHEN: the second (middle) line is deleted
     let content = std::fs::read_to_string(tmp.path()).unwrap();
     let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 3, "expected 3 lines");
-    let kept = format!("{}\n{}\n", lines[0], lines[2]); // skip lines[1]
+    assert_eq!(lines.len(), 4, "open record plus 3 entries");
+    // Skip "y" and keep the tail, so the gap is mid-chain, not tail loss.
+    let kept = format!("{}\n{}\n{}\n", lines[0], lines[1], lines[3]);
     std::fs::write(tmp.path(), &kept).unwrap();
 
     // THEN: verify detects the gap
@@ -338,6 +339,16 @@ fn intact_signed_log_passes_signed_verify() {
     assert_eq!(result.entries_checked, 3);
 }
 
+/// Rewrite the log from `entries`; tamper tests edit `entries[1]`, the caller
+/// record after the open record, so the tail and `.hwm` still agree.
+fn write_entries(path: &Path, entries: &[serde_json::Value]) {
+    let body: String = entries
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap() + "\n")
+        .collect();
+    std::fs::write(path, body).unwrap();
+}
+
 // HMAC.1: stripping the sig cannot bypass the check under a configured secret.
 #[test]
 fn stripped_sig_fails_signed_verify() {
@@ -348,12 +359,8 @@ fn stripped_sig_fails_signed_verify() {
     drop(logger);
 
     let mut entries = read_entries(tmp.path());
-    entries[0].as_object_mut().unwrap().remove("sig");
-    std::fs::write(
-        tmp.path(),
-        format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
-    )
-    .unwrap();
+    entries[1].as_object_mut().unwrap().remove("sig");
+    write_entries(tmp.path(), &entries);
 
     // Hash chain still fine (recompute strips sig anyway), but signed fails.
     assert!(verify_log(tmp.path()).unwrap().ok);
@@ -371,12 +378,8 @@ fn altered_key_id_fails_signed_verify() {
     drop(logger);
 
     let mut entries = read_entries(tmp.path());
-    entries[0]["key_id"] = serde_json::Value::String("attacker-key".to_string());
-    std::fs::write(
-        tmp.path(),
-        format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
-    )
-    .unwrap();
+    entries[1]["key_id"] = serde_json::Value::String("attacker-key".to_string());
+    write_entries(tmp.path(), &entries);
 
     // Hash-only verify passes (key_id is not in entry_hash); signed fails.
     assert!(verify_log(tmp.path()).unwrap().ok);
@@ -397,12 +400,8 @@ fn stripped_key_id_fails_signed_verify() {
     drop(logger);
 
     let mut entries = read_entries(tmp.path());
-    entries[0].as_object_mut().unwrap().remove("key_id");
-    std::fs::write(
-        tmp.path(),
-        format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
-    )
-    .unwrap();
+    entries[1].as_object_mut().unwrap().remove("key_id");
+    write_entries(tmp.path(), &entries);
 
     assert!(verify_log(tmp.path()).unwrap().ok);
     assert!(

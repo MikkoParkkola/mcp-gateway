@@ -691,6 +691,8 @@ impl Stream<'_> {
         // Disk-full expiry can take the last sealed segment, so the open
         // record is the evidence then. An active cut to empty leaves none and
         // reads as a fresh log; only an external anchor catches that (#2276).
+        // A cut back to the genesis open record alone is the same case: it
+        // matches a crash before the first `.hwm`, so it is exempt (#2275).
         let gap = match hw {
             None if sealed_present || (self.opened_oldest && !(self.genesis_open && last == 1)) => {
                 Some("high-water mark missing: tail loss cannot be ruled out".to_string())
