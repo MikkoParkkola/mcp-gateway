@@ -62,8 +62,8 @@ line listing the five forced controls and their effective values. When `hardened
    token requests; and on each redirect hop (`ssrf/redirect.rs:54`). Denial: typed error →
    `-32600 "SSRF blocked"`. stdio unaffected.
 5. **Per-caller identity.** Every HTTP MCP request on both routes must resolve a grant subject
-   (`caller_grant_subject`), else 403 and `-32600 "per-caller identity required
-   (security.posture=hardened)"` before the body is read. All credential kinds: the
+   (`caller_grant_subject`), else 403 and
+   `-32600 "per-caller identity required (security.posture=hardened)"` before the body is read. All credential kinds: the
    `DashboardSession` principal is shared (`auth.rs:706-719`) and key-server tokens are not per
    person. The one exemption is an API key with `kind: personal` (a new enum on `ApiKeyConfig`,
    `auth.rs:25`, default `shared`), which is a per-person identity by maintainer decision M2. The
@@ -105,7 +105,7 @@ Failure modes:
 | startup check fails | refuse to start |
 | posture changed on reload | reload refused |
 | no subject, or no elicitation | 403 / `-32600` before the body is read; no session |
-| private destination | `-32600 SSRF blocked` |
+| private destination | `-32600 "SSRF blocked"` |
 | score >= block threshold | `-32002` |
 | no identity, or pair cap full | refused unscored (`firewall/mod.rs:436-446`) |
 
