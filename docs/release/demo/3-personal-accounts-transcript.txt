@@ -1,8 +1,8 @@
 == NFR.DEMO.1 scenario 3: two personal accounts ==
-gateway:  mcp-gateway 4.0.0
+gateway:  mcp-gateway 4.0.0-beta.2
 accounts: Alice (alice_notes) and Bob (bob_notes), two API keys on one gateway
-run dir:  $RUN_DIR/s3b
-gateway up (pid 64765, port 53362)
+run dir:  /tmp/demo3-2269-run
+gateway up (pid 1738205, port 49987)
 
 -- each account reaches its own backend --
 alice -> {"jsonrpc":"2.0","id":1,"result":{"content":[{"text":"{\n  \"content\": [\n    {\n      \"text\": \"alice_notes answered: private\",\n      \"type\": \"text\"\n
@@ -25,11 +25,14 @@ bob   -> alice_notes: {"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":"
         actual:   absent
 
 -- neither SEES the other's in the catalogue --
-alice catalogue: alice_notes,bob_notes,gateway,personal_inbox
-bob   catalogue: alice_notes,bob_notes,gateway,personal_inbox
-[PASS] S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED
-        expected: alice_notes,bob_notes,gateway,personal_inbox
-        actual:   alice_notes,bob_notes,gateway,personal_inbox
+alice catalogue: alice_notes,personal_inbox
+bob   catalogue: bob_notes,personal_inbox
+[PASS] S3.ALICE_CATALOGUE_IS_HERS
+        expected: alice_notes,personal_inbox
+        actual:   alice_notes,personal_inbox
+[PASS] S3.BOB_CATALOGUE_IS_HIS
+        expected: bob_notes,personal_inbox
+        actual:   bob_notes,personal_inbox
 [PASS] S3.CATALOGUE_LISTS_THE_UNINVOKABLE_BACKEND
         expected: personal_inbox present
         actual:   personal_inbox present
@@ -43,5 +46,5 @@ alice -> personal_inbox: {"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message
         expected: absent
         actual:   absent
 
-results: $RUN_DIR/s3b/results.json
-transcript: $RUN_DIR/s3b/transcript.txt
+results: /tmp/demo3-2269-run/results.json
+transcript: /tmp/demo3-2269-run/transcript.txt

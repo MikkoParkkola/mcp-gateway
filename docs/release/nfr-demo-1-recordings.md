@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.DEMO.1 — recorded demonstrations
 
-VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (41 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
+VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (42 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
 
 The recordings are text transcripts. They meet the criterion, which asks for versions,
 expected observations and actual outcomes (`docs/requirements/RELEASE-4.0.0-scope-tests.md`).
@@ -64,7 +64,7 @@ classification. The driver warms each backend with a tool call first. The design
 did not mention this; anyone writing a further scenario against the era fields
 needs the same warm-up.
 
-## Scenario 3 — two personal accounts (RECORDED, 8/8 rows PASS)
+## Scenario 3 — two personal accounts (RECORDED, 9/9 rows PASS)
 
 Driver `scripts/release/demo/3-personal-accounts.sh`, transcript
 `docs/release/demo/3-personal-accounts-transcript.txt`, rows
@@ -98,7 +98,7 @@ closed. Whether this is a defect or accepted behaviour is an owner decision.
 
 *2026-09-25:* the row fired as designed. 4.0.0-beta.1 scopes the catalogue per key
 (UPGRADING-4.0 item 15), so the script now asserts that scoping instead, as
-`S3.ALICE_CATALOGUE_IS_HERS` and `S3.BOB_CATALOGUE_IS_HIS`. The recordings above are unchanged.
+`S3.ALICE_CATALOGUE_IS_HERS` and `S3.BOB_CATALOGUE_IS_HIS`. Scenario 3 was re-recorded 2026-09-29 at `ffc51fb86` with those rows (#2269).
 
 **The ADR-008 INV-2 refusal is spelled twice.**
 `src/gateway/meta_mcp/invoke.rs:1430-1440` builds its own `-32001` saying "one
