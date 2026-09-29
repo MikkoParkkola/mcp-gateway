@@ -7,7 +7,7 @@
 //! 3.x grant stop working).
 //!
 //! WHY THIS IS A PURE FUNCTION. It takes no store, no filesystem, no RNG and no
-//! clock: `generation` and `descriptor_revision` arrive as arguments. That keeps
+//! clock: `generation`, `descriptor_revision` and `now` arrive as arguments. That keeps
 //! the two data-loss rules testable on their own, before the entry point, the
 //! operator declaration or the guarded commit exist — and it means this slice
 //! needs no API visibility widening (design §8.2/O2 stays at one item, still
@@ -55,6 +55,11 @@ pub(in crate::personal_accounts) enum RecordRefusal {
         "the 3.x record carries neither an expiry nor a refresh token, so no expiry seed is honest"
     )]
     NoHonestExpiry,
+    /// Expired already, with no refresh token (#2255). Committed, it would read
+    /// Connected and never serve: nothing can refresh it. The user
+    /// re-authenticates once instead.
+    #[error("the 3.x record is already expired and carries no refresh token")]
+    ExpiredWithoutRefreshToken,
     /// The record names no scopes and the destination descriptor declares none.
     ///
     /// An empty scope set is not a neutral default: `AccountService::apply`
@@ -67,7 +72,8 @@ pub(in crate::personal_accounts) enum RecordRefusal {
 
 /// Build the grant a 3.x record migrates into, or refuse this backend.
 ///
-/// `generation` and `descriptor_revision` are supplied by the caller because
+/// `generation`, `descriptor_revision` and `now` (seconds since the epoch;
+/// `u64::MAX` for an unreadable clock) are supplied by the caller because
 /// minting them is not this function's business — see the module note. Every
 /// seed is chosen to satisfy `validate_record` (`storage.rs:127-145`), and the
 /// two rules that are decisions rather than copies are `expires_at` and
@@ -78,6 +84,7 @@ pub(in crate::personal_accounts) fn grant_from_legacy(
     client_id: String,
     generation: String,
     descriptor_revision: String,
+    now: u64,
 ) -> Result<GrantRecord, RecordRefusal> {
     if token.access_token.is_empty() {
         return Err(RecordRefusal::EmptyAccessToken);
@@ -95,7 +102,7 @@ pub(in crate::personal_accounts) fn grant_from_legacy(
         access_token: token.access_token.clone(),
         refresh_token: token.refresh_token.clone(),
         token_type: token.token_type.clone(),
-        expires_at: seed_expiry(token)?,
+        expires_at: seed_expiry(token, now)?,
         // The 3.x record has no field for it and nothing may be invented.
         provider_account_id: None,
         client_id,
@@ -103,8 +110,13 @@ pub(in crate::personal_accounts) fn grant_from_legacy(
 }
 
 /// Design §7.2a(a). Preserve, seed expired, or refuse — never `unwrap_or(0)`.
-fn seed_expiry(token: &TokenInfo) -> Result<u64, RecordRefusal> {
+fn seed_expiry(token: &TokenInfo, now: u64) -> Result<u64, RecordRefusal> {
     match (token.expires_at, token.refresh_token.as_deref()) {
+        // Dead on arrival (#2255). A not-yet-expired one migrates, and the
+        // provider fences it as reconnect-required at expiry.
+        (Some(expires_at), None) if expires_at <= now => {
+            Err(RecordRefusal::ExpiredWithoutRefreshToken)
+        }
         // The record states the real lifetime. Nothing is invented and nothing
         // is discarded.
         (Some(expires_at), _) => Ok(expires_at),

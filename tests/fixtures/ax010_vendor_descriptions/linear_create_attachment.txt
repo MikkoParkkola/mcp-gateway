@@ -1,0 +1,29 @@
+Deprecated fallback for tiny files only. Accepts base64 file content, verifies SHA-256 checksum, and uploads it through the MCP worker.
+Prefer `prepare_attachment_upload` plus direct PUT plus `create_attachment_from_upload`.
+
+CRITICAL: Do not print base64Content and then copy it into this tool call.
+Opaque base64 copied through model-visible text is easy to corrupt.
+
+Generate base64Content mechanically from the source bytes and pass it through a programmatic argument construction path whenever available. Before calling this tool, verify the values are consistent:
+
+Unix-like shells:
+file="/path/to/file"
+base64Content=$(base64 < "$file" | tr -d '\n\r')
+sha256=$(shasum -a 256 "$file" | awk '{print $1}')
+decodedSha256=$(printf '%s' "$base64Content" | base64 -d | shasum -a 256 | awk '{print $1}')
+size=$(wc -c < "$file" | tr -d ' ') # optional; stat can also get file byte size
+decodedSize=$(printf '%s' "$base64Content" | base64 -d | wc -c | tr -d ' ')
+
+PowerShell:
+$file = 'C:\path\to\file'
+$bytes = [IO.File]::ReadAllBytes($file)
+$base64Content = [Convert]::ToBase64String($bytes)
+$sha256 = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLower()
+$size = $bytes.Length # optional
+$decoded = [Convert]::FromBase64String($base64Content)
+$decodedStream = [IO.MemoryStream]::new($decoded)
+$decodedSha256 = (Get-FileHash -Algorithm SHA256 -InputStream $decodedStream).Hash.ToLower()
+$decodedSize = $decoded.Length
+
+decodedSha256 must equal sha256. If you pass size, decodedSize must equal size.
+Pass `sha256`. Passing `size` is optional, but recommended for clearer mismatch errors.

@@ -317,7 +317,11 @@ impl Backend {
 
         // Mark CLIENT activity for the idle clock, and hold this slot safe from
         // being stopped for the whole request. Released when the guard drops.
-        let _activity = self.begin_activity(&key)?;
+        let activity = self.begin_activity(&key)?;
+        // The entry just claimed, which the idle reaper cannot take while this
+        // request holds it. The one captured above may already be evicted, and
+        // the start and dispatch outcomes belong to the slot actually used (#2261).
+        let entry = std::sync::Arc::clone(activity.entry());
 
         // Ensure this slot's transport is live.
         let transport = self.start_recorded(&key, &entry, start_time).await?;
@@ -563,7 +567,9 @@ impl Backend {
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
         // See `request_with_headers`: client activity marking + stop protection.
-        let _activity = self.begin_activity(&key)?;
+        let activity = self.begin_activity(&key)?;
+        // As in `request_attempted`: record on the claimed entry (#2261).
+        let entry = std::sync::Arc::clone(activity.entry());
 
         let transport = self.start_recorded(&key, &entry, start_time).await?;
 

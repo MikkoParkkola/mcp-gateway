@@ -99,6 +99,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/gateway/server/control_plane_store.rs",
         "writability probe",
     ),
+    (
+        "src/gateway/task_service/execution/pause_hook.rs",
+        "debug-build test hook writing a task id marker (#2298); compiled out of release",
+    ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
         "src/identity_grants/journal.rs",

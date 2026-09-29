@@ -18,7 +18,7 @@ impl MetaMcp {
     /// The caller's per-user credential for `server`: headers and cache binding.
     ///
     /// THE CONTRACT LIVES HERE, not on the context-taking
-    /// [`MetaMcp::caller_credential_for`], because the protocol-level catalogue
+    /// [`MetaMcp::tool_credential_for`], because the protocol-level catalogue
     /// handlers — `prompts/list`, `resources/list` and
     /// `resources/templates/list` — are dispatched from the method table with
     /// no `MetaMcpCallerContext` to borrow. They build the same proof from the
@@ -54,22 +54,41 @@ impl MetaMcp {
             .unwrap_or_default()
     }
 
-    /// [`Self::caller_credential_for_identity`] for a request's caller context.
+    /// [`Self::catalogue_credential_for`] for a request's caller context: the
+    /// tool-discovery reads (listing and search) omit a backend on the same
+    /// rule the prompt and resource catalogues do (#2326).
     ///
     /// ONE resolution per request per backend, returning BOTH halves, because
     /// the isolation verdict and the slot selection must not disagree about who
     /// the caller is (design §4.3's residual) — and because resolving twice
-    /// would mint twice.
-    pub(crate) async fn caller_credential_for(
+    /// would mint twice. `None` means omit.
+    pub(crate) async fn tool_credential_for(
         &self,
-        server: &str,
+        backend: &Backend,
         caller: &super::MetaMcpCallerContext<'_>,
-    ) -> (Vec<(String, String)>, Option<String>) {
-        let proof = CallerProof::new(
+    ) -> Option<(Vec<(String, String)>, Option<String>)> {
+        self.catalogue_credential_for(backend, Self::proof_of(caller))
+            .await
+    }
+
+    /// What `caller` proved: its verified identity, else its credential's
+    /// provenance.
+    pub(super) fn proof_of<'a>(caller: &super::MetaMcpCallerContext<'a>) -> CallerProof<'a> {
+        CallerProof::new(
             caller.verified_identity,
             CallerProvenance::classify(caller.credential_principal),
-        );
-        self.caller_credential_for_identity(server, proof).await
+        )
+    }
+
+    /// Whether `backend` has no view at all for `caller`: it is `required`
+    /// and the resolver would find no principal, so
+    /// [`Self::catalogue_credential_for`] omits it. Known here without a mint,
+    /// for a reader that only counts (#2346).
+    pub(super) fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required)
+            && self.principal_for_server(&backend.name, caller).is_none()
     }
 
     /// Who the resolver would resolve `server`'s credential for, if anyone.
@@ -127,7 +146,7 @@ impl MetaMcp {
 
     /// The tools discovery should show for `backend`, from THIS CALLER's slot.
     ///
-    /// `binding` and `headers` come from one `caller_credential_for` resolution
+    /// `binding` and `headers` come from one `tool_credential_for` resolution
     /// (MIK-7334.CATALOGUE.1). `None`/empty is the identity-free caller and
     /// selects the shared slot, so single-tenant discovery is unchanged.
     ///

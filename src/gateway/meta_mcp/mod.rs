@@ -80,6 +80,8 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+#[cfg(test)]
+mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
 mod interim_promotion;
@@ -273,7 +275,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
-            agent_declared: None,
+            agent_declared: self.agent_declared,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
@@ -2319,7 +2321,7 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers(caller.scope(), session_id).await,
+            "gateway_list_servers" => self.list_servers(caller, session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,

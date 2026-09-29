@@ -488,6 +488,41 @@ fn wt15d_refused_private_create_leaves_no_file() {
     assert!(gone(&path), "WT-ASSERT W-T15d: refused file left behind");
 }
 
+// W-T15f: between the release of the creating handle and the delete, nobody
+// can open the refused file. Fails if the exclusive cleanup reverts to
+// `drop(file); remove_file(path)`, whose window a full-sharing opener joins.
+#[test]
+fn wt15f_refused_exclusive_file_cannot_be_joined_before_its_delete() {
+    fn join(path: &Path) {
+        let joined =
+            open_shared(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).map(drop);
+        assert_eq!(
+            joined.as_ref().err().and_then(io::Error::raw_os_error),
+            Some(32),
+            "WT-ASSERT W-T15f: another opener joined the refused file before its delete"
+        );
+    }
+    /// Clears the hook even when an assertion inside it panics, so it never
+    /// leaks into the next test on this thread.
+    struct Installed;
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            crate::win_acl::BEFORE_DELETE.with(|hook| hook.set(None));
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("refused.key");
+    crate::win_acl::BEFORE_DELETE.with(|hook| hook.set(Some(join)));
+    let installed = Installed;
+    let err = refuse_create(&path, Share::Exclusive, |_| {});
+    drop(installed);
+    assert!(
+        !err.to_string().contains("could not be removed"),
+        "WT-ASSERT W-T15f: {err}"
+    );
+    assert!(gone(&path), "WT-ASSERT W-T15f: refused file left behind");
+}
+
 // W-T15e: a sidecar create is deleted by a DELETE reopen; a reader holding it
 // without delete sharing makes that fail, and the failure is reported.
 #[test]
