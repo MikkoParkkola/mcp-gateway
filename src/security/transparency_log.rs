@@ -84,6 +84,8 @@ mod append;
 // F20: the bounded async append.
 #[path = "transparency_log_bounded.rs"]
 mod bounded;
+#[path = "transparency_log_hwm_scan.rs"]
+mod hwm_scan;
 #[path = "transparency_log_rotation.rs"]
 mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
