@@ -32,7 +32,6 @@ use crate::personal_accounts::AccountHandles;
 pub(crate) use accounts::{ConnectOffers, account_handles_of};
 mod authorization;
 pub use authorization::CallerStanding;
-pub(crate) use authorization::backend_tool_targets_for_call;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
 };

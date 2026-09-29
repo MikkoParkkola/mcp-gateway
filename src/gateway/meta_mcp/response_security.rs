@@ -37,14 +37,15 @@ pub(crate) fn meta_response_targets(
     targets
 }
 
-/// `gateway_list_tools` and `gateway_search_tools` inspect their canonical
+/// `gateway_list_tools`, `gateway_search_tools` and Code Mode `gateway_search`
+/// inspect their canonical
 /// value before it is serialised (`MetaMcp::inspect_discovery_value`, #2350):
 /// delivery would scan an escaped copy a second time, so it does not.
 pub(crate) fn is_inspected_discovery(context: &ResponseDeliveryContext<'_>) -> bool {
     context.method == "tools/call"
         && matches!(
             context.correlation.external_tool,
-            "gateway_list_tools" | "gateway_search_tools"
+            "gateway_list_tools" | "gateway_search_tools" | "gateway_search"
         )
 }
 

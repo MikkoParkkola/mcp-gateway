@@ -138,8 +138,9 @@ async fn a_blocked_direct_tool_list_is_refused() {
     assert_eq!(inspections(&meta), 0);
 }
 
-/// #2350: `gateway_list_tools` (named server, then aggregate) and
-/// `gateway_search_tools` refuse a blocked listing, one inspection each.
+/// #2350: `gateway_list_tools` (named server, then aggregate),
+/// `gateway_search_tools` and Code Mode `gateway_search` refuse a blocked
+/// listing, one inspection each.
 #[tokio::test]
 async fn blocked_discovery_listings_are_refused_once() {
     let (state, handler, meta, _store) = leaky_list_state().await;
@@ -147,6 +148,7 @@ async fn blocked_discovery_listings_are_refused_once() {
         ("gateway_list_tools", json!({"server": "demo"})),
         ("gateway_list_tools", json!({})),
         ("gateway_search_tools", json!({"query": "echo"})),
+        ("gateway_search", json!({"query": "echo"})),
     ];
     for (i, (tool, arguments)) in calls.into_iter().enumerate() {
         let before = (inspections(&handler), inspections(&meta));

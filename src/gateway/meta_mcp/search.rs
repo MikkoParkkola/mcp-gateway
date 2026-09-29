@@ -403,12 +403,9 @@ impl MetaMcp {
             Vec::new()
         };
 
-        Ok(build_search_response(
-            &query,
-            &matches,
-            total_found,
-            &suggestions,
-        ))
+        let mut out = build_search_response(&query, &matches, total_found, &suggestions);
+        self.inspect_discovery_value(&mut out)?;
+        Ok(out)
     }
 
     /// Handle `gateway_execute` — Code Mode single-tool or chain execution.

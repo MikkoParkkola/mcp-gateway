@@ -1944,7 +1944,8 @@ fn revive_server_unregistered_backend_reports_breaker_not_open() {
     assert_eq!(result["status"], "active");
 }
 
-// The discovery surface is inspected once, at delivery: see
+// The discovery surface is inspected once, on its canonical value
+// (`MetaMcp::inspect_discovery_value`): see
 // `router/tests/meta_firewall_verdict/list_and_task_block.rs` (#2350).
 
 // ── Per-action attestation wiring (MIK-5223, B1-IDENT) ────────────────────

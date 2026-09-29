@@ -1741,7 +1741,7 @@ async fn meta_mcp_dispatch(
             #[cfg(feature = "firewall")]
             if !matches!(
                 external_tool.as_str(),
-                "gateway_list_tools" | "gateway_search_tools"
+                "gateway_list_tools" | "gateway_search_tools" | "gateway_search"
             ) {
                 delivery_inspection = super::response_pass::inspect_tools_call_response(
                     state.firewall.as_deref(),
