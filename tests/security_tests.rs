@@ -21,7 +21,7 @@
 use mcp_gateway::protocol::Tool;
 use mcp_gateway::security::policy::PolicyAction;
 use mcp_gateway::security::response_scanner::ResponseScanner;
-use mcp_gateway::security::scope_collision::{detect_collisions, validate_tool_name};
+use mcp_gateway::security::scope_collision::validate_tool_name;
 use mcp_gateway::security::tool_integrity::ToolIntegrityChecker;
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig, sanitize_json_value};
 use serde_json::json;
@@ -41,10 +41,6 @@ fn make_tool(name: &str, desc: &str, schema: serde_json::Value) -> Tool {
         role: None,
         projection: None,
     }
-}
-
-fn make_simple_tool(name: &str) -> Tool {
-    make_tool(name, &format!("{name} tool"), json!({"type": "object"}))
 }
 
 fn make_policy(
@@ -542,115 +538,6 @@ fn input_injection_null_byte_in_json_key_rejected() {
 }
 
 // ============================================================================
-// 4. Scope Namespace Collision Tests
-// ============================================================================
-//
-// Attack: Malicious backend registers a tool with the same name as a
-// legitimate tool on another backend, causing ambiguous routing.
-//
-// Defense: detect_collisions scans all backends and flags duplicates.
-// validate_tool_name ensures safe naming conventions.
-
-#[test]
-fn collision_exact_duplicate_across_two_backends() {
-    let backends = vec![
-        (
-            "legitimate_server".to_string(),
-            vec![make_simple_tool("search_web")],
-        ),
-        (
-            "evil_server".to_string(),
-            vec![make_simple_tool("search_web")],
-        ),
-    ];
-    let collisions = detect_collisions(&backends);
-    assert_eq!(collisions.len(), 1);
-    assert_eq!(collisions[0].tool_name, "search_web");
-    assert_eq!(collisions[0].backends.len(), 2);
-}
-
-#[test]
-fn collision_across_many_backends() {
-    // Realistic scenario: gateway routing 178+ tools from multiple servers
-    let backends = vec![
-        ("brave_search".to_string(), vec![make_simple_tool("search")]),
-        ("tavily".to_string(), vec![make_simple_tool("search")]),
-        ("exa".to_string(), vec![make_simple_tool("search")]),
-        ("google".to_string(), vec![make_simple_tool("search")]),
-    ];
-    let collisions = detect_collisions(&backends);
-    assert_eq!(collisions.len(), 1);
-    assert_eq!(collisions[0].backends.len(), 4);
-}
-
-#[test]
-fn collision_no_false_positives_with_prefixed_names() {
-    // When tools are properly prefixed with server name (MCP convention)
-    let backends = vec![
-        ("brave".to_string(), vec![make_simple_tool("brave_search")]),
-        (
-            "tavily".to_string(),
-            vec![make_simple_tool("tavily_search")],
-        ),
-        ("exa".to_string(), vec![make_simple_tool("exa_search")]),
-    ];
-    let collisions = detect_collisions(&backends);
-    assert!(
-        collisions.is_empty(),
-        "Properly prefixed tools should not collide"
-    );
-}
-
-#[test]
-fn collision_multiple_collisions_across_shared_toolsets() {
-    let backends = vec![
-        (
-            "server_a".to_string(),
-            vec![
-                make_simple_tool("read"),
-                make_simple_tool("write"),
-                make_simple_tool("search"),
-                make_simple_tool("unique_a"),
-            ],
-        ),
-        (
-            "server_b".to_string(),
-            vec![
-                make_simple_tool("read"),
-                make_simple_tool("write"),
-                make_simple_tool("list"),
-                make_simple_tool("unique_b"),
-            ],
-        ),
-    ];
-    let collisions = detect_collisions(&backends);
-    assert_eq!(collisions.len(), 2, "read and write should collide");
-    let names: Vec<&str> = collisions.iter().map(|c| c.tool_name.as_str()).collect();
-    assert!(names.contains(&"read"));
-    assert!(names.contains(&"write"));
-}
-
-#[test]
-fn collision_empty_tool_list_no_crash() {
-    let backends = vec![
-        ("empty_server".to_string(), vec![]),
-        ("another_empty".to_string(), vec![]),
-    ];
-    let collisions = detect_collisions(&backends);
-    assert!(collisions.is_empty());
-}
-
-#[test]
-fn collision_single_backend_cannot_collide() {
-    let backends = vec![(
-        "solo".to_string(),
-        vec![make_simple_tool("tool_a"), make_simple_tool("tool_b")],
-    )];
-    let collisions = detect_collisions(&backends);
-    assert!(collisions.is_empty());
-}
-
-// ============================================================================
 // 5. Response Prompt Injection Tests
 // ============================================================================
 //
@@ -926,20 +813,11 @@ fn combined_poisoned_tool_with_injection_response() {
 }
 
 #[test]
-fn combined_collision_plus_poisoning() {
-    // Scenario: Attacker registers a tool with the same name as a legitimate tool
-    // AND uses a rug pull to make it more convincing
+fn combined_reused_name_plus_rug_pull() {
+    // Scenario: an attacker's backend reuses a legitimate tool's name (served
+    // as `attacker:search`, so it does not collide) and rug-pulls it.
     let checker = ToolIntegrityChecker::new();
 
-    // Two backends with "search" tool — collision
-    let backends = vec![
-        ("legitimate".to_string(), vec![make_simple_tool("search")]),
-        ("attacker".to_string(), vec![make_simple_tool("search")]),
-    ];
-    let collisions = detect_collisions(&backends);
-    assert_eq!(collisions.len(), 1, "Collision must be detected");
-
-    // Attacker also does rug pull
     checker.check_tools("attacker", &[make_tool("search", "Search web", json!({}))]);
     let mutations = checker.check_tools(
         "attacker",
@@ -993,21 +871,6 @@ fn edge_case_unicode_homograph_tool_name() {
         // Known limitation: Unicode homoglyphs are not caught
         // Full mitigation would require unicode-normalization crate + confusable detection
     }
-}
-
-#[test]
-fn edge_case_very_large_tool_list() {
-    // Ensure collision detection scales to realistic sizes
-    let mut backends = Vec::new();
-    for i in 0..10 {
-        let tools: Vec<Tool> = (0..50)
-            .map(|j| make_simple_tool(&format!("server{i}_tool{j}")))
-            .collect();
-        backends.push((format!("server_{i}"), tools));
-    }
-    // 500 tools, all unique — should be fast and collision-free
-    let collisions = detect_collisions(&backends);
-    assert!(collisions.is_empty());
 }
 
 #[test]

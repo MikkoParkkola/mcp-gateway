@@ -71,6 +71,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 72
 - Item 73
 - Item 74
+- Item 75
 - Item 77
 - Item 78
 - Item 80
@@ -191,7 +192,7 @@ without it.**
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
-| 75 | Reserved: lands with a pending change | None yet |
+| 75 | A backend tool whose description fails the tool-poisoning check is withheld from every tool list and refused by name; `allow_flagged_tools` serves one explicitly; `BackendConfig` gains a field; `security::scope_collision::detect_collisions` is removed | Read the `Tool withheld` warnings; pin a tool you trust; add `allow_flagged_tools` to any `BackendConfig` struct literal; drop calls to `detect_collisions` |
 | 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
@@ -2129,6 +2130,57 @@ holds whichever saved last.
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
 
+## 75. Tools with a poisoned description are withheld
+
+A backend tool's description goes to the model as instructions. 4.0 checks every tool a backend
+lists against the tool-poisoning rule (AX-010: hidden instructions, secret-file paths,
+exfiltration patterns). A tool that fails it at blocking severity:
+
+- is left out of every tool list the gateway serves: `tools/list` on `/mcp` and `/mcp/{name}`,
+  `gateway_list_tools`, `gateway_search_tools` and surfaced tools;
+- is refused by name, for every caller of that backend, on both routes, once any listing has
+  shown it. The refusal names the tool and the rule, and the backend never receives the call;
+- is logged once per distinct description, as a `Tool withheld` warning naming the backend, the
+  tool, the rule, the findings and a digest of the description.
+
+A warn-level finding (long whitespace runs, control characters, an oversized description) is
+served as before.
+
+A tool name that no listing has ever returned is still forwarded when called by name, because the
+gateway has shown its description to no one. This narrows the original goal ("cannot be invoked by
+name") to "cannot be invoked by name once the gateway has observed its descriptor", by maintainer
+decision. The alternative, refusing every name the caller has not listed first, was rejected
+because it breaks every client that calls a remembered tool name without listing.
+
+The gateway remembers at most 4,096 withheld tool names per backend. A backend that withholds more
+is marked saturated, with one warning naming the cap: from then on every tool of that backend is
+withheld from every list and refused by name, since a name past the cap could not be recorded. The
+mark clears only on restart. A tool entry that cannot be parsed is withheld too, and one such entry
+no longer fails the rest of the list. A backend that lists the same name twice, one copy
+unparseable, has that name withheld in every copy. A name withheld by more than 64 callers stays blocked
+until restart.
+
+To serve a withheld tool you trust, pin its current description:
+
+```yaml
+backends:
+  my-backend:
+    allow_flagged_tools:
+      tool_name: "<64-hex digest from the warning>"
+```
+
+A changed description has a new digest and is withheld again. A pin that is not 64 lower-case hex
+characters is refused at load.
+
+For code that embeds the crate: `BackendConfig` has a new public field, `allow_flagged_tools`, so a
+struct literal that lists every field needs it (`Default::default()` works).
+`security::scope_collision::detect_collisions` and `ScopeCollision` are removed. Nothing in the
+gateway called them, and a tool is always addressed as backend plus name, so two backends sharing a
+name do not collide.
+
+**Action:** after upgrading, look for `Tool withheld` warnings. Pin any tool you have reviewed and
+trust. If you build `BackendConfig` with a full struct literal, add `allow_flagged_tools`.
+
 ## 76. Anomaly detection now learns, and its blocks stand
 
 `security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
@@ -2560,8 +2612,9 @@ These need no action and have no startup notice.
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
   drain that stops early keeps what was read, reports its tool count as "at least", and
   increments `mcp_backend_list_truncated_total{backend,reason}`, where `reason` is
-  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
-  `fill_budget` (120 s spent).
+  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`),
+  `fill_budget` (120 s spent) or `unreadable_page` (a page had no `tools` array; the
+  drain reads on, but the catalogue is never treated as complete).
 
 ## Rolling back
 
