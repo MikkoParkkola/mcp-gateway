@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 86
+Approved supplemental criteria: 93
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -124,6 +124,13 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7407.RESPONSE.3 | The real stdio call/list serving path uses the same enforcement boundary, with one content scan and one response audit per response. | SAFETY |
 | MIK-7407.RESPONSE.4 | Shared finalization happens after wrapping and before signing; blocked results and errors stay unsigned; a successful external gateway_invoke signs the final filtered bytes; detached tasks finalize retained backend results independently of admission acknowledgements. | SAFETY |
 | MIK-7407.RESPONSE.5 | Counted backend negative and positive fixtures prove served behavior on every route, with scan-count and policy-target falsifiers; one immutable delivery-attempt event is recorded after final filtering and signing, hashing the final JSON-RPC response without payloads or credentials. | SAFETY |
+| MIK-7406.VERIFY.1 | On the HTTP delivery path a message-signing test recomputes the HMAC over the delivered bytes with the configured key and rejects a tampered byte, not only the signature's shape; MIK-7377.SIGNING.1 stays met on its stdio evidence (MIK-7406). | SAFETY |
+| MIK-7587.WINDOWS.1 | Every area the Windows CI job skipped is classified as a fixed test assumption, a product defect fixed in 4.0 red-first on the Windows job, or Unix-only by design (cfg-gated with a reason and documented as a Windows limitation), and the Windows job runs every test target (MIK-7587, #1142). | VALIDATION |
+| MIK-7581.DOCS.1 | README, release notes and CHANGELOG lead with 4.0's headline improvements (MCP 2026-07-28 support and the multi-user/enterprise scope), the multi-user guide opens with the enterprise scope, and every highlight cites its file or test (MIK-7581). | VALIDATION |
+| GH2294.AUDIT.1 | A restart that finds the audit log's high-water mark missing records that finding in the chain instead of re-minting the mark from a truncated tail, and live verification fails on it (#2294). | SAFETY |
+| MIK-7116.MIN.1 | Tool responses carry a tenant attribution alongside the existing ContextDataClass, and the attribution is recorded in the audit trail whether or not it triggers a block (MIK-7116). | SECURITY |
+| MIK-7116.MIN.2 | A caller that has read sensitive data attributed to tenant A is flagged (observe mode) or, when blocking is switched on, blocked from reading sensitive data attributed to tenant B; a test proves the verdict and the audit entries for both the read and the verdict (MIK-7116). | SECURITY |
+| MIK-7116.MIN.4 | The tenant guard's false-positive rate is measured against a fixture corpus before blocking is enabled by default, and the guard ships observe-only first (MIK-7116). | SECURITY |
 
 ## Boundaries
 
@@ -160,3 +167,15 @@ automated execution-to-evidence binding is a later improvement. The supplemental
 checker enforces reference existence and completeness, not the truth of a test
 report. Reviewers must still assess evidence applicability and quality. Planned
 test files and ignored tests are not completed feature evidence.
+
+### Linear tickets mapped onto existing rows (operator chat ruling C1)
+
+Ruling C1 is recorded in `docs/requirements/RELEASE-4.0.0-operator-decisions.md`, section "Operator rulings given in chat" (added by #2385).
+
+- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows, all MET.
+- MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A.
+- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows, all MET; the other repositories are outside this ledger.
+- MIK-7407 (response firewall): the MIK-7407.RESPONSE.* rows added by #2387.
+- MIK-7481 (container never started in CI): NFR.PKG.1 (MET), whose row names MIK-7481 as owner; the smoke runs on the scan image (.github/workflows/docker.yml:293-294, scripts/ci/smoke-image.sh), carried from #568 (c8803f066).
+- MIK-7116 (data minimisation): MIK-7116.TENANT.1 (baseline) plus MIK-7116.MIN.1, MIN.2 and MIN.4 above. MIN.3, MIN.5 and MIN.6 are not 4.0.0 criteria: decision `mik_7116_min_kill_gate` in RELEASE-4.0.0-scope-status.json (operator ruling 2026-09-30); they are tracked in Linear MIK-7627, gated on the post-release MIN.KILL week.
+- MIK-7406 (response signing): MIK-7377.SIGNING.1 (met) plus MIK-7406.VERIFY.1 above.
