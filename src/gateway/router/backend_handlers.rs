@@ -1410,6 +1410,9 @@ use direct_failure::DirectFailure;
 mod tests;
 
 #[cfg(test)]
+mod passthrough_slot_cap_tests;
+
+#[cfg(test)]
 mod idempotency_settlement_tests;
 
 #[cfg(test)]
