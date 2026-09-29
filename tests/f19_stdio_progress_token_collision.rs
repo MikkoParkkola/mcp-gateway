@@ -60,15 +60,21 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A path as `sh` reads it: forward slashes, since a Windows backslash is an
+/// escape to the shell (and to a quoted YAML scalar).
+fn sh_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {
     let log = home.join("calls.log");
     let script = home.join("peer.sh");
-    std::fs::write(&script, PEER.replace("__LOG__", &log.display().to_string()))
+    std::fs::write(&script, PEER.replace("__LOG__", &sh_path(&log)))
         .expect("write the peer");
     let config = BackendConfig {
         enabled: true,
         transport: TransportConfig::Stdio {
-            command: format!("sh {}", script.display()),
+            command: format!("sh {}", sh_path(&script)),
             cwd: None,
             protocol_version: None,
         },
