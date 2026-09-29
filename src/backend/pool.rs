@@ -411,9 +411,9 @@ impl Backend {
     /// TOCTOU the reaper's atomic `remove_if` never had: with the removal now
     /// unconditional, the write guard is the only remaining mutual exclusion
     /// against a claim landing mid-eviction.
-    pub async fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
+    pub fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
         // First pass: collect matching keys without holding a shard guard
-        // across the async close(), mirroring the reaper's two-pass shape.
+        // across the removals, mirroring the reaper's two-pass shape.
         let candidates: Vec<PoolKey> = self
             .pool
             .iter()
@@ -428,6 +428,8 @@ impl Backend {
 
         let mut evicted = 0;
         for key in candidates {
+            // Under `stop`'s lock: shutdown takes this slot or drains its close.
+            let mut cleanups = self.replaced_transport_cleanups.lock();
             let Some((_, entry)) = self.pool.remove(&key) else {
                 // A concurrent reaper or eviction took it first; it is gone
                 // either way, which is what this call is for.
@@ -446,7 +448,7 @@ impl Backend {
                 }
             };
             if let Some(transport) = idle_transport {
-                let _ = transport.close().await;
+                self.close_evicted(&mut cleanups, transport);
             }
         }
 
@@ -482,15 +484,35 @@ impl Backend {
         self.pool.get(key).is_some()
     }
 
+    /// Close an evicted transport off the caller's path, bounded by
+    /// `close_stage` (#2245): even a bounded close in line holds a grant reload
+    /// one budget per wedged slot. `stop` drains the task with the replaced-
+    /// transport cleanups; a timeout drops the last handle (`kill_on_drop`).
+    fn close_evicted(&self, cleanups: &mut super::CleanupState, transport: Arc<dyn Transport>) {
+        let (backend, budget) = (self.name.clone(), self.budgets.close_stage);
+        let handle = tokio::spawn(async move {
+            let close = tokio::time::timeout(budget, transport.close());
+            if close.await.is_err() {
+                tracing::warn!(
+                    %backend,
+                    budget_secs = budget.as_secs(),
+                    "Evicted transport did not close within its budget; abandoning the close"
+                );
+            }
+        });
+        cleanups.handles.retain(|h| !h.is_finished());
+        cleanups.handles.push(handle);
+    }
+
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
     /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
     /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
     /// number of slots closed (MIK-6735 POOL.2).
-    pub async fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
+    pub fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
         let cutoff = idle_ttl.as_secs();
 
         // First pass: collect candidate keys without holding a guard across the
-        // async close(). Skip the shared slot outright.
+        // removals. Skip the shared slot outright.
         let candidates: Vec<PoolKey> = self
             .pool
             .iter()
@@ -502,7 +524,8 @@ impl Backend {
         for key in candidates {
             // Atomically remove only if STILL idle — re-checked inside the shard
             // lock so a request that touched the slot after the first pass keeps
-            // it alive and is never torn down mid-flight.
+            // it alive and is never torn down mid-flight. Cleanup lock: as above.
+            let mut cleanups = self.replaced_transport_cleanups.lock();
             let removed = self.pool.remove_if(&key, |k, entry| {
                 // in_flight is checked INSIDE the shard lock, alongside the
                 // timestamp. A relaxed timestamp alone is not enough: a request
@@ -518,7 +541,7 @@ impl Backend {
             if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
-                    let _ = transport.close().await;
+                    self.close_evicted(&mut cleanups, transport);
                 }
                 closed += 1;
             }

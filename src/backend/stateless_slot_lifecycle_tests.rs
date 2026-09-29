@@ -281,7 +281,7 @@ async fn revocation_evicts_a_stateless_backends_per_identity_slot() {
         .await
         .expect("beta fills");
 
-    let evicted = backend.evict_identity_slots(&prefix("alpha")).await;
+    let evicted = backend.evict_identity_slots(&prefix("alpha"));
 
     // THE DISCRIMINATOR, FIRST. Beta's slot is what holds beta's catalogue and
     // the revocation named alpha, so beta's must survive it. Before the arm

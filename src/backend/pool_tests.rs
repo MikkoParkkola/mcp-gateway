@@ -14,8 +14,7 @@ use super::*;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::transport::Transport;
-use crate::{Error, Result};
+use crate::{Error, Result, transport::Transport};
 
 // ---- MIK-6735: per-user transport/session pool ----
 
@@ -312,9 +311,7 @@ async fn evict_idle_per_user_entries_reaps_idle_users_but_spares_shared() {
             .store(0, Ordering::Relaxed);
     }
 
-    let closed = backend
-        .evict_idle_per_user_entries(Duration::from_secs(1))
-        .await;
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(closed, 1, "only the per-user slot is reaped");
     assert!(
         backend
@@ -921,9 +918,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .last_used
         .store(0, Ordering::Relaxed);
 
-    let closed = backend
-        .evict_idle_per_user_entries(Duration::from_secs(1))
-        .await;
+    let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(
         closed, 0,
         "a per-user slot with work in flight must not be evicted"
@@ -942,9 +937,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
         .last_used
         .store(0, Ordering::Relaxed);
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
         "eviction resumes once the request completes"
     );
@@ -1233,9 +1226,7 @@ async fn a_leased_slot_is_never_evicted() {
         .store(0, Ordering::Relaxed);
 
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         0,
         "the evictor removed a slot with a live lease on it"
     );
@@ -1256,13 +1247,12 @@ async fn a_leased_slot_is_never_evicted() {
         .store(0, Ordering::Relaxed);
 
     assert_eq!(
-        backend
-            .evict_idle_per_user_entries(Duration::from_secs(1))
-            .await,
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
         "once the lease is released the slot must become evictable again, \
          or in_flight leaks and the slot is immortal"
     );
+    tokio::time::sleep(Duration::from_millis(50)).await; // the close runs detached (#2245)
     assert!(
         mock.closed.load(Ordering::SeqCst),
         "the evicted slot's transport was never closed"
@@ -1960,8 +1950,8 @@ async fn concurrent_stops_wait_for_one_teardown() {
 // the same drop-reaps-child property for the REAL StdioTransport, including its
 // reader task's deliberate Weak handle.
 #[cfg(unix)]
-struct RealChildWedgedClose {
-    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+pub(super) struct RealChildWedgedClose {
+    pub(super) child: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 
 #[cfg(unix)]
@@ -2009,12 +1999,12 @@ fn process_state(pid: u32) -> Option<String> {
 }
 
 #[cfg(unix)]
-fn is_alive(pid: u32) -> bool {
+pub(super) fn is_alive(pid: u32) -> bool {
     process_state(pid).is_some_and(|s| !s.starts_with('Z'))
 }
 
 #[cfg(unix)]
-async fn spawn_probe_child() -> (tokio::process::Child, u32) {
+pub(super) async fn spawn_probe_child() -> (tokio::process::Child, u32) {
     let child = tokio::process::Command::new("sleep")
         .arg("300")
         .kill_on_drop(true)

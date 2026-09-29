@@ -305,7 +305,7 @@ async fn c1_a_revoked_callers_populated_slot_does_not_survive() {
     let fills_before = upstream.fills();
 
     upstream.revoke();
-    backend.evict_identity_slots(&prefix).await;
+    backend.evict_identity_slots(&prefix);
     rearm(&backend, &binding, &upstream);
 
     let served = backend
@@ -349,7 +349,7 @@ async fn c2_an_unaffected_callers_slot_is_preserved_byte_for_byte() {
 
     alice_upstream.revoke();
     bob_upstream.revoke();
-    backend.evict_identity_slots(&alice_prefix).await;
+    backend.evict_identity_slots(&alice_prefix);
 
     // POSITIVE assertions, not absences: B's list is byte-identical and B did
     // not refetch. Had B been evicted, its upstream now serves AFTER, so the
@@ -401,7 +401,7 @@ async fn c3_eviction_does_not_decline_against_a_busy_slot() {
     );
 
     upstream.revoke();
-    backend.evict_identity_slots(&prefix).await;
+    backend.evict_identity_slots(&prefix);
     drop(claim);
     rearm(&backend, &binding, &upstream);
 
@@ -496,8 +496,8 @@ async fn c9_every_backend_holding_the_subject_is_evicted() {
     upstream_b.revoke();
     // The production loop runs this per backend; the cell asserts each
     // separately so an implementation that stops after the first goes red.
-    first.evict_identity_slots(&prefix).await;
-    second.evict_identity_slots(&prefix).await;
+    first.evict_identity_slots(&prefix);
+    second.evict_identity_slots(&prefix);
     rearm(&first, &binding_a, &upstream_a);
     rearm(&second, &binding_b, &upstream_b);
 
@@ -558,7 +558,7 @@ async fn c12_eviction_removes_a_busy_slot_without_closing_its_transport() {
         "C12 premise: the transport must be live before the revocation"
     );
 
-    backend.evict_identity_slots(&prefix).await;
+    backend.evict_identity_slots(&prefix);
 
     assert!(
         !backend.pool_has_slot_for_test(&slot(&binding)),
@@ -621,7 +621,7 @@ async fn c13_a_poisoned_audience_does_not_let_one_revocation_reach_another_calle
 
     alice_upstream.revoke();
     bob_upstream.revoke();
-    backend.evict_identity_slots(&alice_prefix).await;
+    backend.evict_identity_slots(&alice_prefix);
 
     // A half: the revocation landed. Without this the B half is green against
     // an evictor that does nothing at all.
