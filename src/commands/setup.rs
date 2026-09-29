@@ -218,6 +218,23 @@ fn source_label(source: &DiscoverySource) -> String {
 
 // ── Interactive selection ──────────────────────────────────────────────────────
 
+/// One-line transport description for the import list.
+fn transport_label(transport: &TransportConfig) -> String {
+    match transport {
+        TransportConfig::Stdio { command, .. } => {
+            let short = command
+                .split_whitespace()
+                .next()
+                .unwrap_or(command.as_str());
+            format!("stdio: {short}")
+        }
+        TransportConfig::Http { http_url, .. } => format!("http: {http_url}"),
+        TransportConfig::WebSocket { ws_url, .. } => format!("websocket: {ws_url}"),
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { a2a_url, .. } => format!("a2a: {a2a_url}"),
+    }
+}
+
 /// Prompt the user to select which servers to import via a numbered list.
 ///
 /// Prints each server with its index, then reads a comma-separated list of
@@ -228,19 +245,7 @@ fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredSer
     let labels: Vec<String> = servers
         .iter()
         .map(|s| {
-            let transport = match &s.transport {
-                TransportConfig::Stdio { command, .. } => {
-                    let short = command
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or(command.as_str());
-                    format!("stdio: {short}")
-                }
-                TransportConfig::Http { http_url, .. } => format!("http: {http_url}"),
-                TransportConfig::WebSocket { ws_url, .. } => format!("websocket: {ws_url}"),
-                #[cfg(feature = "a2a")]
-                TransportConfig::A2a { a2a_url, .. } => format!("a2a: {a2a_url}"),
-            };
+            let transport = transport_label(&s.transport);
             format!("{} [{}] ({})", s.name, source_label(&s.source), transport)
         })
         .collect();
@@ -314,6 +319,22 @@ fn print_next_steps(config_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_label_hides_url_credentials() {
+        let ws: TransportConfig = serde_json::from_value(serde_json::json!({
+            "ws_url": "ws://user:pass@host/mcp?token=x"
+        }))
+        .unwrap();
+        let http: TransportConfig = serde_json::from_value(serde_json::json!({
+            "http_url": "http://user:pass@host/mcp?token=x"
+        }))
+        .unwrap();
+        for label in [transport_label(&ws), transport_label(&http)] {
+            assert!(label.contains("host"), "{label}");
+            assert!(!label.contains("pass") && !label.contains("token=x"), "{label}");
+        }
+    }
     use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
     use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 
