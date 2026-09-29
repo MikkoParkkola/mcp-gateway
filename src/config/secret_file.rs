@@ -40,13 +40,6 @@ pub(crate) enum SecretFile {
 }
 
 /// What a file's mode must protect.
-#[cfg_attr(
-    all(windows, not(test)),
-    allow(
-        dead_code,
-        reason = "the Windows guarded reader calls it from the next #1718 commit"
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Protects {
     /// It holds a secret: others may neither read nor change it.
@@ -80,13 +73,6 @@ impl SecretFile {
         }
     }
 
-    #[cfg_attr(
-        windows,
-        allow(
-            dead_code,
-            reason = "the Windows guarded reader calls it from the next #1718 commit"
-        )
-    )]
     pub(crate) const fn protects(self) -> Protects {
         match self {
             Self::TlsCert | Self::TlsCrl | Self::IdentityGrants | Self::ControlPlaneCollection => {
@@ -204,6 +190,8 @@ fn read_guarded_bytes(path: &Path, what: SecretFile) -> std::result::Result<Vec<
     let mut file = open_for_guarded_read(path).map_err(GuardedRead::Io)?;
     #[cfg(unix)]
     check_mode(&file, path, what)?;
+    #[cfg(windows)]
+    check_acl(&file, path, what)?;
     let mut bytes = Vec::new();
     match what.max_bytes() {
         // Bounded on the handle the mode was judged on: a size taken from a
@@ -242,10 +230,57 @@ fn open_for_guarded_read(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-/// Windows: a plain open; no file types or modes are checked (UPGRADING item 35).
-#[cfg(not(unix))]
+/// Windows: opens the file the way unix does, following links, so the handle
+/// judged and read is the target's. Directories open too (`BACKUP_SEMANTICS`),
+/// so they are refused as not a regular file rather than as a raw error.
+#[cfg(windows)]
 fn open_for_guarded_read(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, READ_CONTROL};
+    std::fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | READ_CONTROL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+
+/// The type and DACL verdict on an open handle, as a refusal naming every
+/// broken rule and the repair for this file's class.
+#[cfg(windows)]
+fn check_acl(
+    file: &std::fs::File,
+    path: &Path,
+    what: SecretFile,
+) -> std::result::Result<(), GuardedRead> {
+    use crate::private_fs::{PrivacyRefusal, file_refusals_for, windows_remediation};
+
+    let found = file_refusals_for(file, what.protects());
+    if found.is_empty() {
+        return Ok(());
+    }
+    let shown = path.display().to_string();
+    let head = format!("Refusing to load {} {shown}", what.noun());
+    let text = if found
+        .iter()
+        .any(|r| matches!(r, PrivacyRefusal::ReparsePoint | PrivacyRefusal::NotRegular))
+    {
+        format!(
+            "{head} ({found:?}): it is not a regular file. Write the content, then replace the file."
+        )
+    } else {
+        let mut text = format!(
+            "{head}{}",
+            windows_remediation(&shown, &found, what.protects())
+        );
+        if what.protects() == Protects::Integrity {
+            text.push_str(
+                "This file may be read by others, so the repair keeps them as readers; \
+                 an owner-only repair would also lock out legitimate readers.\n",
+            );
+        }
+        text
+    };
+    Err(GuardedRead::Refused(text))
 }
 
 /// What a non-regular file is, for the refusal text.
