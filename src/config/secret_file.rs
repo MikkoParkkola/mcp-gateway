@@ -14,6 +14,7 @@ use crate::{Error, Result};
 #[cfg(unix)]
 const UPGRADE_ITEM: u32 = 35;
 /// The item that adds the owner rule.
+#[cfg(unix)]
 const OWNER_UPGRADE_ITEM: u32 = 96;
 
 /// Which kind of file is read. It sets the wording, the rule and the size cap.
