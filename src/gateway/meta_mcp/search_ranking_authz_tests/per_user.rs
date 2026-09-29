@@ -55,7 +55,7 @@ async fn per_user_backend_tools_are_discoverable() {
         backends.register(per_user_mcp_backend(MCP_BACKEND).await),
         "fixture backend failed to register"
     );
-    let meta = MetaMcp::with_features(
+    let mut meta = MetaMcp::with_features(
         backends,
         None,
         None,
@@ -81,9 +81,7 @@ async fn per_user_backend_tools_are_discoverable() {
         "a `required` backend's tools reached a caller with no identity"
     );
 
-    meta.set_identity_propagation(Arc::new(
-        super::super::catalogue_per_caller_tests::PerIdentityMint,
-    ));
+    super::super::catalogue_per_caller_tests::install_minting(&mut meta);
     let alpha = super::super::catalogue_per_caller_tests::identity("alpha");
     meta.seed_caller_slot_for_test(MCP_BACKEND, &alpha).await;
     let response = meta

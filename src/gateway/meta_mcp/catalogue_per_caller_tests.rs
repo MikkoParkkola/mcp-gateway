@@ -58,6 +58,26 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     }
 }
 
+/// Let `meta` mint for a verified caller: [`PerIdentityMint`] plus the durable
+/// audit log a `required` mint refuses to run without.
+pub(super) fn install_minting(meta: &mut MetaMcp) {
+    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = file.path().to_string_lossy().to_string();
+    std::mem::forget(file);
+    meta.enable_transparency_log(Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path,
+                key_id: "catalogue-minting".to_string(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("transparency logger opens"),
+    ));
+    meta.set_identity_propagation(Arc::new(PerIdentityMint));
+}
+
 pub(super) fn identity(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
     crate::key_server::oidc::VerifiedIdentity {
         subject: subject.to_string(),
