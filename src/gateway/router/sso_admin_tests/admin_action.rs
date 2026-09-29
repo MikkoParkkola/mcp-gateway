@@ -103,7 +103,9 @@ impl Audited {
     fn entries(&self) -> Vec<Value> {
         self.raw()
             .lines()
-            .map(|line| serde_json::from_str(line).expect("a JSON entry"))
+            .map(|line| serde_json::from_str::<Value>(line).expect("a JSON entry"))
+            // Skip the log's genesis housekeeping record (#2275).
+            .filter(|e| e["event"] != "audit_segment_opened")
             .collect()
     }
 
