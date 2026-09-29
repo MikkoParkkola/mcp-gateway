@@ -143,7 +143,7 @@ pub(super) fn refuse_unrecognised_keys(
     let backend = unread_backend_keys(raw, &mut ignored);
     found.extend(backend.keys().cloned());
     // Before the refusal, so a file that also carries a typo still says which
-    // keys would have loaded. Once per key per process: a refused reload is
+    // keys would have loaded. Once per key per config file: a refused reload is
     // retried every poll and must not repeat these.
     log_ignored(path, &ignored);
     if found.is_empty() {
@@ -489,6 +489,38 @@ mod tests {
         assert!(
             include_str!("../../docs/UPGRADING-4.0.md").contains(&quote),
             "UPGRADING must quote: {quote}"
+        );
+    }
+
+    /// #2360: a retired key warns once, an annotation logs at DEBUG once, and a
+    /// reload of the same file stays quiet. A refused file still warns first.
+    #[test]
+    fn ignored_keys_are_logged_once_even_beside_a_refusal() {
+        use crate::test_log_capture::{count, records};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ok = dir.path().join("ok.yaml");
+        let bad = dir.path().join("bad.yaml");
+        let write = crate::gateway::test_helpers::write_owner_only;
+        write(
+            &ok,
+            "backends:\n  x:\n    command: y\n    idle_timeout: 5m\n    _note: n\n",
+        )
+        .expect("write ok");
+        write(
+            &bad,
+            "backends:\n  x:\n    command: y\n    idle_timeout: 5m\n    idel: 1\n",
+        )
+        .expect("write bad");
+        let logs = records(|| {
+            crate::config::Config::load(Some(&ok)).expect("loads");
+            crate::config::Config::load(Some(&ok)).expect("reloads");
+            crate::config::Config::load(Some(&bad)).expect_err("typo refuses");
+        });
+        let retired = "`backends.x.idle_timeout` is ignored since 4.0";
+        assert_eq!(count(&logs, "WARN", retired), 2, "once per file: {logs:?}");
+        assert_eq!(
+            count(&logs, "DEBUG", "`backends.x._note` is an annotation"),
+            1
         );
     }
 
