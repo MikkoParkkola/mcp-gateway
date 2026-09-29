@@ -746,4 +746,24 @@ fn cert_subject_id_skips_an_empty_first_san_like_agent_identity() {
         cert_subject_id(&cert).as_deref(),
         Some("spiffe://cluster/b")
     );
+
+    // Non-empty, not non-blank: a whitespace SAN is itself the subject.
+    let blank = crate::mtls::identity::CertIdentity {
+        san_uris: vec![" ".to_string(), "spiffe://cluster/b".to_string()],
+        ..cert.clone()
+    };
+    assert_eq!(cert_subject_id(&blank).as_deref(), Some(" "));
+
+    let empty_sans = crate::mtls::identity::CertIdentity {
+        san_uris: vec![String::new(), String::new()],
+        ..cert.clone()
+    };
+    assert_eq!(cert_subject_id(&empty_sans).as_deref(), Some("c"));
+
+    let nothing = crate::mtls::identity::CertIdentity {
+        san_uris: vec![String::new()],
+        common_name: Some(String::new()),
+        ..cert
+    };
+    assert_eq!(cert_subject_id(&nothing), None);
 }
