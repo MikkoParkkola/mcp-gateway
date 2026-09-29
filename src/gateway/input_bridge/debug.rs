@@ -37,6 +37,7 @@ impl std::fmt::Debug for BridgeError {
                 .field("method", method)
                 .field("reason", reason)
                 .finish(),
+            Self::MalformedInterim => f.write_str("MalformedInterim"),
             Self::RequestBudgetExhausted => f.write_str("RequestBudgetExhausted"),
             Self::Deadline => f.write_str("Deadline"),
             Self::NotAdmitted { message } => f

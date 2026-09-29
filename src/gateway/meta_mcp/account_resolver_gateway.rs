@@ -265,7 +265,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
 
 /// [`caller`] that also presented a credential the gateway accepted, named by
 /// its principal (`STDIO_CREDENTIAL_PRINCIPAL` for the stdio transport).
-fn caller_as<'a>(
+pub(in super::super) fn caller_as<'a>(
     verified_identity: Option<&'a VerifiedIdentity>,
     credential_principal: Option<&'a str>,
 ) -> MetaMcpCallerContext<'a> {

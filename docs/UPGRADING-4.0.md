@@ -2149,10 +2149,11 @@ FUSE mounts.
 
 In 4.0:
 
-- A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
-  re-reads every listed env file every 2 seconds and reloads when its content differs from
-  what is loaded. A file that appears later is picked up. A stdio gateway, or one that found
-  its config on its own, watches no files, as before.
+- A gateway serving HTTP from a config file, named with `--config` or `MCP_GATEWAY_CONFIG`
+  or found by discovery, re-reads every listed env file every 2 seconds and reloads when its
+  content differs from what is loaded. A file that appears later is picked up. A stdio
+  gateway watches no files, as before; any gateway that loaded a config file offers the
+  `gateway_reload_config` meta-tool.
 - A lookup error on an env file (a link loop, a directory the gateway cannot search) fails
   the load instead of reading as a missing file.
 - After any failed reload, whatever caused it, the reload is retried every 2 seconds until

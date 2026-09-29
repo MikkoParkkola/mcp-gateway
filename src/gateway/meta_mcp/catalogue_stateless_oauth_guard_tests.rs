@@ -165,7 +165,10 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
     // PREMISE, checked rather than assumed. The mint MUST succeed, or the guard
     // refuses for a reason that has nothing to do with the pool slot.
     let (headers, binding) = meta
-        .caller_credential_for_identity(PLAIN_STATELESS_BACKEND, Some(&alpha_id))
+        .caller_credential_for_identity(
+            PLAIN_STATELESS_BACKEND,
+            crate::identity_propagation::CallerProof::Verified(&alpha_id),
+        )
         .await;
     assert!(
         !headers.is_empty() && binding.is_some(),

@@ -249,3 +249,28 @@ fn wt10i_foreign_owner_repair_order() {
          (found at {take:?}, {dacl:?}, {give:?}): {text}"
     );
 }
+
+/// #2250: a 0600 file owned by ANOTHER user is not the operator's credential.
+/// A migration run as root (or with `CAP_DAC_READ_SEARCH`) can read it, so the
+/// read succeeding proves nothing about who wrote it.
+#[cfg(unix)]
+#[test]
+fn a_private_file_owned_by_another_user_is_refused() {
+    const ME: u32 = 1000;
+    assert!(
+        super::private_to(0o100_600, ME, ME),
+        "positive control: my own 0600 file is private"
+    );
+    assert!(
+        !super::private_to(0o100_600, ME + 1, ME),
+        "another user's 0600 file must be refused"
+    );
+    assert!(
+        !super::private_to(0o100_600, 0, ME),
+        "a root-owned 0600 file read by a non-root migration must be refused"
+    );
+    assert!(
+        super::private_to(0o100_600, 0, 0),
+        "an operator running as root owns its own root-owned file"
+    );
+}
