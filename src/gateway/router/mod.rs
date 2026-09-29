@@ -76,11 +76,11 @@ mod direct_guards_tests;
 mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_tasks_owner_tests;
+#[cfg(test)]
+mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
-#[cfg(test)]
-mod dispatch_parity_tests;
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
