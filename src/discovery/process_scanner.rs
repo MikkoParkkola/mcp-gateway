@@ -134,6 +134,8 @@ impl ProcessScanner {
         // Server 2025), so ask CIM. One "pid command" line per process behind
         // a header line, the shape `parse_ps_output` reads.
         let output = Command::new("powershell")
+            // A PowerShell 7 parent leaks a module path Windows PowerShell cannot load.
+            .env_remove("PSModulePath")
             .args([
                 "-NoProfile",
                 "-NonInteractive",
