@@ -145,6 +145,20 @@ impl Config {
     pub(crate) fn validate_identity_sources(&self) -> crate::Result<()> {
         self.key_server.validate()?;
         self.security.agent_identity.validate()?;
+        let agent_identity = &self.security.agent_identity;
+        if agent_identity.enabled
+            && agent_identity.require_id
+            && !agent_identity.allow_unverified_agent_identity
+            && !self.agent_auth.enabled
+            && !self.mtls.enabled
+        {
+            // No proof source can ever satisfy it: every call would be a 403.
+            return Err(crate::Error::ConfigValidation(
+                "agent_identity.require_id needs a proof source: enable agent_auth or mtls, \
+                 or set agent_identity.allow_unverified_agent_identity"
+                    .into(),
+            ));
+        }
         self.security
             .caller_identity
             .validate(self.auth.enabled, &self.key_server)
