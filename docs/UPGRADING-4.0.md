@@ -2394,7 +2394,7 @@ answered as before.
 In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
 query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
 any client could name itself onto the allowlist. Only a proven principal satisfies them now: the
-mTLS client-certificate subject (first SAN URI, else CN) or the `sub` of an agent token the
+mTLS client-certificate subject (first non-empty SAN URI, else CN) or the `sub` of an agent token the
 gateway validated. The unsigned JWT claim is no longer read; the header and query label are kept
 for telemetry and cost attribution.
 
@@ -2458,7 +2458,7 @@ key on who the caller is, on the meta route and the per-backend `/mcp/{name}` ro
   scored against the caller's previous call on either session.
 - The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
   one session at a time, so that is that session's budget and tenant count.
-- An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
+- An mTLS caller is identified by its certificate's first non-empty SAN URI, else its CN; a renewed
   certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
   CA issuing unique CNs. A certificate with neither is not an identity.
 - The default config has no behaviour change: the budget, the tenant guard and anomaly detection
