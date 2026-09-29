@@ -342,6 +342,7 @@ fn install_unscanned_capabilities(
         "gateway",
         std::sync::Arc::new(crate::capability::CapabilityExecutor::new()),
     ));
+    backend.begin_initial_scan();
     state
         .meta_mcp
         .set_capabilities(std::sync::Arc::clone(&backend));

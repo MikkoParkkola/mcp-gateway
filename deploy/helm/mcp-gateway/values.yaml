@@ -84,6 +84,32 @@ configVolume:
 stateVolume:
   sizeLimit: 1Gi
 
+# Keep `state` on a PersistentVolumeClaim instead, so task records and the
+# control-plane store (rendered to /var/lib/mcp-gateway/control-plane) survive
+# a replaced pod. The store holds an exclusive lease, so this forces one
+# replica and the Recreate strategy, and sets fsGroupChangePolicy:
+# OnRootMismatch (the store refuses group bits a per-mount chown would add).
+persistence:
+  enabled: false
+  existingClaim: ""    # use this claim instead of rendering one
+  size: 1Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+
+# Secrets for backends' `env:VAR` references, rendered after the chart's env.
+# Names starting MCP_GATEWAY_ (in any case) are refused: those variables
+# override gateway config. HOME, GATEWAY_API_KEY_* and GATEWAY_KS_ADMIN_TOKEN
+# are the chart's own and refused too. Every envFrom entry needs a prefix
+# outside MCP_GATEWAY_, so no key in the Secret can become an override.
+# Every value is readable by the gateway and its stdio backends: scope the
+# Secret to what the backends need.
+extraEnv: []
+#  - name: GITHUB_TOKEN
+#    valueFrom: {secretKeyRef: {name: backend-secrets, key: github}}
+envFrom: []
+#  - prefix: BACKEND_
+#    secretRef: {name: backend-secrets}
+
 resources:
   requests:
     cpu: 100m
@@ -95,21 +121,29 @@ resources:
 # How this gateway proves who is calling it. A pod's service is reachable by
 # every other pod in the cluster, and the gateway refuses to serve a
 # network-reachable tool surface that needs no credential — so this has to be
-# answered, and the chart renders exactly one of the two answers.
+# answered, and the chart renders exactly one answer.
 #
 #   credential  (default) the tools require a bearer token, supplied from the
 #               Secret named below. Only /health, /livez and /readyz stay open,
 #               so probes work.
+#   api_keys    one client per auth.apiKeys entry, each with its own backends.
+#               The Secret holds each key's digest (`printf %s "$KEY" |
+#               mcp-gateway hash-key` prints sha256:<hex>), never the key.
+#               No master bearer is rendered.
+#   oidc        the key server exchanges OIDC ID tokens (POST /auth/token) for
+#               gateway tokens under auth.oidc. Tokens live in one process, so
+#               this forces one replica and the Recreate strategy.
 #   mesh        a service mesh authenticates before anything reaches this pod.
 #               No token is rendered and server.allow_unauthenticated_network_bind
 #               is set, which is logged at WARN on every start.
 #
-# The two are mutually exclusive by construction. Setting the mesh flag while a
+# The modes are mutually exclusive by construction. Setting the mesh flag while a
 # token reference was still rendered produced a pod that crash-looped on an
 # unresolvable environment variable.
 auth:
   mode: credential
-  # credential mode only: the Secret holding the bearer token. Named by default
+  # The Secret holding this mode's credentials (credential: the bearer token;
+  # api_keys: each key's digest; oidc: the admin token, if any). Named by default
   # rather than left blank, so the chart renders and the missing-Secret failure
   # lands where Kubernetes reports it clearly — the pod stops with
   # CreateContainerConfigError naming this Secret, instead of the chart refusing
@@ -119,8 +153,31 @@ auth:
   #     --from-literal=token="$(openssl rand -base64 32)"
   existingSecret: mcp-gateway-auth
   secretKey: token
+  # api_keys mode only. backends is required: an empty list grants none.
+  #   kubectl create secret generic mcp-gateway-auth \
+  #     --from-literal=ci="$(printf %s "$CI_KEY" | mcp-gateway hash-key)"
+  apiKeys: []
+  #  - name: ci                  # the key's identity (api_key:ci)
+  #    secretKey: ci             # key in existingSecret holding sha256:<hex>
+  #    backends: ["github"]      # ["*"] is all
+  #    admin: false
+  #    rateLimit: 0              # requests per minute, 0 = unlimited
+  #    allowedTools: []          # optional allowlist (globs)
+  #    deniedTools: []           # optional blocklist (globs)
+  #    expiresAt: "2027-01-01T00:00:00Z"
+  # oidc mode only. Every policy match names an issuer and at least one of
+  # domain, email or group (UPGRADING-4.0 item 17).
+  oidc: {}
+  #  providers:
+  #    - issuer: https://idp.acme.test
+  #      audiences: ["mcp-gateway"]
+  #      allowedDomains: ["acme.test"]
+  #  policies:
+  #    - match: {issuer: https://idp.acme.test, domain: acme.test}
+  #      scopes: {backends: ["*"], rateLimit: 0}
+  #  adminTokenSecretKey: ""    # key in existingSecret -> key_server.admin_token
 
-# credential mode only. The bearer token crosses the pod's 0.0.0.0 bind in
+# Every mode but mesh. A bearer, API key or key-server token crosses the pod's 0.0.0.0 bind in
 # plain HTTP, and the gateway refuses that unless server.cleartext_http names
 # who protects it (UPGRADING-4.0, C3). Rendered as that key:
 #
@@ -152,9 +209,8 @@ config:
   # `auth` is NOT set here on purpose: the template renders it from auth.mode
   # above, so the credential and the mesh flag cannot both appear. A value set
   # here would be overwritten.
-  # That includes auth.api_keys: the chart renders no API keys. A config you
-  # mount yourself stores each key as key_sha256 (`mcp-gateway hash-key`),
-  # never the key.
+  # That includes auth.api_keys and key_server: set auth.mode api_keys or
+  # oidc above instead.
   security:
     firewall:
       enabled: true
@@ -175,7 +231,7 @@ serviceAccount:
 rbac:
   create: false
 
-# NetworkPolicy is opt-in, except that credential mode with
+# NetworkPolicy is opt-in, except that every mode but mesh with
 # server.cleartextHttp: cluster_internal (the default) always renders an
 # INGRESS-ONLY policy (ingress limited to the service port, egress untouched so
 # backends on any port stay reachable): the cluster network is then the trust

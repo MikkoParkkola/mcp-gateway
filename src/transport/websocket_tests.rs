@@ -404,6 +404,31 @@ async fn request_times_out_when_the_outbound_queue_is_full() {
 }
 
 #[tokio::test]
+async fn close_does_not_wait_behind_a_blocked_send() {
+    let t = WebSocketTransport::new(
+        "ws://localhost:9999",
+        HashMap::new(),
+        std::time::Duration::from_secs(60),
+        None,
+    );
+    // A stalled writer: capacity 1, filled, never drained.
+    let (tx, _rx) = channel::<Message>(1);
+    tx.try_send(Message::Text("fill".into())).unwrap();
+    *t.inner.outbound_tx.lock().await = Some(tx);
+
+    let sender = Arc::clone(&t);
+    let blocked = tokio::spawn(async move { sender.notify("x", None).await });
+    tokio::task::yield_now().await;
+
+    // close() must not queue behind the send's hold on the sender slot.
+    tokio::time::timeout(std::time::Duration::from_secs(2), t.close())
+        .await
+        .expect("close() must not wait for a blocked send")
+        .unwrap();
+    blocked.abort();
+}
+
+#[tokio::test]
 async fn close_fails_in_flight_requests_at_once() {
     let t = test_transport("ws://localhost:9999");
     let (tx, rx) = oneshot::channel();

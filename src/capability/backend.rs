@@ -181,7 +181,7 @@ impl CapabilityBackend {
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicBool::new(false),
+            initial_scan: std::sync::atomic::AtomicBool::new(true), // see initial_scan.rs
         }
     }
 
