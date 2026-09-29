@@ -124,6 +124,7 @@ internal_doc_allowlist=(
 # through. A new root entry is a deliberate act, so it is added here by hand.
 root_doc_allowlist=(
   ".dockerignore"
+  ".gitattributes"
   ".gitignore"
   ".gitleaksignore"
   ".license-scope-exclude"

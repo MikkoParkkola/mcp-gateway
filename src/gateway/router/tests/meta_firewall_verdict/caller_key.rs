@@ -111,8 +111,7 @@ fn keys(keys: Vec<ApiKeyConfig>) -> AuthConfig {
         bearer_token: None,
         api_keys: keys,
         public_paths: vec!["/health".to_string()],
-        client_circuit_breaker: None,
-        single_user: false,
+        ..AuthConfig::default()
     }
 }
 

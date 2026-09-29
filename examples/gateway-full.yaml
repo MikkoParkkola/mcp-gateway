@@ -54,6 +54,13 @@ auth:
   public_paths:
     - /health
 
+  # Dashboard browser sessions (the link `serve` prints, or `mcp-gateway dashboard-link`).
+  # A session ends after idle_timeout_secs without activity or absolute_timeout_secs after
+  # sign-in. The dashboard's own refresh is not activity. Both > 0; idle <= absolute.
+  # dashboard_session:
+  #   idle_timeout_secs: 1800        # 30 minutes
+  #   absolute_timeout_secs: 28800   # 8 hours
+
 # --- Audit log ---
 # Tamper-evident, hash-chained record of every tool call: who (credential kind,
 # key fingerprint, verified issuer and subject), outcome, request and response
