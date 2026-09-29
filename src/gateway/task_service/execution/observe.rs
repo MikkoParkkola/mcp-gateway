@@ -24,6 +24,8 @@ pub(crate) enum CommitStage {
     Dispatched,
     /// A terminal transition was committed (settle/cancel/recover).
     Transitioned,
+    /// A worker committed `input_required` and still owns the handoff.
+    InputRequired,
 }
 
 /// After a successful durable write at `stage`, before the worker proceeds.

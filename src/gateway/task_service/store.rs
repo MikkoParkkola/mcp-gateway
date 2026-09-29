@@ -30,6 +30,8 @@ use std::fs::rename;
 #[cfg(windows)]
 #[path = "store_windows.rs"]
 mod platform;
+#[path = "store_input.rs"]
+pub(crate) mod input;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 #[cfg(windows)]
 use platform::{
