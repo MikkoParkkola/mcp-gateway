@@ -540,8 +540,8 @@ async fn t7b_context_integrity_gates_direct_results() {
         .await;
         let (_, body) = post_direct(&fx, backend, "k-std", "read", json!({}), None, None).await;
         // The kernel withheld the result: its content is replaced, and the
-        // decision is recorded as an enforced deny. The attached audit still
-        // echoes matched evidence on both routes (#2204; T7c).
+        // decision is recorded as an enforced deny. T7c checks that nothing
+        // in the body, the attached audit included, echoes the evidence.
         let result = &body["result"];
         let content = result["content"].to_string();
         assert!(!content.contains(INJECTED), "{backend}: delivered: {body}");
