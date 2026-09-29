@@ -97,8 +97,13 @@ async fn discover(
 }
 
 fn names_backend(listing: &Value, backend: &str) -> bool {
-    // A server name as a value (`"work-mail"`) or as a tool prefix (`"work-mail:read"`).
-    let text = listing.to_string();
+    // A server name as a value (`"work-mail"`) or as a tool prefix (`"work-mail:read"`),
+    // anywhere but the echoed request: code mode repeats its `query` back.
+    let mut answer = listing.clone();
+    if let Some(fields) = answer.as_object_mut() {
+        fields.remove("query");
+    }
+    let text = answer.to_string();
     text.contains(&format!("\"{backend}\"")) || text.contains(&format!("\"{backend}:"))
 }
 
