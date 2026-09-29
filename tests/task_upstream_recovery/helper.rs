@@ -523,8 +523,25 @@ impl Gateway {
     /// SIGKILL: the crash the recovery table is about. A graceful stop would
     /// drain the worker and settle the row, which is a different test.
     pub async fn kill(&mut self) {
-        let _ = self.child.start_kill();
-        let _ = tokio::time::timeout(EXIT_BOUND, self.child.wait()).await;
+        use std::os::unix::process::ExitStatusExt;
+        self.child.start_kill().unwrap_or_else(|e| {
+            panic!(
+                "the child must still be running to be killed: {e}\n{}",
+                self.logs()
+            )
+        });
+        let status = tokio::time::timeout(EXIT_BOUND, self.child.wait())
+            .await
+            .unwrap_or_else(|_| panic!("the killed child was not reaped within {EXIT_BOUND:?}"))
+            .expect("the killed child's status reads");
+        // A child that had already exited on its own would report an exit code,
+        // and the restart that follows would not be testing a crash.
+        assert_eq!(
+            status.signal(),
+            Some(9),
+            "the child must die by SIGKILL, not exit on its own: {status}\n{}",
+            self.logs()
+        );
     }
 
     pub async fn terminate(&mut self) {

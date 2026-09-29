@@ -126,8 +126,9 @@ async fn first_record(root: &Path) -> String {
 }
 
 /// Send the create as principal A, wait until its record is on disk, then
-/// SIGKILL. The create future is dropped unread: the client never uses an ack.
-async fn create_then_kill_before_reading_the_ack(
+/// SIGKILL. The create future is dropped, so the client never uses an ack even
+/// if one arrived first.
+async fn create_then_kill_discarding_the_ack(
     root: &Path,
     config: &Path,
     port: u16,
@@ -192,7 +193,7 @@ async fn refused_like_a_never_minted_id(
 }
 
 /// Create boundary: the process dies with the record on disk and the ack
-/// unread. After a restart, principal A's byte-identical retry recovers the
+/// discarded. After a restart, principal A's byte-identical retry recovers the
 /// same handle, A can read it, B cannot, and nothing is submitted twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
@@ -201,8 +202,7 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
     let port = free_port();
     let config = config_with_two_principals(root.path(), port, &peer);
     let client = client();
-    let task_id =
-        create_then_kill_before_reading_the_ack(root.path(), &config, port, &client).await;
+    let task_id = create_then_kill_discarding_the_ack(root.path(), &config, port, &client).await;
     let on_disk = durable_record(root.path(), &task_id);
 
     let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
@@ -254,8 +254,7 @@ async fn a_restart_over_an_empty_store_does_not_recover_the_handle() {
     let port = free_port();
     let config = config_with_two_principals(root.path(), port, &peer);
     let client = client();
-    let task_id =
-        create_then_kill_before_reading_the_ack(root.path(), &config, port, &client).await;
+    let task_id = create_then_kill_discarding_the_ack(root.path(), &config, port, &client).await;
 
     let empty_config = config_with_two_principals(empty.path(), port, &peer);
     let mut restarted = Gateway::start(empty.path(), &empty_config, port, "second.log");
@@ -366,9 +365,13 @@ async fn a_settled_outcome_survives_kills_on_both_sides_of_settlement() {
         "the settled payload is the peer's own: {settled}"
     );
 
+    // Counted from before the restart, and the peer can no longer answer: a
+    // gateway that re-fetched the outcome at startup or on the read would be
+    // seen, and could not rebuild the payload from upstream.
+    let queries = peer.peer.queries();
+    peer.peer.set(Upstream::Unavailable);
     let mut restarted = Gateway::start(root.path(), &config, port, "fourth.log");
     restarted.wait_until_ready(&client).await;
-    let queries = peer.peer.queries();
     let read = restarted
         .post_as(&client, &tasks_get(40, &task_id), Some(KEY_A))
         .await;
