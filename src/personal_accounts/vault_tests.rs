@@ -609,3 +609,85 @@ fn a_held_lease_rechecks_only_against_the_vault_that_released_it() {
         );
     });
 }
+
+/// Real custody, except that `refresh_if_expired` hands back a lease from a
+/// grant replaced after the pre-refresh read: same account, another
+/// descriptor revision.
+struct ReplacedDuringRefresh {
+    inner: Arc<dyn AccountCustody>,
+    releases: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl AccountCustody for ReplacedDuringRefresh {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        self.inner.resolve(account).await
+    }
+
+    async fn refresh_if_expired(
+        &self,
+        account: &AccountKey,
+    ) -> Result<CredentialLease, CustodyError> {
+        let mut lease = self.inner.refresh_if_expired(account).await?;
+        lease.descriptor_revision = "f".repeat(64);
+        Ok(lease)
+    }
+
+    async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError> {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        self.inner.release(lease).await
+    }
+
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<RejectionOutcome, CustodyError> {
+        self.inner.refresh_after_rejection(lease).await
+    }
+}
+
+/// #2249: the fence runs again on the lease `refresh_if_expired` returned, so
+/// a grant replaced between the pre-refresh read and the refresh is refused
+/// before release, not served.
+#[test]
+fn a_lease_from_another_descriptor_revision_is_fenced_after_refresh() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed_sole_operator(tmp.path());
+
+    block_on(async {
+        let handle = CustodyHandle::start(
+            store_config(tmp.path()),
+            CountingProvider {
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            SilentObserver,
+            4,
+        )
+        .expect("custody starts against a seeded store");
+        let custody = Arc::new(ReplacedDuringRefresh {
+            inner: Arc::new(handle),
+            releases: AtomicUsize::new(0),
+        });
+        let vault = VaultStrategy::new(
+            Arc::clone(&custody) as Arc<dyn AccountCustody>,
+            descriptor(),
+            seeded_revision(),
+            true,
+        );
+
+        let error = vault
+            .prepare(Principal::SoleOperator, &backend())
+            .await
+            .expect_err("a lease from another descriptor revision must be fenced");
+
+        assert!(
+            matches!(error, PropagationError::AccountReconnectRequired(_)),
+            "{error}"
+        );
+        assert_eq!(
+            custody.releases.load(Ordering::SeqCst),
+            0,
+            "nothing is released"
+        );
+    });
+}
