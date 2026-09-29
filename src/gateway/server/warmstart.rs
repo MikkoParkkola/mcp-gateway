@@ -545,7 +545,7 @@ async fn warm_start_until_cached(
             if saw_empty_list.swap(false, ordering) {
                 backend.invalidate_tools_cache();
             }
-            let count = backend.get_tools_shared().await.map(|tools| tools.len())?;
+            let count = backend.warm_tools().await.map(|tools| tools.len())?;
             if count == 0 {
                 saw_empty_list.store(true, ordering);
             }
