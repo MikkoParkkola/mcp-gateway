@@ -197,4 +197,94 @@ if ! grep -q 'cleartext_http = cluster_internal' <<<"$logs"; then
   exit 1
 fi
 
-echo "helm kind real image passed: $IMAGE Ready, /livez 200, initialize + tools/list answered, wrong bearer 401 on $CLUSTER"
+# ---- CHART.2: api_keys mode on a persistent claim -------------------------
+# A second release, so the credential checks above stay independent. The key
+# Secret holds the digest (hash-key format: sha256:<hex of sha256(key)>), never
+# the key; the pod must then admit that key, refuse none and a wrong one, and
+# keep its state volume across a replaced pod.
+kill "$pf_pid" 2>/dev/null || true
+pf_pid=""
+RELEASE="$RELEASE-keys"
+KEY0="kind-api-key-not-a-real-credential-0123456789"
+DIGEST="sha256:$(printf %s "$KEY0" | sha256sum | awk '{print $1}')"
+"$KUBECTL" create secret generic mcp-gateway-keys -n "$NAMESPACE" \
+  --from-literal=ci="$DIGEST" \
+  --dry-run=client -o yaml | "$KUBECTL" apply -f -
+
+echo "== install api_keys mode with persistence =="
+if ! "$HELM" upgrade --install "$RELEASE" "$CHART" \
+    --namespace "$NAMESPACE" \
+    --set image.registry="$REGISTRY" \
+    --set image.repository="$REPOSITORY" \
+    --set image.tag="$TAG" \
+    --set image.pullPolicy=Never \
+    --set probes.enabled=true \
+    --set auth.mode=api_keys \
+    --set auth.existingSecret=mcp-gateway-keys \
+    --set 'auth.apiKeys[0].name=ci' \
+    --set 'auth.apiKeys[0].secretKey=ci' \
+    --set 'auth.apiKeys[0].backends[0]=*' \
+    --set persistence.enabled=true \
+    --wait --timeout "$TIMEOUT"; then
+  echo "FAIL: api_keys mode with persistence never became Ready on the real image" >&2
+  diagnose
+  exit 1
+fi
+
+keys_forward() {
+  local svc port
+  svc="$("$KUBECTL" get svc -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
+    -o jsonpath='{.items[0].metadata.name}')"
+  port="$("$KUBECTL" get svc -n "$NAMESPACE" "$svc" -o jsonpath='{.spec.ports[0].port}')"
+  [ -z "$pf_pid" ] || kill "$pf_pid" 2>/dev/null || true
+  "$KUBECTL" port-forward -n "$NAMESPACE" "svc/$svc" "39498:$port" >/dev/null 2>&1 &
+  pf_pid=$!
+  for _ in $(seq 1 30); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:39498/livez || true)" = "200" ] && return 0
+    sleep 1
+  done
+  echo "FAIL: /livez never answered on the api_keys release" >&2
+  diagnose
+  exit 1
+}
+init_code() { # bearer-or-empty -> HTTP status of an MCP initialize
+  curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "http://127.0.0.1:39498/mcp" \
+    ${1:+-H "Authorization: Bearer $1"} \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"helm-kind-real-image","version":"0"}}}' || true
+}
+keys_forward
+for probe in "key:$KEY0:200" "none::401" "wrong:wrong-$KEY0:401"; do
+  IFS=: read -r label bearer want <<<"$probe"
+  got="$(init_code "$bearer")"
+  if [ "$got" != "$want" ]; then
+    echo "FAIL: api_keys initialize with $label answered '$got', want $want" >&2
+    diagnose
+    exit 1
+  fi
+done
+
+echo "== the state volume survives a replaced pod =="
+pod="$("$KUBECTL" get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
+  -o jsonpath='{.items[0].metadata.name}')"
+"$KUBECTL" exec -n "$NAMESPACE" "$pod" -- sh -c 'echo kept > /var/lib/mcp-gateway/pvc-marker'
+"$KUBECTL" delete pod -n "$NAMESPACE" "$pod" --wait=true >/dev/null
+if ! "$KUBECTL" rollout status -n "$NAMESPACE" "deploy/$("$KUBECTL" get deploy -n "$NAMESPACE" \
+    -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.name}')" --timeout "$TIMEOUT"; then
+  echo "FAIL: the replacement pod never became Ready on its own claim" >&2
+  diagnose
+  exit 1
+fi
+pod="$("$KUBECTL" get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
+  --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
+kept="$("$KUBECTL" exec -n "$NAMESPACE" "$pod" -- cat /var/lib/mcp-gateway/pvc-marker 2>&1 || true)"
+if [ "$kept" != "kept" ]; then
+  echo "FAIL: the state volume did not survive the pod: '$kept'" >&2
+  diagnose
+  exit 1
+fi
+keys_forward
+[ "$(init_code "$KEY0")" = "200" ] || { echo "FAIL: the key stopped working after the restart" >&2; diagnose; exit 1; }
+
+echo "helm kind real image passed: $IMAGE Ready, /livez 200, initialize + tools/list answered, wrong bearer 401; api_keys key 200, none/wrong 401, state kept across a replaced pod on $CLUSTER"
