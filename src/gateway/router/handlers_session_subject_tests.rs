@@ -199,3 +199,65 @@ async fn a_subject_without_a_credential_owns_its_session() {
         "the subject lost its own session"
     );
 }
+
+/// A signed agent JWT for `client_id`, registered in `registry`.
+fn real_agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: &str) -> String {
+    let secret = format!("{client_id}-session-owner-secret-0123456789");
+    registry.register(crate::gateway::oauth::AgentDefinition {
+        client_id: client_id.to_string(),
+        name: "one display name for every agent".to_string(),
+        hs256_secret: Some(secret.clone()),
+        rs256_public_key: None,
+        scopes: vec![],
+        issuer: None,
+        audience: Some("session-owner".to_string()),
+    });
+    let now = chrono::Utc::now().timestamp();
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &json!({ "sub": client_id, "exp": now + 3600, "iat": now, "aud": "session-owner" }),
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("sign agent token")
+}
+
+#[tokio::test]
+async fn a_real_agent_token_owns_its_session_on_every_route() {
+    // Through the production auth layers, not a hand-inserted extension: a
+    // subject the layers resolved on POST only would lock the agent out of GET.
+    let (mut state, _store) = test_router_app_state().await;
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let (own, other) = (
+        real_agent_token(&registry, "agent-real-a"),
+        real_agent_token(&registry, "agent-real-b"),
+    );
+    Arc::get_mut(&mut state)
+        .expect("no other state handle")
+        .agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
+    let bearer = |token: &str, method: &str, session: Option<&str>| {
+        let mut request = request(caller(None, None), method, session);
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        request
+    };
+    let (status, id) = send(&state, bearer(&own, "POST", None)).await;
+    assert_eq!(status, StatusCode::OK, "the minting POST was refused");
+    let a = id.expect("a legacy POST is given a session");
+    let (status, got) = send(&state, bearer(&other, "GET", Some(&a))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(
+        got.as_deref(),
+        Some(a.as_str()),
+        "another agent resumed on GET"
+    );
+    let (status, got) = send(&state, bearer(&own, "GET", Some(&a))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        got.as_deref(),
+        Some(a.as_str()),
+        "the agent lost its own stream"
+    );
+    let (status, _) = send(&state, bearer(&own, "DELETE", Some(&a))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "the owner's DELETE");
+}
