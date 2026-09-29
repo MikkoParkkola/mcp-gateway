@@ -88,21 +88,17 @@ async fn an_unparsable_caller_credential_never_falls_back_to_the_static_one() {
     let transport = super::make_transport_with_headers(&format!("http://{addr}/mcp"), configured);
     // A newline cannot appear in a header value.
     let unparsable = format!("Bearer {}\nx", "caller-own");
-    // The notification may be refused or sent; either way the static
-    // credential must not be what the upstream sees.
-    let _ = transport
+    transport
         .notify_with_headers(
             "notifications/cancelled",
             None,
             &[("authorization".to_string(), unparsable)],
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
-    let seen = seen.lock().unwrap().clone();
-    assert!(
-        seen.iter()
-            .all(|auth| auth.as_deref() != Some("Bearer gateway-static")),
-        "the static credential went in the caller's place: {seen:?}"
-    );
+    // Sent, and with no credential of that name: neither the caller's value
+    // nor the static one in its place.
+    assert_eq!(*seen.lock().unwrap(), vec![None]);
 }
