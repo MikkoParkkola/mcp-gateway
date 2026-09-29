@@ -470,8 +470,9 @@ chosen maintenance window:
 ## Response signing
 
 `security.message_signing` adds an HMAC-SHA256 `_signature` block to results, so a
-client holding the shared secret can check that this gateway produced a result
-and that nothing changed it in transit.
+client holding the shared secret can check that the result came from a holder of
+that secret and was not modified after signing. Any holder of the secret can
+produce a valid MAC, so keep it to the gateway and the clients that verify.
 
 What is signed:
 
@@ -492,8 +493,9 @@ Mode, playbook steps, and every JSON-RPC error. `tools/call` on
 `gateway_invoke`.
 
 Key rotation is sender-side only. The gateway signs with `shared_secret` alone.
-`previous_secret` is validated at startup but never signs and never verifies
-anything; the gateway does not verify inbound signatures. To rotate:
+`previous_secret` is only checked (at least 32 bytes, not all zero) when the config
+loads. It never signs a response and is never used to check a signature; the
+gateway does not verify inbound signatures at all. To rotate:
 
 1. Give clients the new key and have them accept a signature from either key,
    matching on `key_id`.
