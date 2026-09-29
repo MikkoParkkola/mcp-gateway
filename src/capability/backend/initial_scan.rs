@@ -33,7 +33,7 @@ const HOLD_SCAN_UNTIL: &str = "MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN";
 impl CapabilityBackend {
     /// Wait before the startup scan reads any directory: the pause that lets
     /// the listener bind first, then (debug builds) the test gate.
-    pub(crate) async fn settle_before_initial_scan(&self) {
+    pub(crate) async fn settle_before_initial_scan() {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         #[cfg(debug_assertions)]
         if let Some(gate) = std::env::var_os(HOLD_SCAN_UNTIL) {

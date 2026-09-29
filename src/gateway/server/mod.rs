@@ -1404,7 +1404,7 @@ impl Gateway {
             let scan = async move {
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
-                    cap_backend_for_load.settle_before_initial_scan().await;
+                    CapabilityBackend::settle_before_initial_scan().await;
                 }
 
                 let mut total_caps = 0;
