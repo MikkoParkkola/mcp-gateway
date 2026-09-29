@@ -381,9 +381,9 @@ fn one_sealed(path: &Path) -> TransparencyLogger {
     l
 }
 
-/// #2242: the surviving active opens with a record only a writer that kept
-/// `.hwm` writes, so a missing `.hwm` is tail loss even with no sealed
-/// segment left.
+/// #2242: the surviving active opens with an open record, so the log went
+/// through segment handling and tail loss cannot be ruled out without `.hwm`,
+/// even with no sealed segment left.
 #[test]
 fn missing_hwm_after_last_sealed_expired_is_a_live_gap() {
     let dir = tempfile::tempdir().unwrap();
