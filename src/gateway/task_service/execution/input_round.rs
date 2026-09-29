@@ -38,16 +38,36 @@ const PRODUCE_SEAM_WAIT: Duration = Duration::from_secs(1);
 
 /// The worker's view of one owned task while it settles a response.
 pub(super) struct Settling<'a> {
-    pub(super) executor: &'a Arc<TaskExecutor>,
-    pub(super) state: &'a Arc<AppState>,
-    pub(super) owned: &'a OwnedCallerContext,
-    pub(super) call: &'a TaskCall,
-    pub(super) principal: &'a str,
-    pub(super) id: &'a str,
-    pub(super) revision: u64,
+    executor: &'a Arc<TaskExecutor>,
+    state: &'a Arc<AppState>,
+    owned: &'a OwnedCallerContext,
+    call: &'a TaskCall,
+    principal: &'a str,
+    id: &'a str,
+    revision: u64,
 }
 
-impl Settling<'_> {
+impl<'a> Settling<'a> {
+    pub(super) const fn new(
+        executor: &'a Arc<TaskExecutor>,
+        state: &'a Arc<AppState>,
+        owned: &'a OwnedCallerContext,
+        call: &'a TaskCall,
+        principal: &'a str,
+        id: &'a str,
+        revision: u64,
+    ) -> Self {
+        Self {
+            executor,
+            state,
+            owned,
+            call,
+            principal,
+            id,
+            revision,
+        }
+    }
+
     /// Settle `response`, resume a state-only round in place, or park a round
     /// that asks the client. The caller owns the handoff and the permit and
     /// drops both when this returns, so a parked row has no owner.
@@ -197,14 +217,14 @@ pub(crate) enum InputOutcome {
 
 impl TaskExecutor {
     /// Apply answers to an open round and, when they complete it, resume the
-    /// call as the caller of THIS update (`owned`).
+    /// call as the caller of THIS update (`caller`).
     ///
     /// Order: exclusive handoff, then one store write that takes the permit
     /// and moves the row to `working`, then the spawn. The handoff exists
     /// before the write, so a cancel racing it always finds an owner to signal.
     pub(crate) async fn provide_input(
         self: &Arc<Self>,
-        owned: OwnedCallerContext,
+        caller: OwnedCallerContext,
         principal: &str,
         id: &str,
         answers: Map<String, Value>,
@@ -253,7 +273,7 @@ impl TaskExecutor {
                     Resume {
                         handoff,
                         slot,
-                        owned,
+                        owned: caller,
                         principal: principal.to_owned(),
                         id: id.to_owned(),
                         revision,
@@ -316,15 +336,7 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
         return;
     };
     let response = inspect_settled(&state, &call, &id, response);
-    Settling {
-        executor: &executor,
-        state: &state,
-        owned: &owned,
-        call: &call,
-        principal: &principal,
-        id: &id,
-        revision,
-    }
-    .settle_or_ask(response, &mut cancel_rx)
-    .await;
+    Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
+        .settle_or_ask(response, &mut cancel_rx)
+        .await;
 }
