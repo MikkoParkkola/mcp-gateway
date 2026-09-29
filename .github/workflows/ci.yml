@@ -530,7 +530,7 @@ jobs:
       # Library and binary unit tests, the store suites included: both stores
       # run on Windows with owner-only DACLs (ADR-016). The integration targets
       # under tests/ are compiled above and not run here yet (W1, #1142).
-      - run: cargo test --all-features --lib --bins --no-fail-fast -- --show-output
+      - run: cargo test --all-features --tests --no-fail-fast -- --show-output
       # Owner-only rows that need real Windows state: a second, non-admin
       # account (the runner is an administrator, whose rights bypass DACLs), a
       # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
