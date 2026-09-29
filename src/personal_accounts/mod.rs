@@ -19,6 +19,8 @@ mod provider;
 pub(crate) mod refusal;
 mod revoke;
 #[cfg(test)]
+mod revoke_connected_tests;
+#[cfg(test)]
 pub(crate) mod revoke_fixture;
 mod service;
 mod storage;
