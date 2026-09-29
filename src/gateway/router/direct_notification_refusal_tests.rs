@@ -104,6 +104,7 @@ fn logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger> {
 /// per-user slots for `alpha` and `beta` record what they are handed.
 struct Gateway {
     router: axum::Router,
+    auth: Arc<crate::gateway::auth::ResolvedAuthConfig>,
     seen: Seen,
     _store: tempfile::TempDir,
     audit: [tempfile::NamedTempFile; 2],
@@ -140,6 +141,14 @@ fn propagation(strategy: PropagationStrategyKind, required: bool) -> IdentityPro
 }
 
 async fn gateway(config: BackendConfig, multi_user: bool) -> Gateway {
+    gateway_with_auth(config, multi_user, crate::config::AuthConfig::default()).await
+}
+
+async fn gateway_with_auth(
+    config: BackendConfig,
+    multi_user: bool,
+    auth: crate::config::AuthConfig,
+) -> Gateway {
     let seen = Seen::default();
     let backend = Arc::new(Backend::new(
         "ledger",
@@ -175,8 +184,11 @@ async fn gateway(config: BackendConfig, multi_user: bool) -> Gateway {
     meta.set_multi_user(multi_user);
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(logger(&audit[1]));
+    state_mut.auth_config = Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(&auth));
+    let auth = Arc::clone(&state_mut.auth_config);
     Gateway {
         router: create_router(state),
+        auth,
         seen,
         _store: store,
         audit,
@@ -352,4 +364,65 @@ async fn a_non_required_backend_keeps_the_shared_bucket_for_an_anonymous_caller(
     let (status, _) = notify(&gw, None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(gw.seen(), vec![("shared", NOTE.to_string())]);
+}
+
+/// A refused notification is excluded from client accounting: it neither
+/// resets the caller's failures (success) nor adds one (failure).
+#[tokio::test]
+async fn a_refused_notification_leaves_the_client_breaker_untouched() {
+    // Auth on, one key, and a client breaker that opens on the second failure.
+    let auth = crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![crate::config::ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(b"k-probe")),
+            expires_at: None,
+            name: "probe".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }],
+        client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 2,
+            ..crate::config::CircuitBreakerConfig::default()
+        }),
+        ..crate::config::AuthConfig::default()
+    };
+    let gw = gateway_with_auth(
+        config_with(Some(propagation(
+            PropagationStrategyKind::SignedAssertion,
+            true,
+        ))),
+        false,
+        auth,
+    )
+    .await;
+    gw.auth.record_client_failure("probe"); // 1 of 2
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/ledger")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer k-probe")
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } }).to_string(),
+        ))
+        .unwrap();
+    let response = gw.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // A refusal that counted a failure would already be open; one that
+    // recorded a success would have reset the count, so this one leaves it
+    // closed.
+    assert_eq!(
+        gw.auth.client_circuit_state("probe"),
+        Some(crate::failsafe::CircuitState::Closed)
+    );
+    gw.auth.record_client_failure("probe"); // 2 of 2
+    assert_eq!(
+        gw.auth.client_circuit_state("probe"),
+        Some(crate::failsafe::CircuitState::Open)
+    );
 }
