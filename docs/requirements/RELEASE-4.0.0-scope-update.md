@@ -21,7 +21,10 @@ Approved supplemental criteria: 86
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
-The approval source for these product requirements is the decision record;
+The approval source for these product requirements is the decision record,
+except MIK-7407.RESPONSE.1-5: MIK-7407 is a required 4.0 security issue the
+ledger lacked, added 2026-09-29 on the lead's instruction under the operator's
+full-4.0-scope ruling, with MIK-7407's own acceptance criteria as the text;
 protocol requirements additionally use the pinned specifications linked below.
 
 | ID | Required outcome | Delivery package |
