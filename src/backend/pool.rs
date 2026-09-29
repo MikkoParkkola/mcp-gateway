@@ -411,9 +411,6 @@ impl Backend {
     /// TOCTOU the reaper's atomic `remove_if` never had: with the removal now
     /// unconditional, the write guard is the only remaining mutual exclusion
     /// against a claim landing mid-eviction.
-    ///
-    /// Not `async` on purpose (#2245): eviction must never wait on a close,
-    /// so each close runs detached (`close_evicted`).
     pub fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
         // First pass: collect matching keys without holding a shard guard
         // across the removals, mirroring the reaper's two-pass shape.
