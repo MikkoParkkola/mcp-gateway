@@ -176,8 +176,54 @@ pub(crate) fn refusals_for(
     user: &Sid,
     what: crate::config::Protects,
 ) -> Vec<PrivacyRefusal> {
-    let _ = what;
-    refusals(inspection, user)
+    use crate::config::Protects;
+    if what == Protects::Secrecy {
+        return refusals(inspection, user);
+    }
+    // Integrity: others may read, never change; SYSTEM and Administrators are
+    // trusted as unix trusts root (#1718 design, owner ruling 2026-09-29).
+    let trusted = |sid: &Sid| sid == user || is_system_or_admins(sid);
+    let mut found = Vec::new();
+    match inspection.dacl.as_ref() {
+        None => found.push(PrivacyRefusal::NullDacl),
+        Some(aces) => {
+            for ace in aces {
+                match ace {
+                    Ace::Allowed { flags, mask, sid } => {
+                        if !trusted(sid) && flags & INHERIT_ONLY == 0 && mask & WRITE_BITS != 0 {
+                            found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
+                        }
+                    }
+                    Ace::Denied { .. } => {}
+                    Ace::Other { ace_type } => {
+                        found.push(PrivacyRefusal::OtherAceType(*ace_type));
+                    }
+                }
+            }
+        }
+    }
+    match inspection.owner.as_ref() {
+        Some(owner) if trusted(owner) => {}
+        Some(owner) => found.push(PrivacyRefusal::ForeignOwner(owner.to_sddl())),
+        None => found.push(PrivacyRefusal::Unreadable),
+    }
+    found
+}
+
+/// Every right that lets a foreign ACE change an Integrity file.
+const WRITE_BITS: u32 = windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA
+    | windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA
+    | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA
+    | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES
+    | windows_sys::Win32::Storage::FileSystem::DELETE
+    | windows_sys::Win32::Storage::FileSystem::WRITE_DAC
+    | windows_sys::Win32::Storage::FileSystem::WRITE_OWNER
+    | GENERIC_WRITE
+    | GENERIC_ALL;
+
+/// `S-1-5-18` (SYSTEM) or `S-1-5-32-544` (Administrators).
+fn is_system_or_admins(sid: &Sid) -> bool {
+    matches!(sid.to_sddl().as_str(), "S-1-5-18" | "S-1-5-32-544")
 }
 
 /// Every rule the open object breaks; empty when it is private.
