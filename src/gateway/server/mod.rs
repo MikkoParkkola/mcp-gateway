@@ -2940,8 +2940,8 @@ impl Gateway {
                     // access to the running config, and the stateless revision is
                     // specified over streamable HTTP; advertising it on a transport
                     // whose modern path is not wired would be a claim the gateway
-                    // cannot honour. Recorded as a limitation, not a decision that
-                    // stdio is excluded.
+                    // cannot honour. A limitation to lift, not a decision to exclude stdio
+                    // (docs/design/2026-08-31-discover-outbound-era-probe.md, DISCOVER.1 caveat).
                     "server/discover" => {
                         JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
                     }

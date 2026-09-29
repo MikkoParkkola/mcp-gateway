@@ -20,7 +20,7 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::config::BackendConfig;
 use crate::error::Result;
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolsListResult};
 use crate::transport::Transport;
 
 /// A resource the fixture backend owns, so `find_resource_owner` resolves to it
@@ -156,5 +156,107 @@ async fn row_13_logging_set_level_skips_a_modern_backend_and_forwards_to_a_legac
     assert!(
         legacy_mock.saw("logging/setLevel"),
         "a legacy peer still serves logging/setLevel and must still be forwarded"
+    );
+}
+
+/// A modern peer that also serves `tools/list`, so the catalogue fills through
+/// the same path a running gateway uses.
+struct ModernCatalogue;
+
+#[async_trait::async_trait]
+impl Transport for ModernCatalogue {
+    async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        let id = RequestId::Number(1);
+        match method {
+            "server/discover" => Ok(JsonRpcResponse::error(
+                Some(id),
+                crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
+                "declined",
+            )),
+            "tools/list" => Ok(JsonRpcResponse::success_serialized(
+                id,
+                ToolsListResult {
+                    tools: vec![Tool {
+                        name: "frobnicate_widget".to_string(),
+                        title: None,
+                        description: Some(
+                            "Frobnicate a widget. [keywords: frobnicate]".to_string(),
+                        ),
+                        input_schema: json!({"type": "object", "properties": {}}),
+                        output_schema: None,
+                        annotations: None,
+                        role: None,
+                        projection: None,
+                    }],
+                    next_cursor: None,
+                },
+            )),
+            _ => Ok(JsonRpcResponse::success_serialized(id, json!({}))),
+        }
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// MIK-7217.DISCOVER.6 — a backend whose era came from its own `server/discover`
+/// answer is searchable through `gateway_search`, and finding it leaves its
+/// breaker closed. The breaker half is pinned in `crate::backend::tests`; this
+/// is the search half, asked of a peer whose era is resolved, not assumed.
+#[tokio::test]
+async fn discover_6_a_modern_backend_is_visible_in_gateway_search_and_its_breaker_is_closed() {
+    let backend = Arc::new(Backend::new(
+        "modern-cat",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ModernCatalogue);
+    backend.set_transport_for_test(Arc::clone(&transport));
+    backend.resolve_era_for_test(&transport).await;
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "precondition: the fixture must construct a modern peer"
+    );
+    backend.get_tools_shared().await.expect("catalogue fills");
+
+    // The constructor the search end-to-end fixtures use, so this rides a path
+    // already proven to rank and return matches.
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::clone(&backend)));
+    let meta = MetaMcp::with_features(
+        registry,
+        None,
+        None,
+        Some(Arc::new(crate::ranking::SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(true);
+    let found = meta
+        .code_mode_search_anon(&json!({ "query": "frobnicate widget" }), None)
+        .await
+        .expect("gateway_search answers");
+
+    assert!(
+        found["matches"]
+            .as_array()
+            .is_some_and(|hits| hits.iter().any(|hit| hit["tool"]
+                .as_str()
+                .is_some_and(|tool| tool.contains("frobnicate_widget")))),
+        "a modern-era backend's tool must appear in gateway_search: {found}"
+    );
+    assert!(
+        !backend.is_circuit_tripped(),
+        "searching a modern-era backend must not trip its breaker"
     );
 }
