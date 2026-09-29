@@ -276,3 +276,49 @@ async fn append_timeout_is_counted() {
     );
     release.release();
 }
+
+/// #2252. A degraded log whose probe write hangs must be marked stalled by
+/// the probe's own timeout: the next admit then fails fast, without a second
+/// probe, and the timeout is counted. Under the production append bound
+/// (5 s) the 2 s probe bound is the one that expires.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn probe_timeout_marks_the_log_stalled() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logger(&dir, AuditFailurePolicy::FailClosed);
+    // Degrade it with one failed append, then let appends succeed again.
+    l.set_append_failure_for_test(true);
+    assert!(invocation(&l).await.is_err());
+    l.set_append_failure_for_test(false);
+    assert!(l.is_degraded());
+    let release = stall(&l);
+    *l.bound.limit.lock().unwrap() = super::bounded::AUDIT_APPEND_TIMEOUT;
+
+    let l2 = Arc::clone(&l);
+    let first = tokio::spawn(async move { l2.admit().await });
+    let guard = std::time::Instant::now();
+    while !release.is_entered() {
+        assert!(
+            guard.elapsed() < Duration::from_secs(60),
+            "the probe never started"
+        );
+        tokio::task::yield_now().await;
+    }
+    let probe_bound = super::degraded::AUDIT_PROBE_TIMEOUT;
+    tokio::time::advance(probe_bound.saturating_sub(Duration::from_millis(1))).await;
+    tokio::task::yield_now().await;
+    assert!(!first.is_finished(), "gave up before the probe bound");
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(first.await.unwrap().is_err());
+    assert!(l.is_stalled(), "the probe timeout did not mark the stall");
+
+    let probes = l.hooks.probes.load(std::sync::atomic::Ordering::Acquire);
+    // Under the paused clock a call that had to wait would hit this timeout.
+    let next = tokio::time::timeout(Duration::from_millis(1), l.admit()).await;
+    assert!(next.expect("the next admit waited").is_err());
+    assert_eq!(
+        l.hooks.probes.load(std::sync::atomic::Ordering::Acquire),
+        probes,
+        "no second probe while stalled"
+    );
+    release.release();
+}
