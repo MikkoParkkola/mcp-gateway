@@ -83,7 +83,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
-- Item 97
+- Item 98
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -216,7 +216,7 @@ without it.**
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
-| 97 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
+| 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2585,7 +2585,7 @@ the mode. The check runs before the mode rules, on the same handle as the read.
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
 
-## 97. A new audit log begins with an open record
+## 98. A new audit log begins with an open record
 
 In 3.x, the first record in a new audit log was the first caller event, at counter 1.
 
