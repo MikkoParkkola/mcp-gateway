@@ -321,6 +321,21 @@ impl TransparencyLogger {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
+    /// Instance-local one-shot I/O fault for the next append whose `kind`
+    /// field equals `kind`; other appends pass (D3-a R4).
+    #[cfg(test)]
+    pub(crate) fn fail_next_append_of_kind_for_test(&self, kind: &str) {
+        let _ = (self, kind);
+    }
+
+    /// Bounded appends refused at once because the log was stalled (D3-a):
+    /// lets a cell prove a spawned write took the bounded path.
+    #[cfg(test)]
+    pub(crate) fn refused_under_stall_for_test(&self) -> usize {
+        let _ = self;
+        0
+    }
+
     #[cfg(test)]
     pub(crate) fn append_attempts_for_test(&self) -> usize {
         self.append_attempts
