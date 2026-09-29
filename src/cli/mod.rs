@@ -315,6 +315,18 @@ pub enum Command {
         /// Gateway base URL (default as for `stats`).
         #[arg(short, long)]
         url: Option<String>,
+        /// PEM client certificate for a listener that requires one
+        /// (`mtls.require_client_cert`); pair with `--client-key`.
+        #[arg(long, env = "MCP_GATEWAY_CLIENT_CERT")]
+        client_cert: Option<std::path::PathBuf>,
+        /// PEM private key for `--client-cert`.
+        #[arg(long, env = "MCP_GATEWAY_CLIENT_KEY")]
+        client_key: Option<std::path::PathBuf>,
+        /// PEM CA the gateway's server certificate must chain to; replaces the
+        /// built-in roots. Without it, a config-derived URL on an mTLS listener
+        /// trusts only `mtls.ca_cert`.
+        #[arg(long, env = "MCP_GATEWAY_CA_CERT")]
+        ca_cert: Option<std::path::PathBuf>,
     },
 
     /// Lint capability YAMLs against agent-UX best practices

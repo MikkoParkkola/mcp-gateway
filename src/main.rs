@@ -103,15 +103,26 @@ async fn run() -> ExitCode {
             commands::run_stats_command(&effective_url).await
         }
         #[cfg(feature = "webui")]
-        Some(Command::DashboardLink { url }) => {
-            let base = commands::dashboard_link_base(
+        Some(Command::DashboardLink {
+            url,
+            client_cert,
+            client_key,
+            ca_cert,
+        }) => {
+            let flags = commands::LinkTlsFlags {
+                client_cert,
+                client_key,
+                ca_cert,
+            };
+            let target = commands::dashboard_link_base(
                 url,
+                flags,
                 || Config::load(config_path.as_deref()).map_err(|e| e.to_string()),
                 port_override,
                 host_override.as_deref(),
             );
-            match base {
-                Ok(base) => commands::run_dashboard_link_command(&base).await,
+            match target {
+                Ok((base, tls)) => commands::run_dashboard_link_command(&base, &tls).await,
                 Err(message) => {
                     eprintln!("dashboard-link: {message}");
                     ExitCode::FAILURE

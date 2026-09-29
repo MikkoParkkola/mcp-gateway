@@ -6,10 +6,33 @@
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// The environment variable the admin credential is read from.
 pub(crate) const TOKEN_ENV: &str = "MCP_GATEWAY_TOKEN";
+
+/// The TLS material the operator named on the command line (or in the
+/// matching environment variables).
+#[derive(Debug, Default, Clone)]
+pub struct LinkTlsFlags {
+    /// PEM client certificate presented to the listener.
+    pub client_cert: Option<PathBuf>,
+    /// PEM private key for `client_cert`.
+    pub client_key: Option<PathBuf>,
+    /// PEM CA the server certificate must chain to.
+    pub ca_cert: Option<PathBuf>,
+}
+
+/// What the link request trusts and presents.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LinkTls {
+    /// The only roots the server certificate may chain to; `None` keeps the
+    /// built-in roots.
+    pub(crate) ca: Option<PathBuf>,
+    /// Client certificate and key files.
+    pub(crate) identity: Option<(PathBuf, PathBuf)>,
+}
 
 /// The credential in [`TOKEN_ENV`], read through `lookup`.
 ///
@@ -41,12 +64,14 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
 /// The config load failure, when no `--url` was given.
 pub fn dashboard_link_base(
     url: Option<String>,
+    flags: LinkTlsFlags,
     load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
     port_override: Option<u16>,
     host_override: Option<&str>,
-) -> Result<String, String> {
+) -> Result<(String, LinkTls), String> {
+    let _ = (flags.client_cert, flags.client_key, flags.ca_cert);
     if let Some(url) = url {
-        return Ok(url);
+        return Ok((url, LinkTls::default()));
     }
     let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --url"))?;
     if let Some(port) = port_override {
@@ -56,11 +81,12 @@ pub fn dashboard_link_base(
         config.server.host = host.to_string();
     }
     let base = super::default_stats_url(&config.server.host, config.server.port);
-    Ok(if config.mtls.enabled {
+    let base = if config.mtls.enabled {
         base.replacen("http://", "https://", 1)
     } else {
         base
-    })
+    };
+    Ok((base, LinkTls::default()))
 }
 
 /// Refuse a target the admin credential must not be sent to: plain `http://`
@@ -101,7 +127,8 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 /// # Errors
 ///
 /// A message carrying the gateway's status or the transport failure.
-pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String> {
+pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+    let _ = (&tls.ca, &tls.identity);
     check_target(base)?;
     let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
@@ -133,9 +160,9 @@ pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String
 }
 
 /// Run the command against the gateway at `base`.
-pub async fn run_dashboard_link_command(base: &str) -> ExitCode {
+pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
     let result = match read_token(|name| std::env::var(name).ok()) {
-        Ok(token) => fetch_link(base, &token).await,
+        Ok(token) => fetch_link(base, &token, tls).await,
         Err(message) => Err(message),
     };
     match result {
@@ -153,20 +180,34 @@ pub async fn run_dashboard_link_command(base: &str) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{TOKEN_ENV, fetch_link, read_token};
+    use super::{LinkTls, LinkTlsFlags, TOKEN_ENV, read_token};
+
+    fn no_flags() -> LinkTlsFlags {
+        LinkTlsFlags::default()
+    }
+
+    /// No TLS material: the pre-#1832 request.
+    async fn fetch_link(base: &str, token: &str) -> Result<String, String> {
+        super::fetch_link(base, token, &LinkTls::default()).await
+    }
 
     #[test]
     fn the_base_url_never_falls_back_past_a_config_that_failed_to_load() {
         use super::dashboard_link_base;
-        let explicit =
-            dashboard_link_base(Some("http://h:1".into()), || Err("x".into()), None, None);
+        let explicit = dashboard_link_base(
+            Some("http://h:1".into()),
+            no_flags(),
+            || Err("x".into()),
+            None,
+            None,
+        );
         assert_eq!(
-            explicit.as_deref(),
+            explicit.map(|(base, _)| base).as_deref(),
             Ok("http://h:1"),
             "--url wins without a load"
         );
 
-        let failed = dashboard_link_base(None, || Err("bad yaml".into()), None, None)
+        let failed = dashboard_link_base(None, no_flags(), || Err("bad yaml".into()), None, None)
             .expect_err("a config that fails to load is not replaced by defaults");
         assert!(
             failed.contains("bad yaml") && failed.contains("--url"),
@@ -175,11 +216,18 @@ mod tests {
 
         let mut config = mcp_gateway::config::Config::default();
         config.server.port = 4100;
-        let plain = dashboard_link_base(None, || Ok(config.clone()), None, None);
-        assert_eq!(plain.as_deref(), Ok("http://127.0.0.1:4100"));
+        let plain = dashboard_link_base(None, no_flags(), || Ok(config.clone()), None, None);
+        assert_eq!(
+            plain.map(|(base, _)| base).as_deref(),
+            Ok("http://127.0.0.1:4100")
+        );
         config.mtls.enabled = true;
-        let tls = dashboard_link_base(None, || Ok(config.clone()), Some(4200), None);
-        assert_eq!(tls.as_deref(), Ok("https://127.0.0.1:4200"));
+        config.mtls.require_client_cert = false;
+        let tls = dashboard_link_base(None, no_flags(), || Ok(config.clone()), Some(4200), None);
+        assert_eq!(
+            tls.map(|(base, _)| base).as_deref(),
+            Ok("https://127.0.0.1:4200")
+        );
     }
 
     /// E5-T21: the credential never goes out in cleartext to the network.

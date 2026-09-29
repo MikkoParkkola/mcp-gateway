@@ -91,3 +91,133 @@ async fn the_credential_bypasses_an_environment_proxy() {
         "stdout: {stdout}"
     );
 }
+
+/// #1832 acceptance, through the built binary: against an mTLS listener that
+/// requires a client certificate, the command gets a link when given the CA
+/// and a client identity, and is refused without the identity before the
+/// bearer reaches the handler.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
+    use mcp_gateway::mtls::{CaParams, CertGenerator, LeafCertParams, MtlsConfig};
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ca = CertGenerator::init_ca(&CaParams {
+        cn: "link CA",
+        validity_days: 1,
+    })
+    .expect("CA");
+    let leaf = |cn: &str, san: &[&str]| {
+        CertGenerator::issue_leaf(
+            &LeafCertParams {
+                cn,
+                ou: None,
+                san_dns: san.iter().map(ToString::to_string).collect(),
+                san_uris: vec![],
+                validity_days: 1,
+            },
+            &ca.cert_pem,
+            &ca.key_pem,
+        )
+        .expect("leaf")
+    };
+    for (cert, stem) in [
+        (leaf("gateway", &["127.0.0.1"]), "server"),
+        (leaf("operator", &[]), "client"),
+    ] {
+        CertGenerator::write_to_dir(&cert, dir.path(), stem).expect("files");
+    }
+    CertGenerator::write_to_dir(&ca, dir.path(), "ca").expect("CA files");
+    let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+    let tls = mcp_gateway::mtls::build_tls_config(&MtlsConfig {
+        enabled: true,
+        server_cert: path("server.crt"),
+        server_key: path("server.key"),
+        ca_cert: path("ca.crt"),
+        require_client_cert: true,
+        ..Default::default()
+    })
+    .expect("the listener serve builds");
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&hits);
+    let app = axum::Router::new().route(
+        "/ui/api/dashboard-link",
+        axum::routing::post(move |headers: HeaderMap| {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                if headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer tok")
+                {
+                    Ok(axum::Json(serde_json::json!({
+                        "link": "https://127.0.0.1:1/dashboard?bootstrap=abc"
+                    })))
+                } else {
+                    Err(StatusCode::FORBIDDEN)
+                }
+            }
+        }),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let base = format!("https://{}", listener.local_addr().expect("addr"));
+    let config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls));
+    let server = axum_server::from_tcp_rustls(listener, config).expect("TLS listener");
+    tokio::spawn(async move { server.serve(app.into_make_service()).await });
+
+    let home = tempfile::tempdir().expect("home");
+    let run = |identity: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        cmd.args([
+            "dashboard-link",
+            "--url",
+            &base,
+            "--ca-cert",
+            &path("ca.crt"),
+        ]);
+        if identity {
+            cmd.args([
+                "--client-cert",
+                &path("client.crt"),
+                "--client-key",
+                &path("client.key"),
+            ]);
+        }
+        cmd.env("MCP_GATEWAY_TOKEN", "tok")
+            .env_remove("MCP_GATEWAY_CLIENT_CERT")
+            .env_remove("MCP_GATEWAY_CLIENT_KEY")
+            .env_remove("MCP_GATEWAY_CA_CERT")
+            .env("HOME", home.path())
+            .env("MCP_GATEWAY_CONFIG_DIR", home.path());
+        cmd
+    };
+    let (mut with_identity, mut without) = (run(true), run(false));
+    let (ok, refused) = tokio::task::spawn_blocking(move || {
+        (
+            with_identity.output().expect("runs"),
+            without.output().expect("runs"),
+        )
+    })
+    .await
+    .expect("join");
+
+    let stderr = String::from_utf8_lossy(&ok.stderr);
+    assert!(
+        ok.status.success(),
+        "exit {:?}; stderr: {stderr}",
+        ok.status
+    );
+    assert!(
+        String::from_utf8_lossy(&ok.stdout).contains("/dashboard?bootstrap=abc"),
+        "stderr: {stderr}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "no identity succeeded");
+    assert!(stderr.contains("--client-cert"), "stderr: {stderr}");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "the bearer reached the handler"
+    );
+}
