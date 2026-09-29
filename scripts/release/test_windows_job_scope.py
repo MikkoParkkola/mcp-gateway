@@ -16,7 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 def windows_job() -> str:
     text = (ROOT / ".github/workflows/ci.yml").read_text()
-    m = re.search(r"^  windows-check:\n(.*?)(?=^  [a-z0-9-]+:\n)", text, re.S | re.M)
+    m = re.search(r"^  windows-check:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.S | re.M)
     assert m, "windows-check job not found"
     return m.group(1)
 
@@ -24,7 +24,9 @@ def windows_job() -> str:
 def test_the_job_runs_every_test_target_with_no_skip_filter():
     job = windows_job()
     assert "cargo test --all-features --tests --no-fail-fast" in job
-    assert "--skip" not in job
+    # Exact match on purpose: any change to the command must revisit this guard.
+    runs = [l for l in job.splitlines() if "cargo test" in l]
+    assert not any("--skip" in l for l in runs), runs
 
 
 def test_no_met_criterion_cites_windows_execution_evidence():

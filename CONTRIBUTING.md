@@ -45,8 +45,8 @@ cargo kani --output-format=terse
 The `Windows check` job runs `cargo test --all-features --tests --no-fail-fast`: the
 library, the binary and every integration target under `tests/`, with no `--skip`
 filters. It also runs the privileged owner-only rows (`win_privileged::`, `--ignored`).
-Nothing else is counted as Windows coverage, and no release criterion cites Windows
-evidence the job does not produce (`scripts/release/test_windows_job_scope.py`).
+Nothing else is counted as Windows coverage, and no met release criterion cites Windows
+execution evidence (`scripts/release/test_windows_job_scope.py`).
 
 Every test that does not run on Windows carries a `#[cfg(unix)]` or `#[cfg(not(windows))]`
 gate. Each gate is class (c), unix-only by design, and is one of:
