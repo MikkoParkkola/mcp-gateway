@@ -2849,6 +2849,7 @@ verify (edited, unlinked or oversized).
 **Action:** treat the record as possible tail loss and investigate. To clear the live failure,
 archive the log's files together and let the gateway start a new log. Like the other
 `audit_segment_*` records (item 49), SIEM rules that match caller events can skip it.
+
 ## 102. Per-caller backend slots are capped
 
 **Startup:** no notice
