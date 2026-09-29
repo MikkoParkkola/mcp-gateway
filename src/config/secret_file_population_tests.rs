@@ -67,6 +67,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
     (
+        "src/config_reload/grant_audit_plan.rs",
+        "grant audit state: journal ids and grant digests; no secret",
+    ),
+    (
         "src/control_plane/export.rs",
         "audit export cursor and log; no secret, append-only",
     ),

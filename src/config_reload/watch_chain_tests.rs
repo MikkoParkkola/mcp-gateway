@@ -22,6 +22,7 @@ fn set(dirs: &[&Path]) -> BTreeSet<PathBuf> {
 
 /// Point `link` at `target` atomically, the way a deploy does: a new link
 /// renamed over the old one.
+#[cfg(target_os = "linux")]
 fn retarget(link: &Path, target: &Path) {
     // Named from the whole file name, not `with_extension`: for a dot-led
     // name like `..data` that can land on the link itself.
