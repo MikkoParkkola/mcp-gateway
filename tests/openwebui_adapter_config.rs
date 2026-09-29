@@ -1011,7 +1011,6 @@ fn enabled_store_yaml(dir: &std::path::Path, adapter_secret: &str, gateway_key: 
         ),
     )
     .expect("fixture env file must be writable");
-
     format!(
         "\
 env_files:
@@ -1031,8 +1030,8 @@ accounts:
   enabled: true
   deployment: single_process
   instance_id: openwebui-adapter-separation
-  store_dir: /var/lib/mcp-gateway/accounts/store
-  authority_dir: /var/lib/mcp-gateway/accounts/authority
+  store_dir: {1}/store
+  authority_dir: {1}/authority
   current_key_id: primary
   keys:
     primary: env:OWUI_SEP_STORE_KEY
@@ -1046,6 +1045,7 @@ accounts:
         - owui-gateway-key
 ",
         env_path.display(),
+        dir.display(),
     )
 }
 
