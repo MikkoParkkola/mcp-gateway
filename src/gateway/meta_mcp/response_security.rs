@@ -228,6 +228,55 @@ impl super::MetaMcp {
 }
 
 impl super::MetaMcp {
+    /// Inspect a task's result once, at settlement, under the targets the
+    /// synchronous call would have used (#2351). `tasks/get` serves what is
+    /// settled, so a refusal here is what every read sees.
+    ///
+    /// # Errors
+    /// [`crate::Error::ResponseFirewallRefused`] when the verdict refuses.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::unused_self, clippy::unnecessary_wraps)
+    )]
+    pub(crate) fn inspect_task_result(
+        &self,
+        targets: &[ResponsePolicyTarget],
+        task_id: &str,
+        result: &mut serde_json::Value,
+    ) -> crate::Result<()> {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            use crate::security::firewall::FirewallAction;
+            use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
+
+            let (server, tool) = targets.first().map_or(("gateway", "tasks/get"), |t| {
+                (t.server.as_str(), t.tool.as_str())
+            });
+            let correlation = ResponseCorrelation {
+                session_id: task_id,
+                caller: "task",
+                external_server: server,
+                external_tool: tool,
+            };
+            let verdict = firewall
+                .check_response_artifact(
+                    result,
+                    targets,
+                    &correlation,
+                    ResponseArtifactKind::FinalResponse,
+                    ResponseMutationPolicy::Redact,
+                )
+                .map_err(|_| crate::Error::ResponseFirewallRefused)?;
+            if !verdict.allowed || verdict.action == FirewallAction::Block {
+                tracing::warn!(task_id, "Firewall: task result blocked");
+                return Err(crate::Error::ResponseFirewallRefused);
+            }
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = (targets, task_id, result);
+        Ok(())
+    }
+
     /// Admit the whole client-visible question artifact without rewriting it.
     /// The bridge supplies authenticated targets and excludes opaque state.
     #[cfg_attr(

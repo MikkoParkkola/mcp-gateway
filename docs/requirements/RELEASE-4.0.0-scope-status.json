@@ -920,11 +920,20 @@
     },
     {
       "id": "MIK-7570.AUDIT.4",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-27 (D3-e); design decided 2026-09-28 (decision audit_4_owner_ratification). Not yet built; implementation tracked in #1869. Gap at source: the `identity grants` CLI only rewrites the grant file (src/commands/identity.rs:176, :199) and tells the user a running gateway applies the change on its next reload (:273-280); docs/identity_grants.md:259-261 states reloads reach only the tracing log; at startup the file is installed by load_configured_identity_grants (src/gateway/server/mod.rs:1186-1198) before the governance store opens (:1777). Why a journal: two independent reviews showed at source that startup reconciliation alone cannot see an add followed by a revoke between two loads, and that the CLI can edit while a gateway runs. The CLI therefore journals each change to a sidecar file and never writes the audit log itself (one-writer lease, #1570); the gateway ingests the journal. Design constraints kept: a file-driven change has no authenticated actor and none is synthesized (docs/internal/design/2026-09-22-live-identity-grant-reload.md:529-552); publish first, record second (:562-572); with auth disabled no governance store is built (src/gateway/server/control_plane_store.rs:76-81); an unopenable default store directory builds none either (:104). Acceptance test: RELEASE-4.0.0-scope-tests.md row MIK-7570.AUDIT.4. PROGRESS 2026-09-28, row stays pending: the CLI half of AUDIT4.1 merged in #2069 (769eb66d8). Each successful identity grants add, --replace and revoke appends one line to <grant file>.journal.jsonl (mode 0600) under one lock spanning the grant write and the append; a refused change appends nothing. Evidence: CI 36422097220 on ac571b31f; mutants 4 of 4 fail their named test in run 36422120703. Nothing reads the journal yet: gateway ingestion (AUDIT4.2-4.8) is #2090, so #1869 stays open."
+      "evidence": [
+        "src/identity_grants/journal_tests.rs",
+        "src/config_reload/grant_audit_tests.rs",
+        "src/config_reload/grant_audit_reload_tests.rs",
+        "src/config_reload/grant_audit_crash_tests.rs",
+        "src/config_reload/grant_audit_journal_tests.rs",
+        "src/gateway/server/identity_grants_tests.rs",
+        "docs/UPGRADING-4.0.md",
+        "docs/identity_grants.md"
+      ],
+      "note": "Graded 2026-09-29 (D3-e; design docs/design/2026-09-28-grant-change-journal.md rev 4, decision audit_4_owner_ratification). Journal (AUDIT4.1, #2069 merged 769eb66d8): each successful identity grants add, --replace and revoke appends one line to <grant file>.journal.jsonl (0600) under one lock with the grant write; a refused change appends nothing; CI 36422097220, mutants 4/4 RED in 36422120703. Ingestion and snapshot (AUDIT4.2-4.8, #2090 merged 5c3021827): the gateway ingests the journal at start and on every reload (watcher included) exactly once across crashes (no authenticated actor is recorded; action mutate_grant, grant_change field); a direct file edit is recorded out_of_band; lost history is indeterminate; each start records one loaded row per active grant and loaded_complete with the count before serving, and an incomplete run serves no grants; with auth on and grants on, a governance store that cannot open refuses the start; auth off writes only the tracing event; an append failure after an applied reload keeps the change and reports it unrecorded. Cells: identity_grants/journal_tests.rs t1a-t1f t10a (CLI journal); config_reload/grant_audit_tests.rs t2a t2b t4a t4b t4d t4e t4f t4l; grant_audit_reload_tests.rs t2c (watcher) t2d t2e t6 t6b; grant_audit_crash_tests.rs t3 t3cd t6 t7 t7c t8 t8b; grant_audit_journal_tests.rs t4g t4h t4i t4k; gateway/server/identity_grants_tests.rs t3a t3b t3cd t4c t5a t5b t6c t9 t12 (HTTP, stdio) t13. Red first: 36415426849, 36432522556, 36433326765, 36448660068, 36465839353. Green: CI 36475474885, Docker 36475474407. Mutants: 36469396993, 24/24 RED. UPGRADING-4.0 item 79. Follow-ups outside this criterion: #2185 (attribution for two spellings of one grant file), #1718 (Windows ACL on the audit state file)."
     },
     {
       "id": "MIK-7570.METRICS.2",
@@ -1076,6 +1085,72 @@
       "blocked_on": "none",
       "evidence": [],
       "note": "Pending. Umbrella issue #1625 tracks the backlog of unread automated review findings; the builder brief now blocks merge on unread bot comments. Decision row 25 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.1",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/router/tests/meta_firewall_verdict.rs:297",
+        "src/gateway/router/dispatch_parity_tests.rs:313",
+        "src/gateway/router/direct_guards.rs:101",
+        "src/gateway/router/response_pass.rs:34"
+      ],
+      "note": "Graded 2026-09-29 against MIK-7407's own AC. Meta HTTP tools/call: the router pass (response_pass.rs:34) replaces a Block or refused verdict with the -32600 refusal carrying the caller's id and no payload, read off the wire by meta_tools_call_refuses_delivery_when_response_firewall_blocks. Direct HTTP tools/call: direct_guards.rs response_blocked refuses on !allowed; t12_response_firewall_block_refuses_on_both_routes drives both routes. Merged before #2361; #2361 adds no change to this path."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.2",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:134",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:180",
+        "src/gateway/meta_mcp/response_delivery_tests.rs:306",
+        "src/gateway/router/tests/descriptor_withholding/redaction.rs:80"
+      ],
+      "note": "Closed by #2361 (c0b3f0312): direct tools/list goes through the router's refusing pass; gateway_list_tools, gateway_search_tools and Code Mode gateway_search inspect their raw value before serialisation and refuse on Block (a Block was redacted and served). Warn and redaction controls: the pinned-tool cell under a tools/list Warn rule serves the redacted list; inspect_discovery_value_redacts_credentials_when_not_blocking pins the non-Block arm. Mutants DIRECT and DISCBLOCK caught (run 36590084235). Discovery responses are inspected twice (canonical and served form), tracked as #2358 under RESPONSE.3."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.3",
+      "status": "pending",
+      "stage": "built",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/server/mod.rs:2972"
+      ],
+      "note": "Built, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.4",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:138",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:521",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:562",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:458",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:179",
+        "src/gateway/meta_mcp/response_security.rs:81",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:211",
+        "src/gateway/task_service/execution/worker.rs:476"
+      ],
+      "note": "Finalization runs the firewall, then signing, then the delivery record (response_security.rs finalize_response_after_inspection); a successful external gateway_invoke is signed over its final fields (signing_delivery_external_success_covers_all_supplied_final_fields) after the firewall's redaction (signing_delivery_one_firewall_redaction_precedes_final_mac); a firewall Block is never signed (signing_delivery_firewall_block_skips_invalid_context_and_signing_failure), nor is an error (signing_delivery_existing_error_bypasses_invalid_context_and_failure_counter) or an internal/absent origin (signing_delivery_internal_and_absent_origin_remain_unsigned). Detached tasks: #2361 inspects every retained result at settlement under the synchronous call's targets (worker.rs inspect_settled; recover_task_result for upstream-followed and owner-read recovery), independent of the admission acknowledgement; a blocked result is what the task settles on. Mutants SETTLE and TASKBLOCK caught (run 36610137167). Residual: an upstream-recovered refusal settles as -32603 rather than -32600 (#2357, 4.0.1); the payload is withheld either way."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.5",
+      "status": "pending",
+      "stage": "built",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/meta_mcp/response_security.rs:175",
+        "src/gateway/router/tests/meta_firewall_verdict.rs:564",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149"
+      ],
+      "note": "Built on HTTP: counted per-instance inspection fixtures for meta tools/call, tools/list and the discovery tools, with policy-target rules; the delivery-attempt event (record_response_delivery_attempt) hashes the final response after filtering and signing. Open: no counted stdio fixture (see RESPONSE.3), so 'every route' is not yet proven."
     }
   ],
   "decisions": [

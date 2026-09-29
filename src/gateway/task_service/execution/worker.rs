@@ -217,21 +217,21 @@ async fn run_dispatched(
     // A handle in the slot means the peer really did start a task: the
     // dispatch's own return is the `working` stub, not an answer, and settling
     // on it would report a job that has not run as finished.
-    match submission.as_ref().and_then(|slot| slot.handle()) {
-        Some(handle) => {
-            let job = job.expect("a handle is captured only for an armed job");
-            follow_upstream_job(
-                &executor,
-                &state,
-                &principal,
-                &id,
-                revision,
-                (job, handle),
-                &mut cancel_rx,
-            )
-            .await;
-        }
-        None => settle_response(&executor, &principal, &id, revision, response).await,
+    if let Some(handle) = submission.as_ref().and_then(|slot| slot.handle()) {
+        let job = job.expect("a handle is captured only for an armed job");
+        follow_upstream_job(
+            &executor,
+            &state,
+            &principal,
+            &id,
+            revision,
+            (job, handle),
+            &mut cancel_rx,
+        )
+        .await;
+    } else {
+        let response = inspect_settled(&state, &call, &id, response);
+        settle_response(&executor, &principal, &id, revision, response).await;
     }
 }
 
@@ -449,6 +449,41 @@ async fn settle_descriptor_refused(
          descriptor does not fit the durable record budget.",
     ));
     executor.settle_cas(principal, id, revision, event).await;
+}
+
+/// The response firewall on a native task result, under the targets the
+/// synchronous call would use (#2351): a refusal is what the task settles on.
+fn inspect_settled(
+    state: &crate::gateway::router::AppState,
+    call: &TaskCall,
+    id: &str,
+    mut response: crate::protocol::JsonRpcResponse,
+) -> crate::protocol::JsonRpcResponse {
+    if response.error.is_some() {
+        return response;
+    }
+    let Some(result) = response.result.as_mut() else {
+        return response;
+    };
+    let backend = crate::gateway::router::backend_tool_targets_for_call(
+        &state.meta_mcp,
+        &call.tool,
+        &call.arguments,
+    );
+    let targets =
+        crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
+    if state
+        .meta_mcp
+        .inspect_task_result(&targets, id, result)
+        .is_err()
+    {
+        response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+            response.id,
+            -32600,
+            "Response blocked by security firewall",
+        );
+    }
+    response
 }
 
 async fn settle_response(
