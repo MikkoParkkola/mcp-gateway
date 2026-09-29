@@ -154,6 +154,11 @@ pub(super) async fn require_admin_tool_access(
             format!("Tool '{tool_name}' requires admin access"),
         ))
     };
+    // Counted before the log check: a refusal is one with or without a log.
+    if verdict.is_err() {
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        denied(DenialRoute::Admin, DenialReason::AdminRequired);
+    }
     let Some(log) = log else {
         return verdict;
     };

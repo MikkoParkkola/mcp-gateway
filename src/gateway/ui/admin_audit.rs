@@ -29,12 +29,34 @@ pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     ))
 }
 
-/// The layer. With no audit log configured it passes every request through.
+/// The layer. With no audit log configured it passes every request through,
+/// and only counts a refusal (D4).
 async fn admin_action_layer(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Response {
+    let control_plane = request
+        .extensions()
+        .get::<MatchedPath>()
+        .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
+    let response = audited(&state, request, next).await;
+    // D4: every method, with or without a log. The control-plane pages are
+    // counted by their own route, which arrives with AUDIT.3 (D3).
+    if !control_plane
+        && matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        )
+    {
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        denied(DenialRoute::Ui, DenialReason::AdminRequired);
+    }
+    response
+}
+
+/// E1-f: admit, run and record a mutation; pass everything else through.
+async fn audited(state: &Arc<AppState>, request: Request, next: Next) -> Response {
     let Some(log) = state.transparency_log.clone() else {
         return next.run(request).await;
     };

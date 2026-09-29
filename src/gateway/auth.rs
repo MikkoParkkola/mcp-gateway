@@ -43,6 +43,7 @@ pub use dashboard::DashboardBootstrap;
 pub(crate) use dashboard::{Now, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
+use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 
 /// Type alias for our rate limiter
@@ -221,6 +222,17 @@ impl ResolvedAuthConfig {
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
         self.validate_token_with_origin(token)
             .map(|(client, _origin)| client)
+    }
+
+    /// Whether `token` is a configured API key past its expiry. Hashed again
+    /// only on the reject path, to tell an expired key from a wrong one (D4).
+    fn is_expired_key(&self, token: &str) -> bool {
+        use subtle::ConstantTimeEq;
+        let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+        self.api_keys.iter().any(|k| {
+            bool::from(presented.as_slice().ct_eq(k.digest.as_slice()))
+                && crate::config::api_key_expired(k.expires_at, chrono::Utc::now())
+        })
     }
 
     /// The same validation, also saying WHICH configured credential matched.
@@ -721,7 +733,8 @@ pub async fn auth_middleware(
     let has_authorization = request
         .headers()
         .contains_key(axum::http::header::AUTHORIZATION);
-    let mut dead_session = false;
+    // The kind a dead cookie is refused as, when it is refused on its own.
+    let mut dead_session = None;
     if let Some(handle) = session_cookie_value(request.headers()) {
         let touch = if has_authorization || is_poll(&request) {
             Touch::No
@@ -738,12 +751,11 @@ pub async fn auth_middleware(
                 return next.run(request).await;
             }
             SessionCheck::Valid => {}
-            // D4 (MIK-7570.METRICS.2) counts `session_expired` here; an
-            // unknown handle is not an expiry and is not counted.
-            SessionCheck::Expired | SessionCheck::Unknown => dead_session = true,
+            SessionCheck::Expired => dead_session = Some(AuthFailureKind::SessionExpired),
+            SessionCheck::Unknown => dead_session = Some(AuthFailureKind::InvalidCredential),
         }
     }
-    if dead_session {
+    if let Some(kind) = dead_session {
         // A dead handle answers for itself, unless the request carries
         // something else to decide it: a bearer beside a stale cookie (an API
         // client must not be locked out by it), a fresh bootstrap link (the
@@ -753,6 +765,7 @@ pub async fn auth_middleware(
         let is_bootstrap = request.uri().path() == "/dashboard"
             && request.uri().query().and_then(bootstrap_param).is_some();
         if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
+            auth_failure(kind);
             return session_ended_response(cookie_secure(&state));
         }
     }
@@ -770,7 +783,7 @@ pub async fn auth_middleware(
                 .strip_prefix(SESSION_COOKIE.as_bytes())
                 .is_some_and(|rest| rest.starts_with(b"="))
         });
-    if dead_session
+    if dead_session.is_some()
         && !sets_session
         && let Ok(value) = session_cookie("", 0, secure).parse()
     {
@@ -852,6 +865,7 @@ async fn authenticate_request(
     let token = presented_credential(request.headers());
 
     let Some(token) = token else {
+        auth_failure(AuthFailureKind::MissingCredential);
         warn!(path = %path, "Missing credential");
         return bearer_unauthorized_response(
             "Missing Authorization header. Use: Authorization: Bearer <token>",
@@ -885,7 +899,13 @@ async fn authenticate_request(
         return next.run(request).await;
     }
 
-    // 3. Reject
+    // 3. Reject. An expired key was matched and refused above, so it is
+    // counted as its own kind rather than as a wrong credential.
+    auth_failure(if auth_config.is_expired_key(token) {
+        AuthFailureKind::ExpiredApiKey
+    } else {
+        AuthFailureKind::InvalidCredential
+    });
     warn!(path = %path, "Invalid token");
     bearer_unauthorized_response("Invalid token")
 }

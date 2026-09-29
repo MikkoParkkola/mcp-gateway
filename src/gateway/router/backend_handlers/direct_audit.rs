@@ -97,11 +97,16 @@ pub(super) async fn record(
     call: DirectCall,
     answer: Answer,
 ) -> Answer {
+    let (status, Json(body)) = &answer;
+    let outcome = direct_outcome(*status, body);
+    // D4: counted before the log check, so auth off still counts.
+    if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body) {
+        use crate::security::security_metrics::{DenialRoute, denied};
+        denied(DenialRoute::Direct, reason);
+    }
     let Some(log) = state.transparency_log.as_ref() else {
         return answer;
     };
-    let (status, Json(body)) = &answer;
-    let outcome = direct_outcome(*status, body);
     // D1-d.1: a failed call has no response hash.
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // D2-f: the caller's W3C trace id, else a trace id; no session rung.

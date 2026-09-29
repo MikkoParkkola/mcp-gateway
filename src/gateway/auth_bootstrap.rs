@@ -8,6 +8,8 @@ use axum::http::Request;
 use axum::response::Response;
 use tracing::warn;
 
+use crate::security::security_metrics::{AuthFailureKind, auth_failure};
+
 use super::{
     AuthState, Now, Redemption, bearer_unauthorized_response, cookie_secure, session_cookie,
     session_limits,
@@ -72,6 +74,7 @@ pub(super) fn try_dashboard_bootstrap(
             // presented from elsewhere must die on first use. A wrong value
             // spends nothing.
             let spent = state.dashboard_bootstrap.consume(&candidate);
+            auth_failure(AuthFailureKind::BootstrapRefused);
             warn!(
                 peer_is_local,
                 looks_forwarded,
@@ -100,6 +103,7 @@ pub(super) fn try_dashboard_bootstrap(
         let has_admin_credential = state.auth_config.bearer_token.is_some()
             || state.auth_config.api_keys.iter().any(|k| k.admin);
         if !has_admin_credential {
+            auth_failure(AuthFailureKind::BootstrapRefused);
             warn!("Dashboard bootstrap unusable: no admin credential is configured");
             return Some(bearer_unauthorized_response(
                 "No admin credential is configured. Set auth.bearer_token or an admin \
@@ -127,6 +131,7 @@ pub(super) fn try_dashboard_bootstrap(
         }
         let Some(Redemption { not_after }) = state.dashboard_bootstrap.consume_capped(&candidate)
         else {
+            auth_failure(AuthFailureKind::BootstrapRefused);
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
                 "Bootstrap link is invalid or already used. Run `mcp-gateway \

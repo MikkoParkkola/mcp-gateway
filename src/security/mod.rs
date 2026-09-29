@@ -31,6 +31,7 @@ pub(crate) mod response_policy;
 pub mod response_scanner;
 pub mod sanitize;
 pub mod scope_collision;
+pub(crate) mod security_metrics;
 // Pure module; increment 2 of the ASI07 design adds its first caller, at
 // which point this `expect` stops being fulfilled and must be removed.
 #[cfg_attr(not(test), expect(dead_code))]
