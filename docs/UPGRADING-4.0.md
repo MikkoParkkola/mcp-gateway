@@ -122,7 +122,7 @@ backend" and "fails a capability file" first.**
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
-| 98 | Reserved: lands with #2293 | None yet |
+| 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 | 99 | Reserved: lands with #2295 | None yet |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
@@ -2688,6 +2688,30 @@ unchanged, and so is any `auth.bearer_token` spelling (`auto`, `env:`).
 
 **Action:** a personal gateway that added a client key beside its bearer token keeps exactly one
 of the two: remove `auth.bearer_token` or the extra API key.
+
+## 98. A new audit log begins with an open record
+
+**Startup:** no notice
+
+In 3.x, the first record in a new audit log was the first caller event, at counter 1.
+
+In 4.0 a new log (one with no records yet) begins with an `audit_segment_opened` record:
+`segment_seq` 0, counter 1, `prev_entry_hash` `genesis`. The first caller record is counter 2.
+A log that already holds records is not changed.
+
+With the record in place, `audit verify` fails a never-rotated log whose high-water mark is
+missing once any caller record follows the open record, so a tail cut is no longer read as
+clean. A log cut back to the open record alone still reads as a fresh log, as does a deleted
+log; only an anchor kept off the host catches that.
+
+The record is signed and chained like any other, so every consumer that follows the chain gets
+it: SIEM export and the NDJSON file sink forward it, the export metrics count it, and
+`audit verify` counts it in `entries_checked`. Readers that select records by session or kind
+(`audit show`, the dashboard's governance view) never show it.
+
+**Action:** where a SIEM rule, export consumer or script matches caller events, skip records
+whose `event` is `audit_segment_opened`. Chain and counter checks need no change: the sequence
+starts at 1 with no gap.
 
 ## 100. Proven identifiers are compared verbatim
 
