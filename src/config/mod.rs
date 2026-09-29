@@ -712,6 +712,12 @@ impl Config {
         if let Some(token) = self.key_server.admin_token.as_mut() {
             subst(token, &mut seen);
         }
+        // Names and digests only: `resolve_metrics_token` reads the reference
+        // itself, so the spelling stays. Without this a rotated token was
+        // never reported and the route kept the one it was built with (#2251).
+        if let Some(token) = &self.server.metrics_token {
+            let _names_only = record(token, &mut seen);
+        }
         // Record names only. Leave `env:` spellings in place so a rewrite cannot
         // persist decoded account key material.
         if let Some(accounts) = &self.accounts {
