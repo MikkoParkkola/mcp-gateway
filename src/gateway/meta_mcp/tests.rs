@@ -6247,5 +6247,7 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
     ));
 }
 
+#[path = "bridge_fallthrough_tests.rs"]
+mod bridge_fallthrough;
 #[path = "list_servers_tools_known_tests.rs"]
 mod list_servers_tools_known;

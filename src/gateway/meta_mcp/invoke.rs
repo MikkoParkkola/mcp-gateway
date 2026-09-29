@@ -144,6 +144,7 @@ use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 mod side_effect_markers;
+mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
@@ -2281,25 +2282,12 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        if let Some(interim) = &interim
-            && let Some(refused) = interim.undeclared(caller.input_capabilities)
-        {
-            warn!(
-                server,
-                tool,
-                trace_id,
-                request_key = refused.key,
-                method = refused.method,
-                "Backend asked for input of a type the client did not declare"
-            );
-            return Err(undeclared_input_request(server, tool, &refused));
-        }
+        undeclared_gate::refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
 
         // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
         // being handed a continuation envelope it has no vocabulary for. A 2025
-        // client cannot redeem one, so relaying it strands the exchange at both
-        // ends — the client holds a token it cannot spend and the backend holds
-        // a round nobody will finish.
+        // client does not know to send one back, so relaying it strands the
+        // exchange at both ends. The envelope is the fallback, not the path.
         //
         // Placed between the two gates on purpose. After MRTR.9, because
         // reaching this line means the question has already been found
@@ -2402,20 +2390,36 @@ impl MetaMcp {
                 // Stdio does not reach this arm. The serve loop passes a live
                 // channel (MIK-7387), so its legacy caller is asked in-band;
                 // the dispatchers outside it (a batch, `dispatch_single`)
-                // carry `NoClientChannel` but declare `Declared::NONE`, so
-                // `plan` refuses as `Refused` before any delivery is tried. A
+                // carry `NoClientChannel` but declare `Declared::NONE`, so the
+                // MRTR.9 gate above refuses the interim before the bridge. A
                 // stdio context that did fall through would mint, bound by its
                 // process nonce (MIK-7570.STDIO.1).
                 //
                 // ponytail: `run` walks rounds internally and a session lost on
                 // round two surfaces the same way, so the mint would replay
-                // prompts already answered. Needs a progress signal out of
-                // `run` to tell the two apart; not built, because no channel in
-                // tree fails later than round one.
+                // prompts already answered. `RoundsExhausted` carries its last
+                // round for exactly this; `Delivery` does not yet, because no
+                // channel in tree fails later than round one.
                 Err(crate::gateway::input_bridge::BridgeError::Delivery {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
                 }) => {}
+                // Out of rounds: hand back the LAST round, sealed (#569).
+                Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
+                    if let Some(last) = last {
+                        result = *last;
+                        interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+                    }
+                }
+                Err(BridgeError::Undeclared {
+                    key,
+                    method,
+                    reason,
+                }) => {
+                    return Err(undeclared_gate::bridge_refusal(
+                        &key, &method, reason, server, tool, trace_id,
+                    ));
+                }
                 // A policy refusal keeps its type across the bridge boundary.
                 // `error_response_preserving_status` carries a dedicated
                 // `ResponseFirewallRefused` arm that builds the delivery-refusal
@@ -2471,14 +2475,14 @@ impl MetaMcp {
                     // key must not be readmitted. `BackendFailed` is the only
                     // variant raised from the backend call itself; `NotAdmitted`
                     // was refused above the dispatch, and `Deadline`,
-                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and
-                    // `RoundsExhausted` all leave the backend parked on a
-                    // question that was never answered, and a backend that
-                    // stopped to ask has not acted yet — the premise the `Ok`
-                    // arm below rests on too. So their release-on-drop default
-                    // still stands. A round that never left the gateway — no
-                    // such backend, no such tool, an open circuit, a transport
-                    // that never connected — is `NotAdmitted` rather than
+                    // `RequestBudgetExhausted`, `Refused` and `Delivery` all
+                    // leave the backend parked on a question that was never
+                    // answered, and a backend that stopped to ask has not
+                    // acted yet — the premise the `Ok` arm below rests on too.
+                    // So their release-on-drop default still stands. A round
+                    // that never left the gateway — no such backend, no such
+                    // tool, an open circuit, a transport that never connected
+                    // — is `NotAdmitted` rather than
                     // `BackendFailed`, because `classify_bridged_dispatch_error`
                     // defers to the error type's own pre-dispatch allowlist; it
                     // is provably unexecuted, so it keeps the default too. Only

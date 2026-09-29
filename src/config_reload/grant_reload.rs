@@ -233,7 +233,7 @@ impl ReloadContext {
             };
             let mut hit = 0usize;
             for backend in self.registry.all() {
-                hit += backend.evict_identity_slots(&prefix).await;
+                hit += backend.evict_identity_slots(&prefix);
             }
             if hit == 0 {
                 matched_nothing += 1;
