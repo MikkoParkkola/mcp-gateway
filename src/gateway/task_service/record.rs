@@ -25,6 +25,10 @@ pub(super) const UPSTREAM_VERSION: u32 = 3;
 
 /// The record version that introduced [`Record::input_round`]. Spelled
 /// separately for the reason [`UPSTREAM_VERSION`] is.
+#[allow(
+    dead_code,
+    reason = "stub for the failing tests; used by the input-round change"
+)]
 pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 
 /// An open input round's continuation: what a resume needs and nothing else.

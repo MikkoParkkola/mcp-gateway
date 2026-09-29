@@ -25,6 +25,10 @@ pub(crate) enum CommitStage {
     /// A terminal transition was committed (settle/cancel/recover).
     Transitioned,
     /// A worker committed `input_required` and still owns the handoff.
+    #[allow(
+        dead_code,
+        reason = "stub for the failing tests; used by the input-round change"
+    )]
     InputRequired,
 }
 

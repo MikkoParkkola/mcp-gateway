@@ -5,6 +5,10 @@
 //!
 //! Every write here runs under the store's ordering lock on a blocking thread,
 //! like every other mutation, and is refused before anything is written.
+#![allow(
+    dead_code,
+    reason = "stubs for the failing tests; used by the input-round change"
+)]
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
