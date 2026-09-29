@@ -467,6 +467,45 @@ chosen maintenance window:
 5. Remove old trust only after every consumer has migrated and the operator has
    ended the rollback window. Retention and key disposal follow your PKI policy.
 
+## Response signing
+
+`security.message_signing` adds an HMAC-SHA256 `_signature` block to results, so a
+client holding the shared secret can check that this gateway produced a result
+and that nothing changed it in transit.
+
+What is signed:
+
+- Successful `gateway_invoke` results on `POST /mcp` and on stdio. The block is
+  added at delivery, after the response firewall, so it covers the result the
+  client receives. Every delivery is signed again, including cache hits and
+  idempotent replays, with that request's own `nonce` and timestamp.
+- The MAC input is the RFC 8785 (JCS) canonical form of `domain`
+  (`mcp-gateway-response-v2`), `body` (the result without `_signature`),
+  `request_id` (`{kind: "string"|"number", value}` from the JSON-RPC id), `alg`,
+  `version` (`2`), `nonce`, `ts` and `key_id`. The block carries `alg`, `sig`
+  (hex), `nonce`, `ts`, `key_id` and `version`.
+- A result holding an integer beyond ±2^53-1 is refused rather than signed.
+
+What is not signed: named backend tools called through the meta surface, Code
+Mode, playbook steps, and every JSON-RPC error. `tools/call` on
+`POST /mcp/{name}` is refused with -32001 while signing is on; use
+`gateway_invoke`.
+
+Key rotation is sender-side only. The gateway signs with `shared_secret` alone.
+`previous_secret` is validated at startup but never signs and never verifies
+anything; the gateway does not verify inbound signatures. To rotate:
+
+1. Give clients the new key and have them accept a signature from either key,
+   matching on `key_id`.
+2. Set the new `shared_secret` and a new `key_id`, then restart the gateway.
+3. Once no client needs the old key, remove it from the clients.
+
+Every `security.message_signing` field (`enabled`, `shared_secret`,
+`previous_secret`, `key_id`, `require_nonce`, `replay_window`) needs a restart. A
+config reload that changes any of them is refused with
+`config reload refused: security.message_signing.<field> requires restart` and
+leaves the running config untouched.
+
 ## Reverse Proxy
 
 Bind the gateway to `127.0.0.1` (default) and proxy from the public-facing server. SSE streaming requires disabled response buffering.

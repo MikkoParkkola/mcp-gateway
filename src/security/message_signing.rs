@@ -16,7 +16,8 @@
 //! - **Opt-in**: the whole subsystem is gated by `SecurityConfig::message_signing.enabled`.
 //!   When disabled, zero extra allocations occur on the hot path.
 //! - **Key rotation**: up to two active secrets (`shared_secret` + `previous_secret`).
-//!   Current key is tried first; previous key allows seamless rotation windows.
+//!   Only the current key signs; the previous key is validated but never
+//!   signs or verifies. Rotation is sender-side (see docs/DEPLOYMENT.md).
 //!
 //! # OWASP Reference
 //!
