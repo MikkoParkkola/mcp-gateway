@@ -119,7 +119,7 @@ async fn a_wedged_close_does_not_stall_the_idle_reaper() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timed_out_eviction_close_still_reaps_the_child() {
-    use super::pool_tests::{RealChildWedgedClose, is_alive, spawn_probe_child};
+    use super::pool_tests::{RealChildWedgedClose, spawn_probe_child};
 
     let (child, pid) = spawn_probe_child().await;
     let mut backend = per_user_backend("wedged-child");
@@ -139,7 +139,7 @@ async fn a_timed_out_eviction_close_still_reaps_the_child() {
     assert_eq!(evicted, 1);
 
     for _ in 0..40 {
-        if !is_alive(pid) {
+        if is_reaped(pid) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -195,4 +195,34 @@ async fn stop_drains_a_close_that_eviction_detached() {
         closed.load(Ordering::SeqCst),
         "stop returned before the evicted transport's close ran"
     );
+}
+
+/// Reaped means gone from the process table. A killed child nobody has waited
+/// on is a zombie: `is_alive` is false for it, `is_reaped` is not true (#2301).
+#[cfg(unix)]
+pub(super) fn is_reaped(pid: u32) -> bool {
+    super::pool_tests::process_state(pid).is_none()
+}
+
+/// #2301: the probe the reap tests use must tell a zombie from a reaped
+/// child. A killed child that nobody waits on is a zombie, so holding the
+/// `Child` without awaiting it fails `is_reaped`; awaiting it passes.
+#[cfg(unix)]
+#[tokio::test]
+async fn is_reaped_rejects_a_zombie_until_it_is_waited_on() {
+    let (mut child, pid) = super::pool_tests::spawn_probe_child().await;
+    child.start_kill().expect("signal the probe child");
+    for _ in 0..200 {
+        if !super::pool_tests::is_alive(pid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !super::pool_tests::is_alive(pid),
+        "the killed child never stopped running"
+    );
+    assert!(!is_reaped(pid), "a zombie was counted as reaped");
+    child.wait().await.expect("reap the probe child");
+    assert!(is_reaped(pid), "a waited-on child is still in the table");
 }
