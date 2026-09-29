@@ -156,7 +156,13 @@ impl Harness {
 
     /// Seed a 3.x credential under a BACKEND REGISTRY NAME.
     fn seed(&self, backend_name: &str, tag: &str) {
-        let path = self.legacy.token_path(backend_name, RESOURCE);
+        self.seed_at(backend_name, RESOURCE, tag);
+    }
+
+    /// Seed a 3.x credential hashed over `backend_url`, which is what 3.x
+    /// passed as the resource: the backend's own `http_url`.
+    fn seed_at(&self, backend_name: &str, backend_url: &str, tag: &str) {
+        let path = self.legacy.token_path(backend_name, backend_url);
         crate::gateway::test_helpers::write_owner_only(&path, legacy_json(tag)).expect("seed");
         #[cfg(unix)]
         {
@@ -274,6 +280,36 @@ fn the_override_names_the_file_when_the_backend_was_renamed_since_3_x() {
     assert_eq!(
         harness.stored_access_token().as_deref(),
         Some("renamed-access-token")
+    );
+}
+
+/// #2262: 3.x hashed the token file over the backend's `http_url`, not the
+/// descriptor resource. When the two differ, the file must still be found.
+#[test]
+fn the_3_x_file_is_found_under_the_backend_url_when_the_resource_differs() {
+    const BACKEND_URL: &str = "https://mcp.example.test/v1/mcp/stream";
+    let mut harness = Harness::new("");
+    match &mut harness
+        .config
+        .backends
+        .get_mut("gdrive")
+        .expect("the fixture binds gdrive")
+        .transport
+    {
+        crate::config::TransportConfig::Http { http_url, .. } => {
+            *http_url = BACKEND_URL.to_owned();
+        }
+        _ => panic!("the fixture's gdrive backend is HTTP"),
+    }
+    harness.seed_at("gdrive", BACKEND_URL, "moved");
+
+    let report = harness
+        .migrate(None)
+        .expect("the file 3.x wrote under the backend URL must be found");
+    assert!(report.written);
+    assert_eq!(
+        harness.stored_access_token().as_deref(),
+        Some("moved-access-token")
     );
 }
 
