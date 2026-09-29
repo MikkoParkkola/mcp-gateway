@@ -127,6 +127,15 @@ pub(crate) struct ChainSigner {
     key_id: String,
 }
 
+// Only the key id: the key pair is secret material.
+impl std::fmt::Debug for ChainSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChainSigner")
+            .field("key_id", &self.key_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ChainSigner {
     /// Build the signer from a 32-byte Ed25519 seed and its 1..64-byte key id.
     pub(crate) fn from_seed(seed: &[u8], key_id: &str) -> Result<Self> {

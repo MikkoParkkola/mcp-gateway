@@ -21,7 +21,7 @@ const fn default_chain_max_links() -> usize {
 }
 
 /// `security.signature_chain`: Ed25519 chain identity and emission policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignatureChainConfig {
     /// Secret reference resolving to a base64 32-byte Ed25519 seed.
@@ -36,18 +36,31 @@ pub struct SignatureChainConfig {
     pub max_links: usize,
 }
 
+// `signing_key` may be a literal seed, so `Debug` never prints it (CWE-532).
+impl std::fmt::Debug for SignatureChainConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignatureChainConfig")
+            .field("signing_key", &"<redacted>")
+            .field("key_id", &self.key_id)
+            .field("emit", &self.emit)
+            .field("max_links", &self.max_links)
+            .finish()
+    }
+}
+
 // The implementation commit wires both into config loading and reload.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "stub until the signature chain is wired")
 )]
 impl SignatureChainConfig {
-    /// Resolve the secret reference and validate the seed and key id.
-    /// Errors name the field, never the seed.
+    /// Resolve the secret reference, validate the seed and key id, and build
+    /// the signer. The decoded seed lives only inside the signer; errors name
+    /// the field, never the seed.
     pub(crate) fn resolve_with_env(
         &self,
         overlay: &crate::config::EnvOverlay,
-    ) -> crate::Result<Self> {
+    ) -> crate::Result<crate::security::signature_chain::ChainSigner> {
         use base64::Engine as _;
         let invalid = |field: &str, rule: &str| {
             crate::Error::ConfigValidation(format!("security.signature_chain.{field} {rule}"))
@@ -58,16 +71,15 @@ impl SignatureChainConfig {
         let seed = crate::config::secret_ref::SecretRef::parse(&self.signing_key)
             .resolve("security.signature_chain.signing_key", overlay)?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(seed.trim());
-        if !bytes.is_ok_and(|bytes| bytes.len() == 32) {
-            return Err(invalid(
+        match bytes {
+            Ok(bytes) if bytes.len() == 32 => {
+                crate::security::signature_chain::ChainSigner::from_seed(&bytes, &self.key_id)
+            }
+            _ => Err(invalid(
                 "signing_key",
                 "must be a base64 32-byte Ed25519 seed",
-            ));
+            )),
         }
-        Ok(Self {
-            signing_key: seed,
-            ..self.clone()
-        })
     }
 
     /// Name of the first identity field that differs between the running and
