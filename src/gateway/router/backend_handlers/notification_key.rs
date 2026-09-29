@@ -40,6 +40,17 @@ pub(super) async fn resolve(
             }
         }
     } else {
+        // A credential the transport cannot carry is refused before it is
+        // minted, so the log never records a mint for a notification that is
+        // not sent (#2310). With no principal nothing is minted: the resolver
+        // decides, and a non-required backend keeps its static path.
+        if idp_cfg.is_some()
+            && !backend.transport_carries_identity_headers()
+            && state.meta_mcp.has_principal_for(name, caller)
+        {
+            refuse_audited(state, name, caller, audience, CANNOT_CARRY).await;
+            return Err(());
+        }
         match state
             .meta_mcp
             .resolve_propagation_credential_held(name, caller)
@@ -61,6 +72,7 @@ pub(super) async fn resolve(
         // Sent without its caller's credential, the notification would carry
         // the backend's static one: refuse it instead (#2292).
         if !backend.transport_carries_identity_headers() {
+            refuse_audited(state, name, caller, audience, CANNOT_CARRY).await;
             return Err(());
         }
         // A forwarded credential is audited as a request's is, and not
@@ -92,6 +104,10 @@ pub(super) async fn resolve(
     }
     Ok(Resolved { headers, binding })
 }
+
+/// The `idp_refuse` reason for a credential the backend's transport cannot
+/// carry (#2310).
+const CANNOT_CARRY: &str = crate::identity_propagation::TRANSPORT_CANNOT_CARRY_HEADERS;
 
 /// What a forwarded notification carries: the caller's credential headers
 /// and the session bucket. No `Debug`: the headers are credentials.
