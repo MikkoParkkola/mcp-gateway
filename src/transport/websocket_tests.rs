@@ -377,6 +377,32 @@ async fn send_message_succeeds_with_live_channel() {
     assert_eq!(msg, Message::Text("hello".into()));
 }
 
+#[tokio::test]
+async fn request_times_out_when_the_outbound_queue_is_full() {
+    let t = WebSocketTransport::new(
+        "ws://localhost:9999",
+        HashMap::new(),
+        std::time::Duration::from_millis(100),
+        None,
+    );
+    // A stalled writer: capacity 1, filled, and never drained.
+    let (tx, _rx) = channel::<Message>(1);
+    tx.try_send(Message::Text("fill".into())).unwrap();
+    *t.inner.outbound_tx.lock().await = Some(tx);
+
+    // The outer bound turns a hang into a failure instead of a stuck suite.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        t.request("tools/list", None),
+    )
+    .await
+    .expect("the configured timeout must cover the enqueue");
+    assert!(
+        matches!(result, Err(Error::BackendTimeout(_))),
+        "{result:?}"
+    );
+}
+
 fn test_transport(url: &str) -> Arc<WebSocketTransport> {
     WebSocketTransport::new(
         url,
