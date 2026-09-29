@@ -67,11 +67,28 @@ impl MetaMcp {
         backend: &Backend,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Option<(Vec<(String, String)>, Option<String>)> {
-        let proof = CallerProof::new(
+        self.catalogue_credential_for(backend, Self::proof_of(caller))
+            .await
+    }
+
+    /// What `caller` proved: its verified identity, else its credential's
+    /// provenance.
+    pub(super) fn proof_of<'a>(caller: &super::MetaMcpCallerContext<'a>) -> CallerProof<'a> {
+        CallerProof::new(
             caller.verified_identity,
             CallerProvenance::classify(caller.credential_principal),
-        );
-        self.catalogue_credential_for(backend, proof).await
+        )
+    }
+
+    /// Whether `backend` has no view at all for `caller`: it is `required`
+    /// and the resolver would find no principal, so
+    /// [`Self::catalogue_credential_for`] omits it. Known here without a mint,
+    /// for a reader that only counts (#2346).
+    pub(super) fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required)
+            && self.principal_for_server(&backend.name, caller).is_none()
     }
 
     /// Who the resolver would resolve `server`'s credential for, if anyone.

@@ -216,22 +216,30 @@ impl MetaMcp {
     /// `gateway_list_servers` — the servers this caller may reach, with
     /// kill-switch and circuit-breaker state. `tools_count` counts the tools
     /// it could invoke over the warm cache; a cold cache does not hide a server.
+    /// A `required` backend this caller has no view of reads as unenumerated:
+    /// its shared-slot cache is not this caller's catalogue (#2346).
     #[allow(clippy::unnecessary_wraps)]
     pub(super) async fn list_servers(
         &self,
-        scope: super::InvokeScope<'_>,
+        caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Result<Value> {
+        let scope = caller.scope();
+        let proof = Self::proof_of(caller);
         let mut servers: Vec<Value> = Vec::new();
         for b in self.backends.all() {
             if !self.admits_backend(&b.name, scope, session_id) {
                 continue;
             }
-            let admitted = b
-                .get_cached_tools_snapshot()
-                .iter()
-                .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
-                .count();
+            let hidden = self.has_no_view_for(&b, proof);
+            let admitted = if hidden {
+                0
+            } else {
+                b.get_cached_tools_snapshot()
+                    .iter()
+                    .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
+                    .count()
+            };
             let status = b.status();
             let killed = self.kill_switch.is_killed(&status.name);
             let mut entry = json!({
@@ -240,7 +248,7 @@ impl MetaMcp {
                 "transport": status.transport,
                 "tools_count": admitted,
                 // Consult this before reading tools_count == 0 as "empty".
-                "tools_known": status.tools_known,
+                "tools_known": status.tools_known && !hidden,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
             });

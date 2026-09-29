@@ -191,3 +191,43 @@ async fn optional_backend_and_operator_views_are_unchanged() {
         );
     }
 }
+
+/// #2346: the server list names a `required` backend but does not count its
+/// shared-slot cache for a caller that has no view of it; the sole operator
+/// still gets the count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() {
+    let (meta, _dispatches, _custody) = gateway(false);
+    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let seeded = backend
+        .get_tools_for_binding(None, &[])
+        .await
+        .expect("the shared slot fills");
+    assert!(
+        !seeded.is_empty(),
+        "premise: the shared snapshot holds the tool"
+    );
+
+    let row = |listing: Value| {
+        listing["servers"]
+            .as_array()
+            .and_then(|servers| servers.iter().find(|s| s["name"] == REQUIRED).cloned())
+            .expect("the required backend is still named")
+    };
+    let anonymous = row(meta
+        .list_servers(&caller_as(None, Some("")), None)
+        .await
+        .expect("list_servers answers"));
+    assert_eq!(anonymous["tools_count"], 0, "anonymous: {anonymous}");
+    assert_eq!(anonymous["tools_known"], false, "anonymous: {anonymous}");
+
+    let operator = row(meta
+        .list_servers(&caller_as(None, Some("operator")), None)
+        .await
+        .expect("list_servers answers"));
+    assert_eq!(
+        operator["tools_count"],
+        seeded.len(),
+        "operator: {operator}"
+    );
+}
