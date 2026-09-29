@@ -312,6 +312,10 @@ struct Stream<'a> {
     /// The oldest survivor's link to an expired segment, checked at the end
     /// because its anchoring expiry record lives in a newer segment.
     anchor: Option<(u64, String, u64)>,
+    /// The oldest survivor opens with an open record: this log went through
+    /// segment handling, so `.hwm` is expected even with no sealed sibling
+    /// left (#2242).
+    opened_oldest: bool,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -339,6 +343,7 @@ impl<'a> Stream<'a> {
             result: VerifyResult::default(),
             expiries: BTreeMap::new(),
             anchor: None,
+            opened_oldest: false,
         }
     }
 
@@ -477,6 +482,7 @@ impl Stream<'_> {
                 }
                 return Ok(()); // a pre-D6 segment 0 starts at genesis
             }
+            self.opened_oldest = true;
             Self::check_open_seq(entry, counter, expected, file)?;
             let prev_hash = field_str(entry, "prev_entry_hash")
                 .unwrap_or_default()
@@ -674,8 +680,11 @@ impl Stream<'_> {
         }
         let sealed_present = files.iter().any(|(s, _)| s.is_some());
         let last = self.prev.as_ref().map_or(0, |p| p.0);
+        // Disk-full expiry can take the last sealed segment, so the open
+        // record is the evidence then. An active cut to empty leaves none and
+        // reads as a fresh log; only an external anchor catches that (#2276).
         let gap = match hw {
-            None if sealed_present => {
+            None if sealed_present || self.opened_oldest => {
                 Some("high-water mark missing: tail loss cannot be ruled out".to_string())
             }
             Some(h) if last < h.counter => Some(format!(

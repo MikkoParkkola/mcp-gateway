@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::rotation::{EV_EXPIRED, EV_SEALED, EV_TORN, WriteFault};
+use super::rotation::{EV_EXPIRED, EV_OPENED, EV_SEALED, EV_TORN, WriteFault};
 use super::rotation_tests::{append, cfg, event, lines, log_path, rotate_n, verify};
 use super::segments::{list_segments, sealed_path, sibling};
 use super::*;
@@ -342,4 +342,96 @@ fn rotation_leaves_no_degraded_window() {
     );
     assert!(list_segments(&path).unwrap().len() >= 50);
     assert!(verify(&path, false).ok);
+}
+
+/// A log whose only sealed segment disk-full expiry removed, with `.hwm`
+/// deleted and the active tail cut back by two records.
+fn expired_last_sealed_then_tail_cut(path: &Path) {
+    let l = one_sealed(path);
+    l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+    append(&l, 1);
+    l.arm_write_fault(None);
+    (2..5).for_each(|i| append(&l, i));
+    drop(l);
+    assert!(
+        list_segments(path).unwrap().is_empty(),
+        "no sealed segment left"
+    );
+    assert!(
+        verify(path, false).ok,
+        "positive control: intact log verifies"
+    );
+    std::fs::remove_file(sibling(path, "hwm")).unwrap();
+    let mut all = lines(path);
+    all.truncate(all.len() - 2);
+    std::fs::write(
+        path,
+        all.iter()
+            .fold(String::new(), |acc, v| acc + &v.to_string() + "\n"),
+    )
+    .unwrap();
+}
+
+/// A fail-closed, expire-oldest logger with one sealed segment.
+fn one_sealed(path: &Path) -> TransparencyLogger {
+    let l = TransparencyLogger::open(cfg(path, 12, false))
+        .unwrap()
+        .with_failure_policy(AuditFailurePolicy::FailClosed);
+    rotate_n(&l, path, 1);
+    l
+}
+
+/// #2242: the surviving active opens with an open record, so the log went
+/// through segment handling and tail loss cannot be ruled out without `.hwm`,
+/// even with no sealed segment left.
+#[test]
+fn missing_hwm_after_last_sealed_expired_is_a_live_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    expired_last_sealed_then_tail_cut(&path);
+    let r = verify(&path, false);
+    assert!(!r.ok, "tail loss with no .hwm verified clean");
+    let msg = r.error_message.unwrap();
+    assert!(msg.contains("high-water mark missing"), "{msg}");
+}
+
+/// Archive mode keeps its split: the same state warns, never fails.
+#[test]
+fn missing_hwm_after_last_sealed_expired_warns_in_archive_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    expired_last_sealed_then_tail_cut(&path);
+    let r = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Archive).unwrap();
+    assert!(r.ok, "{:?}", r.error_message);
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.contains("high-water mark missing")),
+        "{:?}",
+        r.warnings
+    );
+}
+
+/// Cutting the head as well drops the open record, but not the evidence: the
+/// first surviving record then links to a hash that is not genesis.
+#[test]
+fn head_cut_after_last_sealed_expired_still_fails_live_verify() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    expired_last_sealed_then_tail_cut(&path);
+    let all = lines(&path);
+    assert_eq!(
+        event(&all[0]),
+        Some(EV_OPENED),
+        "the head is the open record"
+    );
+    std::fs::write(
+        &path,
+        all[1..]
+            .iter()
+            .fold(String::new(), |acc, v| acc + &v.to_string() + "\n"),
+    )
+    .unwrap();
+    let r = verify(&path, false);
+    assert!(!r.ok, "a head-cut active with no .hwm verified clean");
 }
