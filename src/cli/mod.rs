@@ -310,6 +310,13 @@ pub enum Command {
         url: Option<String>,
     },
 
+    /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
+    DashboardLink {
+        /// Gateway base URL (default as for `stats`).
+        #[arg(short, long)]
+        url: Option<String>,
+    },
+
     /// Lint capability YAMLs against agent-UX best practices
     ///
     /// Validates one or more capability files (or directories) against the

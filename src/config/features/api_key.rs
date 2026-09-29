@@ -213,7 +213,7 @@ impl AuthConfig {
                 }
             }
         }
-        Ok(())
+        self.dashboard_session.validate()
     }
 
     /// One WARN per key that has already expired. Load does not fail on it:

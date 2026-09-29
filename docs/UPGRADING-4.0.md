@@ -66,6 +66,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 67
 - Item 68
 - Item 70
+- Item 71
 - Item 72
 - Item 73
 - Item 74
@@ -184,7 +185,7 @@ without it.**
 | 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
 | 69 | Reserved: lands with a pending change | None yet |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
-| 71 | Reserved: lands with a pending change | None yet |
+| 71 | Dashboard sessions end after 30 minutes idle or 8 hours total; the dashboard's own refresh is not activity; an ended session gets a 401 that clears the cookie | Log in again with `mcp-gateway dashboard-link`; set `auth.dashboard_session` to change the limits |
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
@@ -1974,6 +1975,55 @@ reached the log.
 **Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
+With an HTTPS `server.public_url` on a plain-HTTP listener (the `tls_terminated_upstream` shape),
+the link is refused with 409 whichever way it is opened, until #2130 lands: enable `mtls` so the
+listener serves HTTPS, or remove `public_url`, to sign in by link.
+
+## 71. Dashboard sessions expire, and logout ends them
+
+A dashboard session opened from the startup link used to last as long as the gateway
+process. Its cookie said `Max-Age=86400`, but the server never enforced that, so a copied
+cookie kept working. There was no logout.
+
+In 4.0:
+
+- A session ends after 30 minutes without activity, or 8 hours after sign-in, whichever
+  comes first. The cookie's `Max-Age` matches the 8-hour limit.
+- The dashboard's own 5-second refresh does not count as activity, so an unattended tab
+  signs out at the idle limit. Clicks and page changes in `/ui` do count.
+- Both limits are measured on the monotonic and the wall clock, so a machine that sleeps
+  overnight wakes to an ended session.
+- The dashboard has a **Log out** button. `POST /dashboard/logout` ends the session on the
+  server, not only in the browser, redirects to `/ui`, and works while the audit log is
+  unavailable.
+- A request with an ended session cookie gets a 401 that says the session ended and clears
+  the cookie, instead of "Missing Authorization header". A bearer token sent with it is
+  still honoured, and on a public path the request proceeds as unauthenticated.
+- `mcp-gateway dashboard-link` asks the running gateway for a fresh single-use link, so
+  signing in again needs no restart. It reads the static bearer token or an admin API key
+  from `MCP_GATEWAY_TOKEN`, never from an argument. The link still opens only from the
+  machine running the gateway, so a gateway bound to a network address answers 409.
+  The endpoint behind it, `POST /ui/api/dashboard-link`, refuses a dashboard session and an
+  SSO login with 403.
+
+Sessions are held in memory by each replica. Run the dashboard against one replica, or use
+sticky sessions.
+
+**Action:** none for most installs. To change the limits:
+
+```yaml
+auth:
+  dashboard_session:
+    idle_timeout_secs: 1800      # 30 minutes
+    absolute_timeout_secs: 28800 # 8 hours
+```
+
+Both must be above zero, and the idle limit may not exceed the absolute one; the gateway
+refuses to start or reload otherwise. A reload applies shorter limits to sessions already
+open; a longer absolute limit reaches sessions opened after it, because a browser keeps the
+cookie lifetime it was given.
+
+Library users: `DashboardBootstrap::issue_session` and `session_is_valid` are removed.
 
 ## 72. Env files are polled, and a failed reload is retried
 
