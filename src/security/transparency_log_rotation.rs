@@ -522,15 +522,13 @@ pub(super) fn hwm_missing_in(seg: &Path) -> io::Result<Option<u64>> {
     use std::io::BufRead;
     let file = File::open(seg).map_err(segments::ctx("open", seg))?;
     let mut earliest: Option<u64> = None;
-    // Byte lines: a corrupt middle line is skipped, never allowed to block
-    // an expiry.
+    // Every line is parsed: a raw substring pre-filter is defeated by a JSON
+    // escape, which leaves the hash and signature valid. A corrupt middle
+    // line is skipped, never allowed to block an expiry.
     for line in io::BufReader::new(file).split(b'\n') {
         let Ok(line) = String::from_utf8(line?) else {
             continue;
         };
-        if !line.contains(EV_HWM_MISSING) && !line.contains(HWM_MISSING_AT) {
-            continue;
-        }
         let Ok((counter, _, event, v)) = record_head(&line) else {
             continue;
         };

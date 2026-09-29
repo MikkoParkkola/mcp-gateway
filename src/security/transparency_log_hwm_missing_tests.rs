@@ -187,6 +187,39 @@ fn the_mark_outlives_retention() {
     assert_live_fails_on_mark(&path);
 }
 
+/// A JSON escape in the marker's event keeps its hash valid; expiry still
+/// carries the finding, so no raw-text match can be the carry test.
+#[test]
+fn an_escaped_marker_still_outlives_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    drop(TransparencyLogger::open(cfg(&path, 1, false)).unwrap());
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let escaped = raw.replace(
+        &format!("\"{MARK}\""),
+        "\"\\u0061udit_segment_hwm_missing\"",
+    );
+    assert_ne!(raw, escaped, "the marker was rewritten");
+    std::fs::write(&path, escaped).unwrap();
+    assert_live_fails_on_mark(&path);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let newest = |p: &Path| list_segments(p).unwrap().last().map_or(0, |s| s.seq + 1);
+    let target = newest(&path) + 5;
+    let mut i = 0;
+    while newest(&path) < target {
+        append(&l, i);
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+    drop(l);
+    assert!(marks(&path).is_empty(), "the marker's segment expired");
+    assert_live_fails_on_mark(&path);
+}
+
 /// Disk-full expiry of the segment holding the marker carries the finding.
 #[test]
 fn the_mark_outlives_disk_full_expiry() {
