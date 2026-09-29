@@ -2408,6 +2408,10 @@ satisfy `require_id` and `known_agents` again, set
 `security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
 their source (item 27). Nothing changes with agent identity disabled.
 
+`require_id` with no proof source (no `agent_auth`, no `mtls`, hatch off) used to load and then
+refuse every call; the gateway now refuses to start, naming the fix. Duplicate `principal_labels`
+entries for one principal also fail at load, and the hatch logs a warning on every load.
+
 ## 92. Six meta-tools leave the default tool list
 
 `gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
