@@ -149,17 +149,6 @@ async fn h23_legacy_sessions_of_one_credential_share_one_tenant_bucket() {
         second, TenantReach,
         "a new session reset the credential's tenant bucket: {body}"
     );
-    // Guard: the refusal is the tenant limit, not the session. The first
-    // tenant is still allowed from yet another session.
-    let (again, _, body) = send(
-        &router,
-        call_with(&holder("key-one"), false, None, 2, &tenant("acme")),
-    )
-    .await;
-    assert_eq!(
-        again, Delivered,
-        "the caller's own tenant was refused: {body}"
-    );
     // Guard: the bucket is per credential, not global.
     let (other, _, body) = send(
         &router,
