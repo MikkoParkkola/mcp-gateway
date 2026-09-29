@@ -327,3 +327,28 @@ async fn cancel_aborts_a_worker_resuming_a_state_only_round() {
     std::assert_eq!(status_of(&after), "cancelled", "{after}");
     std::assert_eq!(mock.calls(), 2);
 }
+
+/// A completing update whose request is dropped mid-flight never leaves the
+/// task `working` with no worker: the round is either still open or it is
+/// resumed to the backend's answer. Mutant: the completing write awaited on
+/// the request future, with the spawn after it.
+#[tokio::test]
+async fn a_dropped_completing_update_never_strands_the_task() {
+    for delay_us in [0_u64, 200, 1_000, 5_000] {
+        let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+        let (state, _store) = state_with(&mock).await;
+        let id = parked(&state, &format!("dropped-{delay_us}")).await;
+        let _ = tokio::time::timeout(
+            Duration::from_micros(delay_us),
+            post(&state, "key-a", completing(2, &id)),
+        )
+        .await;
+        settle_quiet().await;
+        let current = get_task(&state, "key-a", &id).await;
+        if status_of(&current) == "input_required" {
+            continue;
+        }
+        let settled = poll_until_terminal(&state, "key-a", &id).await;
+        assert_carries_the_backend_result(&settled);
+    }
+}
