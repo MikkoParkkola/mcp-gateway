@@ -11,9 +11,16 @@
 //! never uses the ack. That proves a client that lost its ack can recover the
 //! same handle. It does not prove the kill landed between commit and ack.
 //!
-//! Unix only, like the harness it reuses: `Gateway::kill` is a unix `SIGKILL`.
-
-#![cfg(unix)]
+//! The two principals are delegated OIDC bearers from a temporary HTTPS
+//! issuer: with auth on, task creation needs a verified caller identity, and a
+//! static API key carries none.
+//!
+//! Unix-non-Apple only: `Gateway::kill` is a unix `SIGKILL`, and the child can
+//! be told to trust the temporary issuer's CA only through `SSL_CERT_FILE`,
+//! which the gateway's TLS verifier honours on that branch alone (see
+//! `task_upstream_recovery_sdk/pins.rs`). macOS CI builds tests without
+//! running them.
+#![cfg(all(unix, not(target_vendor = "apple")))]
 
 #[path = "task_upstream_recovery/helper.rs"]
 #[allow(
@@ -21,10 +28,17 @@
     reason = "shared fixture; this target drives only part of it"
 )]
 mod helper;
+#[path = "task_upstream_recovery_sdk/issuer.rs"]
+mod issuer;
+#[path = "task_upstream_recovery_sdk/pins.rs"]
+#[allow(dead_code, reason = "the issuer reads only its bounds")]
+mod pins;
 
 use std::path::{Path, PathBuf};
 
-use mcp_gateway::config::{ApiKeyConfig, AuthConfig, DashboardSessionConfig};
+use mcp_gateway::config::{
+    Config, KeyServerPolicyConfig, KeyServerProviderConfig, PolicyMatchConfig, PolicyScopesConfig,
+};
 use serde_json::{Value, json};
 
 use helper::{
@@ -33,8 +47,8 @@ use helper::{
     task_invoke, tasks_get, write_config,
 };
 
-const KEY_A: &str = "crash-boundary-key-a";
-const KEY_B: &str = "crash-boundary-key-b";
+const EMAIL_A: &str = "principal-a@crash.test";
+const EMAIL_B: &str = "principal-b@crash.test";
 const IDEMPOTENCY_KEY: &str = "crash-boundary-create";
 /// Well formed, and minted by nobody.
 const NEVER_MINTED: &str = "task-00000000-0000-4000-8000-0000000000fe";
@@ -53,23 +67,47 @@ fn client() -> reqwest::Client {
         .expect("bounded fixture HTTP client")
 }
 
-fn api_key(name: &str, secret: &str) -> ApiKeyConfig {
-    ApiKeyConfig {
-        key: None,
-        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(secret.as_bytes())),
-        expires_at: None,
-        name: name.to_string(),
-        rate_limit: 0,
-        backends: vec![BACKEND.to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
+/// Two principals proven by delegated OIDC bearers. With auth on, task creation
+/// needs a verified caller identity, which a static API key does not carry;
+/// the key-server path is the one that proves who the caller is.
+struct Principals {
+    issuer: issuer::Issuer,
+    ca: String,
+    a: String,
+    b: String,
+}
+
+impl Principals {
+    async fn start(root: &Path) -> Self {
+        let issuer = issuer::Issuer::start(root).await;
+        Self {
+            ca: issuer.ca_file.display().to_string(),
+            a: issuer.mint("principal-a-subject", EMAIL_A),
+            b: issuer.mint("principal-b-subject", EMAIL_B),
+            issuer,
+        }
+    }
+
+    /// The gateway child, trusting only this run's issuer CA.
+    fn gateway(&self, root: &Path, config: &Path, port: u16, log_name: &str) -> Gateway {
+        Gateway::start_with_env(
+            root,
+            config,
+            port,
+            log_name,
+            &[("SSL_CERT_FILE", self.ca.as_str())],
+        )
     }
 }
 
 /// The shared fixture config with authentication ON and two principals. With
 /// it off every caller is one principal and no owner check can fail.
-fn config_with_two_principals(root: &Path, port: u16, peer: &PeerGuard) -> PathBuf {
+fn config_with_two_principals(
+    root: &Path,
+    port: u16,
+    peer: &PeerGuard,
+    principals: &Principals,
+) -> PathBuf {
     let path = write_config(
         root,
         &Fixture {
@@ -81,30 +119,53 @@ fn config_with_two_principals(root: &Path, port: u16, peer: &PeerGuard) -> PathB
         },
     );
     let yaml = std::fs::read_to_string(&path).expect("the fixture config reads back");
-    let mut doc: serde_yaml::Value =
-        serde_yaml::from_str(&yaml).expect("the fixture config is YAML");
-    let auth = AuthConfig {
-        enabled: true,
-        bearer_token: None,
-        api_keys: vec![api_key("principal-a", KEY_A), api_key("principal-b", KEY_B)],
-        public_paths: vec!["/health".to_string()],
-        client_circuit_breaker: None,
-        single_user: false,
-        dashboard_session: DashboardSessionConfig::default(),
-    };
-    doc["auth"] = serde_yaml::to_value(&auth).expect("the auth config serializes");
+    let mut config: Config =
+        serde_yaml::from_str(&yaml).expect("the gateway's own config type reloads its own YAML");
+    config.auth.enabled = true;
+    // `/health` only, so `/mcp` demands a credential.
+    config.auth.public_paths = vec!["/health".to_string()];
     // Auth on requires an audit log (UPGRADING-4.0 item 43).
-    let audit = root.join("audit").join("log.jsonl");
-    doc["security"]["transparency_log"]["enabled"] = true.into();
-    doc["security"]["transparency_log"]["path"] = audit.to_string_lossy().into_owned().into();
+    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.path = root
+        .join("audit")
+        .join("log.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    config.key_server.enabled = true;
+    config.key_server.delegated_bearer = true;
+    // The tokens are minted once and span every restart of a row.
+    config.key_server.max_oidc_token_age_secs = 3_600;
+    config.key_server.oidc = vec![KeyServerProviderConfig {
+        issuer: principals.issuer.url.clone(),
+        jwks_uri: None,
+        discovery_url: None,
+        auto_discover: true,
+        audiences: vec![issuer::AUDIENCE.to_string()],
+        allowed_domains: Vec::new(),
+    }];
+    config.key_server.policies = [EMAIL_A, EMAIL_B]
+        .into_iter()
+        .map(|email| KeyServerPolicyConfig {
+            match_criteria: PolicyMatchConfig {
+                email: Some(email.to_string()),
+                issuer: principals.issuer.url.clone(),
+                ..PolicyMatchConfig::default()
+            },
+            // Both hold the same grant, so a refusal can only be ownership.
+            scopes: PolicyScopesConfig {
+                backends: vec![BACKEND.to_string()],
+                tools: vec!["*".to_string()],
+                rate_limit: 0,
+            },
+        })
+        .collect();
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&doc).expect("the patched config serializes"),
+        serde_yaml::to_string(&config).expect("the patched config serializes"),
     )
     .expect("the patched config is written inside the test's own temp root");
     path
 }
-
 /// The id of the first committed record in the store, waiting for it. Temp
 /// files end in `.tmp.<pid>.<n>` and never match.
 async fn first_record(root: &Path) -> String {
@@ -137,12 +198,13 @@ async fn create_then_kill_discarding_the_ack(
     config: &Path,
     port: u16,
     client: &reqwest::Client,
+    principals: &Principals,
 ) -> String {
-    let mut gateway = Gateway::start(root, config, port, "first.log");
+    let mut gateway = principals.gateway(root, config, port, "first.log");
     gateway.wait_until_ready(client).await;
     let body = task_invoke(1, IDEMPOTENCY_KEY);
     let task_id = {
-        let create = gateway.post_as(client, &body, Some(KEY_A));
+        let create = gateway.post_as(client, &body, Some(principals.a.as_str()));
         tokio::pin!(create);
         tokio::select! {
             biased;
@@ -163,20 +225,21 @@ async fn refused_like_a_never_minted_id(
     peer: &PeerGuard,
     method: &str,
     task_id: &str,
+    principals: &Principals,
 ) {
     let before = peer.peer.queries();
     let real = gateway
         .post_as(
             client,
             &modern(90, method, json!({ "taskId": task_id })),
-            Some(KEY_B),
+            Some(principals.b.as_str()),
         )
         .await;
     let fabricated = gateway
         .post_as(
             client,
             &modern(90, method, json!({ "taskId": NEVER_MINTED })),
-            Some(KEY_B),
+            Some(principals.b.as_str()),
         )
         .await;
     assert_eq!(
@@ -204,19 +267,41 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
     let root = temp_root("crash-create-ack");
     let peer = serve_peer(Upstream::Working).await;
     let port = free_port();
-    let config = config_with_two_principals(root.path(), port, &peer);
+    let principals = Principals::start(root.path()).await;
+    let config = config_with_two_principals(root.path(), port, &peer, &principals);
     let client = client();
-    let task_id = create_then_kill_discarding_the_ack(root.path(), &config, port, &client).await;
+    let task_id =
+        create_then_kill_discarding_the_ack(root.path(), &config, port, &client, &principals).await;
     let on_disk = durable_record(root.path(), &task_id);
 
-    let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
+    let mut restarted = principals.gateway(root.path(), &config, port, "second.log");
     restarted.wait_until_ready(&client).await;
 
-    refused_like_a_never_minted_id(&restarted, &client, &peer, "tasks/get", &task_id).await;
-    refused_like_a_never_minted_id(&restarted, &client, &peer, "tasks/cancel", &task_id).await;
+    refused_like_a_never_minted_id(
+        &restarted,
+        &client,
+        &peer,
+        "tasks/get",
+        &task_id,
+        &principals,
+    )
+    .await;
+    refused_like_a_never_minted_id(
+        &restarted,
+        &client,
+        &peer,
+        "tasks/cancel",
+        &task_id,
+        &principals,
+    )
+    .await;
 
     let read = restarted
-        .post_as(&client, &tasks_get(10, &task_id), Some(KEY_A))
+        .post_as(
+            &client,
+            &tasks_get(10, &task_id),
+            Some(principals.a.as_str()),
+        )
         .await;
     assert_eq!(
         read.pointer("/result/taskId").and_then(Value::as_str),
@@ -229,7 +314,11 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
     );
 
     let retried = restarted
-        .post_as(&client, &task_invoke(1, IDEMPOTENCY_KEY), Some(KEY_A))
+        .post_as(
+            &client,
+            &task_invoke(1, IDEMPOTENCY_KEY),
+            Some(principals.a.as_str()),
+        )
         .await;
     assert_eq!(
         retried.pointer("/result/taskId").and_then(Value::as_str),
@@ -257,16 +346,22 @@ async fn a_restart_over_an_empty_store_does_not_recover_the_handle() {
     let empty = temp_root("crash-create-ack-empty");
     let peer = serve_peer(Upstream::Working).await;
     let port = free_port();
-    let config = config_with_two_principals(root.path(), port, &peer);
+    let principals = Principals::start(root.path()).await;
+    let config = config_with_two_principals(root.path(), port, &peer, &principals);
     let client = client();
-    let task_id = create_then_kill_discarding_the_ack(root.path(), &config, port, &client).await;
+    let task_id =
+        create_then_kill_discarding_the_ack(root.path(), &config, port, &client, &principals).await;
 
-    let empty_config = config_with_two_principals(empty.path(), port, &peer);
-    let mut restarted = Gateway::start(empty.path(), &empty_config, port, "second.log");
+    let empty_config = config_with_two_principals(empty.path(), port, &peer, &principals);
+    let mut restarted = principals.gateway(empty.path(), &empty_config, port, "second.log");
     restarted.wait_until_ready(&client).await;
 
     let read = restarted
-        .post_as(&client, &tasks_get(10, &task_id), Some(KEY_A))
+        .post_as(
+            &client,
+            &tasks_get(10, &task_id),
+            Some(principals.a.as_str()),
+        )
         .await;
     assert_eq!(
         read.pointer("/error/code"),
@@ -274,7 +369,11 @@ async fn a_restart_over_an_empty_store_does_not_recover_the_handle() {
         "an empty store holds no such task, even for its creator: {read}"
     );
     let retried = restarted
-        .post_as(&client, &task_invoke(1, IDEMPOTENCY_KEY), Some(KEY_A))
+        .post_as(
+            &client,
+            &task_invoke(1, IDEMPOTENCY_KEY),
+            Some(principals.a.as_str()),
+        )
         .await;
     let minted = task_id_of(&retried);
     restarted.terminate().await;
@@ -292,21 +391,31 @@ async fn kill_before_settlement(
     port: u16,
     client: &reqwest::Client,
     peer: &PeerGuard,
+    principals: &Principals,
 ) -> String {
-    let mut gateway = Gateway::start(root, config, port, "first.log");
+    let mut gateway = principals.gateway(root, config, port, "first.log");
     gateway.wait_until_ready(client).await;
     let created = gateway
-        .post_as(client, &task_invoke(1, IDEMPOTENCY_KEY), Some(KEY_A))
+        .post_as(
+            client,
+            &task_invoke(1, IDEMPOTENCY_KEY),
+            Some(principals.a.as_str()),
+        )
         .await;
     let task_id = task_id_of(&created);
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
-    let mut restarted = Gateway::start(root, config, port, "second.log");
+    let mut restarted = principals.gateway(root, config, port, "second.log");
     restarted.wait_until_ready(client).await;
-    refused_like_a_never_minted_id(&restarted, client, peer, "tasks/get", &task_id).await;
+    refused_like_a_never_minted_id(&restarted, client, peer, "tasks/get", &task_id, principals)
+        .await;
     let live = restarted
-        .post_as(client, &tasks_get(20, &task_id), Some(KEY_A))
+        .post_as(
+            client,
+            &tasks_get(20, &task_id),
+            Some(principals.a.as_str()),
+        )
         .await;
     assert_eq!(
         status_of(&live),
@@ -326,12 +435,13 @@ async fn kill_after_settlement(
     client: &reqwest::Client,
     peer: &PeerGuard,
     task_id: &str,
+    principals: &Principals,
 ) -> Value {
-    let mut gateway = Gateway::start(root, config, port, "third.log");
+    let mut gateway = principals.gateway(root, config, port, "third.log");
     gateway.wait_until_ready(client).await;
     peer.peer.set(Upstream::Completed);
     let settled = gateway
-        .post_as(client, &tasks_get(30, task_id), Some(KEY_A))
+        .post_as(client, &tasks_get(30, task_id), Some(principals.a.as_str()))
         .await;
     assert_eq!(
         status_of(&settled),
@@ -360,11 +470,22 @@ async fn a_settled_outcome_survives_kills_on_both_sides_of_settlement() {
     let root = temp_root("crash-settlement");
     let peer = serve_peer(Upstream::Working).await;
     let port = free_port();
-    let config = config_with_two_principals(root.path(), port, &peer);
+    let principals = Principals::start(root.path()).await;
+    let config = config_with_two_principals(root.path(), port, &peer, &principals);
     let client = client();
 
-    let task_id = kill_before_settlement(root.path(), &config, port, &client, &peer).await;
-    let settled = kill_after_settlement(root.path(), &config, port, &client, &peer, &task_id).await;
+    let task_id =
+        kill_before_settlement(root.path(), &config, port, &client, &peer, &principals).await;
+    let settled = kill_after_settlement(
+        root.path(),
+        &config,
+        port,
+        &client,
+        &peer,
+        &task_id,
+        &principals,
+    )
+    .await;
     assert!(
         settled.to_string().contains(MARKER),
         "the settled payload is the peer's own: {settled}"
@@ -375,10 +496,14 @@ async fn a_settled_outcome_survives_kills_on_both_sides_of_settlement() {
     // seen, and could not rebuild the payload from upstream.
     let queries = peer.peer.queries();
     peer.peer.set(Upstream::Unavailable);
-    let mut restarted = Gateway::start(root.path(), &config, port, "fourth.log");
+    let mut restarted = principals.gateway(root.path(), &config, port, "fourth.log");
     restarted.wait_until_ready(&client).await;
     let read = restarted
-        .post_as(&client, &tasks_get(40, &task_id), Some(KEY_A))
+        .post_as(
+            &client,
+            &tasks_get(40, &task_id),
+            Some(principals.a.as_str()),
+        )
         .await;
     assert_eq!(
         status_of(&read),
@@ -395,8 +520,24 @@ async fn a_settled_outcome_survives_kills_on_both_sides_of_settlement() {
         queries,
         "a settled row is answered from the store, not by asking upstream again"
     );
-    refused_like_a_never_minted_id(&restarted, &client, &peer, "tasks/get", &task_id).await;
-    refused_like_a_never_minted_id(&restarted, &client, &peer, "tasks/cancel", &task_id).await;
+    refused_like_a_never_minted_id(
+        &restarted,
+        &client,
+        &peer,
+        "tasks/get",
+        &task_id,
+        &principals,
+    )
+    .await;
+    refused_like_a_never_minted_id(
+        &restarted,
+        &client,
+        &peer,
+        "tasks/cancel",
+        &task_id,
+        &principals,
+    )
+    .await;
     restarted.terminate().await;
 
     assert_eq!(
