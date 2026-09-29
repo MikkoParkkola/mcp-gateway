@@ -28,6 +28,7 @@ mod cached_metadata;
 mod descriptor_gate;
 mod era;
 mod fill_check;
+mod identity_slots;
 mod input_keys;
 mod lifecycle;
 mod list_drain;
@@ -48,6 +49,7 @@ pub(crate) use annotations::prepare_tool_metadata;
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::text_absent;
+pub(crate) use identity_slots::passthrough_binding;
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
@@ -134,6 +136,8 @@ pub struct Backend {
     /// drain — or worse, start a whole new child process after `stop()` has
     /// torn the backend down, leaving an orphan nothing will ever close.
     replaced_transport_cleanups: parking_lot::Mutex<CleanupState>,
+    /// Admitted `PerUser` slots and eviction-close permits (#2300).
+    identity_slots: Arc<identity_slots::IdentitySlots>,
     /// Serialises whole lifecycle transitions against each other.
     ///
     /// The `stopping` latch alone is not enough: `force_restart` reads it, then
@@ -293,6 +297,18 @@ mod grant_reload_eviction_tests;
 #[cfg(test)]
 #[path = "eviction_close_bound_tests.rs"]
 mod eviction_close_bound_tests;
+
+#[cfg(test)]
+#[path = "eviction_close_cap_tests.rs"]
+mod eviction_close_cap_tests;
+
+#[cfg(test)]
+#[path = "identity_slot_probe_tests.rs"]
+mod identity_slot_probe_tests;
+
+#[cfg(test)]
+#[path = "start_failure_slot_tests.rs"]
+mod start_failure_slot_tests;
 
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]

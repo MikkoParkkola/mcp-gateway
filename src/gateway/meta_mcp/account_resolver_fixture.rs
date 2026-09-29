@@ -128,9 +128,13 @@ pub(super) const RECONNECT_GENERATION: &str = "0123456789abcdef0123456789abcdef"
 const DISPLAY_EMAIL: &str = "shared-display@display.invalid";
 const DISPLAY_NAME: &str = "Shared Display Name";
 
-/// 64 zeros, matching the descriptor-revision width the store commits.
+/// The live revision of the installed descriptors. Every seeded grant carries
+/// it, so only a test that means to cross the #2249 descriptor fence does. Both
+/// descriptor ids share it: the revision covers the declared fields, never the
+/// map key, and [`descriptor`] differs only in the key.
 pub(super) fn descriptor_revision() -> String {
-    "0".repeat(64)
+    crate::personal_accounts::descriptor_revision(&descriptor(WORK))
+        .expect("the fixture descriptor has a revision")
 }
 
 /// A fixture identity. Supplied to the dispatch entry directly: this is a
@@ -148,7 +152,11 @@ pub(super) fn identity(subject: &str) -> VerifiedIdentity {
 /// A structurally complete `personal_managed` descriptor, with the same field
 /// set the existing config tests use. Values are synthetic `.invalid` hosts and
 /// the client secret stays an unresolved `env:` reference.
-pub(super) fn descriptor(id: &str) -> AccountDescriptor {
+///
+/// Identical for every id: the id is the `accounts.descriptors` map key the
+/// caller inserts it under, so two ids differ in the key alone and share one
+/// descriptor revision.
+pub(super) fn descriptor(_id: &str) -> AccountDescriptor {
     AccountDescriptor {
         mode: DescriptorMode::PersonalManaged,
         provider: "google".to_string(),
@@ -157,7 +165,7 @@ pub(super) fn descriptor(id: &str) -> AccountDescriptor {
         authorization_endpoint: Some(format!("{OAUTH_ISSUER}/o/oauth2/v2/auth")),
         token_endpoint: Some(format!("{OAUTH_ISSUER}/token")),
         revocation_endpoint: None,
-        client_id: Some(format!("synthetic-google-client-{id}")),
+        client_id: Some("synthetic-google-client".to_string()),
         client_secret_ref: Some("env:FIXTURE_ACCOUNT_CLIENT_SECRET".to_string()),
         redirect_uri: Some("https://gateway.example.invalid/oauth/callback".to_string()),
         scopes: Some(vec![
@@ -682,3 +690,7 @@ mod sole_operator_mcp_tests;
 // #2231: the catalogue and forward reads, for the same principals as #1961.
 #[path = "account_catalogue_sole_operator_tests.rs"]
 mod catalogue_sole_operator_tests;
+
+// #2326: tool discovery omits a required backend for a caller without identity.
+#[path = "account_tool_discovery_required_tests.rs"]
+mod tool_discovery_required_tests;

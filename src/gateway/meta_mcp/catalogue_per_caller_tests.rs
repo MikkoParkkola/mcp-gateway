@@ -31,7 +31,7 @@ use std::time::Duration;
 /// two identities get two catalogues, and a real JWT signer would add key
 /// material to a test that is about routing, not about crypto. The minted
 /// binding is derived from the subject, so it is the identity that varies.
-struct PerIdentityMint;
+pub(super) struct PerIdentityMint;
 
 #[async_trait::async_trait]
 impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
@@ -58,7 +58,27 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     }
 }
 
-fn identity(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
+/// Let `meta` mint for a verified caller: [`PerIdentityMint`] plus the durable
+/// audit log a `required` mint refuses to run without.
+pub(super) fn install_minting(meta: &mut MetaMcp) {
+    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = file.path().to_string_lossy().to_string();
+    std::mem::forget(file);
+    meta.enable_transparency_log(Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path,
+                key_id: "catalogue-minting".to_string(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("transparency logger opens"),
+    ));
+    meta.set_identity_propagation(Arc::new(PerIdentityMint));
+}
+
+pub(super) fn identity(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
     crate::key_server::oidc::VerifiedIdentity {
         subject: subject.to_string(),
         email: format!("{subject}@example.invalid"),
@@ -387,7 +407,7 @@ fn audit_actions(path: &str) -> Vec<String> {
 /// identified caller does the same, one is.
 ///
 /// THIS GUARDS A COST, NOT A CORRECTNESS PROPERTY, AND THAT IS WHY IT EXISTS.
-/// `caller_credential_for` returns empty *without calling the resolver* when
+/// `caller_credential_for_identity` returns empty *without calling the resolver* when
 /// the caller has no verified identity. Dropping that short-circuit would still
 /// be correct — the resolver refuses and the guard omits the backend either way
 /// — so nothing else in this suite would go red. What it would do is mint once

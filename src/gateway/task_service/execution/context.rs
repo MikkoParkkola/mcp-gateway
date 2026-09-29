@@ -22,6 +22,9 @@ pub(crate) struct OwnedCallerContext {
     authorizer: OwnedRouterAuthorizer,
     api_key_name: Option<String>,
     agent_id: Option<crate::security::OwnedProvenAgentId>,
+    /// The creating request's declared agent label, so the task's calls audit
+    /// it as the request's own would (#2259).
+    agent_declared: Option<String>,
     grant_subject: Option<GrantSubject>,
     verified_identity: Option<VerifiedIdentity>,
     /// The owner the durable task was admitted under, owned because the rebuilt
@@ -58,6 +61,7 @@ impl OwnedCallerContext {
         authorizer: OwnedRouterAuthorizer,
         api_key_name: Option<String>,
         agent_id: Option<crate::security::OwnedProvenAgentId>,
+        agent_declared: Option<String>,
         grant_subject: Option<GrantSubject>,
         verified_identity: Option<VerifiedIdentity>,
         credential_principal: String,
@@ -77,6 +81,7 @@ impl OwnedCallerContext {
             authorizer,
             api_key_name,
             agent_id,
+            agent_declared,
             grant_subject,
             verified_identity,
             credential_principal,
@@ -151,7 +156,10 @@ impl OwnedCallerContext {
                 .agent_id
                 .as_ref()
                 .map(crate::security::OwnedProvenAgentId::as_proven),
-            agent_declared: None,
+            agent_declared: self
+                .agent_declared
+                .as_deref()
+                .map(crate::security::DeclaredAgentLabel::new),
             grant_subject: self.grant_subject.clone(),
             stdio_nonce: None,
             verified_identity: self.verified_identity.as_ref(),

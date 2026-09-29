@@ -41,7 +41,11 @@ impl AccountRevocation for StoreDown {
         ProviderOutcome::Confirmed
     }
 
-    async fn connected(&self, _account: &AccountKey) -> Result<bool, CustodyError> {
+    async fn connected(
+        &self,
+        _account: &AccountKey,
+        _descriptor_revision: &str,
+    ) -> Result<bool, CustodyError> {
         Ok(false)
     }
 }

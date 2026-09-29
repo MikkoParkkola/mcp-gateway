@@ -184,6 +184,7 @@ fn permitted_on(backend: &crate::backend::Backend, binding: Option<&str>) -> Vec
     });
     let mut permitted: Vec<String> = backend
         .pooled_entry(&key)
+        .unwrap()
         .resend_permitted
         .read()
         .iter()

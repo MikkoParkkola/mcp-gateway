@@ -144,6 +144,7 @@ impl Fixture {
             descriptor,
             bound_backend: BACKEND,
             legacy_backend_name: None,
+            legacy_resource: RESOURCE,
             legacy_issuer,
             registered_client_id: None,
         }
