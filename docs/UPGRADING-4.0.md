@@ -83,6 +83,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
+- Item 97
 - Item 100
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
@@ -217,7 +218,7 @@ without it.**
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
-| 97 | Reserved: lands with #2286 | None yet |
+| 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 | 98 | Reserved: lands with #2293 | None yet |
 | 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
@@ -2588,6 +2589,20 @@ the mode. The check runs before the mode rules, on the same handle as the read.
 
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
+
+## 97. A bearer token and an API key are two users, even with `single_user`
+
+With `auth.single_user: true`, a gateway with an `auth.bearer_token` and one API key counted as
+single-user. Both credentials were served the sole operator's personal accounts, and the
+per-user OAuth isolation guard (ADR-008) stayed off.
+
+In 4.0 the bearer token counts as a credential beside the API keys. Two credentials are two
+users whatever `single_user` says: the sole-operator account is not served to either, and the
+isolation guard is on. The gateway still starts. A bearer-only or one-key-only gateway is
+unchanged, and so is any `auth.bearer_token` spelling (`auto`, `env:`).
+
+**Action:** a personal gateway that added a client key beside its bearer token keeps exactly one
+of the two: remove `auth.bearer_token` or the extra API key.
 
 ## 99. Windows checks secret and trust files, and creates them owner-only
 
