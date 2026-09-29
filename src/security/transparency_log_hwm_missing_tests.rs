@@ -287,6 +287,72 @@ fn an_unsigned_rehash_of_a_signed_log_is_not_forgotten_at_restart() {
     });
 }
 
+/// Rotate a retain-1 log `n` times, counted by the newest sealed number.
+fn rotate_retained(l: &TransparencyLogger, path: &Path, n: u64) {
+    let newest = |p: &Path| list_segments(p).unwrap().last().map_or(0, |s| s.seq + 1);
+    let target = newest(path) + n;
+    let mut i = 0;
+    while newest(path) < target {
+        append(l, i);
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+}
+
+/// The open record that carries the finding is cut from the active file:
+/// the newest sealed segment still holds it, and the headless active is
+/// itself a finding.
+#[test]
+fn a_cut_carrying_open_record_is_not_forgotten_at_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_retained(&l, &path, 1);
+    append(&l, 0);
+    drop(l);
+    let first = lines(&path)[0].clone();
+    assert!(
+        first.get("hwm_missing_at").is_some(),
+        "the open record carries it"
+    );
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let rest = raw.split_once('\n').unwrap().1.to_string();
+    std::fs::write(&path, rest).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_retained(&l, &path, 5);
+    drop(l);
+    assert!(marks(&path).is_empty(), "the marker's segment expired");
+    let r = verify_segments(&path, &cfg(&path, 1, true), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "a cut open record laundered the finding");
+    assert!(r.error_message.unwrap().contains(MARK));
+}
+
+/// A marker the mark already counts, torn at the tail, is a committed record:
+/// its drop at restart is recorded again, not replaced by a clean repair.
+#[test]
+fn a_torn_committed_marker_is_not_forgotten_at_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+    assert_eq!(event(lines(&path).last().unwrap()), Some(MARK));
+    let raw = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &raw[..raw.len() - 5]).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_retained(&l, &path, 5);
+    drop(l);
+    let r = verify_segments(&path, &cfg(&path, 1, true), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "a torn repair laundered the finding");
+    assert!(r.error_message.unwrap().contains(MARK));
+}
+
 /// Whitespace past the scan's line bound keeps the marker's hash valid; a
 /// line recovery cannot read counts as a finding, not as none.
 #[test]

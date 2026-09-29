@@ -213,9 +213,15 @@ pub(super) fn recover(
     let secret = config.shared_secret.as_bytes();
     let sealed = segments::list_segments(path)?;
     let hw = segments::read_hwm(path, secret, &config.key_id);
-    if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
-        repair_torn_tail(path, config, sealed.last())?;
-    }
+    let dropped = if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
+        repair_torn_tail(path, config, sealed.last())?
+    } else {
+        None
+    };
+    // `.hwm` is written after its record, so a torn line at or below the
+    // mark was a committed record, not a crash mid-write: its loss is a
+    // finding, whatever the line held (#2294).
+    let committed_drop = dropped.is_some_and(|d| hw.as_ref().is_some_and(|h| h.counter >= d));
     let mut state = match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
@@ -243,8 +249,12 @@ pub(super) fn recover(
         Err(e) => return Err(e),
     };
     finish_pending_expiry(path)?;
-    // The active file holds the finding from its open record or a marker.
-    state.seg.hwm_missing_at = hwm_missing_in(path, config)?;
+    // The active file holds the finding from its open record or a marker,
+    // and the newest sealed segment from its own; either can be edited, so
+    // both are read.
+    let in_active = hwm_missing_in(path, config)?;
+    let in_sealed = newest_finding(&segments::list_segments(path)?, config)?;
+    state.seg.hwm_missing_at = in_active.into_iter().chain(in_sealed).min();
     // The reserve only serves an expiry, which needs a sealed segment, so a
     // log that never rotated holds none (and leaves no 1 MiB file behind).
     if config.rotation.on_disk_full == OnDiskFull::ExpireOldest
@@ -254,7 +264,7 @@ pub(super) fn recover(
         tracing::warn!(error = %e, "audit log: disk-full reserve could not be written");
         telemetry_metrics::gauge!("mcp_audit_reserve_present").set(0.0);
     }
-    if hw.is_none() && state.counter > 0 {
+    if (hw.is_none() || committed_drop) && state.counter > 0 {
         // Re-minting `.hwm` from a cut tail would launder the cut, so a log
         // that went through segment handling first records that the mark
         // was missing (#2294). A pre-D6 log (no open record) and a
@@ -262,7 +272,7 @@ pub(super) fn recover(
         let opened = segments::read_first_line(path)?
             .and_then(|l| record_head(&l).ok())
             .is_some_and(|(_, _, e, _)| e.as_deref() == Some(EV_OPENED));
-        let lost = !sealed.is_empty() || (opened && state.counter > 1);
+        let lost = committed_drop || !sealed.is_empty() || (opened && state.counter > 1);
         // A crash between the marker and the mark left the marker last.
         let marked = read_last_nonempty_line(path)?
             .and_then(|l| record_head(&l).ok())
@@ -285,6 +295,8 @@ pub(super) fn recover(
             );
             telemetry_metrics::counter!("mcp_audit_hwm_missing_total").increment(1);
         }
+    }
+    if hw.is_none() && state.counter > 0 {
         let mark = HighWater {
             counter: state.counter,
             entry_hash: state.last_entry_hash.clone(),
@@ -469,12 +481,13 @@ pub(super) fn open_after_seal(
 /// never a record: truncate to the last newline and, if the file still holds
 /// a record, chain an `audit_segment_torn_tail_dropped` record naming the
 /// dropped length. A complete unparseable line is left for the caller to
-/// refuse, as before D6.
+/// refuse, as before D6. Returns the counter the dropped line would have
+/// held, if a line was dropped.
 fn repair_torn_tail(
     path: &Path,
     config: &TransparencyLogConfig,
     newest_sealed: Option<&Segment>,
-) -> io::Result<()> {
+) -> io::Result<Option<u64>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = OpenOptions::new()
         .read(true)
@@ -487,7 +500,7 @@ fn repair_torn_tail(
     let mut buf = Vec::new();
     (&mut file).take(window).read_to_end(&mut buf)?;
     if buf.last() == Some(&b'\n') {
-        return Ok(());
+        return Ok(None);
     }
     let cut = buf.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
     let keep_len = len - window + cut as u64;
@@ -510,7 +523,8 @@ fn repair_torn_tail(
     if verifies_as_next(&torn, pred_counter, &pred_hash, config) {
         file.seek(SeekFrom::End(0))?;
         file.write_all(b"\n")?;
-        return file.sync_all();
+        file.sync_all()?;
+        return Ok(None);
     }
     file.set_len(keep_len)?;
     file.sync_all()?;
@@ -524,7 +538,7 @@ fn repair_torn_tail(
         let fields = housekeeping(EV_TORN, &[("bytes", dropped.into())]);
         write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
     }
-    Ok(())
+    Ok(Some(pred_counter + 1))
 }
 
 /// The earliest missing-mark counter `file` records: an [`EV_HWM_MISSING`]
@@ -582,9 +596,18 @@ pub(super) fn hwm_missing_in(
         };
         let counter = v.get("counter").and_then(Value::as_u64).unwrap_or(next);
         let stored = v.get("entry_hash").and_then(Value::as_str).unwrap_or("");
-        let linked = prev.as_ref().is_none_or(|(c, h)| {
-            counter == c + 1 && v.get("prev_entry_hash").and_then(Value::as_str) == Some(h)
-        });
+        // The first record opens the segment, or is a pre-D6 genesis record;
+        // anything else means the head was cut.
+        let linked = match prev.as_ref() {
+            Some((c, h)) => {
+                counter == c + 1 && v.get("prev_entry_hash").and_then(Value::as_str) == Some(h)
+            }
+            None => {
+                v.get("event").and_then(Value::as_str) == Some(EV_OPENED)
+                    || (counter == 1
+                        && v.get("prev_entry_hash").and_then(Value::as_str) == Some("genesis"))
+            }
+        };
         let intact = linked
             && recompute_entry_hash(&v).is_ok_and(|h| h == stored)
             && (secret.is_empty() || verify_entry_sig(&v, stored, secret).is_ok());
