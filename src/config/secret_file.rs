@@ -405,7 +405,7 @@ fn refusal_message(
 #[cfg(unix)]
 fn shell_arg(path: &Path) -> String {
     let text = path.to_string_lossy();
-    shlex::try_quote(&text).map_or_else(|_| text.into_owned(), std::borrow::Cow::into_owned)
+    shlex::try_quote(&text).map_or_else(|_| text.to_string(), std::borrow::Cow::into_owned)
 }
 
 /// The owner refusal: another account owns the file, so it can chmod it at will.
