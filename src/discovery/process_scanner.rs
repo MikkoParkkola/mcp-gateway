@@ -143,6 +143,13 @@ impl ProcessScanner {
             .output()
             .await
             .map_err(|e| Error::Internal(format!("Failed to run powershell: {e}")))?;
+        // A failed query must not read as "no processes running".
+        if !output.status.success() {
+            return Err(Error::Internal(format!(
+                "powershell process listing exited with {}",
+                output.status
+            )));
+        }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(self.parse_ps_output(&stdout))
