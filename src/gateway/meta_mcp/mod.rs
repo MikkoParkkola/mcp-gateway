@@ -2400,7 +2400,20 @@ impl MetaMcp {
             }
         };
 
-        match result {
+        // The three discovery arms above inspected their canonical value
+        // (`inspect_discovery_value`); mark the response so no later pass
+        // scans the serialised copy (MIK-7407.RESPONSE.3). Set here, after the
+        // meta-tool match, never on the direct-name routes above it.
+        #[cfg(feature = "firewall")]
+        let inspected = self.firewall.is_some()
+            && result.is_ok()
+            && matches!(
+                tool_name,
+                "gateway_search" | "gateway_list_tools" | "gateway_search_tools"
+            );
+        #[cfg(not(feature = "firewall"))]
+        let inspected = false;
+        let mut response = match result {
             Ok(content) => match shape {
                 // MRTR.11a: an interim round must not be pretty-printed into
                 // `content[0].text`. `wrap_tool_success` states `is_error:
@@ -2427,7 +2440,9 @@ impl MetaMcp {
                 ResultShape::Native => JsonRpcResponse::success(id, content),
             },
             Err(e) => error_response_preserving_status(id, &e),
-        }
+        };
+        response.discovery_inspected = inspected && response.error.is_none();
+        response
     }
 }
 

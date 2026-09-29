@@ -70,6 +70,12 @@ pub struct JsonRpcResponse {
     /// or serialized; it excludes both client strikes and success resets.
     #[serde(skip)]
     pub(crate) delivery_refusal: bool,
+    /// Server-owned: a discovery handler inspected this result's canonical
+    /// value before it was serialised (MIK-7407.RESPONSE.3), so no later pass
+    /// scans the served copy. Never read from or written to the wire, so a
+    /// backend or a retried call under a discovery name cannot set it.
+    #[serde(skip)]
+    pub(crate) discovery_inspected: bool,
 }
 
 impl<'de> Deserialize<'de> for JsonRpcResponse {
@@ -101,6 +107,7 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
             error: shadow.error,
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         })
     }
 }
@@ -116,6 +123,7 @@ impl JsonRpcResponse {
             error: None,
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         }
     }
 
@@ -150,6 +158,7 @@ impl JsonRpcResponse {
             }),
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         }
     }
 
@@ -188,6 +197,7 @@ impl JsonRpcResponse {
             }),
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         }
     }
 }
