@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2240: a notification on the direct route is forwarded only when the same
-//! caller's request on that backend would be. A refused credential, a
-//! refused passthrough, an unbound account backend and a shared personal
-//! login on a multi-user gateway each answer 403 with an empty body and reach
-//! no upstream slot. A backend with no personal binding still forwards on the
-//! shared session (IDP.5).
+//! caller's request on that backend would be. A refused credential, a refused
+//! passthrough, an unbound account backend and a shared personal login on a
+//! multi-user gateway each answer 403 with the `{}` an accepted notification
+//! gets, and reach no upstream slot. A backend with no personal binding still
+//! forwards on the shared session (IDP.5).
 
 use axum::body::to_bytes;
 use axum::http::StatusCode;
@@ -211,10 +211,8 @@ async fn notify(gw: &Gateway, subject: Option<&str>) -> (StatusCode, Vec<u8>) {
 
 fn refused(status: StatusCode, body: &[u8]) {
     assert_eq!(status, StatusCode::FORBIDDEN);
-    assert!(
-        body.is_empty(),
-        "a notification gets no JSON-RPC body: {body:?}"
-    );
+    // The same `{}` an accepted notification gets: no JSON-RPC response.
+    assert_eq!(body, b"{}", "{}", String::from_utf8_lossy(body));
 }
 
 fn config_with(identity_propagation: Option<IdentityPropagationConfig>) -> BackendConfig {
