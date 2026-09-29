@@ -196,6 +196,7 @@ async fn send_as_key(router: &axum::Router, i: usize, key: &str) {
         .insert(crate::gateway::auth::AuthenticatedClient {
             name: key.to_string(),
             principal: key.to_string(),
+            authenticated: true,
             ..crate::gateway::auth::anonymous_client()
         });
     let _ = router.clone().oneshot(request).await.unwrap();

@@ -22,7 +22,7 @@ pub(super) async fn resolve(
     name: &str,
     inbound_headers: &axum::http::HeaderMap,
     caller: crate::identity_propagation::CallerProof<'_>,
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    proven: Option<&str>,
 ) -> Result<Resolved, ()> {
     let idp_cfg = backend.identity_propagation_config();
     let audience = idp_cfg.map(|c| c.audience.as_str());
@@ -36,7 +36,7 @@ pub(super) async fn resolve(
         ) {
             Ok((headers, digest)) => (
                 headers,
-                super::charged_binding(state, name, caller, client, digest),
+                super::charged_binding(state, name, caller, proven, digest),
             ),
             Err(reason) => {
                 refuse_audited(state, name, caller, audience, &reason).await;

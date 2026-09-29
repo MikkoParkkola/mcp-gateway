@@ -327,19 +327,18 @@ fn passthrough_identity_key(credential: &str) -> String {
 /// The slot binding of a passthrough credential digest, charged to the
 /// caller's principal so one caller cannot hold more than its share of the
 /// backend's slots however many header values it sends (#2300). The principal
-/// is the verified identity, else the validated credential's owner, else the
-/// one anonymous principal every unauthenticated caller shares.
+/// is the verified identity, else `proven` (the API key, agent token or client
+/// certificate, as `refusal_principal` names it), else the one anonymous
+/// principal every unauthenticated caller shares.
 fn charged_binding(
     state: &AppState,
     name: &str,
     caller: crate::identity_propagation::CallerProof<'_>,
-    client: Option<&AuthenticatedClient>,
+    proven: Option<&str>,
     digest: Option<String>,
 ) -> Option<String> {
-    let principal = match (caller.verified(), client) {
-        (None, Some(client)) if !client.principal.is_empty() => {
-            format!("credential:{}", client.principal)
-        }
+    let principal = match (caller.verified(), proven) {
+        (None, Some(proven)) => format!("proven:{proven}"),
         _ => state.meta_mcp.audit_subject_for(name, caller),
     };
     digest.map(|digest| crate::backend::passthrough_binding(&principal, &digest))
@@ -528,6 +527,11 @@ async fn backend_handler_inner(
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     let cert_identity = request.extensions().get::<CertIdentity>().cloned();
     let oauth_agent_identity = request.extensions().get::<OAuthAgentIdentity>().cloned();
+    let proven = refusal_principal(
+        client.as_ref(),
+        oauth_agent_identity.as_ref(),
+        cert_identity.as_ref(),
+    );
     // End-user identity for propagation (MIK-6704): the auth middleware may
     // attach a VerifiedIdentity for temporary/delegated OIDC tokens. Extracted
     // before the body is consumed so the direct route can propagate it too.
@@ -675,17 +679,7 @@ async fn backend_handler_inner(
     // One backend's level is still shared by every user of that backend, so
     // this route applies the meta route's admin gate before anything forwards.
     // The helper owns the (case-insensitive) method match.
-    if let Err(e) = require_admin_log_level(
-        &method,
-        client.as_ref(),
-        refusal_principal(
-            client.as_ref(),
-            oauth_agent_identity.as_ref(),
-            cert_identity.as_ref(),
-        )
-        .as_deref(),
-        &name,
-    ) {
+    if let Err(e) = require_admin_log_level(&method, client.as_ref(), proven.as_deref(), &name) {
         return build_http_error_response(id, e.code, e.message, e.status);
     }
 
@@ -702,7 +696,7 @@ async fn backend_handler_inner(
             &name,
             &inbound_headers,
             caller,
-            client.as_ref(),
+            proven.as_deref(),
         )
         .await
         else {
@@ -843,7 +837,8 @@ async fn backend_handler_inner(
                     // credential, so distinct callers never share a stateful
                     // upstream's session-bound data. `None` on the no-credential
                     // path keeps the shared default bucket (behavior unchanged).
-                    identity_key = charged_binding(&state, &name, caller, client.as_ref(), binding);
+                    identity_key =
+                        charged_binding(&state, &name, caller, proven.as_deref(), binding);
                     Ok(headers)
                 }
                 Err(e) => Err(e),
