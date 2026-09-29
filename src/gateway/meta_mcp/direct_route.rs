@@ -50,6 +50,8 @@ impl MetaMcp {
         authentication: super::Authentication,
         params: Option<&Value>,
     ) -> Result<Option<crate::idempotency::GuardOutcome>> {
+        #[cfg(test)]
+        RESERVATION_ATTEMPTS.with(|count| count.set(count.get() + 1));
         let Some(cache) = self.idempotency_cache.as_ref() else {
             return Ok(None);
         };
@@ -92,5 +94,38 @@ impl MetaMcp {
         reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     ) {
         super::invoke::arm_for_dispatch(reservation);
+    }
+}
+
+// T9 (test plan "Shared fixture"): counts every reservation attempt into
+// `direct_route_idempotency`, whatever the outcome, so a fixture can assert
+// on it without `backend_handlers.rs` growing past its size baseline.
+#[cfg(test)]
+thread_local! {
+    static RESERVATION_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+impl MetaMcp {
+    /// Reservation attempts on this thread since the last reset (T9).
+    pub(crate) fn reservation_attempts() -> usize {
+        RESERVATION_ATTEMPTS.with(std::cell::Cell::get)
+    }
+
+    /// Reset the T9 counter for this thread.
+    pub(crate) fn reset_reservation_attempts() {
+        RESERVATION_ATTEMPTS.with(|count| count.set(0));
+    }
+
+    /// Test-only entry to `invoke_tool` for router cells that must drive a
+    /// meta-layer exchange (a bridged input round) on the same `MetaMcp` an
+    /// HTTP fixture serves (MIK-7597 T3c). Compiled only under `cfg(test)`.
+    pub(crate) async fn invoke_tool_for_test(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
+        self.invoke_tool(args, session_id, caller).await
     }
 }
