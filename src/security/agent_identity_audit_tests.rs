@@ -15,7 +15,13 @@ use super::tests::{cfg, proven};
 use super::*;
 
 /// The target every audit record carries: the parent module, not this one.
-const AUDIT_TARGET: &str = "mcp_gateway::security::agent_identity";
+/// Derived from this module's own path, so a crate rename cannot break it.
+fn audit_target() -> &'static str {
+    module_path!()
+        .rsplit_once("::")
+        .expect("this test module has a parent")
+        .0
+}
 
 const PROVEN_A: &str = "spiffe://cluster/ns/agents/sa/runner";
 const DECLARED_B: &str = "runner";
@@ -67,7 +73,7 @@ fn audit_records(run: impl FnOnce()) -> Vec<serde_json::Value> {
         .map(|line| {
             serde_json::from_str::<serde_json::Value>(line).expect("one JSON object per line")
         })
-        .filter(|record| record["target"] == AUDIT_TARGET)
+        .filter(|record| record["target"] == audit_target())
         .collect()
 }
 
