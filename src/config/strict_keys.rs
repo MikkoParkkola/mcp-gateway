@@ -204,7 +204,7 @@ fn ignored_by_serde(
                 .iter()
                 .find(|(retired, _)| segs.iter().map(String::as_str).eq(retired.iter().copied()))
         }) {
-            ignored.insert(path, Ignored::Retired(*why));
+            ignored.insert(path, Ignored::Retired(why));
         } else {
             found.insert(path);
         }
@@ -294,7 +294,7 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
             let path = format!("backends.{name}.{key}");
             if !is_backend_key(key) {
                 if let Some((_, why)) = RETIRED_BACKEND_KEYS.iter().find(|(name, _)| *name == key) {
-                    ignored.insert(path, Ignored::Retired(*why));
+                    ignored.insert(path, Ignored::Retired(why));
                 } else if is_annotation(key) {
                     ignored.insert(path, Ignored::Annotation);
                 } else {
@@ -478,7 +478,7 @@ mod tests {
         walk(&config, "");
     }
 
-    /// #2360: UPGRADING quotes the request_timeout warning verbatim.
+    /// #2360: UPGRADING quotes the `request_timeout` warning verbatim.
     #[test]
     fn upgrading_quotes_the_request_timeout_warning() {
         let (_, why) = RETIRED_KEYS
