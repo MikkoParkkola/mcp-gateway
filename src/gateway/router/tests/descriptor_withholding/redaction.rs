@@ -94,7 +94,26 @@ async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
         allow_flagged_tools: [(PINNED.to_string(), digest.clone())].into(),
         ..BackendConfig::default()
     };
-    let e = build(config, vec![tool(PINNED, TEXT)], Some(redacting_firewall())).await;
+    // `id_rsa` is a blocking response finding, and a blocked list is refused
+    // whole (#2349). An operator rule that downgrades listings to Warn keeps
+    // the redacted list served, which is the case this cell is about.
+    let warn_lists = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            credential_redaction: true,
+            rules: vec![crate::security::firewall::FirewallRule {
+                tool_match: "tools/list".to_string(),
+                action: crate::security::firewall::FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+            }],
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let e = build(config, vec![tool(PINNED, TEXT)], Some(warn_lists)).await;
     let (_, listed) = post(&e.router, "/mcp/evil", None, "tools/list", json!({})).await;
     assert!(
         !listed.to_string().contains("postgres://db.local"),
