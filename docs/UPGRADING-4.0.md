@@ -127,6 +127,7 @@ backend" and "fails a capability file" first.**
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 | 101 | A restart that finds the audit log's `.hwm` missing, on a log that went through segment handling, writes an `audit_segment_hwm_missing` record; `audit verify` then fails the log for as long as it is kept | Investigate how the mark went missing; archive the log and start a new one to clear the failure |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
+| 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2885,6 +2886,19 @@ idle).
 
 **Action:** with auth off, expect at most 8 passthrough credentials served at once per backend.
 Turn auth on to give each user their own budget of 8.
+
+## 103. Grant decisions are written to the audit log
+
+**Startup:** no notice
+
+In 3.x, an identity-grant decision on a personal capability reached only the tracing log, and an
+allow reached nothing. In 4.0, with a transparency log configured, each such decision writes one
+`identity_grant_decision` record (allow `ok`, deny `denied`) with the subject's authority and
+subject, the capability, tool, scope, reason and grant id, and the call's `trace_id`. Listings and
+public or shared capabilities write none. Under `FailClosed`, a record that cannot be written
+answers the call with `-32005`, as an invocation record does.
+
+**Action:** where a SIEM rule or script counts audit records per call, filter on `kind`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
