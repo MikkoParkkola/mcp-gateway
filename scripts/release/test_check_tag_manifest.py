@@ -736,12 +736,22 @@ TAG_GATE = re.compile(
 )
 
 
+def step_props(block):
+    """The step mapping's own keys, without the `run:`/`env:`/`with:` bodies
+    nested under it: a key at any other depth is not a property of the step, so
+    a `timeout-minutes:` or `id:` written inside a body must not count."""
+    item = len(block[0]) - len(block[0].lstrip())
+    return [block[0].lstrip()[2:]] + [
+        line.strip() for line in block[1:] if len(line) - len(line.lstrip()) == item + 2
+    ]
+
+
 def gate_steps(workflow, job):
     """`job`'s own steps that run the tag gate under `id: meta`."""
     return [
         block
         for block in steps(workflow, job=job)
-        if any(line.strip() in ("id: meta", "- id: meta") for line in block)
+        if "id: meta" in step_props(block)
         and any(runs(command, TAG_GATE) for command in joined(block))
     ]
 
@@ -2076,8 +2086,8 @@ class WorkflowWiring(unittest.TestCase):
             # Bounded low: a timeout raised to 360 is the 6-hour stall again.
             minutes = [
                 int(m.group(1))
-                for line in block
-                if (m := re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line))
+                for line in step_props(block)
+                if (m := re.match(r"^timeout-minutes:\s*(\d+)\s*$", line))
             ]
             self.assertTrue(minutes, f"ci.yml: {block[0].strip()} has no step timeout-minutes")
             self.assertLessEqual(max(minutes), 15, f"ci.yml: {block[0].strip()} timeout is not low")
@@ -3128,8 +3138,8 @@ def cosign_calls(block):
 
 
 def timeout_of(block):
-    for line in block:
-        match = re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line)
+    for line in step_props(block):
+        match = re.match(r"^timeout-minutes:\s*(\d+)\s*$", line)
         if match:
             return int(match.group(1))
     return None
