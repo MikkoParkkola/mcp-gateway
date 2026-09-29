@@ -331,6 +331,51 @@ fn a_cut_carrying_open_record_is_not_forgotten_at_restart() {
     assert!(r.error_message.unwrap().contains(MARK));
 }
 
+/// Rotate until the active file's open record names `n` more segments.
+fn rotate_by_open_seq(l: &TransparencyLogger, path: &Path, n: u64) {
+    let seq = |p: &Path| lines(p)[0]["segment_seq"].as_u64().unwrap_or(0);
+    let target = seq(path) + n;
+    let mut i = 0;
+    while seq(path) < target {
+        append(l, i);
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+}
+
+/// With no sealed segment kept (`retain_segments: 0`), the active file's
+/// carrying open record is the only copy of the finding: cutting it leaves a
+/// headless file, which recovery must count as a finding itself.
+#[test]
+fn a_cut_open_record_with_no_sealed_copy_is_not_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 0, true)).unwrap();
+    rotate_by_open_seq(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(cfg(&path, 0, true)).unwrap();
+    rotate_by_open_seq(&l, &path, 1);
+    append(&l, 0);
+    drop(l);
+    assert!(
+        list_segments(&path).unwrap().is_empty(),
+        "no sealed copy kept"
+    );
+    assert!(
+        lines(&path)[0].get("hwm_missing_at").is_some(),
+        "the open record carries it"
+    );
+    let raw = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, raw.split_once('\n').unwrap().1).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 0, true)).unwrap();
+    rotate_by_open_seq(&l, &path, 3);
+    drop(l);
+    let r = verify_segments(&path, &cfg(&path, 0, true), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "a headless active laundered the finding");
+    assert!(r.error_message.unwrap().contains(MARK));
+}
+
 /// A marker the mark already counts, torn at the tail, is a committed record:
 /// its drop at restart is recorded again, not replaced by a clean repair.
 #[test]
