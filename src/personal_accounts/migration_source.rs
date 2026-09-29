@@ -166,8 +166,15 @@ pub(in crate::personal_accounts) fn read_legacy_source(
 /// wrote (`oauth/storage.rs:237-244`), whatever else is true of it.
 #[cfg(unix)]
 fn privately_owned(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    meta.permissions().mode() & 0o777 == 0o600
+    use std::os::unix::fs::MetadataExt as _;
+    private_to(meta.mode(), meta.uid(), rustix::process::geteuid().as_raw())
+}
+
+/// The verdict on a file's mode and owner, apart from the filesystem so a
+/// test can name an owner other than itself.
+#[cfg(unix)]
+fn private_to(mode: u32, _file_uid: u32, _euid: u32) -> bool {
+    mode & 0o777 == 0o600
 }
 
 /// No mode on Windows: the DACL of the opened handle is judged in
