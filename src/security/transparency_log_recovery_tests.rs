@@ -139,7 +139,7 @@ fn newline_less_valid_record_is_kept() {
     let p = path.clone();
     within_10s(move || drop(open(&p, 12)));
     let all = lines(&path);
-    assert_eq!(all.len(), 3, "record kept, no torn-tail record");
+    assert_eq!(all.len(), 4, "record kept, no torn-tail record");
     assert!(std::fs::read(&path).unwrap().ends_with(b"\n"));
     assert!(verify(&path, false).ok);
 }
@@ -409,6 +409,78 @@ fn missing_hwm_after_last_sealed_expired_warns_in_archive_mode() {
             .any(|w| w.contains("high-water mark missing")),
         "{:?}",
         r.warnings
+    );
+}
+
+/// #2275: a fresh log opens segment 0 with an open record, so a never-rotated
+/// log is told apart from a pre-D6 one and tail loss needs `.hwm` to rule out.
+#[test]
+fn missing_hwm_on_never_rotated_log_is_a_live_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let mut c = (*cfg(&path, 12, false)).clone();
+    c.rotation.max_segment_bytes = u64::MAX;
+    let l = TransparencyLogger::open(Arc::new(c)).unwrap();
+    (0..5).for_each(|i| append(&l, i));
+    drop(l);
+    assert!(list_segments(&path).unwrap().is_empty(), "never rotated");
+    assert!(
+        verify(&path, false).ok,
+        "positive control: intact log verifies"
+    );
+    std::fs::remove_file(sibling(&path, "hwm")).unwrap();
+    let mut all = lines(&path);
+    all.truncate(all.len() - 2);
+    std::fs::write(
+        &path,
+        all.iter()
+            .fold(String::new(), |acc, v| acc + &v.to_string() + "\n"),
+    )
+    .unwrap();
+    let r = verify(&path, false);
+    assert!(!r.ok, "tail loss on a never-rotated log verified clean");
+    let msg = r.error_message.unwrap();
+    assert!(msg.contains("high-water mark missing"), "{msg}");
+}
+
+/// #2275: a crash between the open record and the first `.hwm` leaves a log
+/// holding only that record; it is a clean log, not tail loss.
+#[test]
+fn open_record_only_log_without_hwm_verifies_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    let hwm = sibling(&path, "hwm");
+    if hwm.exists() {
+        std::fs::remove_file(&hwm).unwrap();
+    }
+    assert_eq!(lines(&path).len(), 1, "only the open record");
+    let r = verify(&path, false);
+    assert!(r.ok, "{:?}", r.error_message);
+}
+
+/// #2275: the first append lands after the pass read no `.hwm` but before it
+/// streamed the file. The pass sees counter 2 with no mark and must retry, not
+/// report tail loss.
+#[test]
+fn hwm_written_during_a_pass_is_a_retry_not_a_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    let hwm = sibling(&path, "hwm");
+    if hwm.exists() {
+        std::fs::remove_file(&hwm).unwrap();
+    }
+    let writer = Arc::clone(&l);
+    super::verify::LISTED.with(|h| *h.borrow_mut() = Some(Box::new(move || append(&writer, 1))));
+    super::verify::PASSES.with(|c| c.set(0));
+    let r = verify(&path, false);
+    assert!(hwm.exists(), "the append wrote the mark");
+    assert!(r.ok, "{:?}", r.error_message);
+    assert_eq!(
+        super::verify::PASSES.with(std::cell::Cell::get),
+        2,
+        "one retry"
     );
 }
 

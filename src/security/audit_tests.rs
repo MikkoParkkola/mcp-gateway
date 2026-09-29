@@ -232,7 +232,11 @@ async fn non_invoke_writer_gets_trace_id() {
     })
     .await;
     append(&log, fields(&[("event", json!("out"))])).expect("append outside scope");
-    let all = entries(&path);
+    // A fresh log opens with its genesis housekeeping record (#2275).
+    let all: Vec<Value> = entries(&path)
+        .into_iter()
+        .filter(|e| e["event"] == json!("in") || e["event"] == json!("out"))
+        .collect();
     assert_eq!(all[0]["trace_id"], json!("gw-scope-1"), "{}", all[0]);
     let minted = all[1]["trace_id"].as_str().unwrap_or_default();
     assert!(minted.starts_with("gw-"), "{}", all[1]);

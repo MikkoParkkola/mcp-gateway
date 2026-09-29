@@ -338,15 +338,20 @@ pub(super) fn open_after_seal(
     let Some(newest) = sealed.last() else {
         let hw_counter = hw.map_or(0, |h| h.counter);
         if hw_counter == 0 {
-            drop(fresh()?);
-            let file = OpenOptions::new()
-                .append(true)
-                .open(path)
-                .map_err(segments::ctx("open", path))?;
+            // Segment 0 opens with a record too, so verify can tell a
+            // never-rotated log from a pre-D6 one and require `.hwm` (#2275).
+            let fields = housekeeping(
+                EV_OPENED,
+                &[("segment_seq", 0.into()), ("segment_opened_at", now.into())],
+            );
+            let hash = write_synced(&mut fresh()?, config, fields, 1, "genesis")?;
             return Ok(Recovered {
-                file,
-                counter: 0,
-                last_entry_hash: "genesis".into(),
+                file: OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .map_err(segments::ctx("open", path))?,
+                counter: 1,
+                last_entry_hash: hash,
                 seg: file_seg(0),
             });
         }
