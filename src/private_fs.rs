@@ -164,6 +164,13 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
 }
 
 /// Every rule the descriptor breaks for a file of class `what`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Windows guarded reader calls it from the next #1718 commit"
+    )
+)]
 pub(crate) fn refusals_for(
     inspection: &Inspection,
     user: &Sid,

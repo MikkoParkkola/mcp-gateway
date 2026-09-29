@@ -40,6 +40,13 @@ pub(crate) enum SecretFile {
 }
 
 /// What a file's mode must protect.
+#[cfg_attr(
+    all(windows, not(test)),
+    expect(
+        dead_code,
+        reason = "the Windows guarded reader calls it from the next #1718 commit"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Protects {
     /// It holds a secret: others may neither read nor change it.
@@ -73,6 +80,13 @@ impl SecretFile {
         }
     }
 
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "the Windows guarded reader calls it from the next #1718 commit"
+        )
+    )]
     pub(crate) const fn protects(self) -> Protects {
         match self {
             Self::TlsCert | Self::TlsCrl | Self::IdentityGrants | Self::ControlPlaneCollection => {
