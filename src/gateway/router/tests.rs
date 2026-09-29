@@ -34,8 +34,8 @@ use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targe
 
 /// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
 mod attestation_routes;
-mod descriptor_withholding;
 mod chain_direct;
+mod descriptor_withholding;
 mod f24_resource_subscribe;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
