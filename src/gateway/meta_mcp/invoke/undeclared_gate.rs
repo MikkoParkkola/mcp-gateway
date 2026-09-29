@@ -43,3 +43,24 @@ pub(super) fn refusal(
     );
     undeclared_input_request(server, tool, refused)
 }
+
+/// The bridge's `Undeclared` refusal as the client sees it (#2173).
+pub(super) fn bridge_refusal(
+    key: &str,
+    method: &str,
+    reason: crate::protocol::mrtr::Refusal,
+    server: &str,
+    tool: &str,
+    trace_id: &str,
+) -> crate::Error {
+    refusal(
+        &crate::protocol::mrtr::Undeclared {
+            key,
+            method,
+            reason,
+        },
+        server,
+        tool,
+        trace_id,
+    )
+}

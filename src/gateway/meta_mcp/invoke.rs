@@ -164,7 +164,6 @@ use super::support::{
     idempotency_key_for, response_cache_key_for, strip_backend_provenance,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
-use undeclared_gate::refuse_undeclared;
 
 async fn call_capability_tool_with_identity(
     cap: &crate::capability::CapabilityBackend,
@@ -2283,12 +2282,11 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+        undeclared_gate::refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
 
         // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
-        // being handed a continuation envelope it has no vocabulary for. The
-        // gateway would accept one back (`requestState` is read for every era),
-        // but a 2025 client does not know to send it, so relaying it strands the
+        // being handed a continuation envelope it has no vocabulary for. A 2025
+        // client does not know to send one back, so relaying it strands the
         // exchange at both ends. The envelope is the fallback, not the path.
         //
         // Placed between the two gates on purpose. After MRTR.9, because
@@ -2406,27 +2404,21 @@ impl MetaMcp {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
                 }) => {}
-                // Out of rounds: hand back the LAST round, questions and state
-                // together, sealed like any other (#569). The bridge has held it
-                // to MRTR.9 already, refusing it as `Undeclared` below; the key
-                // keeps its release default, since a backend that asked has not acted.
+                // Out of rounds: hand back the LAST round, sealed (#569).
                 Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
                     if let Some(last) = last {
                         result = *last;
                         interim = crate::protocol::mrtr::InputRequired::from_result(&result);
                     }
                 }
-                Err(crate::gateway::input_bridge::BridgeError::Undeclared {
+                Err(BridgeError::Undeclared {
                     key,
                     method,
                     reason,
                 }) => {
-                    let refused = crate::protocol::mrtr::Undeclared {
-                        key: &key,
-                        method: &method,
-                        reason,
-                    };
-                    return Err(undeclared_gate::refusal(&refused, server, tool, trace_id));
+                    return Err(undeclared_gate::bridge_refusal(
+                        &key, &method, reason, server, tool, trace_id,
+                    ));
                 }
                 // A policy refusal keeps its type across the bridge boundary.
                 // `error_response_preserving_status` carries a dedicated
