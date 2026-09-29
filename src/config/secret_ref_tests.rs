@@ -4,30 +4,18 @@
 
 use super::*;
 
-/// 0600, so the C2 file-mode rule does not refuse the fixture first.
-fn private(path: &std::path::Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
 /// Writes `yaml` as `gateway.yaml` under `dir` and loads it.
 fn load_c4(dir: &std::path::Path, yaml: &str) -> Result<Config> {
     let path = dir.join("gateway.yaml");
-    std::fs::write(&path, yaml).expect("write config");
-    private(&path);
+    // Owner-only, so the C2 file-mode rule does not refuse the fixture first.
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     Config::load(Some(&path))
 }
 
 /// Writes one env file under `dir` and returns its path for a YAML single-quoted scalar.
 fn env_file_c4(dir: &std::path::Path, body: &str) -> String {
     let path = dir.join("c4.env");
-    std::fs::write(&path, body).expect("write env file");
-    private(&path);
+    crate::gateway::test_helpers::write_owner_only(&path, body).expect("write env file");
     path.display().to_string()
 }
 

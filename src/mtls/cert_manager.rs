@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
@@ -264,6 +264,7 @@ impl CertGenerator {
     /// Write a [`GeneratedCert`] to disk.
     ///
     /// Writes `<stem>.crt` (`0644`) and `<stem>.key` (`0600`) under `dir` (`0700`).
+    /// On Windows both files are owner-only.
     ///
     /// # Errors
     ///
@@ -277,21 +278,29 @@ impl CertGenerator {
             .map_err(|e| Error::Config(format!("Cannot set dir permissions: {e}")))?;
 
         let cert_path = dir.join(format!("{stem}.crt"));
-        fs::write(&cert_path, &cert.cert_pem)
-            .map_err(|e| Error::Config(format!("Cannot write cert: {e}")))?;
-        // Exactly 0644 whatever the umask or an older file's mode: `serve`
-        // refuses a cert others can change (F18 I1), and this one is public.
-        #[cfg(unix)]
-        fs::set_permissions(&cert_path, fs::Permissions::from_mode(0o644))
-            .map_err(|e| Error::Config(format!("Cannot set cert permissions: {e}")))?;
+        // Windows has no 0644 to set: the cert goes through the same private
+        // create-and-rename as the key, so it never carries the directory's
+        // inherited DACL (a cert others can change is refused on read).
+        #[cfg(windows)]
+        write_private_file(&cert_path, &cert.cert_pem, "cert")?;
+        #[cfg(not(windows))]
+        {
+            fs::write(&cert_path, &cert.cert_pem)
+                .map_err(|e| Error::Config(format!("Cannot write cert: {e}")))?;
+            // Exactly 0644 whatever the umask or an older file's mode: `serve`
+            // refuses a cert others can change (F18 I1), and this one is public.
+            #[cfg(unix)]
+            fs::set_permissions(&cert_path, fs::Permissions::from_mode(0o644))
+                .map_err(|e| Error::Config(format!("Cannot set cert permissions: {e}")))?;
+        }
 
-        write_private_key(&dir.join(format!("{stem}.key")), &cert.key_pem)?;
+        write_private_file(&dir.join(format!("{stem}.key")), &cert.key_pem, "key")?;
 
         Ok(())
     }
 }
 
-fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
+fn write_private_file(path: &Path, pem: &str, what: &str) -> Result<()> {
     // `OpenOptions::mode` applies only to a file it creates. Writing over an
     // existing key would reuse that file's inode and its original mode, so the
     // new key would sit in a possibly world-readable file until the chmod that
@@ -309,41 +318,35 @@ fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
     for _ in 0..8 {
         let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
         let candidate = dir.join(format!("{stem}.tmp.{}.{nonce}", std::process::id()));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        // No owner-only mode on this platform, and no DACL call without `unsafe`.
-        // A private key is the worst file to leave at the directory's permissions,
-        // so say so rather than let it look protected. See SECURITY.md.
-        #[cfg(not(unix))]
-        crate::config_persistence::warn_once_about_inherited_acls("private key", path);
-
-        match options.open(&candidate) {
+        match crate::config_persistence::create_new_private(&candidate) {
             Ok(mut file) => {
                 if let Err(e) = file
-                    .write_all(key_pem.as_bytes())
+                    .write_all(pem.as_bytes())
                     .and_then(|()| file.sync_all())
                 {
+                    // Close first: Windows will not remove a file still open here.
+                    drop(file);
                     let _ = fs::remove_file(&candidate);
-                    return Err(Error::Config(format!("Cannot write key: {e}")));
+                    return Err(Error::Config(format!("Cannot write {what}: {e}")));
                 }
                 tmp_path = Some(candidate);
                 break;
             }
             // Stale temp collided; try the next nonce.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(Error::Config(format!("Cannot write key: {e}"))),
+            Err(e) => return Err(Error::Config(format!("Cannot write {what}: {e}"))),
         }
     }
 
     let tmp_path = tmp_path.ok_or_else(|| {
-        Error::Config("Cannot write key: no unique temp file after 8 attempts".to_string())
+        Error::Config(format!(
+            "Cannot write {what}: no unique temp file after 8 attempts"
+        ))
     })?;
 
     fs::rename(&tmp_path, path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
-        Error::Config(format!("Cannot write key: {e}"))
+        Error::Config(format!("Cannot write {what}: {e}"))
     })?;
 
     Ok(())
@@ -837,7 +840,7 @@ mod private_key_permission_tests {
         let before = fs::metadata(&path).expect("seed metadata").ino();
 
         // WHEN: we write a new key to the same path.
-        write_private_key(&path, "new key").expect("write key");
+        write_private_file(&path, "new key", "key").expect("write key");
 
         // THEN: it is a different file, owner-only, holding the new key.
         let after = fs::metadata(&path).expect("metadata");

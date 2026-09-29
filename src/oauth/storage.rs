@@ -457,14 +457,16 @@ impl TokenStorage {
     /// write failure never leaks a private `0600` temp file under `base_dir`
     /// (MIK-6750 r8, minor -- the previous code returned early via `?`
     /// without cleanup, orphaning the temp on every such error).
-    #[cfg(unix)]
     fn write_secret_tmp(tmp: (fs::File, PathBuf), content: &str) -> Result<PathBuf> {
         use std::io::Write as _;
         let (mut file, tmp_path) = tmp;
-        match file
+        let written = file
             .write_all(content.as_bytes())
-            .and_then(|()| file.sync_all())
-        {
+            .and_then(|()| file.sync_all());
+        // Close before cleanup: Windows cannot delete a file held open
+        // without delete sharing.
+        drop(file);
+        match written {
             Ok(()) => Ok(tmp_path),
             Err(e) => {
                 let _ = fs::remove_file(&tmp_path);
@@ -473,76 +475,21 @@ impl TokenStorage {
         }
     }
 
-    /// Non-unix counterpart of [`write_secret_tmp`](Self::write_secret_tmp)
-    /// (see its docs for the cleanup-on-failure contract). `fs::write` opens,
-    /// writes, and closes the file in one call, so there is no separate
-    /// [`File`] handle to thread through.
-    #[cfg(not(unix))]
-    fn write_secret_tmp(tmp: PathBuf, content: &str) -> Result<PathBuf> {
-        match fs::write(&tmp, content) {
-            Ok(()) => Ok(tmp),
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                Err(Error::OAuth(format!("Failed to write temp file: {e}")))
-            }
-        }
-    }
-
-    /// Atomically create a private (`0600` on unix) temp file for a `client_id`
-    /// write, retrying with a fresh nonce if a stale temp path collides.
+    /// Atomically create a private temp file (`0600` on unix, an owner-only
+    /// DACL on Windows) for a write, retrying with a fresh nonce if a stale
+    /// temp path collides.
     ///
-    /// Returns the open [`File`] handle plus its path on unix (so the caller
-    /// writes through the same fd the mode was set on), and just the path on
-    /// other platforms.
-    #[cfg(unix)]
+    /// Returns the open [`File`] handle plus its path, so the caller writes
+    /// through the handle the access limit was set on.
     fn create_secret_tmp(&self, file_name: &str) -> Result<(fs::File, PathBuf)> {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
         static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
         for _ in 0..8 {
             let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
             let tmp = self
                 .base_dir
                 .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)
-            {
+            match crate::config_persistence::create_new_private(&tmp) {
                 Ok(file) => return Ok((file, tmp)),
-                // Stale temp collided; try the next nonce.
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => {
-                    return Err(Error::OAuth(format!("Failed to create temp file: {e}")));
-                }
-            }
-        }
-        Err(Error::OAuth(
-            "Failed to create a unique temp file after 8 attempts".to_string(),
-        ))
-    }
-
-    /// Non-unix fallback: pick a fresh temp path via `create_new`, closing the
-    /// handle immediately so the caller can `fs::write` it (no unix mode bits).
-    #[cfg(not(unix))]
-    fn create_secret_tmp(&self, file_name: &str) -> Result<PathBuf> {
-        // Same gap as the config writer, so the same warning: without a mode to
-        // set at creation, the file inherits the directory's permissions and an
-        // OAuth token is as readable as wherever the storage directory lives.
-        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
-        crate::config_persistence::warn_once_about_inherited_acls("OAuth token", &self.base_dir);
-        for _ in 0..8 {
-            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-            let tmp = self
-                .base_dir
-                .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp)
-            {
-                Ok(_) => return Ok(tmp),
                 // Stale temp collided; try the next nonce.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
@@ -617,6 +564,28 @@ mod tests {
         assert_eq!(
             mode, 0o600,
             "client_id file must be owner-only, got {mode:o}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn saved_token_and_client_id_are_owner_only_in_an_open_directory() {
+        // WT-ASSERT 1718-W2: both writers create their scratch file private.
+        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+        let dir = everyone_full_dir("1718-W2");
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        let token = TokenInfo::from_response("tok".into(), None, None, None, None);
+
+        store.save(backend, resource, &token).unwrap();
+        store.save_client_id(backend, resource, "cid").unwrap();
+
+        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
+        assert_owner_only("1718-W2 token", &store.token_path(backend, resource), false);
+        assert_owner_only(
+            "1718-W2 client",
+            &store.client_path(backend, resource),
+            false,
         );
     }
 

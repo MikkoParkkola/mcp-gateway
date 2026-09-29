@@ -35,9 +35,8 @@ Allow `unsafe` in exactly one module, `src/win_acl.rs`, compiled only on Windows
 (`#[cfg(windows)]`, so unix builds contain no new `unsafe`). It calls `windows-sys`
 0.61.2, which is already in `Cargo.lock` through `mio`, `socket2`, `errno`, `dirs-sys`
 and `schannel`; the change adds it as a direct Windows-only dependency with the
-`Win32_Foundation`, `Win32_Security`, `Win32_Security_Authorization`,
-`Win32_Storage_FileSystem` and `Win32_System_Threading` features and adds no package to
-the lock file.
+`Win32_Foundation`, `Win32_Security`, `Win32_Storage_FileSystem` and
+`Win32_System_Threading` features and adds no package to the lock file.
 
 The module exports nine safe `pub(crate)` functions and nothing else:
 `current_user_sid`, `private_descriptor`, `create_dir_private`, `create_file_private`,
@@ -56,9 +55,9 @@ A CI check fails the build if `allow(unsafe_code)`, `expect(unsafe_code)` or an
 Every `unsafe` block carries a `// SAFETY:` comment naming which of these it relies on.
 
 1. **Ownership.** Every buffer passed to Win32 is a Rust-owned `Vec<u8>` or a
-   stack value that outlives the call. Buffers Win32 allocates (`GetSecurityInfo`'s
-   security descriptor) are wrapped at once in an owner type whose `Drop` calls
-   `LocalFree`, exactly once. Handles are wrapped in `OwnedHandle` on return, so the
+   stack value that outlives the call; `inspect` reads the stored descriptor with
+   `GetKernelObjectSecurity` into such a buffer, so no Win32-allocated buffer needs
+   `LocalFree`. Handles are wrapped in `OwnedHandle` on return, so the
    standard library closes them.
 2. **Alignment.** SID and ACL buffers are allocated as `Vec<u64>` (8-byte alignment,
    above the 4-byte alignment `ACL` and `SID` need) and viewed as bytes.
@@ -79,9 +78,9 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
      `SetSecurityDescriptorOwner`, `SetSecurityDescriptorDacl`,
      `SetSecurityDescriptorControl`, `GetAce`): zero is failure, then
      `io::Error::last_os_error()`.
-   - `GetSecurityInfo` returns a `WIN32_ERROR`: `ERROR_SUCCESS` (0) is success, any
-     other value is the error itself (`io::Error::from_raw_os_error`); last-error is
-     not consulted.
+   - `GetKernelObjectSecurity` is a `BOOL` too: a zero with
+     `ERROR_INSUFFICIENT_BUFFER` and a larger required length grows the buffer and
+     retries; any other zero is the error.
    - `CreateFileW` fails with `INVALID_HANDLE_VALUE`, never null; that is checked
      before the value is wrapped in `OwnedHandle`.
    - `GetFinalPathNameByHandleW` returns a length: zero is failure; a return >= the
@@ -109,8 +108,9 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
   with checked arithmetic.
 - `create_dir_private` / `create_file_private`: the `SECURITY_ATTRIBUTES` and the wide
   path live on the caller's stack for the duration of the call.
-- `inspect`: the descriptor returned by `GetSecurityInfo` is owned by a `LocalFree`
-  guard; the owner and DACL pointers are read only while it lives. For each ACE from
+- `inspect`: the descriptor `GetKernelObjectSecurity` stores in the `Vec<u64>` buffer
+  is the one source of owner, DACL and `SE_DACL_PROTECTED`; the owner and DACL
+  pointers are read only while the buffer lives, bounded by the descriptor's length. For each ACE from
   `GetAce`: the header's `AceSize` must be at least the fixed part of that ACE type,
   and the SID starting at `SidStart` is bounded BEFORE any SID API touches it: the
   8-byte SID header must fit in the ACE, its `SubAuthorityCount` byte is read, and
