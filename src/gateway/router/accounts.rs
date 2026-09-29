@@ -199,6 +199,7 @@ fn own_key(
         .into_iter()
         .find(|compiled| compiled.descriptor_id == account_id)
         .and_then(|compiled| compiled.account)
+        .map(|(descriptor, _revision)| descriptor)
         .ok_or(NoKey::NotFound)?;
     account_key(Some(Principal::Verified(identity)), &descriptor).map_err(|_| NoKey::NotFound)
 }

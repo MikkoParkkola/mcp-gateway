@@ -83,6 +83,10 @@ pub(super) fn gated(inner: Arc<dyn AccountCustody>) -> (Arc<GatedCustody>, Relea
 
 #[async_trait::async_trait]
 impl AccountCustody for GatedCustody {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        self.inner.resolve(account).await
+    }
+
     async fn refresh_if_expired(
         &self,
         account: &AccountKey,
@@ -137,6 +141,10 @@ pub(super) fn rendezvous(inner: Arc<dyn AccountCustody>, parties: usize) -> Arc<
 
 #[async_trait::async_trait]
 impl AccountCustody for RendezvousCustody {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        self.inner.resolve(account).await
+    }
+
     async fn refresh_if_expired(
         &self,
         account: &AccountKey,

@@ -459,6 +459,7 @@ pub(crate) use storage::journey::owner_digest_compared;
 pub(crate) use storage::journey::{
     JourneyError, JourneyLimits, JourneyRefusal, JourneyStatus, JourneyView,
 };
+pub(crate) use storage::migration_revision::descriptor_revision;
 #[cfg(test)]
 pub(crate) use worker::CustodyHandle;
 pub(crate) use worker::{

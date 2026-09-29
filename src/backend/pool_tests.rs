@@ -1252,7 +1252,13 @@ async fn a_leased_slot_is_never_evicted() {
         "once the lease is released the slot must become evictable again, \
          or in_flight leaks and the slot is immortal"
     );
-    tokio::time::sleep(Duration::from_millis(50)).await; // the close runs detached (#2245)
+    // The close runs detached (#2245): poll for it, bounded, not a fixed wait.
+    for _ in 0..200 {
+        if mock.closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(
         mock.closed.load(Ordering::SeqCst),
         "the evicted slot's transport was never closed"
@@ -1986,7 +1992,7 @@ impl Transport for RealChildWedgedClose {
 // That would report a dead process as orphaned. Process STATE is the honest
 // probe: None = gone, Some("Z...") = dead awaiting reap, anything else = alive.
 #[cfg(unix)]
-fn process_state(pid: u32) -> Option<String> {
+pub(super) fn process_state(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
@@ -2051,7 +2057,7 @@ async fn a_close_that_times_out_still_reaps_the_child() {
     );
 
     for _ in 0..40 {
-        if !is_alive(pid) {
+        if super::eviction_close_bound_tests::is_reaped(pid) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
