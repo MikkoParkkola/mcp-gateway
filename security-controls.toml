@@ -64,6 +64,10 @@ reason = "ASI07 chain signing and verification with no caller yet; it becomes a 
 module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
 
+[[coverage.not_a_control]]
+module = "src/security/security_metrics.rs"
+reason = "D4 counters for refused credentials and calls; it counts decisions the gates already made and refuses nothing"
+
 # --- request-path gates, NFR.SEC.1 inventory rows 1-14 ---
 
 [[control]]
