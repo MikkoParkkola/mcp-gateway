@@ -29,11 +29,12 @@ use windows_sys::Win32::Security::{
     TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdInfo,
-    GetDriveTypeW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_DISPOSITION_INFO,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_TYPE_DISK, FileDispositionInfo, FileIdInfo, GetDriveTypeW,
+    GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW,
     GetVolumeInformationByHandleW, GetVolumePathNameW, MOVEFILE_REPLACE_EXISTING,
-    MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, VOLUME_NAME_DOS,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, SetFileInformationByHandle, VOLUME_NAME_DOS,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -344,6 +345,8 @@ thread_local! {
     /// Per thread, so parallel tests never observe each other's creations.
     pub(crate) static AFTER_CREATE: std::cell::Cell<Option<AfterCreateHook>> =
         const { std::cell::Cell::new(None) };
+    /// Makes private creates on this thread see a volume without ACLs (W-T15d).
+    pub(crate) static NO_ACLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(crate) fn after_create(path: &Path, file: Option<&File>) {
@@ -392,7 +395,7 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
     let raw = unsafe {
         CreateFileW(
             w.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+            GENERIC_READ | GENERIC_WRITE | READ_CONTROL | DELETE,
             share_mode,
             &raw const attrs,
             CREATE_NEW,
@@ -407,15 +410,38 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
     let file = File::from(unsafe { OwnedHandle::from_raw_handle(raw) });
     // A volume without ACLs drops the descriptor and still reports success, so
     // the file would be open to every account. Refuse before any byte is
-    // written, and remove the empty file this call created.
-    if !matches!(volume_keeps_acls(&file), Ok(true)) {
-        drop(file);
-        let _ = std::fs::remove_file(path);
+    // written. The empty file is marked for deletion through this handle
+    // (`DELETE` above) before it closes, so no other opener can keep it; a
+    // failed mark is returned, never ignored.
+    let keeps = volume_keeps_acls(&file);
+    #[cfg(test)]
+    let keeps = if NO_ACLS.with(std::cell::Cell::get) {
+        Ok(false)
+    } else {
+        keeps
+    };
+    if !matches!(keeps, Ok(true)) {
+        let mark = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: contract 1/6 — a live handle; `mark` outlives the call and
+        // its exact size is passed; BOOL checked.
+        let marked = unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileDispositionInfo,
+                (&raw const mark).cast(),
+                u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>()).unwrap_or(u32::MAX),
+            )
+        } != 0;
+        let cleanup = if marked {
+            String::new()
+        } else {
+            format!("; the empty file could not be removed: {}", last())
+        };
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
                 "refusing to create {}: its volume keeps no ACLs (FAT or exFAT), so the file \
-                 cannot be made owner-only; use an NTFS or ReFS volume",
+                 cannot be made owner-only; use an NTFS or ReFS volume{cleanup}",
                 path.display()
             ),
         ));
@@ -667,7 +693,15 @@ pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
     volume_keeps_acls(dir)
 }
 
-/// True when the filesystem holding the open `handle` keeps ACLs (NTFS, ReFS);
+/// True when the open `handle` is a disk object (a file or directory), not a
+/// pipe, console or other device.
+pub(crate) fn is_disk_object(handle: &File) -> bool {
+    // SAFETY: contract 1 — a live handle; the call only reads its type.
+    let kind = unsafe { GetFileType(handle.as_raw_handle()) };
+    kind == FILE_TYPE_DISK
+}
+
+/// True when the filesystem holding the open `handle` keeps ACLs (NTFS, `ReFS`);
 /// FAT and exFAT accept a security descriptor at create and discard it.
 pub(crate) fn volume_keeps_acls(handle: &File) -> io::Result<bool> {
     let mut fs_flags = 0_u32;

@@ -234,6 +234,11 @@ fn first(found: Vec<PrivacyRefusal>) -> Result<(), PrivacyRefusal> {
 
 fn attributes(file: &File) -> Result<u32, PrivacyRefusal> {
     use std::os::windows::fs::MetadataExt as _;
+    // A pipe or device has no attributes worth judging: only a disk object is
+    // a regular file or directory (UPGRADING-4.0 item 99).
+    if !crate::win_acl::is_disk_object(file) {
+        return Err(PrivacyRefusal::NotRegular);
+    }
     file.metadata()
         .map(|meta| meta.file_attributes())
         .map_err(|_| PrivacyRefusal::Unreadable)

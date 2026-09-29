@@ -434,6 +434,47 @@ mod win_privileged {
     }
 }
 
+// W-T15d: a create the volume check refuses leaves no file behind. The check's
+// answer is forced here, so this runs unprivileged on NTFS; the real FAT and
+// exFAT volumes are W-T15c.
+#[test]
+fn wt15d_refused_private_create_leaves_no_file() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("refused.key");
+    crate::win_acl::NO_ACLS.with(|forced| forced.set(true));
+    let result = create_file_private(&path, Share::Exclusive);
+    crate::win_acl::NO_ACLS.with(|forced| forced.set(false));
+    let err = result.expect_err("WT-ASSERT W-T15d: created on a volume without ACLs");
+    assert_eq!(
+        err.kind(),
+        io::ErrorKind::PermissionDenied,
+        "WT-ASSERT W-T15d: {err}"
+    );
+    assert!(!path.exists(), "WT-ASSERT W-T15d: refused file left behind");
+}
+
+// #2305: a device handle is refused as not regular, for both classes and by
+// the store judge, before any attribute or DACL is read.
+#[test]
+fn device_handle_refuses_as_not_regular() {
+    let nul = File::open("NUL").expect("WT-FIXTURE #2305: NUL opens");
+    for what in [
+        crate::config::Protects::Secrecy,
+        crate::config::Protects::Integrity,
+    ] {
+        assert_eq!(
+            file_refusals_for(&nul, what),
+            vec![PrivacyRefusal::NotRegular],
+            "WT-ASSERT #2305/{what:?}"
+        );
+    }
+    assert_eq!(
+        judge_file(&nul),
+        Err(PrivacyRefusal::NotRegular),
+        "WT-ASSERT #2305/judge"
+    );
+}
+
 // W-T6: a symlink at a record name is judged as a reparse point on the handle
 // the no-follow open returns. Skips (with a marker) where symlink creation
 // needs a privilege the runner lacks; junctions cover the rule in W-T5.

@@ -2603,9 +2603,9 @@ the unix mode rules:
   control-plane `grants.json` and `policies.json`) may be read by others but never changed by
   them. A read, and an append to the journal, is refused when another account can write, or the
   owner is not the gateway's account, SYSTEM or Administrators.
-- A secret file is never created on a volume that keeps no ACLs (FAT, exFAT): Windows accepts
-  the owner-only descriptor there and discards it, so the create is refused and nothing is
-  written. Keep the config, keys and token files on NTFS or ReFS.
+- A secret file is refused on a volume that keeps no ACLs (FAT, exFAT): Windows accepts the
+  owner-only descriptor there and discards it, so the create is refused: no secret is written;
+  the empty file is removed. Keep the config, keys and token files on NTFS or ReFS.
 - The check and the read use one handle. Like unix, a link is followed and its target judged; a
   directory or other non-regular file is refused.
 - The refusal names every rule broken and prints the PowerShell lines that repair it, for the
