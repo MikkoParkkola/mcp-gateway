@@ -398,7 +398,7 @@ impl AgentDefinitionConfig {
 mod multi_user_tests {
     use super::*;
 
-    pub(super) fn api_key(name: &str) -> ApiKeyConfig {
+    fn api_key(name: &str) -> ApiKeyConfig {
         ApiKeyConfig {
             key: None,
             key_sha256: Some(super::super::api_key::api_key_digest_spec(
@@ -511,7 +511,7 @@ mod credential_count_tests;
 mod single_user_principal_tests {
     use super::*;
 
-    fn api_key(name: &str) -> ApiKeyConfig {
+    pub(super) fn api_key(name: &str) -> ApiKeyConfig {
         ApiKeyConfig {
             key: None,
             key_sha256: Some(super::super::api_key::api_key_digest_spec(
