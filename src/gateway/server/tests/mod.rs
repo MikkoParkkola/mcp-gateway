@@ -14,6 +14,7 @@
 mod alloc_meter;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
+mod visibility_allocations;
 
 mod signing_stdio_routing;
 
