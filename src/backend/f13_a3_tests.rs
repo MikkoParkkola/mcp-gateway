@@ -342,7 +342,7 @@ async fn a3_t11_a_handshake_failure_answers_as_the_dispatch() {
 async fn a3_t12_a_fill_voided_by_a_direct_list_stamps_nothing() {
     let lister = Lister::new(Mode::Serve);
     let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
-    let entry = backend.pooled_entry(&PoolKey::Shared);
+    let entry = backend.shared_entry();
     let mut guard = super::super::fill_check::FillGuard::arm(Arc::clone(&entry));
     backend.remember_listed_tools(None, false, &[]);
     guard.end(super::super::fill_check::FillEnd::Drained);
@@ -359,7 +359,7 @@ async fn a3_t12_a_fill_voided_by_a_direct_list_stamps_nothing() {
 async fn a3_t13_a_direct_list_ends_the_stale_refresh_cooldown() {
     let lister = Lister::new(Mode::Serve);
     let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
-    let entry = backend.pooled_entry(&PoolKey::Shared);
+    let entry = backend.shared_entry();
     *entry.tools_refresh_failed_at.lock() = Some(tokio::time::Instant::now());
     backend.remember_listed_tools(None, false, &[]);
     assert!(

@@ -34,8 +34,21 @@ impl Backend {
     /// selects the transport. Identity-free readers pass `None` through the
     /// named `*_shared`-style wrappers below, which is how `Shared` stays
     /// reachable without any caller spelling a key.
+    ///
+    /// A LOOKUP, NEVER A CREATE (#2300). Every reader here only reads, so a
+    /// caller with no slot yet reads a cold entry that is never inserted:
+    /// probes cannot fill the identity-slot cap. Fills go through
+    /// `begin_internal_activity_for`, which admits the slot.
     fn tools_slot(&self, binding: Option<&str>) -> Arc<super::pool::PooledEntry> {
-        self.pooled_entry(&self.pool_key_for(binding))
+        self.pool.get(&self.pool_key_for(binding)).map_or_else(
+            || {
+                Arc::new(super::pool::PooledEntry::new(
+                    &self.name,
+                    &self.failsafe_config,
+                ))
+            },
+            |slot| Arc::clone(slot.value()),
+        )
     }
 
     /// Whether a stale hit's refresh on `binding`'s slot failed within the
@@ -279,7 +292,7 @@ impl Backend {
             None => &[],
         };
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
-        let lease = self.begin_internal_activity_for(&key);
+        let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
         select(&entry)
             .get_or_fetch_shared_then(

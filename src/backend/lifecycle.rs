@@ -157,9 +157,10 @@ impl Backend {
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),
             cache_ttl,
             last_used: std::sync::atomic::AtomicU64::new(0),
-            semaphore: Semaphore::new(100), // Max concurrent requests
+            semaphore: Semaphore::new(100),
             request_count: std::sync::atomic::AtomicU64::new(0),
             replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
+            identity_slots: Arc::default(),
             lifecycle: tokio::sync::RwLock::new(()),
             descriptor_gate: super::descriptor_gate::DescriptorGate::default(),
             stop_once: tokio::sync::Mutex::new(()),
@@ -208,8 +209,7 @@ impl Backend {
         const MAX_RACE_RETRIES: u8 = 3;
 
         for _attempt in 0..MAX_RACE_RETRIES {
-            let entry = self.pooled_entry(key);
-
+            let entry = self.pooled_entry(key)?;
             // NOTE: deliberately does NOT touch the idle clocks. `last_used` means
             // "when did a CLIENT last use this backend", and is written only by the
             // request/notify paths in `ops.rs`. Touching it here is what made idle
@@ -327,7 +327,7 @@ impl Backend {
     ///
     /// Returns an error if the transport fails to connect or initialize.
     pub async fn start(&self) -> Result<()> {
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         self.start_entry(&PoolKey::Shared, &entry).await?;
         Ok(())
     }
@@ -897,7 +897,7 @@ impl Backend {
             return Ok(RestartOutcome::SkippedStopping);
         }
 
-        let entry = self.pooled_entry(&PoolKey::Shared);
+        let entry = self.shared_entry();
         let _guard = entry.start_lock.lock().await;
 
         // Re-checked after the await. The lock above normally prevents shutdown
