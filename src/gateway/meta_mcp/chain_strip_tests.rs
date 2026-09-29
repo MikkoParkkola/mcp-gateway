@@ -10,7 +10,7 @@ use super::*;
 const CHAIN_KEY: &str = "io.mcp-gateway/signature-chain";
 
 /// A backend whose result carries `meta` as its `_meta`.
-fn chain_sending_backend(meta: serde_json::Value) -> Arc<BackendRegistry> {
+fn chain_sending_backend(meta: &serde_json::Value) -> Arc<BackendRegistry> {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig};
     use crate::transport::Transport;
@@ -63,7 +63,7 @@ fn forged_chain() -> serde_json::Value {
 async fn backend_chain_stripped_without_emission_meta() {
     for stamping in [false, true] {
         let meta = meta_with(
-            chain_sending_backend(json!({CHAIN_KEY: forged_chain(), "cache_key": "keep-me"})),
+            chain_sending_backend(&json!({CHAIN_KEY: forged_chain(), "cache_key": "keep-me"})),
             stamping,
         );
         let result = invoke(&meta).await;
@@ -85,7 +85,7 @@ async fn backend_chain_stripped_without_emission_meta() {
 #[tokio::test]
 async fn backend_chain_only_meta_is_dropped_meta() {
     let meta = meta_with(
-        chain_sending_backend(json!({CHAIN_KEY: forged_chain()})),
+        chain_sending_backend(&json!({CHAIN_KEY: forged_chain()})),
         false,
     );
     let result = invoke(&meta).await;
@@ -96,7 +96,7 @@ async fn backend_chain_only_meta_is_dropped_meta() {
 
     // With stamping on, `_meta` carries this gateway's receipt instead.
     let meta = meta_with(
-        chain_sending_backend(json!({CHAIN_KEY: forged_chain()})),
+        chain_sending_backend(&json!({CHAIN_KEY: forged_chain()})),
         true,
     );
     let result = invoke(&meta).await;
