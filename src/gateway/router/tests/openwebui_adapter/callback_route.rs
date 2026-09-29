@@ -76,7 +76,8 @@ fn key_of(gw: &Gateway, subject: &str, account: &str) -> AccountKey {
         .find(|compiled| compiled.descriptor_id == account)
         .unwrap()
         .account
-        .unwrap();
+        .unwrap()
+        .0;
     let identity = crate::key_server::oidc::VerifiedIdentity {
         subject: subject.to_owned(),
         email: String::new(),

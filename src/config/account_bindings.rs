@@ -35,6 +35,7 @@ use crate::identity_propagation::{
     IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
 };
 use crate::personal_accounts::config::{AccountDescriptor, AccountsConfig, DescriptorMode};
+use crate::personal_accounts::descriptor_revision;
 use crate::personal_accounts::identity::AccountDescriptor as AccountKeyDescriptor;
 use crate::secret_injection::InjectTarget;
 use crate::{Error, Result};
@@ -327,8 +328,11 @@ pub(crate) struct CompiledDescriptor {
     pub(crate) mode: DescriptorMode,
     /// `None` for `shared`: existing static behaviour is preserved exactly.
     pub(crate) propagation: Option<IdentityPropagationConfig>,
-    /// The five-field account-key descriptor, for `personal_managed` only.
-    pub(crate) account: Option<AccountKeyDescriptor>,
+    /// For `personal_managed` only: the five-field account-key descriptor and
+    /// the live descriptor's `descriptor_revision`. One `Option`, so a managed
+    /// strategy can never be installed without the revision it fences on
+    /// (#2249).
+    pub(crate) account: Option<(AccountKeyDescriptor, String)>,
 }
 
 /// Compile every declared descriptor, or refuse.
@@ -372,7 +376,15 @@ fn compile_descriptor(id: &str, descriptor: &AccountDescriptor) -> Result<Compil
                 resource: resource.to_string(),
                 issuer: issuer.to_string(),
             };
-            (Some(managed_propagation(&account)), Some(account))
+            let revision = descriptor_revision(descriptor).map_err(|error| {
+                Error::ConfigValidation(format!(
+                    "personal_managed account descriptor '{id}' has no usable revision: {error}"
+                ))
+            })?;
+            (
+                Some(managed_propagation(&account)),
+                Some((account, revision)),
+            )
         }
         DescriptorMode::External => {
             let strategy = descriptor.external_strategy.clone().ok_or_else(|| {
