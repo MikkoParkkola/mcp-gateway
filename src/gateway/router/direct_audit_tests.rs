@@ -560,3 +560,29 @@ async fn direct_append_on_a_stalled_disk_is_bounded() {
     assert!(fx.log.is_stalled());
     release.release();
 }
+
+/// #2283. Under FailClosed, a refusal that answers `id: null` still owes the
+/// caller the id it sent when the audit write fails and the answer becomes 503.
+async fn failed_audit_503_echoes_the_request_id(backend: &str) {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    fx.log.fail_next_append_for_test();
+    let (status, body) = post(&fx, backend, &tools_call("t"), &Caller::Key).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], -32005, "{body}");
+    assert_eq!(body["id"], 5, "the request id was dropped: {body}");
+}
+
+#[tokio::test]
+async fn failed_audit_503_keeps_the_request_id_on_a_scope_refusal() {
+    failed_audit_503_echoes_the_request_id("beta").await;
+}
+
+#[tokio::test]
+async fn failed_audit_503_keeps_the_request_id_on_an_unrecognised_backend() {
+    failed_audit_503_echoes_the_request_id("nope").await;
+}
