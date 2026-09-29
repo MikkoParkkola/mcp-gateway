@@ -412,6 +412,37 @@ fn missing_hwm_after_last_sealed_expired_warns_in_archive_mode() {
     );
 }
 
+/// #2275: a fresh log opens segment 0 with an open record, so a never-rotated
+/// log is told apart from a pre-D6 one and tail loss needs `.hwm` to rule out.
+#[test]
+fn missing_hwm_on_never_rotated_log_is_a_live_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let mut c = (*cfg(&path, 12, false)).clone();
+    c.rotation.max_segment_bytes = u64::MAX;
+    let l = TransparencyLogger::open(Arc::new(c)).unwrap();
+    (0..5).for_each(|i| append(&l, i));
+    drop(l);
+    assert!(list_segments(&path).unwrap().is_empty(), "never rotated");
+    assert!(
+        verify(&path, false).ok,
+        "positive control: intact log verifies"
+    );
+    std::fs::remove_file(sibling(&path, "hwm")).unwrap();
+    let mut all = lines(&path);
+    all.truncate(all.len() - 2);
+    std::fs::write(
+        &path,
+        all.iter()
+            .fold(String::new(), |acc, v| acc + &v.to_string() + "\n"),
+    )
+    .unwrap();
+    let r = verify(&path, false);
+    assert!(!r.ok, "tail loss on a never-rotated log verified clean");
+    let msg = r.error_message.unwrap();
+    assert!(msg.contains("high-water mark missing"), "{msg}");
+}
+
 /// Cutting the head as well drops the open record, but not the evidence: the
 /// first surviving record then links to a hash that is not genesis.
 #[test]
