@@ -2511,8 +2511,32 @@ the unix mode rules:
   owner is not the gateway's account, SYSTEM or Administrators.
 - The check and the read use one handle. Like unix, a link is followed and its target judged; a
   directory or other non-regular file is refused.
-- The refusal names every rule broken and prints the PowerShell lines that repair it. For a trust
-  file the repair keeps Everyone as a reader, so it locks no legitimate reader out.
+- The refusal names every rule broken and prints the PowerShell lines that repair it, for the
+  file's class. `load_client_id` reads a public OAuth client id and is the one exception: it is
+  not checked.
+
+Repair a **secret file** (owner-only, one grant to the gateway's account; `<sid>` is that
+account's SID, which the refusal prints):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+Repair a **trust file** (the gateway's account, SYSTEM and Administrators keep full control,
+Everyone keeps read, so no legitimate reader is locked out and every foreign write is removed):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+When the file has another owner, run the lines as an administrator with `takeown /F '<path>'`
+first and `icacls '<path>' /setowner '*<sid>'` last; the refusal prints them in that order.
+A path with characters outside letters, digits, space and `\ : . _ - ( )` gets a description of
+the same repair instead of commands.
 
 Unix behaviour is unchanged.
 
