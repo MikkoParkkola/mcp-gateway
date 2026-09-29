@@ -78,36 +78,45 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
     }
 }
 
-/// A per-backend npm cache, so backends sharing a command cannot tear one tree.
+/// A per-backend package cache, so backends sharing a command cannot tear one
+/// tree. Each runner reads its own variable; `npm_config_cache` alone does
+/// nothing for bunx or yarn (#2258).
 #[must_use]
 pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     backend_name: &str,
     command: &str,
     mut backend_env: HashMap<String, String, S>,
 ) -> HashMap<String, String, S> {
-    if !invokes_npm(command) || backend_env.contains_key("npm_config_cache") {
+    let Some(var) = cache_var_for(command) else {
+        return backend_env;
+    };
+    if backend_env.contains_key(var) {
         return backend_env;
     }
     let dir = crate::config_persistence::gateway_data_dir()
         .join("pkg-cache")
-        .join(sanitize_cache_component(backend_name));
-    backend_env.insert(
-        "npm_config_cache".to_string(),
-        dir.to_string_lossy().into_owned(),
-    );
+        .join(cache_component(backend_name));
+    backend_env.insert(var.to_string(), dir.to_string_lossy().into_owned());
     backend_env
 }
 
-fn invokes_npm(command: &str) -> bool {
-    command
-        .split_whitespace()
-        .next()
-        .map(|program| program.rsplit('/').next().unwrap_or(program))
-        .is_some_and(|program| matches!(program, "npx" | "npm" | "pnpm" | "yarn" | "bunx"))
+/// The variable a runner reads for its cache directory. pnpm has none: its
+/// content store is shared by design, so it is not treated as isolated.
+fn cache_var_for(command: &str) -> Option<&'static str> {
+    let program = command.split_whitespace().next()?;
+    match program.rsplit('/').next().unwrap_or(program) {
+        "npx" | "npm" => Some("npm_config_cache"),
+        "bunx" => Some("BUN_INSTALL_CACHE_DIR"),
+        "yarn" => Some("YARN_CACHE_FOLDER"),
+        _ => None,
+    }
 }
 
-fn sanitize_cache_component(name: &str) -> String {
-    let cleaned: String = name
+/// A readable prefix plus a hash of the whole name. The prefix alone maps
+/// `team.alpha` and `team_alpha` (and, on a case-insensitive filesystem,
+/// `Alpha` and `alpha`) to one directory; the hash keeps them apart.
+fn cache_component(name: &str) -> String {
+    let readable: String = name
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -116,12 +125,10 @@ fn sanitize_cache_component(name: &str) -> String {
                 '_'
             }
         })
+        .take(48)
         .collect();
-    if cleaned.is_empty() {
-        "unnamed".to_string()
-    } else {
-        cleaned
-    }
+    let hash = crate::hashing::sha256_hex(name.as_bytes());
+    format!("{readable}-{}", &hash[..16])
 }
 
 /// Stdio transport for subprocess MCP servers
