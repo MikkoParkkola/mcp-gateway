@@ -303,26 +303,8 @@ pub(super) async fn test_router_app_state_with_backend(
 
 /// `AppState` whose shared Meta-MCP has provenance stamping enabled, for
 /// exercising the direct `/mcp/{name}` route's rung-3 stamping (MIK-6905).
-/// Uses a fixed signer key so a twin validator can verify the receipt.
-async fn test_router_app_state_with_provenance_backend(
-    backend: Arc<Backend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
-    test_router_app_state_with_meta(backend, |meta| {
-        // Derive the receipt-domain subkey before stamping, mirroring the
-        // production `resolve_provenance_signer` wiring in `gateway::server`
-        // (MIK-6909): the validator below derives the same subkey internally,
-        // so the stamping side must derive it too or signatures won't
-        // cross-verify.
-        meta.enable_provenance_stamping(
-            crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
-                .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
-        );
-    })
-    .await
-}
-
-/// The same `AppState`, with the shared Meta-MCP configured by `configure`
-/// before it is frozen behind an `Arc`.
+/// An `AppState` whose Meta-MCP `configure` sets up first (e.g. a receipt signer
+/// on the production-derived subkey, MIK-6909).
 async fn test_router_app_state_with_meta(
     backend: Arc<Backend>,
     configure: impl FnOnce(&mut MetaMcp),
@@ -1684,7 +1666,13 @@ async fn backend_handler_direct_route_stamps_bypass_provenance() {
     let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
     backend.set_transport_for_test(transport);
 
-    let (state, _store) = test_router_app_state_with_provenance_backend(backend).await;
+    let (state, _store) = test_router_app_state_with_meta(backend, |meta| {
+        meta.enable_provenance_stamping(
+            crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
+        );
+    })
+    .await;
     let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")

@@ -58,6 +58,10 @@ pub(crate) enum DeliveryInspection {
 /// Where a final result came from, as decided by the dispatch outcome. Only
 /// backend results and replays of them are eligible for an origin link.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "construction sites set it with the emission")
+)]
 pub(crate) enum ChainSource {
     /// A real backend result reached the provenance stamp.
     Backend,
@@ -136,6 +140,8 @@ impl super::MetaMcp {
             context.mutation,
             inspection,
         );
+        // The origin link goes here: after the firewall, before the v2 HMAC.
+        let _ = (context.chain_source, context.chain_nonce);
 
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.

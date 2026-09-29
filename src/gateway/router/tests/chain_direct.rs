@@ -104,12 +104,12 @@ async fn origin_link_emitted_direct_route() {
     .await;
     let chain = chain_of(&json["result"]).expect("chain emitted");
     let digest = content_digest(&ok_body()).expect("digest");
-    assert_eq!(
+    std::assert_eq!(
         verify_self(chain, &digest, NONCE).expect("verifies").len(),
         1
     );
     let link = origin_link(chain, LinkSource::Live, Some(NONCE));
-    assert_eq!(link.out.as_deref(), Some(digest.as_str()));
+    std::assert_eq!(link.out.as_deref(), Some(digest.as_str()));
 }
 
 #[tokio::test]
@@ -133,7 +133,7 @@ async fn backend_chain_stripped_without_emission_direct() {
         forged["_meta"] = json!({CHAIN_KEY: [{"gw": "attacker"}], "keep": 1});
         let json = post_direct(success(forged), None, provenance, Some(json!(NONCE))).await;
         assert!(!carries_chain(&json["result"]), "provenance={provenance}");
-        assert_eq!(json["result"]["_meta"]["keep"], 1);
+        std::assert_eq!(json["result"]["_meta"]["keep"], 1);
         let mut only = ok_body();
         only["_meta"] = json!({CHAIN_KEY: []});
         let json = post_direct(success(only), None, false, None).await;
@@ -170,7 +170,7 @@ async fn unhashable_final_content_refused_direct() {
     let mut unhashable = ok_body();
     unhashable["structuredContent"] = json!({"n": 9_007_199_254_740_993_u64});
     let json = post_direct(success(unhashable), Some(ChainEmit::Always), false, None).await;
-    assert_eq!(json["error"]["code"], -32001);
+    std::assert_eq!(json["error"]["code"], -32001);
     assert!(!json.to_string().contains(CHAIN_KEY));
 }
 
@@ -184,7 +184,7 @@ async fn oversized_outgoing_link_refused_direct() {
         Some(control_nonce),
     )
     .await;
-    assert_eq!(json["error"]["code"], -32001);
+    std::assert_eq!(json["error"]["code"], -32001);
 }
 
 #[tokio::test]
@@ -197,7 +197,7 @@ async fn chain_nonce_invalid_refused_direct() {
             Some(bad),
         )
         .await;
-        assert_eq!(json["error"]["code"], -32602);
+        std::assert_eq!(json["error"]["code"], -32602);
     }
     let json = post_direct(
         success(ok_body()),
@@ -212,9 +212,9 @@ async fn chain_nonce_invalid_refused_direct() {
 #[test]
 fn chain_nonce_invalid_refused_params() {
     let with = |nonce: Value| chain_nonce_from_params(Some(&json!({"_meta": {NONCE_KEY: nonce}})));
-    assert_eq!(with(json!("ok")), Ok(Some("ok".to_owned())));
+    std::assert_eq!(with(json!("ok")), Ok(Some("ok".to_owned())));
     assert!(with(json!("")).is_err());
     assert!(with(json!("n".repeat(257))).is_err());
     assert!(with(json!(5)).is_err());
-    assert_eq!(chain_nonce_from_params(None), Ok(None));
+    std::assert_eq!(chain_nonce_from_params(None), Ok(None));
 }

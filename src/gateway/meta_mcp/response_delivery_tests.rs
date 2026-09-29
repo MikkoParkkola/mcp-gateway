@@ -369,8 +369,7 @@ fn firewall_delivery_absent_firewall_preserves_response_and_attempt() {
 /// MIK-7407.RESPONSE.1/.3/.5; FWR-10/15 supplied final shape and current ID.
 #[test]
 fn firewall_delivery_allow_hashes_the_complete_shaped_response() {
-    // Prove the independent oracle's availability and UTF-8/escaping contract
-    // before reaching the deliberately missing finalizer behavior.
+    // First prove the independent oracle's availability and UTF-8/escaping contract.
     assert_eq!(
         independent_hash(&json!({"b":"line\n\"quoted\"", "id":-41, "a":"ä🙂"})),
         "sha256:ac24b57ed4e7905c520315f8b93eef737cc5494c9779364ed1692ebc34cda7ef"
@@ -733,8 +732,7 @@ fn firewall_delivery_attempt_preserves_existing_invocation_and_hash_chain() {
 }
 
 /// MIK-7407.RESPONSE.5; FWR-15 handle one append Err without replay or output change.
-/// The entry-level hook proves caller handling and one-shot reset, not recovery
-/// after partial OS writes; that existing logger behavior has a separate probe.
+/// Proves caller handling and one-shot reset; partial OS writes have their own probe.
 #[test]
 fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault() {
     let fixture = Fixture::new(FirewallAction::Allow, true, true, true);

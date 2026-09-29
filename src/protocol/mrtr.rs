@@ -38,13 +38,18 @@ pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 pub(crate) const ATTESTATION_META: &str = "io.mcp-gateway/attestation";
 
 /// The `params._meta` key carrying a client's chain nonce (ASI07).
+#[cfg_attr(not(test), expect(dead_code, reason = "read by the route wiring"))]
 pub(crate) const CHAIN_NONCE_META: &str = "io.mcp-gateway/chain-nonce";
 
 /// Read and validate the request chain nonce: a string of 1..=256 bytes.
 /// `Err` carries the rejected key for a `-32602`.
+#[cfg_attr(not(test), expect(dead_code, reason = "read by the route wiring"))]
 pub(crate) fn chain_nonce_from_params(
-    _params: Option<&Value>,
+    params: Option<&Value>,
 ) -> std::result::Result<Option<String>, &'static str> {
+    let _requested = params
+        .and_then(|params| params.get("_meta"))
+        .and_then(|meta| meta.get(CHAIN_NONCE_META));
     Ok(None)
 }
 

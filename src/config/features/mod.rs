@@ -17,6 +17,7 @@ mod key_server;
 mod playbooks;
 mod runtime;
 mod security;
+mod signature_chain;
 mod streaming;
 mod tasks;
 mod webhooks;
@@ -39,10 +40,11 @@ pub use key_server::{
 pub use playbooks::PlaybooksConfig;
 pub use runtime::{RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
-    AgentIdentityConfig, ChainEmit, ContextIntegrityConfig, ContextIntegrityPresetConfig,
+    AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
     IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
-    SignatureChainConfig, ToolContractConfig,
+    ToolContractConfig,
 };
+pub use signature_chain::{ChainEmit, SignatureChainConfig};
 pub use streaming::StreamingConfig;
 pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
 pub use webhooks::WebhookConfig;
