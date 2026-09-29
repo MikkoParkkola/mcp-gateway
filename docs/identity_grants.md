@@ -112,7 +112,7 @@ it authenticated:
 | OIDC temporary token | the token's issuer | the token's `sub` |
 | `trusted_proxy` headers | `caller_identity.authority` | `X-Gateway-Identity-Subject` |
 | Cloudflare Access assertion | `https://<team_domain>` | the assertion's `sub` |
-| mTLS client certificate | `mtls` | first SAN URI, else CN |
+| mTLS client certificate | `mtls` | first non-empty SAN URI, else CN, as given |
 | Agent JWT | `agent_oauth` | the agent's `client_id` |
 
 Every `auth.api_keys` entry must have a non-empty `name`, unique across the
@@ -121,8 +121,8 @@ missing or duplicated name.
 
 `agent: !exact {source: mtls|jwt, id: AGENT_ID}` (JSON:
 `"agent": {"exact": {"source": ..., "id": ...}}`) matches only a caller whose
-agent id was proven by that source: `mtls` takes the first SAN URI, else the
-bare CN; `jwt` takes the agent's `client_id`. Only mTLS and agent-JWT callers
+agent id was proven by that source: `mtls` takes the first non-empty SAN URI,
+else the bare CN; `jwt` takes the agent's `client_id`. Only mTLS and agent-JWT callers
 have a proven agent id. An API-key caller has none, so an API-key grant uses
 `agent: any`. A bare `!exact AGENT_ID` from 3.x is refused at load; see
 `UPGRADING-4.0.md` item 27.
