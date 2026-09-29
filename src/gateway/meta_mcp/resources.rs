@@ -279,11 +279,11 @@ impl MetaMcp {
     /// so clients always discover them first without depending on any backend.
     /// All backend resource metadata is sanitized to prevent prompt injection.
     ///
-    /// PER CALLER (MIK-7334.CATALOGUE.1). `verified_identity` selects the pool
-    /// slot each backend's catalogue is fetched from and cached on, exactly as
-    /// `tools/list` does. `None` — every stdio caller, and every HTTP caller
-    /// that presented no identity — resolves to the shared slot, so
-    /// single-tenant behaviour is byte-for-byte unchanged (IDP.5).
+    /// PER CALLER (MIK-7334.CATALOGUE.1). The caller `verified_identity` and
+    /// `client` prove selects the pool slot each backend's catalogue is fetched
+    /// from and cached on, exactly as `tools/list` does. A caller no principal
+    /// is found for resolves to the shared slot (IDP.5); the sole operator
+    /// reaches a managed-account backend on its own slot (#2231).
     ///
     /// A backend outside `client`'s scope is omitted before it is contacted.
     ///
@@ -304,15 +304,13 @@ impl MetaMcp {
         // Fetch all backends in parallel; skip ones that fail or time out.
         // The credential is resolved per backend BEFORE the fetch, and a
         // backend the caller may not see is dropped here (fail-closed = omit).
+        let caller = Self::handler_proof(client, verified_identity);
         let mut credentialed = Vec::new();
         for backend in self.backends.all() {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            if let Some(credential) = self
-                .catalogue_credential_for(&backend, verified_identity)
-                .await
-            {
+            if let Some(credential) = self.catalogue_credential_for(&backend, caller).await {
                 credentialed.push((backend, credential));
             }
         }
@@ -407,14 +405,13 @@ impl MetaMcp {
         verified_identity: Option<&VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let mut all_templates: Vec<ResourceTemplate> = Vec::new();
+        let caller = Self::handler_proof(client, verified_identity);
 
         for backend in self.backends.all() {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            let Some((headers, binding)) = self
-                .catalogue_credential_for(&backend, verified_identity)
-                .await
+            let Some((headers, binding)) = self.catalogue_credential_for(&backend, caller).await
             else {
                 continue;
             };
@@ -458,13 +455,12 @@ impl MetaMcp {
         client: Option<&AuthenticatedClient>,
         verified_identity: Option<&VerifiedIdentity>,
     ) -> Option<(Arc<crate::backend::Backend>, ForwardCredential)> {
+        let caller = Self::handler_proof(client, verified_identity);
         for backend in self.backends.all() {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            let Some((headers, binding)) = self
-                .catalogue_credential_for(&backend, verified_identity)
-                .await
+            let Some((headers, binding)) = self.catalogue_credential_for(&backend, caller).await
             else {
                 continue;
             };

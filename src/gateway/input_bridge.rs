@@ -14,6 +14,8 @@
 //! request the gateway cannot classify is one the client was never given the
 //! chance to withhold consent for.
 
+mod debug;
+
 use serde_json::Value;
 
 use crate::protocol::{ElicitationCreateParams, SamplingCreateMessageParams};
@@ -186,7 +188,11 @@ pub enum DeliveryError {
 }
 
 /// Why the whole bridged call failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand (module `debug`): the last round carries the
+/// backend's raw `requestState`.
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BridgeError {
     /// An entry could not be put to this client at all, and nothing was sent.
     Refused {
@@ -203,7 +209,33 @@ pub enum BridgeError {
         error: DeliveryError,
     },
     /// The backend kept asking past the retry bound.
-    RoundsExhausted,
+    ///
+    /// Carries the backend's last interim body, the round the caller can still
+    /// resume: its questions and its `requestState` belong together, and the
+    /// first round's would replay prompts already answered (#569). `None` when
+    /// no round ran, so there is nothing newer than the interim the caller holds.
+    ///
+    /// The round has passed the session declaration, the per-request slice
+    /// and the challenge gate; an undeclared one is [`BridgeError::Undeclared`]
+    /// instead (#2173).
+    RoundsExhausted {
+        /// The last interim result the backend returned, whole.
+        last: Option<Box<Value>>,
+    },
+    /// The last round asks for input the session never declared.
+    ///
+    /// Raised instead of [`BridgeError::RoundsExhausted`], so the round is
+    /// never handed to a caller that would have to check it (#2173). The
+    /// fields are what an MRTR.9 refusal names.
+    #[non_exhaustive]
+    Undeclared {
+        /// The backend's own key for the entry.
+        key: String,
+        /// The method the entry asked with; empty when it carried none.
+        method: String,
+        /// Which refusal this is.
+        reason: crate::protocol::mrtr::Refusal,
+    },
     /// The backend asked for more requests in total than the bound allows.
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
@@ -450,6 +482,7 @@ impl InputBridge<'_> {
     ///
     /// Returns the reason the bridged call failed: a refused entry, a delivery
     /// that produced no answer, or a bound the call ran past.
+    ///
     pub async fn run(
         &self,
         session_id: &str,
@@ -461,6 +494,7 @@ impl InputBridge<'_> {
         let mut interim = first.clone();
         let mut spent = 0_u32;
         let mut dispatched = false;
+        let mut last = None;
         for _ in 0..self.bounds.rounds {
             if started.elapsed() >= self.bounds.aggregate {
                 return Err(BridgeError::Deadline);
@@ -490,8 +524,32 @@ impl InputBridge<'_> {
                 Some(next) => interim = next,
                 None => return Ok(result),
             }
+            last = Some(Box::new(result));
         }
-        Err(BridgeError::RoundsExhausted)
+        // The last round is handed back to the caller rather than asked
+        // in-band, but it is still a question the backend composed after an
+        // answer, so it passes the same checks every asked round did (#569).
+        // An undeclared one is refused here with what MRTR.9 names, so no
+        // caller ever holds a round it would have to check itself (#2173).
+        if let Some(body) = last.as_deref() {
+            if let Some(refused) = interim.undeclared(declared) {
+                return Err(BridgeError::Undeclared {
+                    key: refused.key.to_string(),
+                    method: refused.method.to_string(),
+                    reason: refused.reason,
+                });
+            }
+            Self::plan(&interim, declared, slice)?;
+            self.gate
+                .admit(&Self::handed_back(body))
+                .map_err(|error| match error {
+                    BridgeError::ChallengeRefused { .. } => {
+                        BridgeError::ChallengeRefused { dispatched }
+                    }
+                    other => other,
+                })?;
+        }
+        Err(BridgeError::RoundsExhausted { last })
     }
 
     /// Gate one interim result, whole, before a single frame leaves.
@@ -573,6 +631,22 @@ impl InputBridge<'_> {
                 })
                 .collect(),
         )
+    }
+
+    /// The last round as the caller receives it.
+    ///
+    /// An asked round is rebuilt from its prompts because only that
+    /// projection goes on the wire. A handed-back round is not rebuilt: the
+    /// caller gets the backend's result whole, every request key and every
+    /// field of every entry included, with only `requestState` swapped for a
+    /// sealed continuation. So the gate sees that result without
+    /// `requestState`; the scanners read object keys as well as values.
+    fn handed_back(body: &Value) -> Value {
+        let mut shown = body.clone();
+        if let Some(fields) = shown.as_object_mut() {
+            fields.remove("requestState");
+        }
+        shown
     }
 
     /// Put one round's prompts to the client and collect what came back.
