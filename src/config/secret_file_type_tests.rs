@@ -15,12 +15,7 @@ const BOUND: Duration = Duration::from_secs(5);
 
 fn fifo(dir: &Path) -> PathBuf {
     let path = dir.join("secret.fifo");
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &path,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .expect("create FIFO fixture");
+    crate::test_fifo::make_fifo(&path);
     path
 }
 

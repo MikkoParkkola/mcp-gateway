@@ -1048,14 +1048,18 @@ async fn backend_handler_inner(
                         return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
                     }
                 };
-                let forward = dispatch_in_scope(
-                    &backend,
-                    &method,
-                    &id,
-                    Some(sanitized_params),
-                    &propagated_headers,
-                    identity_key.as_deref(),
-                )
+                // Forward the sanitized params to the backend
+                let forward = Box::pin(dispatch_armed(
+                    idem_reservation.as_mut(),
+                    dispatch_in_scope(
+                        &backend,
+                        &method,
+                        &id,
+                        Some(sanitized_params),
+                        &propagated_headers,
+                        identity_key.as_deref(),
+                    ),
+                ))
                 .await;
                 let (params, client) = (params.as_ref(), client.as_ref());
                 let forward = DirectRouteGuards::after_dispatch(
@@ -1098,15 +1102,15 @@ async fn backend_handler_inner(
             Vec::new()
         };
         let key = identity_key.as_deref();
-        let forward = dispatch_in_scope(
+        let dispatch = dispatch_in_scope(
             &backend,
             &method,
             &id,
             params.clone(),
             &propagated_headers,
             key,
-        )
-        .await;
+        );
+        let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
         if method == "tools/call" {
             let (params, client) = (params.as_ref(), client.as_ref());
             DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward)
@@ -1146,6 +1150,16 @@ async fn backend_handler_inner(
         // lets a retry re-execute a side effect (ADR-012 consequence 1).
         Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
     }
+}
+
+/// #1962: run a backend dispatch with the reservation armed, so a caller
+/// that disconnects mid-call leaves the key settled, not free.
+async fn dispatch_armed<T>(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    dispatch: impl std::future::Future<Output = T>,
+) -> T {
+    crate::gateway::meta_mcp::MetaMcp::arm_direct_dispatch(reservation);
+    dispatch.await
 }
 
 /// Store the direct route's result under the client's idempotency key so a

@@ -28,6 +28,8 @@ use crate::{Error, Result};
 
 #[path = "idempotency/admission.rs"]
 pub(crate) mod admission;
+// #1962: `disarm`, kept out of this file's size baseline.
+mod reservation_arm;
 
 // ── Public constants ──────────────────────────────────────────────────────────
 

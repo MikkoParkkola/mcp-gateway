@@ -33,7 +33,8 @@ SKIPPED = {
 # Every job that runs tests stays on docs-only PRs: tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
-    "scope", "public-repo-hygiene", "test", "windows-check", "task-sdk-recovery", "orphan-test-modules",
+    "scope", "public-repo-hygiene", "test", "windows-check", "macos-check", "task-sdk-recovery",
+    "orphan-test-modules",
     # Compiles every test target from the packaged crate: a test that reads a
     # repository file (docs included) the package leaves out only fails here.
     "package-tests", "public-claims", "release-script-tests",
@@ -91,7 +92,7 @@ def main() -> int:
         "scope gave no output": ctx("pull_request", "success", None),
         "push": ctx("push", "success", "false"),
     }
-    for must in ("test", "windows-check"):
+    for must in ("test", "windows-check", "macos-check"):
         if must in SKIPPED:
             errors.append(f"test job {must} is in the skipped set")
     for name, c in cases.items():
