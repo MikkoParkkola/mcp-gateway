@@ -68,6 +68,28 @@ fn a_rate_limit_refusal_frees_the_key_for_a_retry() {
     );
 }
 
+/// #2300: a full slot table refuses before dispatch, so it frees the key.
+#[test]
+fn a_slot_refusal_frees_the_key_for_a_retry() {
+    let cache = Arc::new(IdempotencyCache::new());
+    let mut reservation = reserve(&cache);
+    let error = Error::IdentitySlotsExhausted {
+        backend: "backend".into(),
+        limit: "principal",
+    };
+    let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+    settle_direct_failure(Some(&mut reservation), &error, &response);
+
+    assert!(
+        matches!(
+            enforce(&cache, "key", "fingerprint"),
+            Ok(GuardOutcome::Proceed(_))
+        ),
+        "a slot refusal never reached the backend and must not consume the key"
+    );
+}
+
 #[test]
 fn dispatched_failure_is_cached_as_terminal() {
     // GIVEN a reserved key whose call reached the backend and failed.
