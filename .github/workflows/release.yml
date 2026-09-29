@@ -439,6 +439,20 @@ jobs:
           TAG: ${{ needs.verify.outputs.tag }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
+      # What the public release serves, checked once more: publishing cannot be
+      # undone here, but an asset changed between the draft check and now fails
+      # the run loudly instead of passing unseen (GH1941.SIGN.1).
+      - name: Verify the published release's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published-final
+          # shellcheck disable=SC2086 # BINARIES is a word list by design
+          scripts/release/verify-release-assets.sh published-final "$VERSION" $BINARIES
+
   publish:
     needs: [release, verify]
     runs-on: ubuntu-latest
