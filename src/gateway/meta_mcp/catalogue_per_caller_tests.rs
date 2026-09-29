@@ -31,7 +31,7 @@ use std::time::Duration;
 /// two identities get two catalogues, and a real JWT signer would add key
 /// material to a test that is about routing, not about crypto. The minted
 /// binding is derived from the subject, so it is the identity that varies.
-struct PerIdentityMint;
+pub(super) struct PerIdentityMint;
 
 #[async_trait::async_trait]
 impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
@@ -58,7 +58,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     }
 }
 
-fn identity(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
+pub(super) fn identity(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
     crate::key_server::oidc::VerifiedIdentity {
         subject: subject.to_string(),
         email: format!("{subject}@example.invalid"),
