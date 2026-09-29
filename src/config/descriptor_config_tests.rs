@@ -230,6 +230,14 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
         ("literal client_secret_ref", |d| {
             d["client_secret_ref"] = json!("inline-literal-not-a-reference");
         }),
+        // #2263: a file: reference must name an absolute path at load, not
+        // fail at the first token refresh.
+        ("empty file: client_secret_ref", |d| {
+            d["client_secret_ref"] = json!("file:");
+        }),
+        ("relative file: client_secret_ref", |d| {
+            d["client_secret_ref"] = json!("file:secrets/client");
+        }),
         ("unknown descriptor field", |d| {
             d["token_ttl_seconds"] = json!(300);
         }),
