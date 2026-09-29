@@ -217,24 +217,21 @@ async fn run_dispatched(
     // A handle in the slot means the peer really did start a task: the
     // dispatch's own return is the `working` stub, not an answer, and settling
     // on it would report a job that has not run as finished.
-    match submission.as_ref().and_then(|slot| slot.handle()) {
-        Some(handle) => {
-            let job = job.expect("a handle is captured only for an armed job");
-            follow_upstream_job(
-                &executor,
-                &state,
-                &principal,
-                &id,
-                revision,
-                (job, handle),
-                &mut cancel_rx,
-            )
-            .await;
-        }
-        None => {
-            let response = inspect_settled(&state, &call, &id, response);
-            settle_response(&executor, &principal, &id, revision, response).await;
-        }
+    if let Some(handle) = submission.as_ref().and_then(|slot| slot.handle()) {
+        let job = job.expect("a handle is captured only for an armed job");
+        follow_upstream_job(
+            &executor,
+            &state,
+            &principal,
+            &id,
+            revision,
+            (job, handle),
+            &mut cancel_rx,
+        )
+        .await;
+    } else {
+        let response = inspect_settled(&state, &call, &id, response);
+        settle_response(&executor, &principal, &id, revision, response).await;
     }
 }
 
