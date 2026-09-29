@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::rotation::{EV_EXPIRED, EV_SEALED, EV_TORN, WriteFault};
+use super::rotation::{EV_EXPIRED, EV_OPENED, EV_SEALED, EV_TORN, WriteFault};
 use super::rotation_tests::{append, cfg, event, lines, log_path, rotate_n, verify};
 use super::segments::{list_segments, sealed_path, sibling};
 use super::*;
@@ -410,4 +410,28 @@ fn missing_hwm_after_last_sealed_expired_warns_in_archive_mode() {
         "{:?}",
         r.warnings
     );
+}
+
+/// Cutting the head as well drops the open record, but not the evidence: the
+/// first surviving record then links to a hash that is not genesis.
+#[test]
+fn head_cut_after_last_sealed_expired_still_fails_live_verify() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    expired_last_sealed_then_tail_cut(&path);
+    let all = lines(&path);
+    assert_eq!(
+        event(&all[0]),
+        Some(EV_OPENED),
+        "the head is the open record"
+    );
+    std::fs::write(
+        &path,
+        all[1..]
+            .iter()
+            .fold(String::new(), |acc, v| acc + &v.to_string() + "\n"),
+    )
+    .unwrap();
+    let r = verify(&path, false);
+    assert!(!r.ok, "a head-cut active with no .hwm verified clean");
 }
