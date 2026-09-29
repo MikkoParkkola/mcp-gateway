@@ -162,7 +162,13 @@ async fn token_exchange_refusals_are_counted() {
     let ((), text) = scrape(async {
         emit(&AuditEvent::denied("policy miss", None));
         emit(&AuditEvent::invalid("bad jwt", None));
+        emit(&AuditEvent::revoked("jti-1", None));
     });
+    assert_eq!(
+        sum_where(&text, AUTH, ""),
+        2,
+        "only the refusals count: {text}"
+    );
     assert_eq!(
         series(&text, AUTH, r#"kind="token_exchange_denied""#),
         1,
@@ -306,4 +312,31 @@ async fn metric_labels_carry_no_caller_data() {
             assert!(!line.contains(leak), "{leak} in {line}");
         }
     }
+}
+
+/// A scope refusal on `POST /mcp` is answered by the router before the meta
+/// layer runs; it is still one `meta` denial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_meta_scope_refusal_counted_once() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "gateway_execute",
+                   "arguments": {"tool": "beta:t", "arguments": {}}}});
+    let (status, text) = scrape(async {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer k")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        fx.router.clone().oneshot(request).await.unwrap().status()
+    });
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert_eq!(sum_where(&text, DENY, r#"route="meta""#), 1, "{text}");
+    assert_eq!(sum_where(&text, DENY, ""), 1, "{text}");
 }

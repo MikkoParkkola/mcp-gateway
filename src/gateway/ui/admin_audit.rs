@@ -29,39 +29,36 @@ pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     ))
 }
 
-/// The layer. With no audit log configured it passes every request through,
-/// and only counts a refusal (D4).
+/// The layer. With no audit log configured it passes every request through.
+/// A refusal is counted on every path (D4), from the handler's own answer.
 async fn admin_action_layer(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Response {
+    // Control-plane pages are counted by their own route (AUDIT.3), never as `ui`.
     let control_plane = request
         .extensions()
         .get::<MatchedPath>()
         .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
-    let response = audited(&state, request, next).await;
-    // D4: every method, with or without a log. The control-plane pages are
-    // counted by their own route, which arrives with AUDIT.3 (D3).
-    if !control_plane
-        && matches!(
-            response.status(),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-        )
-    {
-        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
-        denied(DenialRoute::Ui, DenialReason::AdminRequired);
-    }
-    response
-}
-
-/// E1-f: admit, run and record a mutation; pass everything else through.
-async fn audited(state: &Arc<AppState>, request: Request, next: Next) -> Response {
+    let run = |request| async move {
+        let response = next.run(request).await;
+        if !control_plane
+            && matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            )
+        {
+            use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+            denied(DenialRoute::Ui, DenialReason::AdminRequired);
+        }
+        response
+    };
     let Some(log) = state.transparency_log.clone() else {
-        return next.run(request).await;
+        return run(request).await;
     };
     if matches!(*request.method(), Method::GET | Method::HEAD) {
-        return next.run(request).await;
+        return run(request).await;
     }
     // A degraded log refuses before the handler runs (D1-f).
     if let Err(error) = log.admit().await {
@@ -83,7 +80,7 @@ async fn audited(state: &Arc<AppState>, request: Request, next: Next) -> Respons
         .filter(|id| !id.issuer.is_empty() && !id.subject.is_empty())
         .map(|id| GrantSubject::new(id.issuer.clone(), id.subject.clone(), None));
 
-    let response = next.run(request).await;
+    let response = run(request).await;
 
     let status = response.status();
     fields.insert("http_status".into(), status.as_u16().into());

@@ -100,7 +100,11 @@ pub(super) async fn record(
     let (status, Json(body)) = &answer;
     let outcome = direct_outcome(*status, body);
     // D4: counted before the log check, so auth off still counts.
-    if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body) {
+    let firewall = body
+        .get("error")
+        .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
+    if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body, firewall)
+    {
         use crate::security::security_metrics::{DenialRoute, denied};
         denied(DenialRoute::Direct, reason);
     }

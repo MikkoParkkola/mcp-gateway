@@ -1377,7 +1377,9 @@ async fn meta_mcp_dispatch(
                     );
                     return build_error_response(
                         Some(id),
-                        e.code,
+                        // D4: counted here, as this refusal never reaches the
+                        // meta layer's count.
+                        crate::security::security_metrics::meta_refused(e.code),
                         e.message,
                         &session_id,
                         e.status,
