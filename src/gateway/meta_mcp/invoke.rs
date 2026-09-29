@@ -4126,8 +4126,7 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
                 None => format!("Circuit breaker is open for backend '{backend}'"),
             },
         ),
-        Error::RateLimited(_) => (ErrorCategory::RateLimited, error.to_string()),
-        Error::IdentitySlotsExhausted { .. } => (ErrorCategory::RateLimited, error.to_string()),
+        _ if error.is_gateway_throttle() => (ErrorCategory::RateLimited, error.to_string()),
         Error::BackendNotFound(name) | Error::ToolNotFound(name) => {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
