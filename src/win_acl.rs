@@ -405,6 +405,21 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
     }
     // SAFETY: contract 1 — a valid handle, owned exactly once.
     let file = File::from(unsafe { OwnedHandle::from_raw_handle(raw) });
+    // A volume without ACLs drops the descriptor and still reports success, so
+    // the file would be open to every account. Refuse before any byte is
+    // written, and remove the empty file this call created.
+    if !matches!(volume_keeps_acls(&file), Ok(true)) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to create {}: its volume keeps no ACLs (FAT or exFAT), so the file \
+                 cannot be made owner-only; use an NTFS or ReFS volume",
+                path.display()
+            ),
+        ));
+    }
     after_create(path, Some(&file));
     Ok(file)
 }
@@ -450,6 +465,13 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
             return Err(err);
         }
         buf = aligned(needed as usize);
+    }
+    if buf.is_empty() {
+        // A success with no buffer is a broken contract, not an empty descriptor.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "empty descriptor",
+        ));
     }
     let sd: PSECURITY_DESCRIPTOR = buf.as_mut_ptr().cast();
     let mut control = 0_u16;
@@ -642,11 +664,17 @@ pub(crate) fn volume_is_local(dir: &File) -> io::Result<bool> {
     if kind != DRIVE_FIXED && kind != DRIVE_REMOVABLE {
         return Ok(false);
     }
+    volume_keeps_acls(dir)
+}
+
+/// True when the filesystem holding the open `handle` keeps ACLs (NTFS, ReFS);
+/// FAT and exFAT accept a security descriptor at create and discard it.
+pub(crate) fn volume_keeps_acls(handle: &File) -> io::Result<bool> {
     let mut fs_flags = 0_u32;
     // SAFETY: contract 6 — only the flags out-pointer is requested; BOOL checked.
     if unsafe {
         GetVolumeInformationByHandleW(
-            dir.as_raw_handle(),
+            handle.as_raw_handle(),
             std::ptr::null_mut(),
             0,
             std::ptr::null_mut(),

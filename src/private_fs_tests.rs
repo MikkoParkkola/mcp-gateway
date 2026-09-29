@@ -410,6 +410,28 @@ mod win_privileged {
             "WT-ASSERT W-T15/exfat/judge"
         );
     }
+
+    // W-T15c: the shared private create refuses a volume that drops ACLs and
+    // leaves no file behind, so no caller can write a secret there.
+    #[test]
+    #[ignore = "needs the privileged CI step"]
+    fn wt15c_private_create_refuses_volumes_without_acls() {
+        for (var, row) in [
+            ("MGW_FAT32_ROOT", "W-T15c/fat32"),
+            ("MGW_EXFAT_ROOT", "W-T15c/exfat"),
+        ] {
+            let path = root_from(var, row).join("mgw-private-create.key");
+            let Err(err) = crate::config_persistence::create_new_private(&path) else {
+                panic!("WT-ASSERT {row}: created on a volume without ACLs");
+            };
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "WT-ASSERT {row}: {err}"
+            );
+            assert!(!path.exists(), "WT-ASSERT {row}: refused file left behind");
+        }
+    }
 }
 
 // W-T6: a symlink at a record name is judged as a reparse point on the handle
