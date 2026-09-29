@@ -8,9 +8,11 @@
 //! `FastMCP` + Docket proof lives in `task_upstream_recovery_sdk.rs` and runs the
 //! actual SDK; nothing in this file is offered as evidence about the SDK.
 
-// One consumer: `tests/task_upstream_recovery.rs`. Scaffolding it does not
-// drive yet is marked `expect(dead_code)` so the annotation self-deletes
-// the moment a case starts using the item.
+// Consumers: `tests/task_upstream_recovery.rs`, and
+// `tests/task_crash_boundaries.rs`, which drives only part of it and allows
+// `dead_code` on the module. Scaffolding the first does not drive yet is
+// marked `expect(dead_code)` so the annotation self-deletes the moment a case
+// starts using the item.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -521,8 +523,25 @@ impl Gateway {
     /// SIGKILL: the crash the recovery table is about. A graceful stop would
     /// drain the worker and settle the row, which is a different test.
     pub async fn kill(&mut self) {
-        let _ = self.child.start_kill();
-        let _ = tokio::time::timeout(EXIT_BOUND, self.child.wait()).await;
+        use std::os::unix::process::ExitStatusExt;
+        self.child.start_kill().unwrap_or_else(|e| {
+            panic!(
+                "the child must still be running to be killed: {e}\n{}",
+                self.logs()
+            )
+        });
+        let status = tokio::time::timeout(EXIT_BOUND, self.child.wait())
+            .await
+            .unwrap_or_else(|_| panic!("the killed child was not reaped within {EXIT_BOUND:?}"))
+            .expect("the killed child's status reads");
+        // A child that had already exited on its own would report an exit code,
+        // and the restart that follows would not be testing a crash.
+        assert_eq!(
+            status.signal(),
+            Some(9),
+            "the child must die by SIGKILL, not exit on its own: {status}\n{}",
+            self.logs()
+        );
     }
 
     pub async fn terminate(&mut self) {
