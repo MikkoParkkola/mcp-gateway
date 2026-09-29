@@ -558,6 +558,19 @@ mod tests {
         assert!(error.contains("already exists"));
     }
 
+    /// A built-in authority is one word, so a colon in the subject belongs to
+    /// the subject: an mTLS SAN URI or an API-key name (#2291).
+    #[test]
+    fn subject_parser_keeps_colons_after_a_builtin_authority() {
+        let mtls = parse_subject_spec("mtls:spiffe://corp/agent", None, "subject").unwrap();
+        assert_eq!(mtls.authority, "mtls");
+        assert_eq!(mtls.subject, "spiffe://corp/agent");
+
+        let key = parse_subject_spec("api_key:team:alice", None, "subject").unwrap();
+        assert_eq!(key.authority, "api_key");
+        assert_eq!(key.subject, "team:alice");
+    }
+
     #[test]
     fn subject_parser_keeps_url_authority() {
         let subject = parse_subject_spec(
