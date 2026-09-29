@@ -15,8 +15,13 @@ use sha2::{Digest, Sha256};
 /// Who may resume a streaming session.
 ///
 /// `Credential` carries the validated principal exactly, so ownership equality
-/// is exact. Every caller without one is `Anonymous`, whatever name it carries:
-/// an unvalidated name is not a credential.
+/// is exact. `Subject` is a caller that proved a grant subject (the length-
+/// prefixed `CallerKey` subject form) plus the credential it presented, if
+/// any: two people behind one shared key are two owners, and one person's two
+/// credentials are two owners too, because a resumed session's held
+/// credential is overwritten (GH1942.HARDEN.1 row 9). Every caller with
+/// neither is `Anonymous`, whatever name it carries: an unvalidated name is
+/// not a credential.
 ///
 /// Invariant: no operation may select sessions by owner alone when the owner is
 /// `Anonymous`, because that owner spans every anonymous session. Anonymous
@@ -24,6 +29,10 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SessionOwner {
     Credential(String),
+    Subject {
+        key: String,
+        credential: Option<String>,
+    },
     Anonymous,
 }
 

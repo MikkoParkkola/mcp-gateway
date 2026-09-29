@@ -104,7 +104,7 @@ async fn a_presented_id_that_names_no_session_is_not_adopted() {
     let (state, _store) = test_router_app_state().await;
     let (id, _rx) = state
         .multiplexer
-        .get_or_create_session_for(Some("chosen"), &session_owner(None));
+        .get_or_create_session_for(Some("chosen"), &session_owner(None, None));
     assert_ne!(id, "chosen");
     assert!(id.starts_with("gw-"), "minted: {id:?}");
     assert!(!state.multiplexer.has_session("chosen"));
@@ -115,7 +115,7 @@ async fn a_presented_id_that_names_no_session_is_not_adopted() {
 async fn anonymous_sessions_are_kept_apart_by_their_minted_ids() {
     let (state, _store) = test_router_app_state().await;
     let m = &state.multiplexer;
-    let anon = session_owner(None);
+    let anon = session_owner(None, None);
     let (a, _ra) = m.get_or_create_session_for(None, &anon);
     let (b, _rb) = m.get_or_create_session_for(None, &anon);
     assert_ne!(a, b);
@@ -132,11 +132,14 @@ async fn anonymous_sessions_are_kept_apart_by_their_minted_ids() {
 #[tokio::test]
 async fn every_unauthenticated_caller_is_one_owner_class() {
     let public = unauthenticated("public");
-    assert_eq!(session_owner(Some(&public)), session_owner(None));
+    assert_eq!(
+        session_owner(Some(&public), None),
+        session_owner(None, None)
+    );
     let (state, _store) = test_router_app_state().await;
     let m = &state.multiplexer;
-    let (id, _rx) = m.get_or_create_session_for(None, &session_owner(Some(&public)));
-    let (again, _rx2) = m.get_or_create_session_for(Some(&id), &session_owner(None));
+    let (id, _rx) = m.get_or_create_session_for(None, &session_owner(Some(&public), None));
+    let (again, _rx2) = m.get_or_create_session_for(Some(&id), &session_owner(None, None));
     assert_eq!(again, id, "the holder of the minted id resumes it");
 }
 
@@ -145,8 +148,8 @@ async fn every_unauthenticated_caller_is_one_owner_class() {
 async fn credential_and_anonymous_sessions_never_resume_each_other() {
     let (state, _store) = test_router_app_state().await;
     let m = &state.multiplexer;
-    let anon = session_owner(None);
-    let cred = session_owner(Some(&credential("p1")));
+    let anon = session_owner(None, None);
+    let cred = session_owner(Some(&credential("p1")), None);
     let (anon_id, _ra) = m.get_or_create_session_for(None, &anon);
     let (cred_id, _rc) = m.get_or_create_session_for(None, &cred);
     assert_ne!(
@@ -201,7 +204,7 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
     // GIVEN: auth off; anonymous B opens a stream presenting an id it chose,
     // and anonymous A opens its own stream presenting the same id
     let (state, _store) = test_router_app_state().await;
-    let anon = session_owner(None);
+    let anon = session_owner(None, None);
     let m = &state.multiplexer;
     let (b_id, mut b_rx) = m.get_or_create_session_scoped(Some("gw-shared"), &anon, None);
     let (a_id, mut a_rx) = m.get_or_create_session_scoped(Some("gw-shared"), &anon, None);
@@ -267,7 +270,7 @@ async fn the_prompt_flow_logs_session_fingerprints_only() {
     // A live session asks for a prompt (proxy.rs "Sent elicitation/create")
     let (own, mut rx) = state
         .multiplexer
-        .get_or_create_session_for(None, &session_owner(None));
+        .get_or_create_session_for(None, &session_owner(None, None));
     let router = create_router(Arc::clone(&state));
     let own_for_call = own.clone();
     let call = tokio::spawn(async move {
@@ -306,7 +309,7 @@ async fn get_and_delete_log_session_fingerprints_only() {
     drop(response);
     let (owned, _rx) = state
         .multiplexer
-        .get_or_create_session_for(None, &session_owner(None));
+        .get_or_create_session_for(None, &session_owner(None, None));
     let unowned = "gw-7c1e0000-unowned-session";
     for id in [owned.as_str(), unowned] {
         create_router(Arc::clone(&state))
