@@ -348,10 +348,7 @@ async fn an_uncarried_passthrough_refusal_is_audited() {
     .await;
     let value = format!("Bearer {}", "caller-own");
     gw.passthrough_slot(&value);
-    assert_eq!(
-        notify(&gw, None, Some(&value)).await,
-        StatusCode::FORBIDDEN
-    );
+    assert_eq!(notify(&gw, None, Some(&value)).await, StatusCode::FORBIDDEN);
     assert_eq!(gw.seen(), vec![]);
     assert_eq!(gw.rows("idp_refuse"), 1);
     assert_eq!(gw.rows("idp_mint"), 0);
