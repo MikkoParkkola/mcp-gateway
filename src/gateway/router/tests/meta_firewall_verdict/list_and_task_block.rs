@@ -140,7 +140,8 @@ async fn a_blocked_direct_tool_list_is_refused() {
 
 /// #2350: `gateway_list_tools` (named server, then aggregate),
 /// `gateway_search_tools` and Code Mode `gateway_search` refuse a blocked
-/// listing, one inspection each.
+/// listing: the Meta-MCP on the canonical value, the router on the served
+/// form.
 #[tokio::test]
 async fn blocked_discovery_listings_are_refused_once() {
     let (state, handler, meta, _store) = leaky_list_state().await;
@@ -163,8 +164,8 @@ async fn blocked_discovery_listings_are_refused_once() {
         let after = (inspections(&handler), inspections(&meta));
         assert_eq!(
             (after.0 - before.0, after.1 - before.1),
-            (0, 1),
-            "{tool}: one inspection, on the canonical value in the Meta-MCP"
+            (1, 1),
+            "{tool}: the canonical value in the Meta-MCP, then the served form"
         );
     }
 }

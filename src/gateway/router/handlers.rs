@@ -1736,13 +1736,8 @@ async fn meta_mcp_dispatch(
             // credential in place, so a later target whose policy blocks on that
             // finding inspects an already-cleaned artifact and returns Allow —
             // the block silently depended on which target sorted first.
-            // Discovery tools inspect their canonical value in the Meta-MCP
-            // (#2350); delivery skips them too, so no pass runs here.
             #[cfg(feature = "firewall")]
-            if !matches!(
-                external_tool.as_str(),
-                "gateway_list_tools" | "gateway_search_tools" | "gateway_search"
-            ) {
+            {
                 delivery_inspection = super::response_pass::inspect_tools_call_response(
                     state.firewall.as_deref(),
                     &mut call_response,

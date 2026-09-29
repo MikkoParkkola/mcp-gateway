@@ -37,18 +37,6 @@ pub(crate) fn meta_response_targets(
     targets
 }
 
-/// `gateway_list_tools`, `gateway_search_tools` and Code Mode `gateway_search`
-/// inspect their canonical
-/// value before it is serialised (`MetaMcp::inspect_discovery_value`, #2350):
-/// delivery would scan an escaped copy a second time, so it does not.
-pub(crate) fn is_inspected_discovery(context: &ResponseDeliveryContext<'_>) -> bool {
-    context.method == "tools/call"
-        && matches!(
-            context.correlation.external_tool,
-            "gateway_list_tools" | "gateway_search_tools" | "gateway_search"
-        )
-}
-
 /// Whether delivery must inspect the result, or an earlier pass on the same
 /// dispatch already inspected this exact artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +88,6 @@ impl super::MetaMcp {
         #[cfg(feature = "firewall")]
         if matches!(context.method, "tools/call" | "tools/list")
             && inspection == DeliveryInspection::Required
-            && !is_inspected_discovery(context)
             && response.error.is_none()
             && let Some(result) = response.result.as_mut()
             && let Some(firewall) = &self.firewall

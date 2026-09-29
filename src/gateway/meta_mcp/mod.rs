@@ -1034,8 +1034,9 @@ impl MetaMcp {
     /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
     /// escaped copy hides a quoted key or a split injection phrase from them.
     /// A Block (or no admitting target) refuses the call; otherwise credentials
-    /// are redacted in place. Delivery does not inspect these two tools again
-    /// (`response_security.rs`), so this is their one inspection.
+    /// are redacted in place. The router or delivery pass still inspects the
+    /// served form: a name alone cannot prove this pass ran (a backend tool may
+    /// share the name), so neither pass is skipped.
     ///
     /// # Errors
     /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
