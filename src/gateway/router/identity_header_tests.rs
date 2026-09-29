@@ -675,3 +675,25 @@ fn textwrap_dedent(block: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+// ── cert_subject_id: verbatim (#2243) ───────────────────────────────────────
+
+/// A padded CN or SAN keys its own grant subject; trimming would merge it with
+/// the certificate that carries the bare name.
+#[test]
+fn cert_subject_id_keeps_padding() {
+    let cn = crate::mtls::identity::CertIdentity {
+        common_name: Some(" admin ".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(cert_subject_id(&cn).as_deref(), Some(" admin "));
+
+    let san = crate::mtls::identity::CertIdentity {
+        san_uris: vec![" spiffe://cluster/admin ".to_string()],
+        ..Default::default()
+    };
+    assert_eq!(
+        cert_subject_id(&san).as_deref(),
+        Some(" spiffe://cluster/admin ")
+    );
+}
