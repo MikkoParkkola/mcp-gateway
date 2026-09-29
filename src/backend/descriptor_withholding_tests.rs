@@ -145,13 +145,6 @@ async fn served(backend: &Backend, name: &str) -> bool {
 /// scoped subscriber sees it.
 fn capture() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<u8>>>) {
     static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
     struct W(Arc<Mutex<Vec<u8>>>);
     impl std::io::Write for W {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -162,6 +155,13 @@ fn capture() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<u8>>>) {
             Ok(())
         }
     }
+    INTEREST.call_once(|| {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::Registry::default()
+                .with(tracing::level_filters::LevelFilter::TRACE),
+        );
+    });
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let writer = Arc::clone(&buffer);
     let subscriber = tracing_subscriber::fmt()
