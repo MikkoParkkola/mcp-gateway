@@ -218,3 +218,23 @@ fn chain_nonce_invalid_refused_params() {
     assert!(with(json!(5)).is_err());
     std::assert_eq!(chain_nonce_from_params(None), Ok(None));
 }
+
+/// C4 on the meta route: the retry fields every `tools/call` is parsed into
+/// flag a malformed chain nonce, which the meta route refuses with `-32602`
+/// before dispatch. A 256-byte nonce is well formed.
+#[test]
+fn chain_nonce_invalid_refused_meta_params() {
+    use crate::protocol::mrtr::RetryFields;
+    let malformed = |nonce: Value| {
+        RetryFields::from_params(Some(&json!({"_meta": {NONCE_KEY: nonce}})))
+            .malformed
+            .contains(&NONCE_KEY)
+    };
+    for bad in [json!(""), json!("n".repeat(257)), json!(5)] {
+        assert!(malformed(bad.clone()), "{bad} must be flagged malformed");
+    }
+    assert!(
+        !malformed(json!("n".repeat(256))),
+        "256 bytes is well formed"
+    );
+}
