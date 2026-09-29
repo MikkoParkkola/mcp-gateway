@@ -2298,6 +2298,10 @@ mod cleartext_credential_guard {
 mod account_custody_tests;
 
 #[cfg(test)]
+#[path = "account_secret_order_tests.rs"]
+mod account_secret_order_tests;
+
+#[cfg(test)]
 #[path = "account_consumer_config_tests.rs"]
 mod account_consumer_config_tests;
 
