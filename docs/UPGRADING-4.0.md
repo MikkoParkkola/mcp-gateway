@@ -120,7 +120,7 @@ backend" and "fails a capability file" first.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
-| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
+| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container), then `chmod 600` a secret or `chmod go-w` a trust file; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 | 99 | Windows: the config, OAuth token and client files, and generated mTLS certificates and keys are created owner-only; those and the secret files it only reads (env files, `file:` targets, TLS keys and credential files) are refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
@@ -2705,12 +2705,12 @@ or control-plane file unless its owner is the gateway's effective user or root (
 the mode. The check runs before the mode rules, on the same handle as the read.
 
 - **The error names the file, the owner uid and the fix.** For a secret file the fix is
-  `chown <gateway uid> <file> && chmod 600 <file>`; the `chmod` is needed because a group-read
-  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> <file>`.
+  `chown <gateway uid> -- <file> && chmod 600 -- <file>`; the `chmod` is needed because a group-read
+  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> -- <file> && chmod go-w -- <file>`: `chown` keeps a group- or world-write bit, which the trust rule still refuses. The printed command quotes the path and ends options with `--`.
 - **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
   and still loads.
 - **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
-  `chmod 600` it if it holds a secret (leave a certificate or CRL readable). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
+  `chmod 600` it if it holds a secret (a certificate or CRL keeps its read bits; `chmod go-w` it if others can write it). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.

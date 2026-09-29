@@ -49,6 +49,13 @@ spec:
         # fsGroup is also how the gateway reads its root-owned config projection,
         # which it refuses when a world bit is set (CONFIG.2).
         {{- include "mcp-gateway.podIdentity" . | trim | nindent 8 }}
+        {{- if .Values.persistence.enabled }}
+        # The task and control-plane stores check their modes exactly (dir
+        # 0700, records 0600). The default Always policy re-chowns and adds
+        # group bits on every mount, so a restarted pod would refuse its own
+        # store; OnRootMismatch changes ownership only when the root differs.
+        fsGroupChangePolicy: OnRootMismatch
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -77,23 +84,12 @@ spec:
               value: {{ .Values.logging.format | quote }}
             - name: MCP_GATEWAY_LOG_LEVEL
               value: {{ .Values.logging.level | quote }}
-            {{- /* Same test as the ConfigMap's, inverted the same way: anything
-                   that is not mesh renders a credential, so anything that is
-                   not mesh must also get the Secret. Keying one on "is mesh"
-                   and the other on "is credential" let a typo render a token
-                   reference with nothing to resolve it. */}}
-            {{- if ne .Values.auth.mode "mesh" }}
-            {{- if not .Values.auth.existingSecret }}
-            {{- fail "auth.existingSecret is required in credential mode: the rendered config references env:MCP_GATEWAY_TOKEN, and a pod without it fails validation at startup." }}
-            {{- end }}
-            # The config references env:MCP_GATEWAY_TOKEN. A missing value fails
-            # validation at startup rather than serving without one, so an
-            # install that forgets the Secret stops instead of opening.
-            - name: MCP_GATEWAY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret | quote }}
-                  key: {{ .Values.auth.secretKey | quote }}
+            {{- /* CHART.2: one per-mode table (_helpers.tpl authSecretEnv) that
+                   the ConfigMap's references match, so a mode cannot render a
+                   reference with nothing to resolve it. A missing value fails
+                   validation at startup rather than serving without one. */}}
+            {{- with include "mcp-gateway.authSecretEnv" . }}
+            {{- . | trim | nindent 12 }}
             {{- end }}
             {{- if .Values.metrics.existingSecret }}
             # The scrape token /metrics answers (server.metrics_token). A
@@ -106,6 +102,14 @@ spec:
                   key: {{ .Values.metrics.secretKey | quote }}
                   optional: true
             {{- end }}
+            {{- include "mcp-gateway.envGuards" . }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/mcp-gateway
@@ -157,8 +161,13 @@ spec:
         # Pod-lifetime state under HOME: it survives a container restart, and a
         # replaced pod (rollout, eviction, reschedule) starts empty, task records included.
         - name: state
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mcp-gateway.stateClaim" . | quote }}
+          {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.stateVolume.sizeLimit }}
+          {{- end }}
         {{- if ne .Values.auth.mode "mesh" }}
         # An emptyDir log dies with the pod; set audit.existingClaim to keep it.
         # fsGroup above makes the claim writable by uid 1001.
