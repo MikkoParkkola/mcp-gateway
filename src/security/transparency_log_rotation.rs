@@ -37,6 +37,12 @@ pub(crate) const EV_SEALED: &str = "audit_segment_sealed";
 pub(crate) const EV_OPENED: &str = "audit_segment_opened";
 pub(crate) const EV_EXPIRED: &str = "audit_segment_expired";
 pub(crate) const EV_TORN: &str = "audit_segment_torn_tail_dropped";
+/// A restart found `.hwm` missing on a log that went through segment
+/// handling: tail loss before this record cannot be ruled out (#2294).
+pub(crate) const EV_HWM_MISSING: &str = "audit_segment_hwm_missing";
+/// Carries the earliest [`EV_HWM_MISSING`] counter on an expiry record, so the
+/// finding outlives the segment that held the marker (#2294).
+pub(crate) const HWM_MISSING_AT: &str = "hwm_missing_at";
 
 /// Largest record accepted: recovery reads tails through this window.
 pub(super) const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
@@ -241,8 +247,36 @@ pub(super) fn recover(
         tracing::warn!(error = %e, "audit log: disk-full reserve could not be written");
         telemetry_metrics::gauge!("mcp_audit_reserve_present").set(0.0);
     }
-    if hw.is_none() && sealed.is_empty() && state.counter > 0 {
-        // A pre-D6 log gets its high-water mark from the active tail.
+    if hw.is_none() && state.counter > 0 {
+        // Re-minting `.hwm` from a cut tail would launder the cut, so a log
+        // that went through segment handling first records that the mark
+        // was missing (#2294). A pre-D6 log (no open record) and a
+        // genesis-only one (a crash before the first mark) are not marked.
+        let opened = segments::read_first_line(path)?
+            .and_then(|l| record_head(&l).ok())
+            .is_some_and(|(_, _, e, _)| e.as_deref() == Some(EV_OPENED));
+        let lost = !sealed.is_empty() || (opened && state.counter > 1);
+        // A crash between the marker and the mark left the marker last.
+        let marked = read_last_nonempty_line(path)?
+            .and_then(|l| record_head(&l).ok())
+            .is_some_and(|(_, _, e, _)| e.as_deref() == Some(EV_HWM_MISSING));
+        if lost && !marked {
+            let fields = housekeeping(EV_HWM_MISSING, &[("last_counter", state.counter.into())]);
+            state.last_entry_hash = write_synced(
+                &mut state.file,
+                config,
+                fields,
+                state.counter + 1,
+                &state.last_entry_hash,
+            )?;
+            state.counter += 1;
+            state.seg.has_records = true;
+            tracing::warn!(
+                counter = state.counter,
+                "audit log: high-water mark missing at restart; recorded, verify will fail"
+            );
+            telemetry_metrics::counter!("mcp_audit_hwm_missing_total").increment(1);
+        }
         let mark = HighWater {
             counter: state.counter,
             entry_hash: state.last_entry_hash.clone(),
@@ -479,6 +513,37 @@ fn repair_torn_tail(
         write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
     }
     Ok(())
+}
+
+/// The earliest missing-mark counter `seg` records: an
+/// [`EV_HWM_MISSING`] record, or an expiry record carrying
+/// [`HWM_MISSING_AT`] (#2294).
+pub(super) fn hwm_missing_in(seg: &Path) -> io::Result<Option<u64>> {
+    use std::io::BufRead;
+    let file = File::open(seg).map_err(segments::ctx("open", seg))?;
+    let mut earliest: Option<u64> = None;
+    // Byte lines: a corrupt middle line is skipped, never allowed to block
+    // an expiry.
+    for line in io::BufReader::new(file).split(b'\n') {
+        let Ok(line) = String::from_utf8(line?) else {
+            continue;
+        };
+        if !line.contains(EV_HWM_MISSING) && !line.contains(HWM_MISSING_AT) {
+            continue;
+        }
+        let Ok((counter, _, event, v)) = record_head(&line) else {
+            continue;
+        };
+        let at = match event.as_deref() {
+            Some(EV_HWM_MISSING) => Some(counter),
+            Some(EV_EXPIRED) => v.get(HWM_MISSING_AT).and_then(Value::as_u64),
+            _ => None,
+        };
+        if let Some(at) = at {
+            earliest = Some(earliest.map_or(at, |e| e.min(at)));
+        }
+    }
+    Ok(earliest)
 }
 
 /// Whether `line` is a durable record following `(counter, hash)`.

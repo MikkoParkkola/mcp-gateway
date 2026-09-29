@@ -9,8 +9,9 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use super::rotation::{
-    EV_EXPIRED, EV_SEALED, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping, now_secs,
-    open_after_seal, path_id, record_head, recover, seal_of,
+    EV_EXPIRED, EV_SEALED, HWM_MISSING_AT, MAX_RECORD_BYTES, OversizedRecord, file_id,
+    housekeeping, hwm_missing_in, now_secs, open_after_seal, path_id, record_head, recover,
+    seal_of,
 };
 use super::segments::{self, HighWater, Segment};
 use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
@@ -370,17 +371,19 @@ impl TransparencyLogger {
             (c, h)
         };
         let bytes = std::fs::metadata(&seg.path)?.len();
-        let fields = housekeeping(
-            EV_EXPIRED,
-            &[
-                ("segment_seq", seg.seq.into()),
-                ("first_counter", first_counter.into()),
-                ("last_counter", last_counter.into()),
-                ("final_hash", final_hash.into()),
-                ("bytes", bytes.into()),
-                ("reason", reason.into()),
-            ],
-        );
+        let mut extra: Vec<(&str, Value)> = vec![
+            ("segment_seq", seg.seq.into()),
+            ("first_counter", first_counter.into()),
+            ("last_counter", last_counter.into()),
+            ("final_hash", final_hash.into()),
+            ("bytes", bytes.into()),
+            ("reason", reason.into()),
+        ];
+        // A missing-mark finding outlives the segment that records it (#2294).
+        if let Some(at) = hwm_missing_in(&seg.path)? {
+            extra.push((HWM_MISSING_AT, at.into()));
+        }
+        let fields = housekeeping(EV_EXPIRED, &extra);
         #[cfg(test)]
         self.hooks
             .expiry_in_flight

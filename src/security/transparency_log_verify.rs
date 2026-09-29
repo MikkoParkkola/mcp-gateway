@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::warn;
 
-use super::rotation::{EV_EXPIRED, EV_OPENED, EV_SEALED};
+use super::rotation::{EV_EXPIRED, EV_HWM_MISSING, EV_OPENED, EV_SEALED, HWM_MISSING_AT};
 use super::segments::{self, HighWater};
 use super::{
     MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string, recompute_entry_hash,
@@ -323,6 +323,8 @@ struct Stream<'a> {
     /// The oldest survivor opens segment 0 at genesis with counter 1: a log
     /// holding only that record crashed before its first `.hwm` (#2275).
     genesis_open: bool,
+    /// Earliest counter at which a restart found `.hwm` missing (#2294).
+    hwm_missing: Option<u64>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -352,6 +354,7 @@ impl<'a> Stream<'a> {
             anchor: None,
             opened_oldest: false,
             genesis_open: false,
+            hwm_missing: None,
         }
     }
 
@@ -421,7 +424,11 @@ impl<'a> Stream<'a> {
                         sealed_here =
                             Some(field_u64(&entry, "next_segment_seq").unwrap_or(expected + 1));
                     }
+                    Some(EV_HWM_MISSING) => self.note_hwm_missing(counter),
                     Some(EV_EXPIRED) => {
+                        if let Some(at) = field_u64(&entry, HWM_MISSING_AT) {
+                            self.note_hwm_missing(at);
+                        }
                         if let (Some(k), Some(lc), Some(fh)) = (
                             field_u64(&entry, "segment_seq"),
                             field_u64(&entry, "last_counter"),
@@ -656,6 +663,10 @@ impl Stream<'_> {
         Ok(Ok(()))
     }
 
+    fn note_hwm_missing(&mut self, at: u64) {
+        self.hwm_missing = Some(self.hwm_missing.map_or(at, |e| e.min(at)));
+    }
+
     /// End-of-stream checks: the expiry anchor and tail completeness.
     fn finish(
         &mut self,
@@ -684,6 +695,16 @@ impl Stream<'_> {
                         format!("segment {gone} missing with no expiry record"),
                     ));
                 }
+            }
+        }
+        if let Some(at) = self.hwm_missing {
+            let msg = format!(
+                "{EV_HWM_MISSING} at counter {at}: a restart found the high-water mark \
+                 missing, so tail loss before it cannot be ruled out"
+            );
+            match mode {
+                VerifyMode::Live => return Err((Some(at), msg)),
+                VerifyMode::Archive => self.result.warnings.push(format!("archive mode: {msg}")),
             }
         }
         let sealed_present = files.iter().any(|(s, _)| s.is_some());
