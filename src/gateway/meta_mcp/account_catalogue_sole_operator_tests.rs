@@ -73,6 +73,7 @@ fn client(principal: &str) -> AuthenticatedClient {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        // MIK-6704.IDENT.1a: test fixture standing in for the router's digest.
         principal: principal.to_string(),
         quota_principal: None,
         authenticated: !principal.is_empty(),

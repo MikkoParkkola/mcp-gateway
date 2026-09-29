@@ -8,7 +8,8 @@
 
 use super::MetaMcp;
 use crate::backend::Backend;
-use crate::key_server::oidc::VerifiedIdentity;
+use crate::identity_propagation::{CallerProof, CallerProvenance};
+use crate::personal_accounts::identity::Principal;
 use crate::protocol::Tool;
 use std::sync::Arc;
 use tracing::debug;
@@ -17,19 +18,20 @@ impl MetaMcp {
     /// The caller's per-user credential for `server`: headers and cache binding.
     ///
     /// THE CONTRACT LIVES HERE, not on the context-taking
-    /// [`MetaMcp::caller_credential_for`], because the three protocol-level
-    /// catalogue handlers — `prompts/list`, `resources/list` and
+    /// [`MetaMcp::caller_credential_for`], because the protocol-level catalogue
+    /// handlers — `prompts/list`, `resources/list` and
     /// `resources/templates/list` — are dispatched from the method table with
-    /// the request's verified identity and no `MetaMcpCallerContext` to borrow.
-    /// The identity is the only field the resolution ever read.
+    /// no `MetaMcpCallerContext` to borrow. They build the same proof from the
+    /// client and identity they receive.
     ///
-    /// Returns empty WITHOUT calling the resolver when the caller carries no
-    /// verified identity. That short-circuit is load-bearing, not an
-    /// optimisation: `resolve_propagation_credential` mints over the network and
-    /// writes a durable transparency-log record, and this runs in a loop over
-    /// every registered backend on ordinary discovery. A gateway whose callers
-    /// present no identity — every single-tenant deployment — therefore mints
-    /// nothing and audits nothing, exactly as before (IDP.5).
+    /// Returns empty WITHOUT calling the resolver when the resolver would find
+    /// no principal for this caller on this backend (#2231). That short-circuit
+    /// is load-bearing, not an optimisation: resolving mints over the network
+    /// and writes a durable transparency-log record, and this runs in a loop
+    /// over every registered backend on ordinary discovery. A caller with no
+    /// verified identity therefore mints nothing and audits nothing (IDP.5) —
+    /// except the sole operator on a managed-account backend, whom the vault's
+    /// own predicate serves, exactly as `gateway_invoke` and the direct route do.
     ///
     /// A resolution failure is empty too, never an error: a caller who cannot
     /// mint for this backend simply gets no per-user view of it and falls back
@@ -41,14 +43,49 @@ impl MetaMcp {
     pub(crate) async fn caller_credential_for_identity(
         &self,
         server: &str,
-        verified_identity: Option<&VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> (Vec<(String, String)>, Option<String>) {
-        if verified_identity.is_none() {
+        if self.principal_for_server(server, caller).is_none() {
             return (Vec::new(), None);
         }
-        self.resolve_propagation_credential(server, verified_identity)
+        self.resolve_propagation_credential_held(server, caller)
             .await
+            .map(|(headers, binding, _lease)| (headers, binding))
             .unwrap_or_default()
+    }
+
+    /// [`Self::caller_credential_for_identity`] for a request's caller context.
+    ///
+    /// ONE resolution per request per backend, returning BOTH halves, because
+    /// the isolation verdict and the slot selection must not disagree about who
+    /// the caller is (design §4.3's residual) — and because resolving twice
+    /// would mint twice.
+    pub(crate) async fn caller_credential_for(
+        &self,
+        server: &str,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> (Vec<(String, String)>, Option<String>) {
+        let proof = CallerProof::new(
+            caller.verified_identity,
+            CallerProvenance::classify(caller.credential_principal),
+        );
+        self.caller_credential_for_identity(server, proof).await
+    }
+
+    /// Who the resolver would resolve `server`'s credential for, if anyone.
+    ///
+    /// THE ONE LOOKUP both the resolver and every short-circuit ahead of it
+    /// use, so a gate can never pick a different descriptor than the mint.
+    pub(super) fn principal_for_server<'a>(
+        &self,
+        server: &str,
+        caller: CallerProof<'a>,
+    ) -> Option<Principal<'a>> {
+        let descriptor_id = self
+            .backends
+            .get(server)
+            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        self.caller_principal(descriptor_id.as_deref(), caller)
     }
 
     /// Whether `backend` must be omitted from a per-caller catalogue
@@ -67,10 +104,10 @@ impl MetaMcp {
     pub(super) async fn catalogue_credential_for(
         &self,
         backend: &Backend,
-        verified_identity: Option<&VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Option<(Vec<(String, String)>, Option<String>)> {
         let (headers, binding) = self
-            .caller_credential_for_identity(&backend.name, verified_identity)
+            .caller_credential_for_identity(&backend.name, caller)
             .await;
         if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
             return None;
@@ -208,7 +245,11 @@ impl MetaMcp {
     ///
     /// THE RESOLVE IS REAL: it mints, audits and — for an account-bound backend
     /// — releases custody. Seed only backends whose test does not count those.
-    pub(crate) async fn seed_caller_slot_for_test(&self, server: &str, caller: &VerifiedIdentity) {
+    pub(crate) async fn seed_caller_slot_for_test(
+        &self,
+        server: &str,
+        caller: &crate::key_server::oidc::VerifiedIdentity,
+    ) {
         let Ok((_, Some(binding))) = self
             .resolve_propagation_credential(server, Some(caller))
             .await
