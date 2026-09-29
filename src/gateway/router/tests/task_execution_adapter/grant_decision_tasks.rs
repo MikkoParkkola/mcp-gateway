@@ -45,7 +45,7 @@ async fn unsigned_task_writes_the_workers_record() {
 #[tokio::test]
 async fn signed_task_writes_preparation_and_execution_records() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
-    let body = as_task(with_nonce(personal_invoke(1), "d3a-n13"), "d3a-t13");
+    let body = as_task(with_nonce(personal_invoke(1)), "d3a-t13");
     let created = post(&row.state, "key-a", body).await;
     let settled = poll_until_terminal(&row.state, "key-a", &task_id(&created)).await;
     let records = decisions(&row.dir);

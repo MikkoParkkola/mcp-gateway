@@ -126,8 +126,9 @@ pub(super) fn signing(mut meta: MetaMcp) -> MetaMcp {
 }
 
 /// Put a signing nonce beside `server` and `tool`, where signing reads it.
-pub(super) fn with_nonce(mut body: Value, nonce: &str) -> Value {
-    body["params"]["arguments"]["nonce"] = json!(nonce);
+pub(super) fn with_nonce(mut body: Value) -> Value {
+    // Fresh per call: a signing nonce is single-use, and none is committed.
+    body["params"]["arguments"]["nonce"] = json!(uuid::Uuid::new_v4().to_string());
     body
 }
 
@@ -137,12 +138,7 @@ pub(super) fn with_nonce(mut body: Value, nonce: &str) -> Value {
 #[tokio::test]
 async fn signed_call_writes_one_record_with_invocation_trace() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
-    let answer = post(
-        &row.state,
-        "key-a",
-        with_nonce(personal_invoke(1), "d3a-n1"),
-    )
-    .await;
+    let answer = post(&row.state, "key-a", with_nonce(personal_invoke(1))).await;
     assert!(answer.get("error").is_none(), "{answer}");
     let invocation = only(invocations(&row.dir), "invocation record");
     let record = only(decisions(&row.dir), "decision record");
