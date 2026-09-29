@@ -46,6 +46,7 @@ use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_versio
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
+use crate::security::signature_chain::ChainSigner;
 use crate::stats::UsageStats;
 use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
@@ -531,10 +532,7 @@ pub struct MetaMcp {
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
     /// ASI07 chain identity and emission mode; `None` = feature off.
-    pub(super) chain_signer: Option<(
-        Arc<crate::security::signature_chain::ChainSigner>,
-        crate::config::ChainEmit,
-    )>,
+    pub(super) chain_signer: Option<(Arc<ChainSigner>, crate::config::ChainEmit)>,
 
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
@@ -966,35 +964,6 @@ impl MetaMcp {
         self.message_signer = Some(Arc::new(signer));
         self.nonce_store = Some(nonce_store);
         self.require_nonce = require_nonce;
-    }
-
-    /// Enable signed runtime provenance stamping (MIK-6905, rung 1.2).
-    ///
-    /// When set, every aggregated tool result is stamped with a signed
-    /// `_meta.provenance` receipt. Off by default; the field is `None` unless
-    /// this is called, so the stamping branch never runs on the hot path
-    /// otherwise.
-    pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
-        self.provenance_signer = Some(Arc::new(signer));
-    }
-
-    /// Enable ASI07 origin-link emission.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub(crate) fn set_chain_signer(
-        &mut self,
-        signer: crate::security::signature_chain::ChainSigner,
-        emit: crate::config::ChainEmit,
-    ) {
-        self.chain_signer = Some((Arc::new(signer), emit));
-    }
-
-    /// Enable shadow claim capture (MIK-6908, rung 3.1).
-    ///
-    /// Only has an observable effect once `provenance_signer` is also
-    /// `Some` — capture runs alongside stamping at the same chokepoint, not
-    /// independently of it.
-    pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
-        self.claim_capture = Some(sink);
     }
 
     /// Attach a transparency logger (issue #133, D3).
