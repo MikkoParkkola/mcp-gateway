@@ -636,7 +636,6 @@ mod cli {
     async fn gh462_setup_empty_discovery_without_client() {
         invalid_empty_discovery(false).await;
     }
-
     #[cfg(unix)] // Windows `dirs::home_dir()` ignores HOME/USERPROFILE
     #[tokio::test]
     async fn gh462_valid_config_control_reaches_empty_discovery() {
@@ -812,7 +811,6 @@ mod cli {
             }
         };
     }
-
     reference_cli_case!(gh462_add_references, false);
     #[cfg(unix)]
     reference_cli_case!(gh462_setup_references, true);

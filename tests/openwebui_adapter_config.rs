@@ -1011,7 +1011,6 @@ fn enabled_store_yaml(dir: &std::path::Path, adapter_secret: &str, gateway_key: 
         ),
     )
     .expect("fixture env file must be writable");
-
     format!(
         "\
 env_files:
@@ -1046,7 +1045,7 @@ accounts:
         - owui-gateway-key
 ",
         env_path.display(),
-        dir.display(), // dir: `/var/..` is relative on Windows
+        dir.display(),
     )
 }
 
