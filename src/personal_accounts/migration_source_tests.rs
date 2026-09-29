@@ -269,4 +269,8 @@ fn a_private_file_owned_by_another_user_is_refused() {
         !super::private_to(0o100_600, 0, ME),
         "a root-owned 0600 file read by a non-root migration must be refused"
     );
+    assert!(
+        super::private_to(0o100_600, 0, 0),
+        "an operator running as root owns its own root-owned file"
+    );
 }

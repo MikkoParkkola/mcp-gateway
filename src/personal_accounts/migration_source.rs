@@ -156,7 +156,8 @@ pub(in crate::personal_accounts) fn read_legacy_source(
 /// The mode alone does not establish ownership. A migration run as root, or
 /// with `CAP_DAC_READ_SEARCH`, reads any 0600 file, so another local user could
 /// plant one in the source directory and have it imported as the operator's
-/// credential. The owner is checked on the same metadata as the mode.
+/// credential. The owner is checked on the same metadata as the mode, and
+/// exactly: unlike `config::secret_file`, root is not accepted as a proxy owner.
 ///
 /// Exactly 0600, not "no group or other write": any group or other access at
 /// all on a credential file means it is not the file `TokenStorage::save`
