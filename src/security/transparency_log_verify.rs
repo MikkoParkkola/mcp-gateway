@@ -702,7 +702,8 @@ impl Stream<'_> {
         if let Some(at) = self.hwm_missing {
             let msg = format!(
                 "{EV_HWM_MISSING} at counter {at}: a restart found the high-water mark \
-                 missing, so tail loss before it cannot be ruled out"
+                 missing or a record it could not verify, so tail loss or an edit before \
+                 it cannot be ruled out"
             );
             match mode {
                 VerifyMode::Live => return Err((Some(at), msg)),

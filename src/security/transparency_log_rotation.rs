@@ -27,11 +27,12 @@ use crate::security::audit_rotation_config::OnDiskFull;
 /// Every housekeeping `event` starts with this; callers may not use it.
 pub(super) const SEGMENT_EVENT_PREFIX: &str = "audit_segment_";
 /// Segment fields only the logger writes.
-pub(super) const RESERVED_SEGMENT_FIELDS: [&str; 4] = [
+pub(super) const RESERVED_SEGMENT_FIELDS: [&str; 5] = [
     "segment_seq",
     "prev_segment_seq",
     "prev_segment_final_hash",
     "segment_opened_at",
+    HWM_MISSING_AT,
 ];
 pub(crate) const EV_SEALED: &str = "audit_segment_sealed";
 pub(crate) const EV_OPENED: &str = "audit_segment_opened";
@@ -531,8 +532,8 @@ fn repair_torn_tail(
 ///
 /// Absence is accepted only from a file that checks out: every line is
 /// parsed (a raw-text match is defeated by a JSON escape), its hash
-/// recomputed, a signature it carries checked when a secret is set (a log
-/// signed only from some point on stays readable), and each record
+/// recomputed, its signature checked when a secret is set (as verify does),
+/// and each record
 /// linked to the one before. A line that fails any of these, or is over
 /// [`MAX_RECORD_BYTES`], counts as a finding at that point: an edit that
 /// hides the marker must not also erase it. A blank line is skipped, as
@@ -586,9 +587,7 @@ pub(super) fn hwm_missing_in(
         });
         let intact = linked
             && recompute_entry_hash(&v).is_ok_and(|h| h == stored)
-            && (secret.is_empty()
-                || v.get("sig").is_none()
-                || verify_entry_sig(&v, stored, secret).is_ok());
+            && (secret.is_empty() || verify_entry_sig(&v, stored, secret).is_ok());
         if !intact {
             note(counter);
         }

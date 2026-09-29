@@ -223,20 +223,24 @@ fn an_escaped_marker_still_outlives_retention() {
 /// Mark a retain-1 log, append past the marker, apply `edit` to the active
 /// file's text, restart, then rotate until the marker's segment is gone.
 fn tamper_then_expire(edit: impl FnOnce(String) -> String) {
+    tamper_then_expire_as(false, |_, raw| edit(raw));
+}
+
+fn tamper_then_expire_as(signed: bool, edit: impl FnOnce(&Path, String) -> String) {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 1, signed)).unwrap();
     rotate_n(&l, &path, 1);
     drop(l);
     delete_hwm(&path);
-    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 1, signed)).unwrap();
     append(&l, 0);
     drop(l);
     let raw = std::fs::read_to_string(&path).unwrap();
-    let edited = edit(raw.clone());
+    let edited = edit(&path, raw.clone());
     assert_ne!(raw, edited, "the edit changed the file");
     std::fs::write(&path, edited).unwrap();
-    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 1, signed)).unwrap();
     let newest = |p: &Path| list_segments(p).unwrap().last().map_or(0, |s| s.seq + 1);
     let target = newest(&path) + 5;
     let mut i = 0;
@@ -247,7 +251,40 @@ fn tamper_then_expire(edit: impl FnOnce(String) -> String) {
     }
     drop(l);
     assert!(marks(&path).is_empty(), "the marker's segment expired");
-    assert_live_fails_on_mark(&path);
+    let r = verify_segments(&path, &cfg(&path, 1, signed), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "a restart laundered the missing .hwm");
+    let msg = r.error_message.unwrap();
+    assert!(msg.contains(MARK), "{msg}");
+}
+
+/// On a signed log, dropping the marker and re-hashing the rest without the
+/// secret leaves records whose signatures fail; recovery counts that.
+#[test]
+fn an_unsigned_rehash_of_a_signed_log_is_not_forgotten_at_restart() {
+    tamper_then_expire_as(true, |_, raw| {
+        // Counters are renumbered too, so only the signatures can tell.
+        let mut prev: Option<(u64, String)> = None;
+        let mut out = String::new();
+        for line in raw.lines() {
+            let mut v: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event(&v) == Some(MARK) {
+                continue;
+            }
+            if let Some((c, h)) = &prev {
+                v["counter"] = (c + 1).into();
+                v["prev_entry_hash"] = h.clone().into();
+            }
+            if let Some(o) = v.as_object_mut() {
+                o.remove("sig");
+                o.remove("key_id");
+            }
+            let hash = recompute_entry_hash(&v).unwrap();
+            v["entry_hash"] = hash.clone().into();
+            prev = Some((v["counter"].as_u64().unwrap(), hash));
+            out += &(v.to_string() + "\n");
+        }
+        out
+    });
 }
 
 /// Whitespace past the scan's line bound keeps the marker's hash valid; a
