@@ -2461,7 +2461,10 @@ carries one signed origin link when the request sends `params._meta["io.mcp-gate
 (a 1 to 256 byte string, else `-32602`), or on every such result under `emit: always`. The link
 covers the delivered result and sits under the v2 `_signature` MAC. The direct `/mcp/{name}` route
 links its live `tools/call` results. Capability results, meta-only tools, Code Mode, playbooks,
-cache hits and direct-route replays are not linked in 4.0. A result that cannot carry a link is
+cache hits and direct-route idempotent replays are not linked in 4.0: the direct replay store can
+hold a gateway-authored side-effect notice and records no origin. The `gateway_invoke` `nonce` is
+the link's fallback nonce only while `message_signing` is enabled; with it off, a link carries the
+chain nonce or `null`. A result that cannot carry a link is
 refused with `-32001`. A change to `signing_key`, `key_id` or `emit` needs a restart; a reload
 that changes one is refused.
 
