@@ -274,6 +274,7 @@ async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
         scope: InvokeScope::allow_all(CallerStanding::Standard),
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
+        reservation: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(
@@ -329,6 +330,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
         scope: InvokeScope::allow_all(CallerStanding::Standard),
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
+        reservation: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(
