@@ -682,3 +682,7 @@ mod sole_operator_mcp_tests;
 // #2231: the catalogue and forward reads, for the same principals as #1961.
 #[path = "account_catalogue_sole_operator_tests.rs"]
 mod catalogue_sole_operator_tests;
+
+// #2326: tool discovery omits a required backend for a caller without identity.
+#[path = "account_tool_discovery_required_tests.rs"]
+mod tool_discovery_required_tests;
