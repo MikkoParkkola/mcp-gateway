@@ -920,11 +920,20 @@
     },
     {
       "id": "MIK-7570.AUDIT.4",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-27 (D3-e); design decided 2026-09-28 (decision audit_4_owner_ratification). Not yet built; implementation tracked in #1869. Gap at source: the `identity grants` CLI only rewrites the grant file (src/commands/identity.rs:176, :199) and tells the user a running gateway applies the change on its next reload (:273-280); docs/identity_grants.md:259-261 states reloads reach only the tracing log; at startup the file is installed by load_configured_identity_grants (src/gateway/server/mod.rs:1186-1198) before the governance store opens (:1777). Why a journal: two independent reviews showed at source that startup reconciliation alone cannot see an add followed by a revoke between two loads, and that the CLI can edit while a gateway runs. The CLI therefore journals each change to a sidecar file and never writes the audit log itself (one-writer lease, #1570); the gateway ingests the journal. Design constraints kept: a file-driven change has no authenticated actor and none is synthesized (docs/internal/design/2026-09-22-live-identity-grant-reload.md:529-552); publish first, record second (:562-572); with auth disabled no governance store is built (src/gateway/server/control_plane_store.rs:76-81); an unopenable default store directory builds none either (:104). Acceptance test: RELEASE-4.0.0-scope-tests.md row MIK-7570.AUDIT.4. PROGRESS 2026-09-28, row stays pending: the CLI half of AUDIT4.1 merged in #2069 (769eb66d8). Each successful identity grants add, --replace and revoke appends one line to <grant file>.journal.jsonl (mode 0600) under one lock spanning the grant write and the append; a refused change appends nothing. Evidence: CI 36422097220 on ac571b31f; mutants 4 of 4 fail their named test in run 36422120703. Nothing reads the journal yet: gateway ingestion (AUDIT4.2-4.8) is #2090, so #1869 stays open."
+      "evidence": [
+        "src/identity_grants/journal_tests.rs",
+        "src/config_reload/grant_audit_tests.rs",
+        "src/config_reload/grant_audit_reload_tests.rs",
+        "src/config_reload/grant_audit_crash_tests.rs",
+        "src/config_reload/grant_audit_journal_tests.rs",
+        "src/gateway/server/identity_grants_tests.rs",
+        "docs/UPGRADING-4.0.md",
+        "docs/identity_grants.md"
+      ],
+      "note": "Graded 2026-09-29 (D3-e; design docs/design/2026-09-28-grant-change-journal.md rev 4, decision audit_4_owner_ratification). Journal (AUDIT4.1, #2069 merged 769eb66d8): each successful identity grants add, --replace and revoke appends one line to <grant file>.journal.jsonl (0600) under one lock with the grant write; a refused change appends nothing; CI 36422097220, mutants 4/4 RED in 36422120703. Ingestion and snapshot (AUDIT4.2-4.8, #2090 merged 5c3021827): the gateway ingests the journal at start and on every reload (watcher included) exactly once across crashes (no authenticated actor is recorded; action mutate_grant, grant_change field); a direct file edit is recorded out_of_band; lost history is indeterminate; each start records one loaded row per active grant and loaded_complete with the count before serving, and an incomplete run serves no grants; with auth on and grants on, a governance store that cannot open refuses the start; auth off writes only the tracing event; an append failure after an applied reload keeps the change and reports it unrecorded. Cells: identity_grants/journal_tests.rs t1a-t1f t10a (CLI journal); config_reload/grant_audit_tests.rs t2a t2b t4a t4b t4d t4e t4f t4l; grant_audit_reload_tests.rs t2c (watcher) t2d t2e t6 t6b; grant_audit_crash_tests.rs t3 t3cd t6 t7 t7c t8 t8b; grant_audit_journal_tests.rs t4g t4h t4i t4k; gateway/server/identity_grants_tests.rs t3a t3b t3cd t4c t5a t5b t6c t9 t12 (HTTP, stdio) t13. Red first: 36415426849, 36432522556, 36433326765, 36448660068, 36465839353. Green: CI 36475474885, Docker 36475474407. Mutants: 36469396993, 24/24 RED. UPGRADING-4.0 item 79. Follow-ups outside this criterion: #2185 (attribution for two spellings of one grant file), #1718 (Windows ACL on the audit state file)."
     },
     {
       "id": "MIK-7570.METRICS.2",
