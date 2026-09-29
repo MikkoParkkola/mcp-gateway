@@ -265,7 +265,7 @@ fn wrap_tool_success_with_output_schema_includes_structured_content() {
 fn tool_matches_query_synonym_in_name() {
     let tool = make_tool("search_companies", Some("Find business entities"));
     assert!(
-        tool_matches_query(&tool, "find"),
+        tool_matches_query("testserver", &tool, "find"),
         "'find' should match tool with 'search' via synonym"
     );
 }
@@ -274,7 +274,7 @@ fn tool_matches_query_synonym_in_name() {
 fn tool_matches_query_synonym_in_description() {
     let tool = make_tool("uptimer", Some("Continuously monitor your services"));
     assert!(
-        tool_matches_query(&tool, "watch"),
+        tool_matches_query("testserver", &tool, "watch"),
         "'watch' should match tool with 'monitor' via synonym"
     );
 }
@@ -283,7 +283,7 @@ fn tool_matches_query_synonym_in_description() {
 fn tool_matches_query_no_false_positive_for_unrelated_synonym_group() {
     let tool = make_tool("weather_api", Some("Get current temperature and humidity"));
     assert!(
-        !tool_matches_query(&tool, "find"),
+        !tool_matches_query("testserver", &tool, "find"),
         "should not match a tool with no search-related words"
     );
 }
@@ -292,7 +292,7 @@ fn tool_matches_query_no_false_positive_for_unrelated_synonym_group() {
 fn tool_matches_query_multi_word_uses_synonym_for_one_word() {
     let tool = make_tool("search_weather", Some("Get forecasts"));
     assert!(
-        tool_matches_query(&tool, "find weather"),
+        tool_matches_query("testserver", &tool, "find weather"),
         "should match: 'weather' in name, 'find'~'search' in name"
     );
 }
