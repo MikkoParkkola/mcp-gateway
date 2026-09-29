@@ -22,6 +22,7 @@ use tokio::process::{Child, Command};
 const CAPABILITIES: usize = 1000;
 const TOKEN: &str = "mik-7268-admin";
 const DEADLINE: Duration = Duration::from_secs(60);
+const HOLD_WINDOW: Duration = Duration::from_secs(2);
 const HOLD_SCAN_ENV: &str = "MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN";
 
 fn write_capabilities(dir: &Path) {
@@ -77,8 +78,10 @@ fn spawn(directory: &Path, port: u16, scan_gate: &Path) -> Child {
 
 /// Poll `/readyz` unauthenticated until it answers 200, returning every
 /// answer seen before it. Connection refusals (not yet bound) are skipped.
-/// The first "capabilities loading" answer releases `scan_gate`, so the scan
-/// cannot finish before that answer has been seen.
+/// The scan stays held for `HOLD_WINDOW` after the first "capabilities loading"
+/// answer, and a 200 inside that window fails the test: without the hold the
+/// 1000-file load finishes well inside it, so a removed or ignored hook fails
+/// every run rather than passing on the natural race.
 async fn readyz_until_ready(
     client: &reqwest::Client,
     child: &mut Child,
@@ -89,6 +92,7 @@ async fn readyz_until_ready(
     let logs = || std::fs::read_to_string(directory.join("gateway.log")).unwrap_or_default();
     let start = tokio::time::Instant::now();
     let mut seen = Vec::new();
+    let mut held_since: Option<tokio::time::Instant> = None;
     loop {
         if let Some(status) = child.try_wait().expect("gateway status") {
             panic!("gateway exited {status}: {}", logs());
@@ -97,12 +101,19 @@ async fn readyz_until_ready(
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
             if status == 503 && body == "capabilities loading" {
-                std::fs::write(scan_gate, "release").expect("release the scan gate");
+                held_since.get_or_insert_with(tokio::time::Instant::now);
             }
             seen.push((status, body));
             if status == 200 {
+                assert!(
+                    !scan_gate.exists(),
+                    "the scan finished before its gate was released"
+                );
                 return seen;
             }
+        }
+        if held_since.is_some_and(|since| since.elapsed() >= HOLD_WINDOW) && !scan_gate.exists() {
+            std::fs::write(scan_gate, "release").expect("release the scan gate");
         }
         assert!(
             start.elapsed() < DEADLINE,
