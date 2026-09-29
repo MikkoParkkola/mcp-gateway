@@ -8,9 +8,11 @@
 //! `FastMCP` + Docket proof lives in `task_upstream_recovery_sdk.rs` and runs the
 //! actual SDK; nothing in this file is offered as evidence about the SDK.
 
-// One consumer: `tests/task_upstream_recovery.rs`. Scaffolding it does not
-// drive yet is marked `expect(dead_code)` so the annotation self-deletes
-// the moment a case starts using the item.
+// Consumers: `tests/task_upstream_recovery.rs`, and
+// `tests/task_crash_boundaries.rs`, which drives only part of it and allows
+// `dead_code` on the module. Scaffolding the first does not drive yet is
+// marked `expect(dead_code)` so the annotation self-deletes the moment a case
+// starts using the item.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
