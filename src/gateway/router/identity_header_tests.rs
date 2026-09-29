@@ -732,3 +732,18 @@ fn oauth_agent_grant_subject_keeps_padding() {
         None
     );
 }
+
+/// Grants and the firewall key pick the same subject from a certificate as
+/// agent identity does: the first non-empty SAN URI, else the CN (#2285).
+#[test]
+fn cert_subject_id_skips_an_empty_first_san_like_agent_identity() {
+    let cert = crate::mtls::identity::CertIdentity {
+        san_uris: vec![String::new(), "spiffe://cluster/b".to_string()],
+        common_name: Some("c".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        cert_subject_id(&cert).as_deref(),
+        Some("spiffe://cluster/b")
+    );
+}
