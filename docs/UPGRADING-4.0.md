@@ -86,7 +86,7 @@ backend" and "fails a capability file" first.**
 | 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
-| 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
+| 62 | A bridged input exchange that runs out of rounds returns the backend's last question with a continuation instead of `-32003` | A client that treated `-32003` as final: answer the returned `inputRequests` and resend with the `requestState` it carries, or treat it as unfinished |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
@@ -1875,6 +1875,34 @@ earlier 4.0 binary refuses an authority file with a field it does not know, so i
 custody does not start, and with it the gateway. The file is sealed, so the field cannot be
 removed by hand. It is removed for an account when that account's token next rotates or the
 user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
+
+## 62. A bridged exchange that runs out of rounds can be resumed
+
+**Startup:** no notice
+
+The gateway asks a 2025-era (legacy) client a backend's questions in-band and retries the
+backend with the answers, for a bounded number of rounds (three). When a backend was still asking after
+the last round, the call failed with `-32003` ("asked for input and the bridged exchange
+could not be completed"). The backend's progress was lost, and a retry started over.
+
+Now the call returns the backend's **last** interim result: its `inputRequests`, and a
+`requestState` holding a gateway-sealed continuation of that round. Resending `tools/call`
+with the answers in `inputResponses` and that `requestState` resumes the exchange where the
+backend stopped. The continuation is bound to the caller like any other (MRTR.2). The last
+round is held to the client's declared capabilities, its per-request capability list and the
+response firewall first, so an undeclared question is still refused with the capability it
+needs. The idempotency key is not settled, as before: a backend that stopped to ask has not
+acted.
+
+For code that uses the library's `mcp_gateway::gateway::input_bridge` module directly:
+`BridgeError` is now `#[non_exhaustive]`; `RoundsExhausted` carries the last round
+(`last`); and a new `Undeclared` variant, itself `#[non_exhaustive]`, reports a last round
+that asks for a capability, mode or method the session never declared. `InputBridge::run`
+never hands back such a round.
+
+Action: a client that treated `-32003` from a bridged call as final now gets a result it can
+answer. If it cannot answer, it can treat the result as unfinished, the same as any
+`input_required` result. Library code that matches on `BridgeError` needs a wildcard arm.
 
 ## 63. Error results are never served from a response cache
 
