@@ -1547,13 +1547,13 @@ impl MetaMcp {
     pub(super) fn active_profile(
         &self,
         session_id: Option<&str>,
-    ) -> crate::routing_profile::RoutingProfile {
+    ) -> std::sync::Arc<crate::routing_profile::RoutingProfile> {
         let default_name = self.profile_registry.default_name();
         let name = session_key(session_id).map_or_else(
             || default_name.to_string(),
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
-        self.profile_registry.get(&name)
+        self.profile_registry.get_shared(&name)
     }
 }
 

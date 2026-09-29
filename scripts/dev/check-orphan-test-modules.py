@@ -54,11 +54,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SKIP_DIRS = {".git", "target", "node_modules"}
 
 # One token stream over code with comments and literal contents blanked:
-# a `#[path = "` opener (its value is read back from the literal table), a
+# a `#[path = "` (or raw `r#"`) opener (its value is read back from the literal table), a
 # `mod name;` (backs a file) or `mod name {` (inline, backs none), and the
 # braces that tell which inline modules enclose a declaration.
 TOKEN = re.compile(
-    r"""(?P<path>\#\s*\[\s*path\s*=\s*)(?P<quote>")"""
+    r"""(?P<path>\#\s*\[\s*path\s*=\s*)(?:r\#*)?(?P<quote>")"""
     r"""|\bmod\s+(?:r\#)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<end>[;{])"""
     r"""|(?P<open>\{)|(?P<close>\})"""
 )
@@ -153,29 +153,32 @@ def crate_roots() -> list[Path]:
     return [root for root in roots if root.is_file()]
 
 
-def module_dir(source: Path, is_root: bool) -> Path:
+def module_dir(source: Path, owns_dir: bool) -> Path:
     """The directory a plain `mod foo;` in `source` resolves against.
 
-    A crate root, `mod.rs`, `lib.rs` and `main.rs` own their directory; any
+    A crate root, a file loaded through `#[path]` (rustc treats it as a
+    mod-rs file), `mod.rs`, `lib.rs` and `main.rs` own their directory; any
     other file owns a subdirectory named after itself.
     """
-    if is_root or source.name in {"mod.rs", "lib.rs", "main.rs"}:
+    if owns_dir or source.name in {"mod.rs", "lib.rs", "main.rs"}:
         return source.parent
     return source.parent / source.stem
 
 
-def declarations(source: Path, is_root: bool) -> set[Path]:
+def declarations(source: Path, owns_dir: bool) -> set[tuple[Path, bool]]:
     """Resolve every file-backed declaration in `source` to the path it names.
 
     Per the Rust reference: a plain `mod name;` resolves under the module
     directory plus each enclosing inline module; a `#[path]` resolves against
     the declaring file's directory at top level, and against the module
     directory plus enclosing inline modules inside one. A `#[path]`
-    declaration names only its path, never also the default file.
+    declaration names only its path, never also the default file. Each result
+    carries whether it was reached through `#[path]`, which decides where ITS
+    child modules resolve.
     """
     code, literals = blank(source.read_text(encoding="utf-8", errors="replace"))
-    base = module_dir(source, is_root)
-    declared: set[Path] = set()
+    base = module_dir(source, owns_dir)
+    declared: set[tuple[Path, bool]] = set()
     inline: list[str | None] = []
     pending_path: str | None = None
     for m in TOKEN.finditer(code):
@@ -187,11 +190,11 @@ def declarations(source: Path, is_root: bool) -> set[Path]:
                 inline.append(m.group("name"))
             elif pending_path is not None:
                 start = base.joinpath(*nested) if nested else source.parent
-                declared.add((start / pending_path).resolve())
+                declared.add(((start / pending_path).resolve(), True))
             else:
                 directory = base.joinpath(*nested)
-                declared.add((directory / f"{m.group('name')}.rs").resolve())
-                declared.add((directory / m.group("name") / "mod.rs").resolve())
+                declared.add(((directory / f"{m.group('name')}.rs").resolve(), False))
+                declared.add(((directory / m.group("name") / "mod.rs").resolve(), False))
             pending_path = None
         elif m.group("open"):
             inline.append(None)
@@ -210,15 +213,15 @@ def reachable() -> set[Path]:
     not compiled, so neither is anything it names.
     """
     roots = {root.resolve() for root in crate_roots()}
-    seen: set[Path] = set()
-    stack = list(roots)
+    seen: set[tuple[Path, bool]] = set()
+    stack = [(root, True) for root in roots]
     while stack:
-        path = stack.pop()
-        if path in seen or not path.is_file():
+        path, owns_dir = stack.pop()
+        if (path, owns_dir) in seen or not path.is_file():
             continue
-        seen.add(path)
-        stack.extend(declarations(path, path in roots))
-    return seen
+        seen.add((path, owns_dir))
+        stack.extend(declarations(path, owns_dir))
+    return {path for path, _ in seen}
 
 
 def orphans() -> list[Path]:
