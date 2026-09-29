@@ -7,6 +7,10 @@
 //! the background, after a deliberate pause that lets the listener bind first.
 //! A readiness probe that answered 200 in that window routed traffic to a
 //! gateway whose every capability call failed.
+//!
+//! The scan is held until the test has seen the loading answer (a debug-build
+//! gate file, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, #2376), so that answer
+//! does not depend on the load being slower than the first probe.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -18,6 +22,8 @@ use tokio::process::{Child, Command};
 const CAPABILITIES: usize = 1000;
 const TOKEN: &str = "mik-7268-admin";
 const DEADLINE: Duration = Duration::from_secs(60);
+const HOLD_WINDOW: Duration = Duration::from_secs(2);
+const HOLD_SCAN_ENV: &str = "MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN";
 
 fn write_capabilities(dir: &Path) {
     std::fs::create_dir_all(dir).expect("capability dir");
@@ -30,7 +36,7 @@ fn write_capabilities(dir: &Path) {
     }
 }
 
-fn spawn(directory: &Path, port: u16) -> Child {
+fn spawn(directory: &Path, port: u16, scan_gate: &Path) -> Child {
     let caps = directory.join("caps");
     let config = json!({
         "server": {"host": "127.0.0.1", "port": port},
@@ -53,6 +59,7 @@ fn spawn(directory: &Path, port: u16) -> Child {
     Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
         .env_clear()
         .env("HOME", directory)
+        .env(HOLD_SCAN_ENV, scan_gate)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
@@ -71,15 +78,21 @@ fn spawn(directory: &Path, port: u16) -> Child {
 
 /// Poll `/readyz` unauthenticated until it answers 200, returning every
 /// answer seen before it. Connection refusals (not yet bound) are skipped.
+/// The scan stays held for `HOLD_WINDOW` after the first "capabilities loading"
+/// answer, and a 200 inside that window fails the test: without the hold the
+/// 1000-file load finishes well inside it, so a removed or ignored hook fails
+/// every run rather than passing on the natural race.
 async fn readyz_until_ready(
     client: &reqwest::Client,
     child: &mut Child,
     url: &str,
     directory: &Path,
+    scan_gate: &Path,
 ) -> Vec<(u16, String)> {
     let logs = || std::fs::read_to_string(directory.join("gateway.log")).unwrap_or_default();
     let start = tokio::time::Instant::now();
     let mut seen = Vec::new();
+    let mut held_since: Option<tokio::time::Instant> = None;
     loop {
         if let Some(status) = child.try_wait().expect("gateway status") {
             panic!("gateway exited {status}: {}", logs());
@@ -87,10 +100,20 @@ async fn readyz_until_ready(
         if let Ok(response) = client.get(format!("{url}/readyz")).send().await {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
+            if status == 503 && body == "capabilities loading" {
+                held_since.get_or_insert_with(tokio::time::Instant::now);
+            }
             seen.push((status, body));
             if status == 200 {
+                assert!(
+                    scan_gate.exists(),
+                    "the scan finished before its gate was released"
+                );
                 return seen;
             }
+        }
+        if held_since.is_some_and(|since| since.elapsed() >= HOLD_WINDOW) && !scan_gate.exists() {
+            std::fs::write(scan_gate, "release").expect("release the scan gate");
         }
         assert!(
             start.elapsed() < DEADLINE,
@@ -110,14 +133,15 @@ async fn readyz_is_not_ready_until_every_capability_has_loaded() {
         let reservation = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
         reservation.local_addr().expect("address").port()
     };
-    let mut child = spawn(directory.path(), port);
+    let scan_gate = directory.path().join("scan-gate");
+    let mut child = spawn(directory.path(), port, &scan_gate);
     let url = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .expect("client");
 
-    let seen = readyz_until_ready(&client, &mut child, &url, directory.path()).await;
+    let seen = readyz_until_ready(&client, &mut child, &url, directory.path(), &scan_gate).await;
     assert!(
         seen.iter()
             .any(|(status, body)| *status == 503 && body == "capabilities loading"),

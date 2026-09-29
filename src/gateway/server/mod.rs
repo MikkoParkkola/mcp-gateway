@@ -1360,6 +1360,8 @@ impl Gateway {
                 &self.config.capabilities.name,
                 executor,
             ));
+            // The scan below runs in the background; readiness waits on it.
+            cap_backend.begin_initial_scan();
             meta_mcp.set_capabilities(Arc::clone(&cap_backend));
 
             let capability_dirs = self.config.capabilities.directories.clone();
@@ -1404,7 +1406,7 @@ impl Gateway {
             let scan = async move {
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    CapabilityBackend::settle_before_initial_scan().await;
                 }
 
                 let mut total_caps = 0;
