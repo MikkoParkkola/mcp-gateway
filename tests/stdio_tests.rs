@@ -539,7 +539,7 @@ fn test_stdio_stdout_carries_only_jsonrpc() {
         // and the child would block on the log write before replying on stdout.
         // Discarding it is also exactly what we want to assert: logs go to
         // stderr (here, /dev/null), and stdout carries only JSON-RPC.
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("spawn mcp-gateway serve --stdio");
 
