@@ -522,3 +522,7 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
         journal,
     })
 }
+
+#[cfg(all(test, windows))]
+#[path = "journal_windows_tests.rs"]
+mod windows_tests;

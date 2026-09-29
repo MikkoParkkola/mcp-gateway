@@ -1603,4 +1603,20 @@ mod tests {
             1
         );
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn window_file_is_owner_only_in_an_open_directory_and_over_a_stale_temp() {
+        // WT-ASSERT 1718-W5: the window is created private, and a stale temp
+        // planted with an open DACL does not carry it into the window file.
+        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+
+        let dir = everyone_full_dir("1718-W5");
+        let path = dir.path().join("window.json");
+        std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
+
+        write_window_atomic(&path, &DurableWindow::empty(1)).unwrap();
+
+        assert_owner_only("1718-W5", &path, false);
+    }
 }

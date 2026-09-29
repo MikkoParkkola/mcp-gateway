@@ -620,6 +620,27 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn saved_token_and_client_id_are_owner_only_in_an_open_directory() {
+        // WT-ASSERT 1718-W2: both writers create their scratch file private.
+        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+        let dir = everyone_full_dir("1718-W2");
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        let token = TokenInfo::from_response("tok".into(), None, None, None, None);
+
+        store.save(backend, resource, &token).unwrap();
+        store.save_client_id(backend, resource, "cid").unwrap();
+
+        assert_owner_only("1718-W2 token", &store.token_path(backend, resource), false);
+        assert_owner_only(
+            "1718-W2 client",
+            &store.client_path(backend, resource),
+            false,
+        );
+    }
+
     #[test]
     fn save_client_id_is_first_writer_wins() {
         let dir = tempfile::tempdir().unwrap();
