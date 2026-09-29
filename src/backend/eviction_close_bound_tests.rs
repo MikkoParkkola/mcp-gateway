@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! #2245: an evicted slot's `close()` is bounded by `close_stage`, like the
-//! shutdown and idle-stop closes. One backend whose close never completes must
-//! not stall a grant reload (and with it every later revocation) or the reaper.
+//! #2245: an evicted slot's `close()` runs off the eviction path, bounded by
+//! `close_stage` like the shutdown and idle-stop closes. A backend whose close
+//! never completes must not stall a grant reload (and with it every later
+//! revocation and the next reload) or the reaper, not even for one budget per
+//! wedged slot.
 //!
 //! Paused clock: the wedged close never wakes, so the runtime auto-advances
-//! time to the next timer. Bounded, that is `close_stage`; unbounded, it is the
-//! outer `STALL` guard, which then reports the stall instead of hanging.
+//! time to the next timer. An unbounded close in line hits the outer `STALL`
+//! guard, which reports the stall instead of hanging; a bounded one in line
+//! costs `close_stage` per slot, which the elapsed check rejects.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -67,8 +70,8 @@ fn backend_with_wedged_slots(bindings: &[&str]) -> Arc<Backend> {
 
 /// GIVEN two revoked callers' idle slots whose transports never close
 /// WHEN the grant reload evicts the subject's slots
-/// THEN the eviction returns within the close budget, having evicted both,
-/// so the reload goes on to the next backend and subject.
+/// THEN the eviction returns without waiting out even one close budget,
+/// having evicted both, so the reload goes on to the next backend and subject.
 #[tokio::test(start_paused = true)]
 async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
     let backend = backend_with_wedged_slots(&["rev:alpha", "rev:beta"]);
@@ -83,8 +86,8 @@ async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
         "both slots must be evicted past the stuck close"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "each close must be bounded by close_stage; took {:?}",
+        started.elapsed() < CLOSE_STAGE,
+        "eviction must not wait on the closes; took {:?}",
         started.elapsed()
     );
     for binding in ["rev:alpha", "rev:beta"] {
@@ -97,7 +100,7 @@ async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
 
 /// GIVEN an expired per-user slot whose transport never closes
 /// WHEN the idle reaper runs
-/// THEN it returns within the close budget and the slot is gone.
+/// THEN it returns without waiting on the close and the slot is gone.
 #[tokio::test(start_paused = true)]
 async fn a_wedged_close_does_not_stall_the_idle_reaper() {
     let backend = backend_with_wedged_slots(&["idle:alpha"]);
@@ -118,8 +121,8 @@ async fn a_wedged_close_does_not_stall_the_idle_reaper() {
 
     assert_eq!(closed, 1, "the expired slot must be evicted");
     assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "the close must be bounded by close_stage; took {:?}",
+        started.elapsed() < CLOSE_STAGE,
+        "the reaper must not wait on the close; took {:?}",
         started.elapsed()
     );
     assert!(!backend.pool.contains_key(&slot("idle:alpha")));

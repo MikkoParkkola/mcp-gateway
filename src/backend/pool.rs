@@ -446,7 +446,7 @@ impl Backend {
                 }
             };
             if let Some(transport) = idle_transport {
-                self.close_evicted(transport).await;
+                self.close_evicted(transport);
             }
         }
 
@@ -482,18 +482,26 @@ impl Backend {
         self.pool.get(key).is_some()
     }
 
-    /// Close a transport an eviction took out of the pool, bounded by
-    /// `close_stage` as at shutdown: `close()` has no deadline of its own, and
-    /// one wedged backend must not stall a grant reload or the reaper (#2245).
-    async fn close_evicted(&self, transport: Arc<dyn Transport>) {
-        let close = tokio::time::timeout(self.budgets.close_stage, transport.close());
-        if close.await.is_err() {
-            tracing::warn!(
-                backend = %self.name,
-                budget_secs = self.budgets.close_stage.as_secs(),
-                "Evicted transport did not close within its budget; abandoning the close"
-            );
-        }
+    /// Close a transport an eviction took out of the pool, off the caller's
+    /// path and bounded by `close_stage` as at shutdown (#2245). `close()` has
+    /// no deadline of its own, and even a bounded close awaited in line would
+    /// hold the grant reload, and every slot it has yet to remove, for one
+    /// budget per wedged slot. Dropping the task's handle on timeout reaps a
+    /// `kill_on_drop` child: eviction took the last one.
+    fn close_evicted(&self, transport: Arc<dyn Transport>) {
+        let (backend, budget) = (self.name.clone(), self.budgets.close_stage);
+        tokio::spawn(async move {
+            if tokio::time::timeout(budget, transport.close())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    %backend,
+                    budget_secs = budget.as_secs(),
+                    "Evicted transport did not close within its budget; abandoning the close"
+                );
+            }
+        });
     }
 
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
@@ -532,7 +540,7 @@ impl Backend {
             if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
-                    self.close_evicted(transport).await;
+                    self.close_evicted(transport);
                 }
                 closed += 1;
             }
