@@ -234,4 +234,8 @@ fn unrunnable_path_fallback_is_class_correct() {
         !trust.contains("alone"),
         "WT-ASSERT F-TRUST-NOT-OWNER-ONLY: {trust}"
     );
+    // The reader appends a sentence; without the break it reads "...-500.This".
+    for text in [&secret, &trust] {
+        assert!(text.ends_with(".\n"), "WT-ASSERT F-SEP: {text:?}");
+    }
 }
