@@ -1013,6 +1013,16 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                     .to_owned(),
             });
         }
+        // The check above may have awaited a cold `tools/list`; an operator kill
+        // that landed meanwhile must still stop this round before dispatch.
+        if self.meta.kill_switch.is_killed(self.server) {
+            return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                message: format!(
+                    "Server '{}' is currently disabled by operator kill switch",
+                    self.server
+                ),
+            });
+        }
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")
