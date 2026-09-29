@@ -163,7 +163,7 @@ spec:
         - name: state
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-state" (include "mcp-gateway.fullname" .)) | quote }}
+            claimName: {{ include "mcp-gateway.stateClaim" . | quote }}
           {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.stateVolume.sizeLimit }}

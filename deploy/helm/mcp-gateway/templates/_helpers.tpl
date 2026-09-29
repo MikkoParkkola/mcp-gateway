@@ -122,40 +122,47 @@ sizeLimit. Quantities: plain bytes, or Ki/Mi/Gi/Ti, or k/M/G/T.
 {{- end }}
 {{- end }}
 
-{{/* CHART.2: the env each auth mode injects from auth.existingSecret, as a
-     YAML list. The ConfigMap references exactly these names (config and env
+{{/* CHART.2: the credential references each auth mode renders, as a JSON
+     list of {env, key}: the ConfigMap writes env:<env> from it and the
+     Deployment injects <env> from auth.existingSecret key <key>. The ConfigMap references exactly these names (config and env
      are both keyed on the mode here, so the two templates cannot drift):
        credential  MCP_GATEWAY_TOKEN          <- auth.secretKey
        api_keys    GATEWAY_API_KEY_<i>        <- auth.apiKeys[i].secretKey
        oidc        GATEWAY_KS_ADMIN_TOKEN     <- auth.oidc.adminTokenSecretKey, when set
        mesh        nothing
      Only credential gets the master bearer. */}}
-{{- define "mcp-gateway.authSecretEnv" -}}
+{{- define "mcp-gateway.authRefs" -}}
 {{- $mode := .Values.auth.mode -}}
 {{- $refs := list -}}
 {{- if eq $mode "credential" -}}
-{{- $refs = append $refs (list "MCP_GATEWAY_TOKEN" .Values.auth.secretKey) -}}
+{{- $refs = append $refs (dict "env" "MCP_GATEWAY_TOKEN" "key" .Values.auth.secretKey) -}}
 {{- else if eq $mode "api_keys" -}}
 {{- range $i, $k := .Values.auth.apiKeys -}}
-{{- $refs = append $refs (list (printf "GATEWAY_API_KEY_%d" $i) $k.secretKey) -}}
+{{- $refs = append $refs (dict "env" (printf "GATEWAY_API_KEY_%d" $i) "key" $k.secretKey) -}}
 {{- end -}}
 {{- else if and (eq $mode "oidc") (dig "adminTokenSecretKey" "" (.Values.auth.oidc | default dict)) -}}
-{{- $refs = append $refs (list "GATEWAY_KS_ADMIN_TOKEN" .Values.auth.oidc.adminTokenSecretKey) -}}
+{{- $refs = append $refs (dict "env" "GATEWAY_KS_ADMIN_TOKEN" "key" .Values.auth.oidc.adminTokenSecretKey) -}}
 {{- end -}}
+{{- toJson $refs -}}
+{{- end -}}
+
+{{/* The pod env for mcp-gateway.authRefs, from auth.existingSecret. */}}
+{{- define "mcp-gateway.authSecretEnv" -}}
+{{- $refs := include "mcp-gateway.authRefs" . | fromJsonArray -}}
 {{- if and $refs (not .Values.auth.existingSecret) -}}
-{{- fail (printf "auth.existingSecret is required in %s mode: the rendered config references %s, and a pod without it fails validation at startup." $mode (index (first $refs) 0)) -}}
+{{- fail (printf "auth.existingSecret is required in %s mode: the rendered config references env:%s, and a pod without it fails validation at startup." .Values.auth.mode (index $refs 0).env) -}}
 {{- end -}}
-{{- if eq $mode "credential" }}
+{{- if eq .Values.auth.mode "credential" }}
 # The config references env:MCP_GATEWAY_TOKEN. A missing value fails
 # validation at startup rather than serving without one, so an
 # install that forgets the Secret stops instead of opening.
 {{- end }}
 {{- range $refs }}
-- name: {{ index . 0 }}
+- name: {{ .env }}
   valueFrom:
     secretKeyRef:
       name: {{ $.Values.auth.existingSecret | quote }}
-      key: {{ index . 1 | quote }}
+      key: {{ .key | quote }}
 {{- end -}}
 {{- end -}}
 
@@ -188,4 +195,10 @@ sizeLimit. Quantities: plain bytes, or Ki/Mi/Gi/Ti, or k/M/G/T.
 {{- fail (printf "envFrom prefix %q is unsafe: a Secret key could complete it to a reserved name (MCP_GATEWAY_*, GATEWAY_API_KEY_*, HOME, GATEWAY_KS_ADMIN_TOKEN)." .prefix) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/* The chart-created state claim: 57 characters of fullname plus "-state",
+     within the 63-character name limit. */}}
+{{- define "mcp-gateway.stateClaim" -}}
+{{- .Values.persistence.existingClaim | default (printf "%s-state" (include "mcp-gateway.fullname" . | trunc 57 | trimSuffix "-")) -}}
 {{- end -}}

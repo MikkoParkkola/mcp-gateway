@@ -30,8 +30,9 @@ data:
     {{- $auth := dict "enabled" true "public_paths" (list "/health") }}
     {{- /* CHART.2: each mode renders its own credential and nothing else; the
            env names match mcp-gateway.authSecretEnv. */}}
+    {{- $refs := include "mcp-gateway.authRefs" . | fromJsonArray }}
     {{- if eq $mode "credential" }}
-    {{- $_ := set $auth "bearer_token" "env:MCP_GATEWAY_TOKEN" }}
+    {{- $_ := set $auth "bearer_token" (printf "env:%s" (index $refs 0).env) }}
     {{- else if eq $mode "api_keys" }}
     {{- if not .Values.auth.apiKeys }}
     {{- fail "auth.mode api_keys needs at least one auth.apiKeys entry." }}
@@ -41,7 +42,7 @@ data:
     {{- if not $k.backends }}
     {{- fail (printf "auth.apiKeys[%d] (%s) needs backends: an empty list grants none. Use [\"*\"] for all." $i $k.name) }}
     {{- end }}
-    {{- $key := dict "name" $k.name "key_sha256" (printf "env:GATEWAY_API_KEY_%d" $i) "backends" $k.backends }}
+    {{- $key := dict "name" $k.name "key_sha256" (printf "env:%s" (index $refs $i).env) "backends" $k.backends }}
     {{- if $k.admin }}{{- $_ := set $key "admin" true }}{{- end }}
     {{- if $k.rateLimit }}{{- $_ := set $key "rate_limit" (int64 $k.rateLimit) }}{{- end }}
     {{- if $k.allowedTools }}{{- $_ := set $key "allowed_tools" $k.allowedTools }}{{- end }}
@@ -67,18 +68,26 @@ data:
     {{- if .discoveryUrl }}{{- $_ := set $prov "discovery_url" .discoveryUrl }}{{- end }}
     {{- $providers = append $providers $prov }}
     {{- end }}
+    {{- $issuers := list }}
+    {{- range $oidc.providers }}{{- $issuers = append $issuers .issuer }}{{- end }}
     {{- $policies := list }}
     {{- range $oidc.policies }}
+    {{- if not (has .match.issuer $issuers) }}
+    {{- fail (printf "auth.oidc.policies match.issuer %q names no auth.oidc.providers issuer, so the policy can never match." .match.issuer) }}
+    {{- end }}
     {{- $scopes := dict "backends" (.scopes.backends | default list) "tools" (.scopes.tools | default list) }}
     {{- if .scopes.rateLimit }}{{- $_ := set $scopes "rate_limit" (int64 .scopes.rateLimit) }}{{- end }}
     {{- $policies = append $policies (dict "match" .match "scopes" $scopes) }}
     {{- end }}
-    {{- $ks := merge (dict "enabled" true "oidc" $providers "policies" $policies) ($cfg.key_server | default dict) }}
+    {{- $ks := $cfg.key_server | default dict }}
+    {{- if hasKey $ks "admin_token" }}
+    {{- fail "config.key_server.admin_token is not allowed in oidc mode: set auth.oidc.adminTokenSecretKey, so the admin token comes from auth.existingSecret and never sits in the ConfigMap." }}
+    {{- end }}
     {{- $_ := set $ks "enabled" true }}
     {{- $_ := set $ks "oidc" $providers }}
     {{- $_ := set $ks "policies" $policies }}
     {{- if $oidc.adminTokenSecretKey }}
-    {{- $_ := set $ks "admin_token" "env:GATEWAY_KS_ADMIN_TOKEN" }}
+    {{- $_ := set $ks "admin_token" (printf "env:%s" (index $refs 0).env) }}
     {{- end }}
     {{- $_ := set $cfg "key_server" $ks }}
     {{- end }}

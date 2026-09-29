@@ -113,3 +113,13 @@ refused "oidc policy matching a whole issuer" "match" --set auth.mode=oidc \
   --set 'auth.oidc.providers[0].issuer=https://idp.acme.test' \
   --set 'auth.oidc.policies[0].match.issuer=https://idp.acme.test' \
   --set 'auth.oidc.policies[0].scopes.backends[0]=*'
+refused "oidc with a literal admin_token" "admin_token" "${OIDC[@]}" --set config.key_server.admin_token=literal
+refused "oidc provider without an audience" "audiences" --set auth.mode=oidc \
+  --set 'auth.oidc.providers[0].issuer=https://idp.acme.test' \
+  --set 'auth.oidc.policies[0].match.issuer=https://idp.acme.test' \
+  --set 'auth.oidc.policies[0].match.domain=acme.test' \
+  --set 'auth.oidc.policies[0].scopes.backends[0]=*'
+refused "oidc policy for a foreign issuer" "names no" "${OIDC[@]}" \
+  --set 'auth.oidc.policies[0].match.issuer=https://other.acme.test'
+long="$(render --set persistence.enabled=true --set fullnameOverride="$(printf 'x%.0s' $(seq 1 63))" || true)"
+grep -qE '^  name: x{57}-state$' <<<"$long" || fail "state claim name is not truncated to 63 characters"

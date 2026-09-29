@@ -372,7 +372,8 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "issuer"
+                  "issuer",
+                  "audiences"
                 ],
                 "properties": {
                   "issuer": {
@@ -381,10 +382,12 @@
                   },
                   "audiences": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {
                       "type": "string",
                       "minLength": 1
-                    }
+                    },
+                    "description": "Required: the gateway refuses a provider with no audience."
                   },
                   "allowedDomains": {
                     "type": "array",
@@ -463,10 +466,12 @@
                     "properties": {
                       "backends": {
                         "type": "array",
+                        "minItems": 1,
                         "items": {
                           "type": "string",
                           "minLength": 1
-                        }
+                        },
+                        "description": "Required: an empty list grants none. [\"*\"] is all."
                       },
                       "tools": {
                         "type": "array",
@@ -479,7 +484,10 @@
                         "type": "integer",
                         "minimum": 0
                       }
-                    }
+                    },
+                    "required": [
+                      "backends"
+                    ]
                   }
                 }
               }
@@ -591,7 +599,7 @@
             "tls_terminated_upstream",
             "refuse"
           ],
-          "description": "credential mode only: who protects bearer tokens sent over plain HTTP on the pod's 0.0.0.0 bind (rendered as server.cleartext_http). cluster_internal: callers reach the pod only over the cluster network by its Service name; the chart then renders an ingress-only NetworkPolicy and refuses a non-ClusterIP Service or a public_url other than this release's Service name. tls_terminated_upstream: an ingress or proxy terminates TLS in front of the pod. refuse: the gateway will not start without mTLS."
+          "description": "Every mode but mesh: who protects bearer tokens sent over plain HTTP on the pod's 0.0.0.0 bind (rendered as server.cleartext_http). cluster_internal: callers reach the pod only over the cluster network by its Service name; the chart then renders an ingress-only NetworkPolicy and refuses a non-ClusterIP Service or a public_url other than this release's Service name. tls_terminated_upstream: an ingress or proxy terminates TLS in front of the pod. refuse: the gateway will not start without mTLS."
         }
       }
     },

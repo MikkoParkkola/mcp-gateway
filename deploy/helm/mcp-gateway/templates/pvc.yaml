@@ -3,7 +3,11 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "mcp-gateway.fullname" . }}-state
+  name: {{ include "mcp-gateway.stateClaim" . }}
+  # Uninstalling the release keeps the claim, and the task and control-plane
+  # stores on it; delete it by hand when the data is no longer wanted.
+  annotations:
+    helm.sh/resource-policy: keep
   labels:
     {{- include "mcp-gateway.labels" . | nindent 4 }}
 spec:

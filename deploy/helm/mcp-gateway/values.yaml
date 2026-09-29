@@ -142,7 +142,8 @@ resources:
 # unresolvable environment variable.
 auth:
   mode: credential
-  # credential mode only: the Secret holding the bearer token. Named by default
+  # The Secret holding this mode's credentials (credential: the bearer token;
+  # api_keys: each key's digest; oidc: the admin token, if any). Named by default
   # rather than left blank, so the chart renders and the missing-Secret failure
   # lands where Kubernetes reports it clearly — the pod stops with
   # CreateContainerConfigError naming this Secret, instead of the chart refusing
@@ -176,7 +177,7 @@ auth:
   #      scopes: {backends: ["*"], rateLimit: 0}
   #  adminTokenSecretKey: ""    # key in existingSecret -> key_server.admin_token
 
-# credential mode only. The bearer token crosses the pod's 0.0.0.0 bind in
+# Every mode but mesh. A bearer, API key or key-server token crosses the pod's 0.0.0.0 bind in
 # plain HTTP, and the gateway refuses that unless server.cleartext_http names
 # who protects it (UPGRADING-4.0, C3). Rendered as that key:
 #
@@ -230,7 +231,7 @@ serviceAccount:
 rbac:
   create: false
 
-# NetworkPolicy is opt-in, except that credential mode with
+# NetworkPolicy is opt-in, except that every mode but mesh with
 # server.cleartextHttp: cluster_internal (the default) always renders an
 # INGRESS-ONLY policy (ingress limited to the service port, egress untouched so
 # backends on any port stay reachable): the cluster network is then the trust
