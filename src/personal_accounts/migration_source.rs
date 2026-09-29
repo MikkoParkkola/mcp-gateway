@@ -151,15 +151,12 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     })
 }
 
-/// Mode exactly 0600, which within §10.5's threat model also establishes
-/// ownership.
+/// Mode exactly 0600 AND owned by the effective uid of this process (#2250).
 ///
-/// The mode check alone is enough, and that is worth stating rather than
-/// reaching for a uid: a file at 0600 is readable ONLY by its owner, so a
-/// successful read of one means the reading process owns it. A 0600 file owned
-/// by someone else fails the read and refuses as `NotPrivate` — which is the
-/// same answer, reached one step later. §10.5 defends against a party who can
-/// WRITE into the source directory, and no `getuid` changes that answer.
+/// The mode alone does not establish ownership. A migration run as root, or
+/// with `CAP_DAC_READ_SEARCH`, reads any 0600 file, so another local user could
+/// plant one in the source directory and have it imported as the operator's
+/// credential. The owner is checked on the same metadata as the mode.
 ///
 /// Exactly 0600, not "no group or other write": any group or other access at
 /// all on a credential file means it is not the file `TokenStorage::save`
@@ -173,8 +170,8 @@ fn privately_owned(meta: &std::fs::Metadata) -> bool {
 /// The verdict on a file's mode and owner, apart from the filesystem so a
 /// test can name an owner other than itself.
 #[cfg(unix)]
-fn private_to(mode: u32, _file_uid: u32, _euid: u32) -> bool {
-    mode & 0o777 == 0o600
+fn private_to(mode: u32, file_uid: u32, euid: u32) -> bool {
+    mode & 0o777 == 0o600 && file_uid == euid
 }
 
 /// No mode on Windows: the DACL of the opened handle is judged in
