@@ -207,10 +207,32 @@ pub(crate) fn expand_field(
     overlay: &EnvOverlay,
 ) -> std::result::Result<String, String> {
     expand_template(text, overlay).map_err(|why| match why {
-        Unresolved::Unset(var) => format!(
-            "{field} references ${{{var}}}, which is not set (or is empty) and has no default. \
-             Set it, or write ${{{var}:-}} to allow empty."
-        ),
+        Unresolved::Unset(var) => {
+            // Every unset variable in the field, not only the first: one load
+            // reports every unresolved reference.
+            let mut vars = vec![var];
+            for caps in TEMPLATE.captures_iter(text) {
+                let name = &caps[1];
+                let unset = caps.get(2).is_none()
+                    && overlay.resolve(name).is_none_or(|value| value.is_empty());
+                if unset && !vars.iter().any(|seen| seen == name) {
+                    vars.push(name.to_owned());
+                }
+            }
+            if let [var] = vars.as_slice() {
+                format!(
+                    "{field} references ${{{var}}}, which is not set (or is empty) and has no default. \
+                     Set it, or write ${{{var}:-}} to allow empty."
+                )
+            } else {
+                let names = vars.iter().map(|v| format!("${{{v}}}")).collect::<Vec<_>>();
+                format!(
+                    "{field} references {}, which are not set (or are empty) and have no default. \
+                     Set them, or write ${{NAME:-}} to allow empty.",
+                    names.join(", ")
+                )
+            }
+        }
         Unresolved::Malformed(Some(name)) => format!(
             "{field} contains ${{{name}}}, which is not a variable reference: names are \
              uppercase letters, digits and '_', starting with a letter or '_'."
