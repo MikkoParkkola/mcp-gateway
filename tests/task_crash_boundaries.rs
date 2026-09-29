@@ -6,10 +6,12 @@
 //! else.
 //!
 //! Scope of the create-boundary rows: the gateway sends the ack right after the
-//! durable create, and nothing outside the process can pause it between the
-//! two. These rows kill the process once the record is on disk, and the client
-//! never uses the ack. That proves a client that lost its ack can recover the
-//! same handle. It does not prove the kill landed between commit and ack.
+//! durable create. One row kills the process once the record is on disk and
+//! never uses the ack, which proves a client that lost its ack recovers the
+//! same handle. The paused row pins the window itself: a debug build holds the
+//! create at `Published`, after the commit and before the ack
+//! (`MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`, compiled out of release builds), and
+//! the kill lands there (#2298).
 //!
 //! The two principals are delegated OIDC bearers from a temporary HTTPS
 //! issuer: with auth on, task creation needs a verified caller identity, and a
@@ -90,13 +92,21 @@ impl Principals {
 
     /// The gateway child, trusting only this run's issuer CA.
     fn gateway(&self, root: &Path, config: &Path, port: u16, log_name: &str) -> Gateway {
-        Gateway::start_with_env(
-            root,
-            config,
-            port,
-            log_name,
-            &[("SSL_CERT_FILE", self.ca.as_str())],
-        )
+        self.gateway_with(root, config, port, log_name, &[])
+    }
+
+    /// [`Self::gateway`] with extra environment for the child.
+    fn gateway_with(
+        &self,
+        root: &Path,
+        config: &Path,
+        port: u16,
+        log_name: &str,
+        extra: &[(&str, &str)],
+    ) -> Gateway {
+        let mut env = vec![("SSL_CERT_FILE", self.ca.as_str())];
+        env.extend_from_slice(extra);
+        Gateway::start_with_env(root, config, port, log_name, &env)
     }
 }
 
@@ -272,40 +282,106 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
     let client = client();
     let task_id =
         create_then_kill_discarding_the_ack(root.path(), &config, port, &client, &principals).await;
-    let on_disk = durable_record(root.path(), &task_id);
-
-    let mut restarted = principals.gateway(root.path(), &config, port, "second.log");
-    restarted.wait_until_ready(&client).await;
-
-    refused_like_a_never_minted_id(
-        &restarted,
+    recovered_by_its_owner_only(
+        root.path(),
+        &config,
+        port,
         &client,
         &peer,
-        "tasks/get",
-        &task_id,
         &principals,
+        &task_id,
     )
     .await;
-    refused_like_a_never_minted_id(
-        &restarted,
+}
+
+/// Create boundary, pinned (#2298): the child is held at `Published`, after
+/// the durable create and before the ack, and killed there. So the kill lands
+/// between commit and ack by construction, and the recovery must still hold.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only() {
+    let root = temp_root("crash-create-published");
+    let peer = serve_peer(Upstream::Working).await;
+    let port = free_port();
+    let principals = Principals::start(root.path()).await;
+    let config = config_with_two_principals(root.path(), port, &peer, &principals);
+    let client = client();
+    let marker = root.path().join("paused-at-published");
+    let marker_env = marker.display().to_string();
+    let mut gateway = principals.gateway_with(
+        root.path(),
+        &config,
+        port,
+        "paused.log",
+        &[("MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED", marker_env.as_str())],
+    );
+    gateway.wait_until_ready(&client).await;
+    let body = task_invoke(1, IDEMPOTENCY_KEY);
+    let create = gateway.post_as(&client, &body, Some(principals.a.as_str()));
+    let paused = async {
+        loop {
+            if let Ok(id) = std::fs::read_to_string(&marker)
+                && !id.is_empty()
+            {
+                return id;
+            }
+            tokio::time::sleep(POLL_GAP).await;
+        }
+    };
+    let task_id = tokio::select! {
+        id = tokio::time::timeout(OBSERVE_BOUND, paused) => {
+            id.expect("the child pauses at Published within the bound")
+        }
+        answer = create => panic!("the create was answered while paused at Published: {answer}"),
+    };
+    gateway.kill().await;
+    recovered_by_its_owner_only(
+        root.path(),
+        &config,
+        port,
         &client,
         &peer,
-        "tasks/cancel",
-        &task_id,
         &principals,
+        &task_id,
+    )
+    .await;
+}
+
+/// After a create was killed before its ack: a restart over the same store,
+/// then principal B is refused as for a never-minted id, principal A reads the
+/// retained handle and its byte-identical retry gets the same handle back, and
+/// nothing is submitted twice.
+async fn recovered_by_its_owner_only(
+    root: &Path,
+    config: &Path,
+    port: u16,
+    client: &reqwest::Client,
+    peer: &PeerGuard,
+    principals: &Principals,
+    task_id: &str,
+) {
+    let on_disk = durable_record(root, task_id);
+
+    let mut restarted = principals.gateway(root, config, port, "second.log");
+    restarted.wait_until_ready(client).await;
+
+    refused_like_a_never_minted_id(&restarted, client, peer, "tasks/get", task_id, principals)
+        .await;
+    refused_like_a_never_minted_id(
+        &restarted,
+        client,
+        peer,
+        "tasks/cancel",
+        task_id,
+        principals,
     )
     .await;
 
     let read = restarted
-        .post_as(
-            &client,
-            &tasks_get(10, &task_id),
-            Some(principals.a.as_str()),
-        )
+        .post_as(client, &tasks_get(10, task_id), Some(principals.a.as_str()))
         .await;
     assert_eq!(
         read.pointer("/result/taskId").and_then(Value::as_str),
-        Some(task_id.as_str()),
+        Some(task_id),
         "the owner reads the retained handle after the crash: {read}\nrecord: {on_disk}"
     );
     assert!(
@@ -315,14 +391,14 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
 
     let retried = restarted
         .post_as(
-            &client,
+            client,
             &task_invoke(1, IDEMPOTENCY_KEY),
             Some(principals.a.as_str()),
         )
         .await;
     assert_eq!(
         retried.pointer("/result/taskId").and_then(Value::as_str),
-        Some(task_id.as_str()),
+        Some(task_id),
         "the owner who never saw the ack gets the SAME handle back from its retry: \
          {retried}\nrecord: {on_disk}"
     );

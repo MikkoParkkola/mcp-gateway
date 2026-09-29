@@ -1264,7 +1264,10 @@ Wherever a whole-value secret takes `env:NAME`, it now also takes `file:/absolut
 field is read once, at startup.
 
 - **The path must be absolute.** `~`, relative paths and `${VAR}` inside the path are not expanded;
-  `file:secrets/token` fails with `... is not an absolute path.`
+  `file:secrets/token` fails with `... is not an absolute path.` A descriptor's `client_secret_ref`
+  is checked at load too, although its file is read only at use: an empty or relative `file:` path
+  refuses to start with `client_secret_ref file: must name an absolute path`, where a 4.0 beta
+  started and failed at the first token refresh.
 - **The file is held to the item 35 rule**: a file other users can read or change fails the load,
   and so does a group-readable file this process owns. It must be UTF-8 and at most 64 KiB.
 - **Exactly one trailing newline is stripped** (`\n` or `\r\n`), as `kubectl create secret

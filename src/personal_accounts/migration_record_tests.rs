@@ -16,6 +16,8 @@ const GENERATION: &str = "fedcba9876543210fedcba9876543210";
 const CLIENT: &str = "synthetic-migration-client";
 /// 2100-01-01, so a seeded expiry is unambiguously in the future.
 const FAR_FUTURE: u64 = 4_102_444_800;
+/// The clock every case migrates at: 2026-09-29, well before [`FAR_FUTURE`].
+const NOW: u64 = 1_790_000_000;
 
 fn revision() -> String {
     "0".repeat(64)
@@ -45,6 +47,7 @@ fn build(
         CLIENT.to_owned(),
         GENERATION.to_owned(),
         revision(),
+        NOW,
     )
 }
 
@@ -244,4 +247,29 @@ fn a_migrated_grant_is_the_first_revision_of_a_new_authorization() {
     assert_eq!(record.client_id, CLIENT);
     assert_eq!(record.token_type, "Bearer");
     assert_eq!(record.access_token, "live-3x-access-token");
+}
+
+/// #2255: an expiry already in the past with no refresh token is REFUSED. The
+/// grant would be committed Connected and could never serve: it is expired, and
+/// nothing can refresh it.
+#[test]
+fn an_expired_record_with_no_refresh_token_is_refused() {
+    let mut token = legacy("expired-3x-access-token");
+    token.expires_at = Some(1);
+    assert_eq!(
+        build(&token, Some(&declared(&["read"]))),
+        Err(RecordRefusal::ExpiredWithoutRefreshToken),
+        "an expired, unrefreshable credential must not migrate"
+    );
+}
+
+/// POSITIVE CONTROL for the case above: the same expired record WITH a refresh
+/// token still migrates, because the refresh token can redeem it.
+#[test]
+fn an_expired_record_with_a_refresh_token_still_migrates() {
+    let mut token = legacy("expired-3x-access-token");
+    token.expires_at = Some(1);
+    token.refresh_token = Some("live-3x-refresh-token".to_owned());
+    let record = build(&token, Some(&declared(&["read"]))).expect("must migrate");
+    assert_eq!(record.expires_at, 1);
 }
