@@ -75,6 +75,8 @@ pub(crate) mod admission;
 mod audit_record_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
+#[cfg(test)]
+mod declared_label_carry_tests;
 mod caller_forward;
 mod chain_interim;
 #[cfg(test)]
