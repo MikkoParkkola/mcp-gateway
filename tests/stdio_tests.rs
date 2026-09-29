@@ -520,12 +520,11 @@ fn test_stdio_stdout_carries_only_jsonrpc() {
 
     // Minimal, hermetic config: no backends, so the spawn does not touch the
     // network or any well-known fallback config location.
-    let mut cfg = tempfile::Builder::new()
-        .suffix(".yaml")
-        .tempfile()
-        .expect("create temp config");
-    std::io::Write::write_all(&mut cfg, b"backends: {}\n").expect("write temp config");
-    let cfg_path = cfg.path().to_path_buf();
+    // Owner-only: the gateway refuses a config other accounts can read (Windows ACLs too).
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let cfg_path = dir.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&cfg_path, "backends: {}\n")
+        .expect("write temp config");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
         .args(["serve", "--stdio", "-c"])
