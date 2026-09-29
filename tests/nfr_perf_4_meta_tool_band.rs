@@ -236,10 +236,11 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
     );
 }
 
-/// MIK-7217.DISCOVER.8 — the count the public claims file publishes and the
-/// band this file pins cannot move apart. `public_claims_validation.rs` ties
-/// the claims to the served surface; this ties them to `BAND`, so widening or
-/// narrowing the band without the claims (or the reverse) fails here.
+/// MIK-7217.DISCOVER.8 — the floor and the README benchmark the public claims
+/// file publishes cannot move apart from this band. `public_claims_validation.rs`
+/// ties the claims to the served surface; this ties the published minimum to
+/// `BAND`'s floor and the published benchmark to `BAND`'s interior. The claims
+/// file publishes no ceiling, so the ceiling stays pinned by the sweep above.
 #[test]
 fn nfr_perf_4_2_the_band_agrees_with_public_claims_json() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benchmarks/public_claims.json");
