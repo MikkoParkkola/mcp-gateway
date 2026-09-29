@@ -83,6 +83,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
+- Item 97
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
