@@ -119,10 +119,15 @@ impl TransparencyLogger {
     /// past a deleted active file (2.8, 2.13).
     fn rebuild(&self, inner: &mut Inner, path: &Path, g: &ExclusiveFileLock) -> io::Result<()> {
         let r = recover(path, &self.config, g, self.now())?;
+        // A finding this writer already holds is never forgotten (#2294).
+        let known = inner.seg.hwm_missing_at;
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
+        if let Some(at) = known {
+            inner.seg.hwm_missing_at = Some(inner.seg.hwm_missing_at.map_or(at, |e| e.min(at)));
+        }
         Ok(())
     }
 
@@ -314,6 +319,7 @@ impl TransparencyLogger {
             &segments::list_segments(path)?,
             Some(&hw),
             now,
+            inner.seg.hwm_missing_at,
         )?;
         inner.file = r.file;
         inner.counter = r.counter;

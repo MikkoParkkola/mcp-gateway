@@ -17,11 +17,14 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 81
+Approved supplemental criteria: 86
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
-The approval source for these product requirements is the decision record;
+The approval source for these product requirements is the decision record,
+except MIK-7407.RESPONSE.1-5: MIK-7407 is a required 4.0 security issue the
+ledger lacked, added 2026-09-29 on the lead's instruction under the operator's
+full-4.0-scope ruling, with MIK-7407's own acceptance criteria as the text;
 protocol requirements additionally use the pinned specifications linked below.
 
 | ID | Required outcome | Delivery package |
@@ -116,6 +119,11 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | GH1944.CHAIN.1 | A downstream gateway configured to verify a backend's signature chain checks every link against its trusted keys, the pinned origin and last signer, the link-to-link digests and its own nonce, strips and marks a chain that fails, and appends its own link, so a tampered, reordered or dropped hop or a re-signed chain fails verification (ASI07, #1944). | SECURITY |
 | GH1945.COLLUDE.1 | Opt-in verbatim cross-principal relay detection: sensitive content one principal received that another principal then sends onward is reported, or refused under `block`, on the meta route and on the direct route once #1785 lands; one principal never flags itself and relays outside the window are not flagged. ASI10 stays PARTIAL, since other collusion patterns have no sound definition (#1945). | SECURITY |
 | GH1625.BOTREVIEW.1 | Every automated pull-request reviewer finding on pull requests merged to the release line up to the release tip is resolved with a fix commit or an individual written disposition verified at source (no bulk won't-fix), and the #1625 backlog is closed (#1625). | SECURITY |
+| MIK-7407.RESPONSE.1 | Meta HTTP and direct HTTP tool calls enforce the actual response verdict, replace blocked results with a generic JSON-RPC refusal, preserve the request ID and release no blocked payload. | SAFETY |
+| MIK-7407.RESPONSE.2 | Direct and aggregated discovery honor tools/list response policy; allow, scan-disabled, Warn and redaction controls remain correct. | SAFETY |
+| MIK-7407.RESPONSE.3 | The real stdio call/list serving path uses the same enforcement boundary, with one content scan and one response audit per response. | SAFETY |
+| MIK-7407.RESPONSE.4 | Shared finalization happens after wrapping and before signing; blocked results and errors stay unsigned; a successful external gateway_invoke signs the final filtered bytes; detached tasks finalize retained backend results independently of admission acknowledgements. | SAFETY |
+| MIK-7407.RESPONSE.5 | Counted backend negative and positive fixtures prove served behavior on every route, with scan-count and policy-target falsifiers; one immutable delivery-attempt event is recorded after final filtering and signing, hashing the final JSON-RPC response without payloads or credentials. | SAFETY |
 
 ## Boundaries
 
