@@ -258,6 +258,28 @@ async fn a_rejected_round_shape_keeps_the_abandoned_result() {
     std::assert_eq!(reason_of(&settled), Some("input_round_unavailable"), "{settled}");
 }
 
+/// #2416 (design §4.3d): a question whose `requestState` is present but not
+/// a string is a malformed round. It settles the abandoned result and is never
+/// parked or resumed. Mutant: a non-string state read as absent.
+#[tokio::test]
+async fn a_non_string_request_state_keeps_the_abandoned_result() {
+    for (key, state) in [("object", json!({ "k": 1 })), ("number", json!(7))] {
+        let mut round = ask("q", "unused");
+        round["requestState"] = state;
+        let mock = MockBackend::answering(Answer::Result(round));
+        let (state, _store) = state_with(&mock).await;
+        let id = task_id(&post(&state, "key-a", create(1, &format!("state-{key}"))).await);
+        let settled = poll_until_terminal(&state, "key-a", &id).await;
+        std::assert_eq!(status_of(&settled), "completed", "{key}: {settled}");
+        std::assert_eq!(
+            reason_of(&settled),
+            Some("input_round_unavailable"),
+            "{key}: {settled}"
+        );
+        std::assert_eq!(mock.calls(), 1, "{key}: a malformed round never resumes");
+    }
+}
+
 /// Mutant: the model error from `require_input` swallowed (a reused key must
 /// settle `failed`, never leave a `working` row).
 #[tokio::test]

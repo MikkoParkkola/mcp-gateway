@@ -657,6 +657,20 @@ mod reverse {
             .is_none(),
             "a malformed inputRequests is a fault, not an absent field"
         );
+        // #2416: a present requestState that is not a string is a malformed
+        // shape too, not an absent one. Read as absent, a question would be
+        // resumed later with answers and no backend continuation at all.
+        for state in [json!({ "k": 1 }), json!(7), json!(["x"])] {
+            assert!(
+                InputRequired::from_result(&json!({
+                    "resultType": "input_required",
+                    "inputRequests": { "q": { "method": "elicitation/create" } },
+                    "requestState": state,
+                }))
+                .is_none(),
+                "a non-string requestState is a fault, not an absent field: {state}"
+            );
+        }
         assert!(
             InputRequired::from_result(&json!({ "resultType": "complete", "tools": [] })).is_none()
         );
