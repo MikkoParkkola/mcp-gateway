@@ -39,9 +39,9 @@ pub use key_server::{
 pub use playbooks::PlaybooksConfig;
 pub use runtime::{RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
-    AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    IdentityGrantsConfig, RemoteServerSigningConfig, ChainEmit, SignatureChainConfig, ResponseContractConfig, SecurityConfig,
-    ToolContractConfig,
+    AgentIdentityConfig, ChainEmit, ContextIntegrityConfig, ContextIntegrityPresetConfig,
+    IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
+    SignatureChainConfig, ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
 pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};

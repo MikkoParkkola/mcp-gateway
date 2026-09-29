@@ -25,10 +25,10 @@ pub mod oauth;
 // Crate-internal on purpose: the adapter is wired by `router` and by nothing
 // else, so no caller outside the gateway can install it without the standard
 // auth layer that must run first.
-mod openwebui_adapter;
-pub mod proxy;
 #[cfg(test)]
 pub(crate) mod chain_test_support;
+mod openwebui_adapter;
+pub mod proxy;
 #[cfg(test)]
 mod proxy_scope_tests;
 #[cfg(test)]
