@@ -103,16 +103,12 @@ async fn run() -> ExitCode {
             commands::run_stats_command(&effective_url).await
         }
         #[cfg(feature = "webui")]
-        Some(Command::DashboardLink {
-            url,
-            client_cert,
-            client_key,
-            ca_cert,
-        }) => {
+        Some(Command::DashboardLink(args)) => {
+            let (url, tls) = (args.url, args.tls);
             let flags = commands::LinkTlsFlags {
-                client_cert,
-                client_key,
-                ca_cert,
+                client_cert: tls.client_cert,
+                client_key: tls.client_key,
+                ca_cert: tls.ca_cert,
             };
             let target = commands::dashboard_link_base(
                 url,
@@ -132,7 +128,7 @@ async fn run() -> ExitCode {
         // The endpoint it calls exists only with the web UI; say so rather
         // than let the command fail with a bare 404.
         #[cfg(not(feature = "webui"))]
-        Some(Command::DashboardLink { .. }) => {
+        Some(Command::DashboardLink(_)) => {
             eprintln!("dashboard-link: this build has no web UI (cargo feature `webui`)");
             ExitCode::FAILURE
         }

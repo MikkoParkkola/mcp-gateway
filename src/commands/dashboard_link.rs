@@ -6,7 +6,7 @@
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The environment variable the admin credential is read from.
@@ -69,9 +69,16 @@ pub fn dashboard_link_base(
     port_override: Option<u16>,
     host_override: Option<&str>,
 ) -> Result<(String, LinkTls), String> {
-    let _ = (flags.client_cert, flags.client_key, flags.ca_cert);
+    let identity = match (flags.client_cert, flags.client_key) {
+        (Some(cert), Some(key)) => Some((cert, key)),
+        (None, None) => None,
+        _ => return Err("--client-cert and --client-key go together".to_string()),
+    };
+    // `--url` describes the target: no config is read, so its trust anchor
+    // is `--ca-cert` or the built-in roots.
     if let Some(url) = url {
-        return Ok((url, LinkTls::default()));
+        let ca = flags.ca_cert;
+        return Ok((url, LinkTls { ca, identity }));
     }
     let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --url"))?;
     if let Some(port) = port_override {
@@ -81,12 +88,31 @@ pub fn dashboard_link_base(
         config.server.host = host.to_string();
     }
     let base = super::default_stats_url(&config.server.host, config.server.port);
-    let base = if config.mtls.enabled {
-        base.replacen("http://", "https://", 1)
-    } else {
-        base
-    };
-    Ok((base, LinkTls::default()))
+    let mtls = &config.mtls;
+    if !mtls.enabled {
+        return Ok((
+            base,
+            LinkTls {
+                ca: flags.ca_cert,
+                identity,
+            },
+        ));
+    }
+    let base = base.replacen("http://", "https://", 1);
+    if mtls.require_client_cert && identity.is_none() {
+        return Err(format!(
+            "{base} requires a client certificate (mtls.require_client_cert); pass \
+             --client-cert and --client-key, or set MCP_GATEWAY_CLIENT_CERT and \
+             MCP_GATEWAY_CLIENT_KEY"
+        ));
+    }
+    // The listener's own CA when none is named. It becomes the only root, so
+    // a public CA cannot vouch for this name; a server certificate from a
+    // public CA is reached with `--url` instead.
+    let ca = flags
+        .ca_cert
+        .or_else(|| (!mtls.ca_cert.is_empty()).then(|| PathBuf::from(&mtls.ca_cert)));
+    Ok((base, LinkTls { ca, identity }))
 }
 
 /// Refuse a target the admin credential must not be sent to: plain `http://`
@@ -128,16 +154,22 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 ///
 /// A message carrying the gateway's status or the transport failure.
 pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
-    let _ = (&tls.ca, &tls.identity);
     check_target(base)?;
     let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
     // (https to http) would keep the bearer.
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(ca) = &tls.ca {
+        builder = builder.tls_certs_only(read_roots(ca)?);
+    }
+    if let Some((cert, key)) = &tls.identity {
+        builder = builder.identity(read_identity(cert, key)?);
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("could not build the HTTP client: {e}"))?;
     let response = client
@@ -146,7 +178,7 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| format!("could not reach the gateway at {base}: {e}"))?;
+        .map_err(|e| transport_error(base, &e, tls))?;
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap_or_default();
     if !status.is_success() {
@@ -157,6 +189,62 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
         .as_str()
         .map(ToString::to_string)
         .ok_or_else(|| "the gateway's answer carried no link".to_string())
+}
+
+fn read_file(path: &Path) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))
+}
+
+/// The CA bundle at `path`, which must hold at least one certificate.
+fn read_roots(path: &Path) -> Result<Vec<reqwest::Certificate>, String> {
+    let roots = reqwest::Certificate::from_pem_bundle(&read_file(path)?)
+        .map_err(|e| format!("{}: not a PEM certificate bundle ({e})", path.display()))?;
+    if roots.is_empty() {
+        return Err(format!("{}: holds no PEM certificate", path.display()));
+    }
+    Ok(roots)
+}
+
+/// The client identity from a PEM certificate file and a PEM key file.
+fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, String> {
+    let mut pem = read_file(cert)?;
+    // Two files that each lack a final newline still concatenate to PEM.
+    pem.push(b'\n');
+    pem.extend(read_file(key)?);
+    reqwest::Identity::from_pem(&pem).map_err(|e| {
+        format!(
+            "{} with {}: not a PEM certificate and private key ({e})",
+            cert.display(),
+            key.display()
+        )
+    })
+}
+
+/// A transport failure with its causes, and on `https` the TLS material the
+/// operator did not give.
+fn transport_error(base: &str, error: &reqwest::Error, tls: &LinkTls) -> String {
+    use std::fmt::Write as _;
+    let mut message = format!("could not reach the gateway at {base}: {error}");
+    let mut cause = std::error::Error::source(error);
+    while let Some(inner) = cause {
+        let _ = write!(message, ": {inner}");
+        cause = inner.source();
+    }
+    if base
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    {
+        if tls.identity.is_none() {
+            message.push_str(
+                "; if the listener requires a client certificate \
+                 (mtls.require_client_cert), pass --client-cert and --client-key",
+            );
+        }
+        if tls.ca.is_none() {
+            message.push_str("; if its certificate comes from a private CA, pass --ca-cert");
+        }
+    }
+    message
 }
 
 /// Run the command against the gateway at `base`.

@@ -92,15 +92,12 @@ async fn the_credential_bypasses_an_environment_proxy() {
     );
 }
 
-/// #1832 acceptance, through the built binary: against an mTLS listener that
-/// requires a client certificate, the command gets a link when given the CA
-/// and a client identity, and is refused without the identity before the
-/// bearer reaches the handler.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
+/// An mTLS gateway stand-in requiring a client certificate, its PKI written
+/// to `dir` (`ca.crt`, `client.crt`, `client.key`). Returns the base URL and
+/// a count of requests that reached the handler.
+async fn mtls_gateway(dir: &std::path::Path) -> (String, Arc<AtomicUsize>) {
     use mcp_gateway::mtls::{CaParams, CertGenerator, LeafCertParams, MtlsConfig};
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let dir = tempfile::tempdir().expect("tempdir");
     let ca = CertGenerator::init_ca(&CaParams {
         cn: "link CA",
         validity_days: 1,
@@ -124,10 +121,10 @@ async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
         (leaf("gateway", &["127.0.0.1"]), "server"),
         (leaf("operator", &[]), "client"),
     ] {
-        CertGenerator::write_to_dir(&cert, dir.path(), stem).expect("files");
+        CertGenerator::write_to_dir(&cert, dir, stem).expect("files");
     }
-    CertGenerator::write_to_dir(&ca, dir.path(), "ca").expect("CA files");
-    let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+    CertGenerator::write_to_dir(&ca, dir, "ca").expect("CA files");
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
     let tls = mcp_gateway::mtls::build_tls_config(&MtlsConfig {
         enabled: true,
         server_cert: path("server.crt"),
@@ -163,6 +160,18 @@ async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
     let config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls));
     let server = axum_server::from_tcp_rustls(listener, config).expect("TLS listener");
     tokio::spawn(async move { server.serve(app.into_make_service()).await });
+    (base, hits)
+}
+
+/// #1832 acceptance, through the built binary: against an mTLS listener that
+/// requires a client certificate, the command gets a link when given the CA
+/// and a client identity, and is refused without the identity before the
+/// bearer reaches the handler.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (base, hits) = mtls_gateway(dir.path()).await;
+    let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
 
     let home = tempfile::tempdir().expect("home");
     let run = |identity: bool| {
