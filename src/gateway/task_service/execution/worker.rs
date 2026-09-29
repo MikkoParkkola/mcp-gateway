@@ -78,7 +78,9 @@ fn split_create(outcome: CreateOutcome) -> (BeginOutcome, Option<OwnedSemaphoreP
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+// The input-round hand-off (`Settling`) added the last lines; the steps
+// read in order here and splitting them would scatter the drop-order rule.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_dispatched(
     executor: Arc<TaskExecutor>,
     handoff: Handoff,
