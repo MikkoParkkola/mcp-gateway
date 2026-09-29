@@ -1944,67 +1944,43 @@ fn revive_server_unregistered_backend_reports_breaker_not_open() {
     assert_eq!(result["status"], "active");
 }
 
-// ── Discovery-surface firewall scan (OWASP ASI01 tool-poisoning) ──────────
-//
-// `scan_tool_list_value` is the seam that routes the aggregated discovery
-// surface (`gateway_list_tools` / `gateway_search_tools`) through the same
-// firewall response scanner as the direct `tools/call` path, closing the gap
-// where backend-supplied tool `description` strings previously bypassed all
-// content scanning. These verify the wiring, not the redactor engine (which
-// has its own exhaustive tests in `security/firewall/redactor.rs`).
+// The discovery surface is inspected once, on its canonical value
+// (`MetaMcp::inspect_discovery_value`): see
+// `router/tests/meta_firewall_verdict/list_and_task_block.rs` (#2350).
 
+/// The non-Block arm: under a Warn rule the discovery value is served with
+/// its credential redacted in place (#2350; Block is covered end to end).
 #[cfg(feature = "firewall")]
 #[test]
-fn scan_tool_list_value_redacts_credentials_in_tool_descriptions() {
-    use crate::security::firewall::{Firewall, FirewallConfig};
+fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
+    use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 
     let token = format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890");
     let mut surface = json!({
-        "tools": [{
-            "name": "poisoned_tool",
-            "description": format!("Use the API. token: {token} for auth"),
-        }]
+        "tools": [{"name": "t", "description": format!("token: {token} for auth")}]
     });
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig::default(),
+        FirewallConfig {
+            rules: vec![FirewallRule {
+                tool_match: "tools/list".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+            }],
+            ..FirewallConfig::default()
+        },
         None,
     ))));
 
-    // WHEN: the discovery surface is scanned in place.
-    meta.scan_tool_list_value(&mut surface);
-
-    // THEN: the embedded credential is redacted before the surface is served.
-    let description = surface["tools"][0]["description"]
-        .as_str()
-        .expect("description remains a string");
+    meta.inspect_discovery_value(&mut surface)
+        .expect("a Warn verdict serves the list");
+    let description = surface["tools"][0]["description"].as_str().unwrap();
     assert!(
         description.contains("[REDACTED:credential]"),
-        "credential must be redacted, got: {description}"
+        "{description}"
     );
-    assert!(
-        !description.contains("ghp_"),
-        "raw token must not survive the scan, got: {description}"
-    );
-}
-
-#[cfg(feature = "firewall")]
-#[test]
-fn scan_tool_list_value_without_firewall_is_a_pure_no_op() {
-    // GIVEN: a MetaMcp with no firewall wired (set_firewall never called).
-    let token = format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890");
-    let original = json!({
-        "tools": [{ "name": "t", "description": format!("token: {token}") }]
-    });
-    let mut surface = original.clone();
-    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-
-    // WHEN: scanning with no firewall present.
-    meta.scan_tool_list_value(&mut surface);
-
-    // THEN: the surface is returned byte-for-byte unchanged (no accidental
-    //       mutation when the security feature is unconfigured).
-    assert_eq!(surface, original);
+    assert!(!description.contains("ghp_"), "{description}");
 }
 
 // ── Per-action attestation wiring (MIK-5223, B1-IDENT) ────────────────────

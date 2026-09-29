@@ -423,7 +423,14 @@ impl MetaMcp {
             });
         let validated =
             super::invoke::enforce_output_schema(server, tool, result, output_schema.as_ref());
-        self.apply_response_gates(server, tool, api_key_name, trace_id, validated)
+        let mut gated =
+            self.apply_response_gates(server, tool, api_key_name, trace_id, validated)?;
+        let target = super::response_security::ResponsePolicyTarget {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        };
+        self.inspect_task_result(&[target], trace_id, &mut gated)?;
+        Ok(gated)
     }
 
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.

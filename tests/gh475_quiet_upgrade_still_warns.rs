@@ -96,3 +96,42 @@ fn a_dry_run_promises_the_notices_without_delivering_them() {
         "a dry run must not fire the one-time notice; stderr was:\n{stderr}"
     );
 }
+
+/// MIK-7394.MIGRATE.3 / MIGRATE.4 — from an installed 3.x the 4.0.0 notice is
+/// emitted once, the second run is silent (the version stamp is the guard),
+/// and the operator's config is never edited.
+#[test]
+fn a_3_x_upgrade_notifies_once_and_never_edits_the_config() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("version.stamp"), "3.9.0").expect("stamp");
+    let yaml = dir.path().join("gateway.yaml");
+    let original = "auth:\n  enabled: true\n  single_user: true\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&yaml, original).expect("config");
+
+    let run = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+            .arg("upgrade")
+            .arg("--data-dir")
+            .arg(dir.path())
+            .output()
+            .expect("the upgrade command runs");
+        assert!(out.status.success(), "upgrade exited {:?}", out.status);
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    let first = run();
+    assert!(
+        first.contains("v4.0.0: ") && first.contains("changes need your attention"),
+        "a 3.x install must get the 4.0.0 notice; stderr was:\n{first}"
+    );
+    let second = run();
+    assert!(
+        !second.contains("changes need your attention"),
+        "the second run must be silent; stderr was:\n{second}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&yaml).expect("config"),
+        original,
+        "the upgrade must never edit the operator's config"
+    );
+}

@@ -345,6 +345,13 @@ probe = "none"
 reason = "an on-disk property of the log; nothing on the wire changes when it rotates"
 
 [[control]]
+id = "audit-log-hwm-missing"
+description = "a restart that finds the audit log's high-water mark missing, or a record it cannot verify, chains audit_segment_hwm_missing and carries it on every later open record, so live verify fails (#2294)"
+source = "src/security/transparency_log_hwm_scan.rs"
+probe = "none"
+reason = "an on-disk property of the log; nothing on the wire changes when it is recorded"
+
+[[control]]
 id = "audit-writer-lease"
 description = "one gateway process writes an audit log path: the log holds an exclusive lease on <path>.lock for its whole life, and a second writer is refused at startup after a bounded wait, whatever the auth setting"
 source = "src/security/transparency_log_lease.rs"

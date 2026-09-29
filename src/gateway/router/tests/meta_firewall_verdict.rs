@@ -711,3 +711,5 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
 
 #[cfg(feature = "firewall")]
 mod caller_key;
+#[cfg(feature = "firewall")]
+mod list_and_task_block;

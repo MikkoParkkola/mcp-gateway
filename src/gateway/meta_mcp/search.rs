@@ -401,12 +401,9 @@ impl MetaMcp {
             Vec::new()
         };
 
-        Ok(build_search_response(
-            &query,
-            &matches,
-            total_found,
-            &suggestions,
-        ))
+        let mut out = build_search_response(&query, &matches, total_found, &suggestions);
+        self.inspect_discovery_value(&mut out)?;
+        Ok(out)
     }
 
     /// Handle `gateway_execute` — Code Mode single-tool or chain execution.
@@ -639,7 +636,7 @@ impl MetaMcp {
                 "status": if killed { "disabled" } else { "active" },
                 "tools": tools
             });
-            self.scan_tool_list_value(&mut out);
+            self.inspect_discovery_value(&mut out)?;
             return Ok(out);
         }
 
@@ -675,7 +672,7 @@ impl MetaMcp {
             "status": if killed { "disabled" } else { "active" },
             "tools": tools
         });
-        self.scan_tool_list_value(&mut out);
+        self.inspect_discovery_value(&mut out)?;
         Ok(out)
     }
 
@@ -771,7 +768,7 @@ impl MetaMcp {
             "tools": all_tools,
             "total": all_tools.len()
         });
-        self.scan_tool_list_value(&mut out);
+        self.inspect_discovery_value(&mut out)?;
         Ok(out)
     }
 
@@ -853,7 +850,7 @@ impl MetaMcp {
         };
 
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
-        self.scan_tool_list_value(&mut out);
+        self.inspect_discovery_value(&mut out)?;
         Ok(out)
     }
 }
