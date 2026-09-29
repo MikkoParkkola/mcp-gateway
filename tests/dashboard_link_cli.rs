@@ -322,6 +322,13 @@ async fn the_config_path_needs_only_the_identity_flags() {
         ),
     )
     .expect("config");
+    // The gateway refuses a config other users can read.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod 600");
+    }
     let home = tempfile::tempdir().expect("home");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
     cmd.args(["--config", &config.to_string_lossy(), "dashboard-link"])
