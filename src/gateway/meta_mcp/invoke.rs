@@ -149,9 +149,9 @@ mod audit;
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
-use bridge_settle::arm;
 pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
+use bridge_settle::{arm, refuse_if_killed};
 mod withheld_evidence;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
@@ -956,19 +956,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         &self,
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
-        // The operator kill switch is read once at the top of the call, so an
-        // operator who disables the server mid-exchange would not stop the
-        // remaining rounds. Checked per round, before anything is dispatched:
-        // `NotAdmitted`, so the idempotency key is not burned by work that
-        // never ran.
-        if self.meta.kill_switch.is_killed(self.server) {
-            return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
-                message: format!(
-                    "Server '{}' is currently disabled by operator kill switch",
-                    self.server
-                ),
-            });
-        }
+        // The kill switch is read once at the top of the call, so re-read it per round.
+        refuse_if_killed(&self.meta.kill_switch, self.server)?;
 
         // Admitted here as well as at the first dispatch, because the spend
         // check is per backend call and `invoke_tool` ran it once, before the
@@ -1022,16 +1011,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                     .to_owned(),
             });
         }
-        // The check above may have awaited a cold `tools/list`; an operator kill
-        // that landed meanwhile must still stop this round before dispatch.
-        if self.meta.kill_switch.is_killed(self.server) {
-            return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
-                message: format!(
-                    "Server '{}' is currently disabled by operator kill switch",
-                    self.server
-                ),
-            });
-        }
+        // The check above may have awaited a cold `tools/list`: re-read the kill.
+        refuse_if_killed(&self.meta.kill_switch, self.server)?;
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")
