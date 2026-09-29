@@ -15,7 +15,7 @@ use super::Config;
 use super::env_overlay::EnvOverlay;
 
 fn write_secret(path: &Path) {
-    crate::gateway::test_helpers::write_owner_only(path, &"k".repeat(48)).unwrap();
+    crate::gateway::test_helpers::write_owner_only(path, "k".repeat(48)).unwrap();
 }
 
 /// GIVEN a disabled `accounts` block whose key is a readable `file:` reference
@@ -29,7 +29,7 @@ fn a_disabled_accounts_block_reads_no_secret_file() {
     let config_path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
         &config_path,
-        &format!(
+        format!(
             "accounts:\n  schema_version: accounts.v1\n  enabled: false\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {store:?}\n  authority_dir: {authority:?}\n  current_key_id: current\n  keys:\n    current: \"file:{key}\"\n",
             store = dir.path().join("store"),
             authority = dir.path().join("authority"),
