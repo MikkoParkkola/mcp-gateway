@@ -871,11 +871,15 @@
     },
     {
       "id": "MIK-7547.SLOTS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/backend/identity_slots.rs",
+        "src/gateway/router/backend_handlers/passthrough_slot_cap_tests.rs",
+        "src/backend/eviction_close_cap_tests.rs"
+      ],
+      "note": "Met 2026-09-29 (#2300, merged in #2332 as ae62e891c). A backend with identity propagation admits at most 64 per-caller slots (MAX_IDENTITY_SLOTS, src/backend/identity_slots.rs:27) and one principal at most 8 (:29); past either limit the call is refused with IdentitySlotsExhausted, never moved to the shared slot or given another caller's slot. Red-first run 36572352157 on 84fff7041: all 7 new cells failed on their assertions (72 vs 64 slots, 10 vs 8, 128 closes vs 64, probe minted a slot). Green CI run 36579805128 on the PR head. Tests are wired: backend_handlers.rs mod passthrough_slot_cap_tests, backend/mod.rs mod eviction_close_cap_tests.\n\n--- prior note follows ---\nAdded 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
     },
     {
       "id": "MIK-7570.BREAKER.1",
@@ -1041,10 +1045,10 @@
     {
       "id": "GH1941.SIGN.1",
       "status": "pending",
-      "stage": "ungraded",
+      "stage": "built",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "note": "PENDING 2026-09-29, one conjunct unmet. #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles for every binary, SBOM and SHA256SUMS.txt, verifies the downloaded DRAFT assets (.github/workflows/release.yml:432-434) and refuses uploads onto a published release (:357-361). The criterion also requires the job to re-check the PUBLISHED release afterwards; release.yml ends at `gh release edit --draft=false` (:440) with no post-publication download and verify, and no wiring test for one. Returns to met when that step and its wiring check land (#2402). #1941 was closed before this was noticed.\n\n--- prior note follows ---\nPending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1942.HARDEN.1",
