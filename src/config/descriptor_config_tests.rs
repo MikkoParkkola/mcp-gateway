@@ -281,6 +281,24 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
             "descriptor case must be rejected: {label}"
         );
     }
+    // #2263: both `file:` rows fail for the load-time path rule, not for some
+    // later check that also makes the load fail.
+    for (index, reference) in ["file:", "file:secrets/client"].into_iter().enumerate() {
+        let mut broken = valid.clone();
+        broken["client_secret_ref"] = json!(reference);
+        let fx = fixture(
+            &root.path().join(format!("file-ref-case-{index}")),
+            true,
+            Some(&json!({ "gmail-personal": broken })),
+        );
+        let err = Config::load_evaluated(Some(&fx.config))
+            .expect_err("a non-absolute file: client_secret_ref must be refused");
+        assert!(
+            err.to_string()
+                .contains("client_secret_ref file: must name an absolute path"),
+            "{reference}: {err}"
+        );
+    }
     // `shared` and `external` acceptance is NOT asserted here: it cannot be
     // discriminated from a mode-specific rejection without inventing an
     // external_strategy fixture. Deferred, see NOTES.md.
