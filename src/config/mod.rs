@@ -41,23 +41,23 @@ pub use input_schema::InputSchemaEnforcement;
 use secret_ref::SecretRef;
 pub(crate) use secret_ref::is_template_syntax;
 
-// New items (F18), not widened ones: the one mode-checked read for files
-// outside `config`.
+// New items (F18): the one mode-checked read for files outside `config`.
+pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
 #[cfg(windows)]
 pub(crate) use secret_file::Protects;
-pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
     CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdempotencyConfig,
-    IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
+    IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig,
+    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
+    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
+    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecurityConfig, StreamingConfig, TasksConfig, ToolContractConfig,
+    WebhookConfig, api_key_digest_spec,
 };
 pub(crate) use features::{api_key_expired, parse_api_key_digest};
 

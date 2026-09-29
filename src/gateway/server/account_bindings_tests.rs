@@ -67,6 +67,7 @@ fn eligible_auth(api_keys: Vec<ApiKeyConfig>) -> AuthConfig {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: true,
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
     }
 }
 

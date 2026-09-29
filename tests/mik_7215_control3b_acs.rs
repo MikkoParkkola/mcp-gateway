@@ -84,6 +84,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
         public_paths: Vec::new(),
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
