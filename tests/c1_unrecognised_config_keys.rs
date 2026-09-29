@@ -499,3 +499,15 @@ fn unselected_transport_key_beside_retired_key_refused() {
     );
     assert!(!message.contains("idle_timeout"), "got: {message}");
 }
+
+/// Flow style is valid YAML and loads like the block form: the retired key
+/// loads there too (#2360), and a misspelling is still refused.
+#[test]
+fn retired_key_loads_in_flow_style_mappings() {
+    let (_dir, _path, result) = load("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}");
+    result.expect("flow-style retired key must load");
+    refusal(
+        "backends: {demo: {command: \"echo hi\", idel_timeout: 10m}}",
+        &["backends.demo.idel_timeout"],
+    );
+}

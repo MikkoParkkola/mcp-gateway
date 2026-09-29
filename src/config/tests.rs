@@ -1020,30 +1020,6 @@ fn duration_parser_handles_milliseconds() {
     );
 }
 
-/// Flow style is valid YAML and loads identically to the block form: the
-/// retired key loads there too (#2360), and a misspelling is still refused.
-#[test]
-fn retired_key_loads_in_flow_style_mappings() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    write_owner_only(
-        &path,
-        "backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}",
-    )
-    .expect("write config");
-    Config::load(Some(&path)).expect("flow-style retired key must load");
-    write_owner_only(
-        &path,
-        "backends: {demo: {command: \"echo hi\", idel_timeout: 10m}}",
-    )
-    .expect("write config");
-    let err = Config::load(Some(&path)).expect_err("flow-style misspelling must be refused");
-    assert!(
-        err.to_string().contains("backends.demo.idel_timeout"),
-        "{err}"
-    );
-}
-
 /// The key's NAME inside a value is not a use of the key: a description
 /// quoting `idle_timeout:` must not make the config refuse to load.
 #[test]
