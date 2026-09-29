@@ -91,12 +91,28 @@ impl TransparencyLogger {
         T: Send + 'static,
         F: FnOnce(&TransparencyLogger) -> io::Result<T> + Send + 'static,
     {
+        self.append_bounded_within(None, op).await
+    }
+
+    /// [`Self::append_bounded`] with an optional tighter `cap` on both bounds.
+    /// A caller that wants a tighter bound passes it here rather than
+    /// wrapping the future in its own timeout: dropping the future would skip
+    /// the stall bookkeeping and the timeout metric (#2252).
+    pub(crate) async fn append_bounded_within<T, F>(
+        self: &Arc<Self>,
+        cap: Option<Duration>,
+        op: F,
+    ) -> io::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&TransparencyLogger) -> io::Result<T> + Send + 'static,
+    {
         // While stalled every append is refused at once, with no wait and no
         // thread; a best-effort caller logs it and serves anyway.
         if self.is_stalled() {
             return Err(timed_out());
         }
-        let limit = self.append_timeout();
+        let limit = cap.map_or(self.append_timeout(), |c| c.min(self.append_timeout()));
         // The write this caller queues behind, if any: a permit wait that
         // times out marks the log stalled only if that same write is still in
         // the kernel, not a fresh one that took the permit at the boundary.
