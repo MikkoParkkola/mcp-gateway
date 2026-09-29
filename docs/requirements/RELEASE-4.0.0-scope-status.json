@@ -871,11 +871,15 @@
     },
     {
       "id": "MIK-7547.SLOTS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/backend/identity_slots.rs",
+        "src/gateway/router/backend_handlers/passthrough_slot_cap_tests.rs",
+        "src/backend/eviction_close_cap_tests.rs"
+      ],
+      "note": "Met 2026-09-29 (#2300, merged in #2332 as ae62e891c). A backend with identity propagation admits at most 64 per-caller slots (MAX_IDENTITY_SLOTS, src/backend/identity_slots.rs:27) and one principal at most 8 (:29); past either limit the call is refused with IdentitySlotsExhausted, never moved to the shared slot or given another caller's slot. Red-first run 36572352157 on 84fff7041: all 7 new cells failed on their assertions (72 vs 64 slots, 10 vs 8, 128 closes vs 64, probe minted a slot). Green CI run 36579805128 on the PR head. Tests are wired: backend_handlers.rs mod passthrough_slot_cap_tests, backend/mod.rs mod eviction_close_cap_tests.\n\n--- prior note follows ---\nAdded 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
     },
     {
       "id": "MIK-7570.BREAKER.1",
@@ -1031,11 +1035,17 @@
     },
     {
       "id": "GH1941.SIGN.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        "scripts/release/sign-release-assets.sh",
+        "scripts/release/verify-release-assets.sh",
+        "scripts/release/check_release_assets.py",
+        "scripts/release/refuse-published-release.sh",
+        ".github/workflows/release.yml"
+      ],
+      "note": "Met 2026-09-29 (#1941 closed, merged in #2218 as 59f802b19). Each release binary is built with cargo auditable and ships an SPDX SBOM; every binary, SBOM and SHA256SUMS.txt carries a keyless cosign bundle whose identity is pinned to release.yml at the tag; the release stays a draft until every served asset verifies, and refuse-published-release.sh refuses to upload onto a published release. CI asserts the wiring (test_workflow_wiring_mutations.py, test_check_release_assets.py, test_sign_release_assets.py, test_refuse_published_release.py); green CI run 36505555255. Functional proof is the v4.0.0 tag's release run.\n\n--- prior note follows ---\nPending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "GH1942.HARDEN.1",
