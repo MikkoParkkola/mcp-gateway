@@ -1419,7 +1419,7 @@ async fn meta_mcp_dispatch(
                         target.tool,
                         target.arguments,
                         caller_name,
-                        &control_identity,
+                        &session_id,
                     );
                     if verdict.action == FirewallAction::Warn {
                         warn!(
