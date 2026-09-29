@@ -105,9 +105,12 @@ pub(crate) async fn fetch_link(base: &str, token: &str) -> Result<String, String
     check_target(base)?;
     let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
-    // credential off this machine even to a loopback URL.
+    // credential off this machine even to a loopback URL. No redirects either:
+    // `check_target` vetted only this URL, and a same-host, same-port hop
+    // (https to http) would keep the bearer.
     let client = reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("could not build the HTTP client: {e}"))?;
     let response = client
