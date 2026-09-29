@@ -39,3 +39,5 @@ mod stdio_cost_persistence;
 
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
+
+mod grant_decision_stdio;
