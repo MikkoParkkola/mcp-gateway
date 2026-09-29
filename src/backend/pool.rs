@@ -503,9 +503,9 @@ impl Backend {
     }
 
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
-    /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
-    /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
-    /// number of slots closed (MIK-6735 POOL.2).
+    /// scheduling a bounded background close of their transports. The canonical
+    /// [`PoolKey::Shared`] slot is never evicted. Returns the number of slots
+    /// evicted, not closed: a close may still be running (MIK-6735 POOL.2).
     pub fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
         let cutoff = idle_ttl.as_secs();
 
