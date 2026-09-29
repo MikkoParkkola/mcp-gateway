@@ -398,7 +398,7 @@ impl AgentDefinitionConfig {
 mod multi_user_tests {
     use super::*;
 
-    fn api_key(name: &str) -> ApiKeyConfig {
+    pub(super) fn api_key(name: &str) -> ApiKeyConfig {
         ApiKeyConfig {
             key: None,
             key_sha256: Some(super::super::api_key::api_key_digest_spec(
@@ -502,6 +502,11 @@ mod multi_user_tests {
 /// behind this auth?", and this asks "is exactly one human proven to be?". The
 /// auth-disabled case below is where the two answers differ, and it is the whole
 /// reason this predicate is not a negation of that one.
+// #2241: the bearer token is a credential too.
+#[cfg(test)]
+#[path = "auth_credential_count_tests.rs"]
+mod credential_count_tests;
+
 #[cfg(test)]
 mod single_user_principal_tests {
     use super::*;
@@ -524,7 +529,7 @@ mod single_user_principal_tests {
 
     /// The population this exists for: a 3.x personal gateway that took the
     /// upgrade advice at `commands/upgrade.rs:144` and set `single_user: true`.
-    fn solo() -> AuthConfig {
+    pub(super) fn solo() -> AuthConfig {
         AuthConfig {
             enabled: true,
             bearer_token: Some("the-operator's-own-token".to_string()),
@@ -548,10 +553,12 @@ mod single_user_principal_tests {
         // the same deployment shape, and the operator asserted both are one
         // person. Neither has a second credential to hand to anyone.
         let cfg = AuthConfig {
+            bearer_token: None,
             api_keys: vec![api_key("me")],
             ..solo()
         };
         assert!(cfg.grants_single_user_principal(false));
+        assert!(!cfg.implies_multi_user(false));
     }
 
     /// THE SECURITY CASE. This is the defect §4.1a of the design doc records:
