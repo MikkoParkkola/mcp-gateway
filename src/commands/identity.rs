@@ -575,6 +575,10 @@ mod tests {
         let key = parse_subject_spec("api_key:team:alice", None, "subject").unwrap();
         assert_eq!(key.authority, "api_key");
         assert_eq!(key.subject, "team:alice");
+
+        let agent = parse_subject_spec("agent_oauth:urn:corp:bot", None, "subject").unwrap();
+        assert_eq!(agent.authority, "agent_oauth");
+        assert_eq!(agent.subject, "urn:corp:bot");
     }
 
     #[test]
