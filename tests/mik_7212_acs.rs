@@ -660,7 +660,7 @@ mod reverse {
         // #2416: a present requestState that is not a string is a malformed
         // shape too, not an absent one. Read as absent, a question would be
         // resumed later with answers and no backend continuation at all.
-        for state in [json!({ "k": 1 }), json!(7), json!(["x"])] {
+        for state in [json!({ "k": 1 }), json!(7), json!(["x"]), json!(null)] {
             assert!(
                 InputRequired::from_result(&json!({
                     "resultType": "input_required",

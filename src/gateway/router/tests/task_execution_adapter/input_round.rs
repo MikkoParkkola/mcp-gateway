@@ -309,7 +309,11 @@ async fn a_rejected_round_shape_keeps_the_abandoned_result() {
 /// parked or resumed. Mutant: a non-string state read as absent.
 #[tokio::test]
 async fn a_non_string_request_state_keeps_the_abandoned_result() {
-    for (key, state) in [("object", json!({ "k": 1 })), ("number", json!(7))] {
+    for (key, state) in [
+        ("object", json!({ "k": 1 })),
+        ("number", json!(7)),
+        ("null", json!(null)),
+    ] {
         let mut round = ask("q", "unused");
         round["requestState"] = state;
         let mock = MockBackend::answering(Answer::Result(round));

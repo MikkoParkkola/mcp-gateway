@@ -298,7 +298,7 @@ impl InputRequired {
         // absent, a question would later be resumed with answers and no
         // backend continuation, restarting work the backend meant to continue.
         let request_state = match result.get("requestState") {
-            None | Some(Value::Null) => None,
+            None => None,
             Some(Value::String(state)) => Some(state.clone()),
             Some(_) => return None,
         };
