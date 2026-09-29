@@ -222,12 +222,8 @@ impl MetaMcp {
         if !is_admin
             && let Some(capabilities) = self.get_capabilities()
             && server == capabilities.name
-            && capabilities
-                .with_definition(
-                    tool,
-                    crate::capability::definition::creates_caller_addressed_external_state,
-                )
-                .unwrap_or(false)
+            && let Some(def) = capabilities.get(tool)
+            && crate::capability::definition::creates_caller_addressed_external_state(&def)
         {
             // A deliberate, permanent refusal: the admin-denial shape admin-only
             // tools answer with (403, -32600), never a retriable internal error.
@@ -259,31 +255,31 @@ impl MetaMcp {
         if server != cap.name || !cap.has_capability(tool) {
             return Ok(());
         }
-        // Borrowed, not cloned: this runs per tool on every listing (#2110).
-        let request = cap
-            .with_definition(tool, |cap_def| IdentityGrantRequest {
-                identity: scope
-                    .grant_subject
-                    .cloned()
-                    .or_else(|| Self::grant_subject_from_api_key(scope.api_key_name)),
-                agent_id: scope
-                    .agent_id
-                    .map(crate::security::OwnedProvenAgentId::from),
-                capability: cap_def.name.clone(),
-                tool: Some(tool.to_string()),
-                scope: GrantScope::requested_by(cap_def),
-                exposure: cap_def.metadata.exposure,
-                owner: cap_def.metadata.identity_owner.clone(),
-                now: chrono::Utc::now(),
-            })
+        let cap_def = cap
+            .get(tool)
             .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
+        let request = IdentityGrantRequest {
+            identity: scope
+                .grant_subject
+                .cloned()
+                .or_else(|| Self::grant_subject_from_api_key(scope.api_key_name)),
+            agent_id: scope
+                .agent_id
+                .map(crate::security::OwnedProvenAgentId::from),
+            capability: cap_def.name.clone(),
+            tool: Some(tool.to_string()),
+            scope: GrantScope::requested_by(&cap_def),
+            exposure: cap_def.metadata.exposure,
+            owner: cap_def.metadata.identity_owner.clone(),
+            now: chrono::Utc::now(),
+        };
         let evaluation = self.identity_grants.read().evaluate(&request);
         if evaluation.allowed {
             return Ok(());
         }
         if emit == Emit::Audit {
             warn!(
-                capability = %request.capability,
+                capability = %cap_def.name,
                 tool,
                 agent_id = scope.agent_id.map_or("anonymous", |a| a.as_str()),
                 reason = ?evaluation.reason,
@@ -294,7 +290,7 @@ impl MetaMcp {
             -32004,
             format!(
                 "Identity grant denied for capability '{}': {:?}",
-                request.capability, evaluation.reason
+                cap_def.name, evaluation.reason
             ),
         ))
     }
