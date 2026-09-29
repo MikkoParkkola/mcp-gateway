@@ -57,8 +57,7 @@ use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
-    wrap_tool_success,
+    build_routing_instructions, extract_client_version, extract_required_str, wrap_tool_success,
 };
 use super::meta_mcp_tool_defs::{
     MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
