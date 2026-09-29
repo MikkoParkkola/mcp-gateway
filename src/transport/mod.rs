@@ -207,6 +207,7 @@ pub trait Transport: Send + Sync {
         &self,
         method: &str,
         params: Option<Value>,
+        _extra_headers: &[(String, String)],
         _identity_key: Option<&str>,
     ) -> Result<()> {
         self.notify(method, params).await

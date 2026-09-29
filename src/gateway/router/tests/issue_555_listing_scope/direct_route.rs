@@ -66,15 +66,16 @@ impl crate::transport::Transport for Pager {
     }
 }
 
-/// Two pages. Page 0 carries an admitted tool that does not parse, a denied
-/// tool in both forms, a sibling key and a cursor that each name the denied
-/// tool. Page 1 carries the parseable admitted tool.
+/// Two pages. Page 0 carries an admitted tool that does not parse, the denied
+/// tool, a sibling key and a cursor that each name the denied tool. Page 1
+/// carries the parseable admitted tool. No name appears twice: an unparseable
+/// copy of a name withholds every copy of it (#1441, pinned separately), which
+/// would hide the denied tool without the listing predicate ever running.
 fn two_pages() -> Vec<Value> {
     vec![
         json!({
             "tools": [
-                { "name": "alpha_read", "description": 7 },
-                { "name": "alpha_write", "description": 7 },
+                { "name": "alpha_list", "description": 7 },
                 super::tool_json("alpha_write"),
             ],
             "nextCursor": "alpha_write-1",
@@ -151,6 +152,44 @@ async fn direct_route_tools_list_follows_direct_call_predicate() {
         call.get("error").is_none(),
         "a listed tool must be callable: {call}"
     );
+}
+
+/// Review fold (F13): a direct list is cached only when every page is
+/// readable. Control: two readable pages are cached. An unreadable first page
+/// before a readable last one is answered but not cached. Mutant M41 (only
+/// the last page counts) reddens it.
+#[tokio::test]
+async fn an_unreadable_page_keeps_a_direct_list_out_of_the_cache() {
+    let poisoned = vec![
+        json!({"tools": null, "nextCursor": "alpha_read-1"}),
+        json!({"tools": [super::tool_json("alpha_read")]}),
+    ];
+    for (pages, cached) in [(two_pages(), true), (poisoned, false)] {
+        let f = with_pager(Pager {
+            pages,
+            endless: false,
+        })
+        .await;
+        let (_, body) = post(
+            &f.router,
+            "/mcp/pager",
+            Some("read-key"),
+            "tools/list",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            body["result"]["tools"].as_array().map(Vec::len),
+            Some(1),
+            "{body}"
+        );
+        let backend = f.state.backends.get("pager").expect("pager");
+        assert_eq!(
+            backend.has_cached_tools(),
+            cached,
+            "cached={cached}: {body}"
+        );
+    }
 }
 
 /// T13 (b): a catalogue longer than the page cap is an error, never a

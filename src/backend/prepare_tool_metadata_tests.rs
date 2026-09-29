@@ -25,7 +25,12 @@ fn prepare_tool_metadata_keeps_a_well_formed_annotation() {
     )];
 
     // WHEN the tool-metadata path filters the list
-    prepare_tool_metadata("beeper", &mut tools);
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
 
     // THEN it survives
     assert_eq!(tools.len(), 1);
@@ -45,7 +50,12 @@ fn prepare_tool_metadata_drops_only_the_violating_tool() {
         ),
     ];
 
-    prepare_tool_metadata("beeper", &mut tools);
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
 
     // THEN exclusion is per-tool, never per-backend
     assert_eq!(tools.len(), 1);
@@ -61,7 +71,12 @@ fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
         }}),
     )];
 
-    prepare_tool_metadata("beeper", &mut tools);
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
 
     assert!(
         tools.is_empty(),
@@ -73,7 +88,12 @@ fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
 fn prepare_tool_metadata_leaves_unannotated_tools_untouched() {
     let mut tools = vec![sample_tool("plain"), sample_tool("also_plain")];
 
-    prepare_tool_metadata("beeper", &mut tools);
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
 
     assert_eq!(tools.len(), 2);
 }
@@ -92,7 +112,12 @@ fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
     ];
 
     // WHEN the single tool-metadata entry point runs
-    prepare_tool_metadata("beeper", &mut tools);
+    prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
 
     // THEN both steps happened: neither caller can get one without the other
     assert_eq!(tools.len(), 1);

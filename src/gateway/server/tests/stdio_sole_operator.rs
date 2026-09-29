@@ -182,6 +182,7 @@ async fn stdio_caller_with_auth_off_is_the_sole_operator() {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
     };
     let caller = CallerProof::new(
         None,
@@ -212,6 +213,7 @@ async fn http_multiple_api_keys_never_asserts_sole_operator() {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: true,
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
     };
     let caller = CallerProof::new(None, CallerProvenance::classify(Some("validated-api-key")));
     let error = resolve_under(ServeMode::Http, auth, caller).await;

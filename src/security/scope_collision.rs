@@ -1,27 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! Scope collision detection for MCP gateway tool namespaces.
+//! Tool-name validation for MCP gateway tool namespaces.
 //!
-//! When multiple upstream MCP servers register tools with identical names,
-//! the gateway must detect and report the collision to prevent ambiguous routing.
-//!
-//! # Attack Vector
-//!
-//! A malicious backend could register a tool with the same name as a legitimate
-//! tool on another backend, causing the gateway to route calls to the wrong
-//! (attacker-controlled) server.
+//! Every backend tool is addressed as backend plus tool name, so two backends
+//! sharing a tool name do not collide on any served surface. What remains is
+//! the name itself: [`validate_tool_name`] keeps a malformed name out of
+//! session state.
 //!
 //! # Reference
 //!
 //! - [Doyensec MCP AuthN/Z research](https://blog.doyensec.com/2026/03/05/mcp-nightmare.html)
 //! - OWASP MCP Top 10: Scope Namespace Collision
-
-use std::collections::HashMap;
-
-use tracing::warn;
-
-use crate::protocol::Tool;
 
 /// Shell metacharacters that are rejected in tool names (denylist, defense-in-depth).
 ///
@@ -32,92 +22,6 @@ use crate::protocol::Tool;
 const DANGEROUS_TOOL_NAME_CHARS: &[char] = &[
     '`', '$', '|', ';', '&', '>', '<', '!', '{', '}', '(', ')', '[', ']', '\'', '"', '\n', '\r',
 ];
-
-/// A detected collision between tool names across backends.
-#[derive(Debug, Clone)]
-pub struct ScopeCollision {
-    /// The tool name that collides.
-    pub tool_name: String,
-    /// All backends that expose a tool with this name.
-    pub backends: Vec<String>,
-}
-
-/// Detect tool name collisions across multiple backends.
-///
-/// Takes a slice of `(backend_name, tools)` pairs and returns all
-/// tool names that appear in more than one backend.
-///
-/// # Example
-///
-/// ```rust
-/// use mcp_gateway::security::scope_collision::detect_collisions;
-/// use mcp_gateway::protocol::Tool;
-/// use serde_json::json;
-///
-/// let tools_a = vec![Tool {
-///     name: "search".to_string(),
-///     title: None,
-///     description: None,
-///     input_schema: json!({}),
-///     output_schema: None,
-///     annotations: None,
-///     role: None,
-///     projection: None,
-/// }];
-/// let tools_b = vec![Tool {
-///     name: "search".to_string(),
-///     title: None,
-///     description: None,
-///     input_schema: json!({}),
-///     output_schema: None,
-///     annotations: None,
-///     role: None,
-///     projection: None,
-/// }];
-///
-/// let backends = vec![
-///     ("backend_a".to_string(), tools_a),
-///     ("backend_b".to_string(), tools_b),
-/// ];
-///
-/// let collisions = detect_collisions(&backends);
-/// assert_eq!(collisions.len(), 1);
-/// assert_eq!(collisions[0].tool_name, "search");
-/// ```
-pub fn detect_collisions(backends: &[(String, Vec<Tool>)]) -> Vec<ScopeCollision> {
-    // Map: tool_name -> list of backends exposing that tool
-    let mut tool_owners: HashMap<&str, Vec<&str>> = HashMap::new();
-
-    for (backend_name, tools) in backends {
-        for tool in tools {
-            tool_owners
-                .entry(tool.name.as_str())
-                .or_default()
-                .push(backend_name.as_str());
-        }
-    }
-
-    let mut collisions: Vec<ScopeCollision> = tool_owners
-        .into_iter()
-        .filter(|(_, owners)| owners.len() > 1)
-        .map(|(name, owners)| {
-            let collision = ScopeCollision {
-                tool_name: name.to_string(),
-                backends: owners.into_iter().map(String::from).collect(),
-            };
-            warn!(
-                tool = collision.tool_name.as_str(),
-                backends = ?collision.backends,
-                "SECURITY: Tool name collision detected across backends"
-            );
-            collision
-        })
-        .collect();
-
-    // Sort for deterministic output
-    collisions.sort_by(|a, b| a.tool_name.cmp(&b.tool_name));
-    collisions
-}
 
 /// Validate that a tool name is safe to persist to session state and invoke.
 ///
@@ -181,88 +85,6 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    fn make_tool(name: &str) -> Tool {
-        Tool {
-            name: name.to_string(),
-            title: None,
-            description: None,
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-            role: None,
-            projection: None,
-        }
-    }
-
-    // -- detect_collisions --
-
-    #[test]
-    fn no_collisions_when_names_are_unique() {
-        let backends = vec![
-            ("a".to_string(), vec![make_tool("tool_a")]),
-            ("b".to_string(), vec![make_tool("tool_b")]),
-        ];
-        let collisions = detect_collisions(&backends);
-        assert!(collisions.is_empty());
-    }
-
-    #[test]
-    fn detects_collision_between_two_backends() {
-        let backends = vec![
-            ("a".to_string(), vec![make_tool("search")]),
-            ("b".to_string(), vec![make_tool("search")]),
-        ];
-        let collisions = detect_collisions(&backends);
-        assert_eq!(collisions.len(), 1);
-        assert_eq!(collisions[0].tool_name, "search");
-        assert_eq!(collisions[0].backends.len(), 2);
-    }
-
-    #[test]
-    fn detects_collision_across_three_backends() {
-        let backends = vec![
-            ("a".to_string(), vec![make_tool("read")]),
-            ("b".to_string(), vec![make_tool("read")]),
-            ("c".to_string(), vec![make_tool("read")]),
-        ];
-        let collisions = detect_collisions(&backends);
-        assert_eq!(collisions.len(), 1);
-        assert_eq!(collisions[0].backends.len(), 3);
-    }
-
-    #[test]
-    fn multiple_collisions_detected() {
-        let backends = vec![
-            (
-                "a".to_string(),
-                vec![make_tool("search"), make_tool("read")],
-            ),
-            (
-                "b".to_string(),
-                vec![make_tool("search"), make_tool("read")],
-            ),
-        ];
-        let collisions = detect_collisions(&backends);
-        assert_eq!(collisions.len(), 2);
-        assert_eq!(collisions[0].tool_name, "read");
-        assert_eq!(collisions[1].tool_name, "search");
-    }
-
-    #[test]
-    fn empty_backends_no_collisions() {
-        let backends: Vec<(String, Vec<Tool>)> = vec![];
-        let collisions = detect_collisions(&backends);
-        assert!(collisions.is_empty());
-    }
-
-    #[test]
-    fn single_backend_no_collisions() {
-        let backends = vec![("a".to_string(), vec![make_tool("t1"), make_tool("t2")])];
-        let collisions = detect_collisions(&backends);
-        assert!(collisions.is_empty());
-    }
 
     // -- validate_tool_name --
 

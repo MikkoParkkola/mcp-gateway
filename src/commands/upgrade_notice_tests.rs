@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all twenty-five items, each named by the
+/// GH475.MIG.4 — the notice carries all thirty items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_twenty_five_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 25);
+fn notice_4_0_0_carries_all_thirty_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 30);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -44,6 +44,10 @@ fn notice_4_0_0_carries_all_twenty_five_items() {
         "audit_segment_expired",
         "minted by the gateway",
         "without the `requeststate`",
+        "-32022",
+        "proven principal",
+        "expose_stats_tool",
+        "refuses (403)",
     ] {
         assert!(
             all.contains(expected),
@@ -146,35 +150,43 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (49, "audit_segment_expired"),
     (58, "minted by the gateway"),
     (55, "without the `requeststate`"),
+    (59, "lists the backend"),
+    (90, "-32022"),
+    (91, "proven principal"),
+    (92, "expose_stats_tool"),
+    (93, "refuses (403)"),
 ];
 
-/// The item numbers the guide says the first start prints: the `- Item N`
-/// bullets after the notice paragraph, one per line, up to the next blank line.
+/// The item numbers the guide says the first start prints: every section whose
+/// startup marker, the first non-blank line after its heading, begins with
+/// `**Startup:** prints a notice`.
 ///
 /// Line endings are normalised first: a Windows checkout reads the guide with
-/// CRLF, and the blank line that ends the lead is then `\r\n\r\n`.
+/// CRLF.
 fn guide_notice_items(doc: &str) -> std::collections::BTreeSet<u32> {
-    const LEAD: &str = "`RUST_LOG` filters cannot swallow it.\n\n";
     let doc = doc.replace("\r\n", "\n");
-    let start = doc
-        .find(LEAD)
-        .expect("the guide no longer says which items the notice lists")
-        + LEAD.len();
-    let list = &doc[start..];
-    let list = &list[..list.find("\n\n").expect("the notice list ends")];
-    list.lines()
-        .map(|line| {
-            line.strip_prefix("- Item ")
-                .and_then(|n| n.parse().ok())
-                .unwrap_or_else(|| panic!("not a `- Item N` bullet: {line:?}"))
-        })
-        .collect()
+    let mut items = std::collections::BTreeSet::new();
+    for section in doc.split("\n## ").skip(1) {
+        let Some((number, rest)) = section.split_once(". ") else {
+            continue;
+        };
+        let Ok(n) = number.parse::<u32>() else {
+            continue;
+        };
+        let marker = rest.lines().skip(1).find(|l| !l.trim().is_empty());
+        if marker.is_some_and(|l| l.starts_with("**Startup:** prints a notice")) {
+            items.insert(n);
+        }
+    }
+    items
 }
 
-/// A CRLF checkout (Windows) reads the same list as an LF one.
+/// A CRLF checkout (Windows) reads the same markers as an LF one.
 #[test]
 fn guide_notice_items_reads_crlf() {
-    let doc = "`RUST_LOG` filters cannot swallow it.\r\n\r\n- Item 1\r\n- Item 6\r\n\r\nNext.";
+    let doc = "Intro.\r\n\r\n## 1. One\r\n\r\n**Startup:** prints a notice\r\n\r\nBody.\r\n\r\n\
+               ## 2. Two\r\n\r\n**Startup:** no notice\r\n\r\n\
+               ## 6. Six\r\n\r\n**Startup:** prints a notice; refuses to start\r\n";
     assert_eq!(
         guide_notice_items(doc),
         std::collections::BTreeSet::from([1, 6])
@@ -212,6 +224,6 @@ fn upgrading_guide_lists_exactly_the_items_the_notice_prints() {
     let listed = guide_notice_items(include_str!("../../docs/UPGRADING-4.0.md"));
     assert_eq!(
         listed, printed,
-        "docs/UPGRADING-4.0.md lists notice items {listed:?}; the notice prints {printed:?}"
+        "docs/UPGRADING-4.0.md marks items {listed:?} as printing a notice; the notice prints {printed:?}"
     );
 }

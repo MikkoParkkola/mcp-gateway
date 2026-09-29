@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use super::rotation::{EV_EXPIRED, EV_OPENED};
 use super::rotation_tests::{
-    SECRET, append, cfg, event, lines, log_path, rewrite_line, rotate_n, verify, with_progress,
+    SECRET, append, cfg, event, lines, log_path, rewrite_line, rotate_n, strip_genesis_open,
+    verify, with_progress,
 };
 use super::segments::{list_segments, sealed_path};
 use super::*;
@@ -104,7 +105,7 @@ fn age_rotation_survives_restart() {
     let l = TransparencyLogger::open(Arc::clone(&c)).unwrap();
     append(&l, 0);
     l.set_clock_offset(61);
-    append(&l, 1); // pre-D6 segment 0 counts its age from open: rotates
+    append(&l, 1); // segment 0 counts its age from open: rotates
     assert_eq!(list_segments(&path).unwrap().len(), 1);
     drop(l);
     // Reopen: the age comes from the open record, not the process start.
@@ -233,6 +234,7 @@ fn unrotated_v1_log_verifies_as_segment_zero() {
     let l = TransparencyLogger::open(Arc::new(c)).unwrap();
     (0..20).for_each(|i| append(&l, i));
     drop(l);
+    strip_genesis_open(&path);
     std::fs::remove_file(segments::sibling(&path, "hwm")).unwrap();
     assert!(verify(&path, false).ok, "no sealed segment: no hwm needed");
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();

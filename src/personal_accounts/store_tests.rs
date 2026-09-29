@@ -773,12 +773,7 @@ fn s03_fifo_record_refuses_promptly_without_blocking_lookup() {
     let original = std::fs::read(&path).unwrap();
     let backup = settings.store_dir.join("saved-valid-ciphertext");
     std::fs::rename(&path, &backup).unwrap();
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &path,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .expect("create actual FIFO in private fixture root");
+    crate::test_fifo::make_fifo(&path);
     assert!(
         std::fs::symlink_metadata(&path)
             .unwrap()

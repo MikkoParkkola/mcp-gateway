@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.DEMO.1 — recorded demonstrations
 
-VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (41 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
+VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (42 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
 
 The recordings are text transcripts. They meet the criterion, which asks for versions,
 expected observations and actual outcomes (`docs/requirements/RELEASE-4.0.0-scope-tests.md`).
@@ -64,7 +64,7 @@ classification. The driver warms each backend with a tool call first. The design
 did not mention this; anyone writing a further scenario against the era fields
 needs the same warm-up.
 
-## Scenario 3 — two personal accounts (RECORDED, 8/8 rows PASS)
+## Scenario 3 — two personal accounts (RECORDED, 9/9 rows PASS)
 
 Driver `scripts/release/demo/3-personal-accounts.sh`, transcript
 `docs/release/demo/3-personal-accounts-transcript.txt`, rows
@@ -84,21 +84,18 @@ with a credential that belongs to somebody else.
 
 ### Two findings this recording surfaced
 
-**The catalogue is not account-scoped.** `gateway_list_servers` returns the same
-list to both keys: each account sees the other's backend, and the
-personally-bound backend that neither may invoke. Credential isolation holds —
-what crosses the boundary is metadata, backend names and descriptions.
-`meta_route_isolation_refused` (`src/gateway/meta_mcp/mod.rs:1119`) exists to
-omit isolation-refused backends from list paths, and this list path does not
-consult it. The recording carries this as
-`S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED`, written as a **characterisation** row: it
-asserts the behaviour as observed, so a build that starts scoping the catalogue
-makes the row FAIL and forces the finding to be revisited rather than quietly
-closed. Whether this is a defect or accepted behaviour is an owner decision.
+**The catalogue was not account-scoped (resolved).** In the first recording
+`gateway_list_servers` returned the same list to both keys: each account saw the
+other's backend, and the personally-bound backend that neither may invoke.
+Credential isolation held; what crossed the boundary was metadata, backend names
+and descriptions. That recording carried it as the **characterisation** row
+`S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED`, which asserted the behaviour as observed so
+that a build that started scoping would fail the row and force the finding to be
+revisited.
 
 *2026-09-25:* the row fired as designed. 4.0.0-beta.1 scopes the catalogue per key
 (UPGRADING-4.0 item 15), so the script now asserts that scoping instead, as
-`S3.ALICE_CATALOGUE_IS_HERS` and `S3.BOB_CATALOGUE_IS_HIS`. The recordings above are unchanged.
+`S3.ALICE_CATALOGUE_IS_HERS` and `S3.BOB_CATALOGUE_IS_HIS`. Scenario 3 was re-recorded 2026-09-29 at `ffc51fb86` with those rows (#2269); the retired row is gone and the two scoping rows carry the finding, so no owner decision remains open on it.
 
 **The ADR-008 INV-2 refusal is spelled twice.**
 `src/gateway/meta_mcp/invoke.rs:1430-1440` builds its own `-32001` saying "one

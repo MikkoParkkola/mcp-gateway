@@ -375,8 +375,8 @@ async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
     let (state, received, _store_dir) = state_with_fixture().await;
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
-    let (_status, response) =
-        post(&state, &retry_body(1, "other-tool", &arguments(), &handle)).await;
+    // A listed tool: R2 refuses an unlisted one first (F13), testing existence.
+    let (_status, response) = post(&state, &retry_body(1, TOOL, &arguments(), &handle)).await;
 
     assert_refused_by_the_continuation_guard(&response, "handle minted against a different tool");
 }

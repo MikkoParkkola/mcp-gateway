@@ -142,6 +142,17 @@ async fn mint_write_failure_is_fail_closed() {
     let exe = std::env::current_exe().expect("current test binary path");
     let file = NamedTempFile::new().expect("tempfile");
     let path = file.path().to_string_lossy().to_string();
+    // A new log's open() writes its genesis record (#2275); open it here,
+    // outside the size limit, so the child's open() only reads.
+    drop(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.clone(),
+            key_id: "test".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("parent creates the log"),
+    );
     let script =
         format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
     let output = std::process::Command::new("sh")

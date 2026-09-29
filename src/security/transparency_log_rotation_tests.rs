@@ -120,6 +120,25 @@ pub(super) fn rewrite_line(file: &Path, index: usize, edit: impl FnOnce(&mut ser
     std::fs::write(file, body).unwrap();
 }
 
+/// Rewrite a fresh log as a pre-D6 one: drop the genesis open record and
+/// re-chain the rest from genesis (unsigned).
+pub(super) fn strip_genesis_open(path: &Path) {
+    let all = lines(path);
+    assert_eq!(event(&all[0]), Some(rotation::EV_OPENED));
+    let c = cfg(path, 12, false);
+    let mut prev = "genesis".to_string();
+    let mut body = String::new();
+    for (i, v) in all[1..].iter().enumerate() {
+        let mut fields = v.as_object().unwrap().clone();
+        fields.remove("entry_hash");
+        let (line, hash) = chain_line(&c, fields, i as u64 + 1, &prev).unwrap();
+        body += &line;
+        body.push('\n');
+        prev = hash;
+    }
+    std::fs::write(path, body).unwrap();
+}
+
 #[test]
 fn rotates_at_max_segment_bytes() {
     let dir = tempfile::tempdir().unwrap();
@@ -495,4 +514,38 @@ fn corrupt_tail_on_resync_still_degrades() {
     let r = l.append_event_synced(serde_json::Map::new(), &AuditEnvelope::gateway());
     assert!(r.is_err());
     assert!(l.is_degraded());
+}
+
+/// #1528: identity comes from the open handle. A path and a handle on the same
+/// file agree, and two distinct files never do, whatever their timestamps.
+#[test]
+fn mik_1528_two_distinct_files_have_distinct_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let fa = std::fs::File::create(&a).unwrap();
+    let fb = std::fs::File::create(&b).unwrap();
+    // Windows: the same creation time on both, as NTFS tunnelling produces.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTimesExt;
+        let t = std::fs::FileTimes::new().set_created(std::time::SystemTime::UNIX_EPOCH);
+        fa.set_times(t).unwrap();
+        fb.set_times(t).unwrap();
+        assert_eq!(
+            fa.metadata().unwrap().created().unwrap(),
+            fb.metadata().unwrap().created().unwrap()
+        );
+    }
+    assert_ne!(
+        rotation::file_id(&fa).unwrap(),
+        rotation::file_id(&fb).unwrap()
+    );
+    assert_eq!(
+        rotation::file_id(&fa).unwrap(),
+        rotation::path_id(&a).unwrap()
+    );
+    assert_ne!(
+        rotation::path_id(&a).unwrap(),
+        rotation::path_id(&b).unwrap()
+    );
 }

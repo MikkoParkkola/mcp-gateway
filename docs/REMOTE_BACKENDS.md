@@ -207,8 +207,9 @@ and `passthrough` mode.
 A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at any
 depth, is refused with `isError: true` before it reaches the backend. That applies on `/mcp` and on
 the direct `/mcp/{name}` route, `passthrough` backends included. The schema is the one the
-caller's own `tools/list` returned. A tool the gateway has not listed for that caller yet is
-forwarded unchecked.
+caller's own `tools/list` returned. For a tool the gateway has not listed for that caller yet, it
+lists the backend's tools once, as that caller, before judging the call (see
+[UPGRADING-4.0.md §59](UPGRADING-4.0.md#59-a-tool-call-on-a-cold-catalogue-lists-the-backend-first)).
 
 `input_schema_enforcement` sets the rule per backend:
 
@@ -217,6 +218,24 @@ forwarded unchecked.
 | `closed` (default) | An object level that lists `properties` or `patternProperties` without stating `additionalProperties` is closed. `{"type": "object"}` and `properties: {}` stay free maps. |
 | `standard` | JSON Schema's default: only `additionalProperties: false` closes a level. |
 | `off` | No check. |
+
+## Tools with a poisoned description
+
+Every tool a backend lists is checked with the tool-poisoning rule (AX-010). A tool that fails it
+at blocking severity is left out of every tool list and refused by name, for every caller of the
+backend, once any listing has shown it. The gateway logs a `Tool withheld` warning once per
+distinct description, with the rule's findings and a digest.
+
+`allow_flagged_tools` serves a tool you have reviewed, pinned to that digest:
+
+```yaml
+backends:
+  my-backend:
+    allow_flagged_tools:
+      tool_name: "<64-hex digest from the warning>"
+```
+
+A changed description gets a new digest and is withheld again. See UPGRADING-4.0 §75.
 
 ## First-time OAuth interactive authorization
 

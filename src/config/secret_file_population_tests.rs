@@ -36,6 +36,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
+        "src/commands/dashboard_link.rs",
+        "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
+    ),
+    (
         "src/commands/kubernetes.rs",
         "Kubernetes manifests input; public",
     ),
@@ -66,6 +70,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
+    (
+        "src/config_reload/grant_audit_plan.rs",
+        "grant audit state: journal ids and grant digests; no secret",
+    ),
     (
         "src/control_plane/export.rs",
         "audit export cursor and log; no secret, append-only",

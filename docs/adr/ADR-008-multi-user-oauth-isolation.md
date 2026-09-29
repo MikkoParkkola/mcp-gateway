@@ -67,7 +67,8 @@ so shared+single-user collapse to the same code path.
 
 `is_multi_user` is **fail-closed** (MIK-6752, `AuthConfig::implies_multi_user`):
 auth disabled → `false`; auth enabled → `true` **unless** the operator explicitly
-declares `auth.single_user = true`. More than one API key or any OIDC issuer is a
+declares `auth.single_user = true`. More than one credential (API keys and the
+bearer token, #2241) or any OIDC issuer is a
 hard multi-user signal that overrides the `single_user` hint. Rationale: a single
 shared API key or bearer token can be handed to a whole team, so count-based
 detection (`api_keys > 1 || oidc`) fails open — a shared single key read as

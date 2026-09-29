@@ -54,6 +54,8 @@ mod san;
 mod ip_san_tests;
 #[cfg(test)]
 mod mode_tests;
+#[cfg(test)]
+mod windows_write_tests;
 
 pub use access_control::{MtlsPolicy, PolicyDecision};
 pub use cert_manager::{

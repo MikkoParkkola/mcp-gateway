@@ -18,9 +18,10 @@ use super::AppState;
 use super::authorization::{
     ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
 };
+use super::direct_guards::{DirectRouteGuards, refusal};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::personal_accounts::refusal::refusal_text;
@@ -43,6 +44,31 @@ struct BackendAuthContext<'a> {
     client: Option<&'a AuthenticatedClient>,
     oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     cert_identity: Option<&'a CertIdentity>,
+    /// The caller as a grant subject, resolved for this request: the only
+    /// carrier of an OIDC or trusted-header subject on this route.
+    #[cfg(feature = "firewall")]
+    grant_subject: Option<&'a crate::identity_grants::GrantSubject>,
+}
+
+/// The key the direct route's per-caller firewall controls score on: the
+/// caller's `CallerKey`, as on the meta route, so one caller has one budget on
+/// both. With no key (authentication off) it is the shared per-backend bucket,
+/// never tracked; a keyed caller's reclaim deadline is renewed (CONTROL.4).
+#[cfg(feature = "firewall")]
+fn direct_control_identity(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    per_backend: &str,
+) -> String {
+    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
+    if key.is_empty() {
+        return per_backend.to_string();
+    }
+    if let Some(ref lifecycle) = state.session_lifecycle {
+        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
+        lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
+    }
+    key
 }
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
@@ -59,14 +85,14 @@ struct BackendAuthContext<'a> {
 /// 2. `tool_policy.check` — enforces global allow/deny rules.
 /// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
 #[allow(clippy::result_large_err)]
-fn apply_backend_tool_call_security(
+async fn apply_backend_tool_call_security(
     state: &AppState,
     backend_name: &str,
     auth: BackendAuthContext<'_>,
     params: Option<&Value>,
     id: &RequestId,
     backend: &crate::backend::Backend,
-    identity_key: Option<&str>,
+    (slot, failed): (key_check::CallerSlot<'_>, &DirectFailure<'_>),
 ) -> BackendSecurityResult {
     let unnamed = || {
         let message = "tools/call requires params.name";
@@ -108,17 +134,15 @@ fn apply_backend_tool_call_security(
     if let Some(ref fw) = state.firewall {
         let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
         let session_id = format!("direct:{backend_name}");
-        let verdict =
-            // A direct backend call always has this synthetic per-backend key,
-            // so the per-caller controls have a stable identity to score on.
-            fw.check_request(
-                &session_id,
-                backend_name,
-                tool_name,
-                arguments,
-                caller_name,
-                &session_id,
-            );
+        let control_identity = direct_control_identity(state, auth, &session_id);
+        let verdict = fw.check_request(
+            &session_id,
+            backend_name,
+            tool_name,
+            arguments,
+            caller_name,
+            &control_identity,
+        );
         if verdict.action == FirewallAction::Warn {
             warn!(
                 backend = %backend_name,
@@ -151,14 +175,10 @@ fn apply_backend_tool_call_security(
         }
     }
 
-    // MIK-7570.SCHEMA.1 (R2): above the passthrough return, so a passthrough
-    // backend is checked too. A tool result, not a 403, so a model can correct
-    // the call; the early return drops the idempotency reservation unsettled.
-    let call_arguments = params.get("arguments").unwrap_or(&Value::Null);
-    if let Some(text) = backend.undeclared_key_refusal(identity_key, tool_name, call_arguments) {
-        let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
-        let response = JsonRpcResponse::success(id.clone(), result);
-        return Err(build_http_response(&response, StatusCode::OK));
+    // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
+    // passthrough backend is checked too.
+    if let Some(rejection) = key_check::key_refusal(backend, (slot, failed), params, id).await {
+        return Err(rejection);
     }
 
     if backend.passthrough() {
@@ -227,8 +247,14 @@ fn backend_security_error_with_status(
 
 /// Fill missing MCP tool annotation hints on direct backend `tools/list`
 /// responses before returning them to clients.
-fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcResponse) {
+fn normalize_tools_list_response(
+    backend: &crate::backend::Backend,
+    response: &mut JsonRpcResponse,
+) {
+    let backend_name = backend.name.as_str();
     if response.error.is_some() {
+        // Never forward an unjudged list beside an error (#1441).
+        response.result = None;
         return;
     }
 
@@ -260,7 +286,7 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         }
     }
 
-    prepare_tool_metadata(backend_name, &mut tools);
+    backend.prepare_judged_tools(&mut tools);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
@@ -366,65 +392,14 @@ fn resolve_passthrough_headers(
     }
 }
 
-/// Stable actor id for an identity-propagation audit entry (MIK-6740). Uses
-/// the same `issuer`+`subject` derivation as the control-plane governance
-/// audit (`stable_actor_id`) so the two audit trails describe the same actor
-/// under the same id. `"unauthenticated"` covers the non-`required` path,
-/// where a mint/refuse decision can be reached with no verified identity.
-fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>) -> String {
-    verified_identity.map_or_else(
-        || "unauthenticated".to_string(),
-        crate::key_server::oidc::VerifiedIdentity::stable_actor_id,
-    )
-}
+// The audit subject is the resolver's (`MetaMcp::audit_subject_for`); the
+// identity-only form stays in reach of this module's tests.
+#[cfg(test)]
+use crate::identity_propagation::audit_subject;
 
 // One writer for identity-propagation audit on both routes (the direct
 // route used to carry a hand copy of it).
 use crate::identity_propagation::audit_identity_propagation;
-
-/// Resolve just the identity-key session-bucket binding for a notification
-/// (MIK-6735 fix 2), WITHOUT the full propagation/OAuth-isolation enforcement
-/// gate `isolation_guarded` applies to id-bearing requests below.
-///
-/// `isolation_guarded` deliberately excludes `notifications/*` from that gate
-/// (the `idp_refuse` 403 path, `enforce_oauth_isolation`, and tool-policy) —
-/// notifications are fire-and-forget MCP protocol plumbing (e.g.
-/// `notifications/cancelled`), never a caller-data operation, so a
-/// propagation failure must never turn a notification into a hard error.
-/// Before this fix, `backend.notify()` also hardcoded the shared session
-/// bucket unconditionally, so even a successfully resolved per-user identity
-/// went unused and a notification correlating a per-user request could land
-/// on the wrong upstream session.
-///
-/// This is deliberately best-effort and side-effect free (no audit log entry,
-/// no error surfaced to the caller): any resolution failure — including no
-/// identity-propagation config on the backend at all, the overwhelmingly
-/// common case — falls back to `None`, the shared default bucket, exactly
-/// what every notification used unconditionally before this fix (IDP.5).
-async fn resolve_notification_identity_key(
-    state: &AppState,
-    backend: &crate::backend::Backend,
-    name: &str,
-    inbound_headers: &axum::http::HeaderMap,
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-) -> Option<String> {
-    let idp_cfg = backend.identity_propagation_config()?;
-    if idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough {
-        let (_headers, binding) = resolve_passthrough_headers(
-            idp_cfg,
-            inbound_headers,
-            backend.transport_carries_identity_headers(),
-        )
-        .ok()?;
-        return binding;
-    }
-    let (_headers, binding) = state
-        .meta_mcp
-        .resolve_propagation_credential(name, verified_identity)
-        .await
-        .ok()?;
-    binding
-}
 
 /// Dispatch a direct-route request to a backend inside a notification scope.
 ///
@@ -539,6 +514,14 @@ async fn backend_handler_inner(
         .extensions()
         .get::<crate::key_server::oidc::VerifiedIdentity>()
         .cloned();
+    // Classified once for every credential this route resolves, notifications
+    // included (#2190): a validated credential can be the sole operator.
+    let caller = crate::identity_propagation::CallerProof::new(
+        verified_identity.as_ref(),
+        crate::identity_propagation::CallerProvenance::classify(
+            client.as_ref().map(|client| client.principal.as_str()),
+        ),
+    );
     // Inbound headers, captured before the body is consumed, so the passthrough
     // path (ADR-008 rung 2, MIK-6746) can read the caller's own backend
     // credential from the operator-named header.
@@ -686,24 +669,22 @@ async fn backend_handler_inner(
     }
 
     // Handle notifications - forward to backend but return 202 Accepted.
-    // Resolve (best-effort) the same session-bucket identity_key a matching
-    // `request_with_headers` call for this caller would have used (MIK-6735
-    // fix 2), so a notification correlating that request lands on the same
-    // upstream session instead of always the shared default bucket. Deliberately
-    // NOT routed through the `isolation_guarded` enforcement gate below —
-    // notifications stay exempt from the idp_refuse-403 / OAuth-isolation /
-    // tool-policy checks that apply to id-bearing requests.
+    // The bucket is the one a matching `request_with_headers` call for this
+    // caller would use (MIK-6735 fix 2), so a notification correlating that
+    // request lands on the same upstream session. Not routed through the
+    // `isolation_guarded` gate below (no id, no tool policy), but refused where
+    // this caller's request would be refused for its identity (#2240).
     if method.starts_with("notifications/") {
-        let notif_identity_key = resolve_notification_identity_key(
-            &state,
-            &backend,
-            &name,
-            &inbound_headers,
-            verified_identity.as_ref(),
-        )
-        .await;
+        let Ok(notification_key::Resolved { headers, binding }) =
+            notification_key::resolve(&state, &backend, &name, &inbound_headers, caller).await
+        else {
+            // Refused as this caller's request would be (#2240): nothing is
+            // forwarded, and the client breaker is untouched, as for
+            // `direct_refusal`. `{}` is what an accepted notification gets.
+            return (StatusCode::FORBIDDEN, Json(json!({})));
+        };
         return match backend
-            .notify_with_headers(&method, params, notif_identity_key.as_deref())
+            .notify_with_headers(&method, params, &headers, binding.as_deref())
             .await
         {
             Ok(()) => {
@@ -836,7 +817,7 @@ async fn backend_handler_inner(
         } else {
             match state
                 .meta_mcp
-                .resolve_propagation_credential_held(&name, verified_identity.as_ref())
+                .resolve_propagation_credential_held(&name, caller)
                 .await
             {
                 Ok((headers, binding, held)) => {
@@ -848,7 +829,8 @@ async fn backend_handler_inner(
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
             }
         };
-        let subject = audit_subject(verified_identity.as_ref());
+        // The principal resolved for (passthrough: the verified identity).
+        let subject = state.meta_mcp.audit_subject_for(&name, caller);
         let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
         match resolved {
             Ok(headers) => {
@@ -972,6 +954,23 @@ async fn backend_handler_inner(
         identity: verified_identity.as_ref(),
         managed: managed.as_ref(),
     };
+    // MIK-7597: the shared dispatch controls, S1 and G7 before the reservation.
+    let call = BackendCall {
+        server: &name,
+        tool: params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        session_id,
+        api_key_name: client.as_ref().map(|c| c.name.as_str()),
+        trace_id: "",
+    };
+    if method == "tools/call"
+        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call)
+    {
+        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+    }
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1018,45 +1017,45 @@ async fn backend_handler_inner(
                 client: client.as_ref(),
                 oauth_agent_identity: oauth_agent_identity.as_ref(),
                 cert_identity: cert_identity.as_ref(),
+                #[cfg(feature = "firewall")]
+                grant_subject: grant_subject.as_ref(),
             },
             params.as_ref(),
             &id,
             &backend,
-            identity_key.as_deref(),
-        ) {
+            ((identity_key.as_deref(), &propagated_headers), &failed),
+        )
+        .await
+        {
             Ok(Some(sanitized_params)) => {
+                let warnings = match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
+                    Ok(warnings) => warnings,
+                    Err(e) => {
+                        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+                    }
+                };
                 // Forward the sanitized params to the backend
-                let forward = dispatch_in_scope(
-                    &backend,
-                    &method,
-                    &id,
-                    Some(sanitized_params),
-                    &propagated_headers,
-                    identity_key.as_deref(),
-                )
+                let forward = Box::pin(dispatch_armed(
+                    idem_reservation.as_mut(),
+                    dispatch_in_scope(
+                        &backend,
+                        &method,
+                        &id,
+                        Some(sanitized_params),
+                        &propagated_headers,
+                        identity_key.as_deref(),
+                    ),
+                ))
                 .await;
+                let (params, client) = (params.as_ref(), client.as_ref());
+                let forward = DirectRouteGuards::after_dispatch(
+                    &state, &call, params, client, &warnings, forward,
+                );
                 return match forward {
                     Ok(mut response) => {
-                        record_client_success(&state, client.as_ref());
-                        // The transport uses its own request IDs to correlate
-                        // concurrent upstream calls. Restore the caller's ID at
-                        // the HTTP boundary so the client can correlate this
-                        // response with its original JSON-RPC request.
+                        // Restore the caller's ID over the transport's own.
                         response.id = Some(id.clone());
-                        scan_direct_backend_response(
-                            &state,
-                            &name,
-                            params.as_ref(),
-                            client.as_ref(),
-                            &mut response,
-                        );
-                        stamp_direct_provenance(
-                            &state,
-                            &name,
-                            params.as_ref(),
-                            client.as_ref(),
-                            &mut response,
-                        );
+                        stamp_direct_provenance(&state, &name, params, client, &mut response);
                         settle_direct_idempotency(idem_reservation.as_mut(), &response);
                         build_http_response(&response, StatusCode::OK)
                     }
@@ -1074,22 +1073,39 @@ async fn backend_handler_inner(
     // so it can be filtered per caller and answered without a cursor (A3).
     let forward = if method == "tools/list" {
         let (headers, key) = (&propagated_headers, identity_key.as_deref());
-        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
+        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name)
+            .await
+            .inspect(|_| record_client_success(&state, client.as_ref()))
     } else {
+        let warnings = if method == "tools/call" {
+            match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
+                Ok(warnings) => warnings,
+                Err(e) => {
+                    return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let key = identity_key.as_deref();
-        dispatch_in_scope(
+        let dispatch = dispatch_in_scope(
             &backend,
             &method,
             &id,
             params.clone(),
             &propagated_headers,
             key,
-        )
-        .await
+        );
+        let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
+        if method == "tools/call" {
+            let (params, client) = (params.as_ref(), client.as_ref());
+            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward)
+        } else {
+            forward.inspect(|_| record_client_success(&state, client.as_ref()))
+        }
     };
     match forward {
         Ok(mut response) => {
-            record_client_success(&state, client.as_ref());
             // Upstream transport IDs are private gateway correlation state;
             // direct-route clients must receive the ID they supplied.
             response.id = Some(id.clone());
@@ -1099,19 +1115,12 @@ async fn backend_handler_inner(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
-                normalize_tools_list_response(&name, &mut response);
+                normalize_tools_list_response(&backend, &mut response);
                 // List = invoke: only what this route's `tools/call` admits.
                 let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
                 let client = client.as_ref();
                 direct_list::retain_invocable(&state, client, oauth, cert, &name, &mut response);
             } else if method == "tools/call" {
-                scan_direct_backend_response(
-                    &state,
-                    &name,
-                    params.as_ref(),
-                    client.as_ref(),
-                    &mut response,
-                );
                 stamp_direct_provenance(
                     &state,
                     &name,
@@ -1127,6 +1136,16 @@ async fn backend_handler_inner(
         // lets a retry re-execute a side effect (ADR-012 consequence 1).
         Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
     }
+}
+
+/// #1962: run a backend dispatch with the reservation armed, so a caller
+/// that disconnects mid-call leaves the key settled, not free.
+async fn dispatch_armed<T>(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    dispatch: impl std::future::Future<Output = T>,
+) -> T {
+    crate::gateway::meta_mcp::MetaMcp::arm_direct_dispatch(reservation);
+    dispatch.await
 }
 
 /// Store the direct route's result under the client's idempotency key so a
@@ -1146,6 +1165,11 @@ fn settle_direct_idempotency(
     let Some(reservation) = reservation else {
         return;
     };
+    if response.delivery_refusal {
+        reservation
+            .fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
+        return;
+    }
     if let Some(error) = response.error.as_ref() {
         if let Ok(error) = serde_json::to_value(error) {
             reservation.fail(&error);
@@ -1189,6 +1213,9 @@ fn settle_direct_failure(
 /// strictly poorer error than the first caller received, which defeats the
 /// point of replaying it at all.
 fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcResponse {
+    if crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal(error) {
+        return refusal(id, &crate::Error::ResponseFirewallRefused);
+    }
     let (code, message) = crate::idempotency::cached_error_parts(error);
     match error.get("data") {
         Some(data) => JsonRpcResponse::error_with_data(id, code, message, data.clone()),
@@ -1237,50 +1264,6 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
     if let Some(client) = client {
         state.auth_config.record_client_failure(&client.name);
     }
-}
-
-#[cfg(feature = "firewall")]
-fn scan_direct_backend_response(
-    state: &AppState,
-    backend_name: &str,
-    params: Option<&Value>,
-    client: Option<&AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let Some(ref fw) = state.firewall else {
-        return;
-    };
-    let Some(params) = params else {
-        return;
-    };
-    let Some(tool_name) = params.get("name").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(ref mut result) = response.result else {
-        return;
-    };
-
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        warn!(
-            backend = %backend_name,
-            tool = %tool_name,
-            findings = verdict.findings.len(),
-            "Firewall: direct backend response warning"
-        );
-    }
-}
-
-#[cfg(not(feature = "firewall"))]
-fn scan_direct_backend_response(
-    _state: &AppState,
-    _backend_name: &str,
-    _params: Option<&Value>,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) {
 }
 
 /// Scan a `tools/list` response through the same firewall response scanner used
@@ -1419,6 +1402,8 @@ pub(super) async fn costs_handler(
 mod direct_audit;
 mod direct_failure;
 mod direct_list;
+mod key_check;
+mod notification_key;
 use direct_failure::DirectFailure;
 
 #[cfg(test)]

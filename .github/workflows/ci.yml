@@ -31,6 +31,14 @@ on:
         description: Run the full test suite from the packaged crate (packaged-suite.yml), as a merge would
         type: boolean
         default: false
+      rehearse_binary_signing:
+        description: Sign one release binary into a draft release, verify what it serves, then delete it
+        type: boolean
+        default: false
+      rehearse_all_targets:
+        description: With rehearse_binary_signing, also build every release target with cargo auditable and check its SBOM
+        type: boolean
+        default: true
 
 # A new push to a pull request cancels that PR's superseded run. Every other
 # event (branch push, tag, dispatch) gets a group of its own run id, so it is
@@ -314,7 +322,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v2.5.2
+          cosign-release: v2.6.5
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate supply-chain smoke script
@@ -342,7 +350,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v2.5.2
+          cosign-release: v2.6.5
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate air-gap smoke script
@@ -567,6 +575,21 @@ jobs:
           cargo test --all-features --lib -- --ignored --show-output win_privileged::
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  macos-check:
+    name: macOS check
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # macOS is a shipped target, and every test target has to compile for
+      # it: a Linux-only API in a unix-gated test breaks the whole lib suite
+      # on a Mac without any other job noticing.
+      - run: cargo test --all-features --no-run
+
   test:
     name: Tests
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
@@ -607,6 +630,8 @@ jobs:
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
+        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -650,6 +675,8 @@ jobs:
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
+        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -672,6 +699,151 @@ jobs:
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     uses: ./.github/workflows/task-sdk-recovery.yml
 
+  # Release signing's own tests read nothing live, so they fail every ref:
+  # the asset checker, and the signing script refusing a tampered asset, the
+  # wrong identity and the wrong issuer (cosign and syft stubbed).
+  release-signing-checks:
+    name: Release signing checks
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the release asset checker
+        run: python3 scripts/release/test_check_release_assets.py
+      - name: Test that signing fails closed
+        run: python3 scripts/release/test_sign_release_assets.py
+      - name: Test that an upload onto a published release is refused
+        run: python3 scripts/release/test_refuse_published_release.py
+
+  # The release.yml signing path, rehearsed without a tag: one binary built
+  # with cargo auditable, signed keylessly as this workflow, uploaded to a
+  # draft release (a draft creates no git tag and is visible to maintainers
+  # only), verified as served, checked to refuse a tampered copy, and deleted.
+  binary-signing-rehearsal:
+    name: Binary signing rehearsal (draft release)
+    if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_binary_signing == true || inputs.rehearse_binary_signing == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      IDENTITY: https://github.com/${{ github.workflow_ref }}
+      ISSUER: https://token.actions.githubusercontent.com
+      DRAFT: rehearsal-binary-signing-${{ github.run_id }}
+      NAME: mcp-gateway-linux-x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --locked --version 0.7.6
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.6.5
+      - name: Install syft (SBOM)
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Build, sign and write the SBOM
+        run: |
+          set -euo pipefail
+          cargo auditable build --release
+          mkdir -p release
+          cp target/release/mcp-gateway "release/$NAME"
+          version="$(cargo metadata --format-version 1 --no-deps --locked | jq -r '.packages[] | select(.name == "mcp-gateway") | .version')"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          scripts/release/sign-release-assets.sh release "$version" "$NAME"
+      - name: Upload to a draft release and verify what it serves
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$DRAFT" release/* --draft --target "$GITHUB_SHA" \
+            --title "$DRAFT" --notes "Rehearsal of release signing; deleted by the same run."
+          gh release download "$DRAFT" --dir published
+          scripts/release/verify-release-assets.sh published "$VERSION" "$NAME"
+      - name: A tampered copy is refused
+        run: |
+          set -euo pipefail
+          cp -r published tampered
+          printf 'x' >> "tampered/$NAME"
+          if scripts/release/verify-release-assets.sh tampered "$VERSION" "$NAME"; then
+            echo "::error::a tampered binary verified"
+            exit 1
+          fi
+      - name: Delete the draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete "$DRAFT" --yes --cleanup-tag || true
+
+  # Tag day must not be the first cargo auditable build on macOS or Windows:
+  # every release target is built here, as release.yml builds it, and each
+  # SBOM must list the crates in its binary. Signing is proven by the job above.
+  binary-sbom-rehearsal:
+    name: Binary SBOM rehearsal (${{ matrix.artifact }})
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && (inputs.rehearse_binary_signing == true || inputs.rehearse_binary_signing == 'true')
+      && (inputs.rehearse_all_targets == true || inputs.rehearse_all_targets == 'true')
+    strategy:
+      fail-fast: false
+      # Must match release.yml `build`; the wiring test holds them equal.
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: mcp-gateway-linux-x86_64
+            suffix: ""
+            packages: musl-tools
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: mcp-gateway-linux-aarch64
+            suffix: ""
+            packages: musl-tools
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: mcp-gateway-darwin-arm64
+            suffix: ""
+            packages: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: mcp-gateway-darwin-x86_64
+            suffix: ""
+            packages: ""
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact: mcp-gateway-windows-x86_64
+            suffix: .exe
+            packages: ""
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install system packages
+        if: matrix.packages != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --locked --version 0.7.6
+      - name: Build
+        run: cargo auditable build --release --target ${{ matrix.target }}
+      - name: Install syft (SBOM)
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: The SBOM lists the binary's crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="${{ matrix.artifact }}${{ matrix.suffix }}"
+          mkdir -p sbom
+          cp "target/${{ matrix.target }}/release/mcp-gateway${{ matrix.suffix }}" "sbom/$name"
+          syft scan "file:sbom/$name" \
+            --select-catalogers "+cargo-auditable-binary-cataloger" \
+            -o "spdx-json=sbom/$name.spdx.json"
+          version="$(cargo metadata --format-version 1 --no-deps --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "mcp-gateway"))')"
+          python3 scripts/release/check_release_assets.py sbom --version "$version" --sbom-only "$name"
   # The published crate carries only what Cargo.toml `include` lists, so a test
   # that reads a repository file left out of it compiles here and fails for
   # anyone testing the package (#1812). Every ref builds the packaged tests;
@@ -772,6 +944,8 @@ jobs:
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
+        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Test the counter (fail on parser regression)
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Test supplemental acceptance checks
@@ -977,7 +1151,7 @@ jobs:
     # previously this job's needs: covered clippy/test/fmt/audit but not the
     # security jobs, so a red secrets-scan or leak-lint would not have
     # blocked ghcr.io publish.
-    needs: [check, test, task-sdk-recovery, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria, release-script-tests, package-tests]
+    needs: [check, test, task-sdk-recovery, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria, release-script-tests, package-tests, release-signing-checks]
     permissions:
       contents: read
       packages: write
@@ -1277,7 +1451,7 @@ jobs:
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v2.5.2
+          cosign-release: v2.6.5
 
       # Read-only: verifies v4.0.0-beta.2, signed and SBOM-attested by run
       # 36193916273, with the release verify step's body verbatim. Only the

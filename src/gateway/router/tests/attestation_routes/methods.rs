@@ -229,7 +229,15 @@ async fn direct_route_token_never_forwarded_any_method() {
             let (_, json) = rpc(&router, "/mcp/demo", method, params, Some(&token)).await;
             assert_admitted(method, &json);
         }
-        let forwarded = transport.all.lock().unwrap().len();
+        // The four client requests. The gateway's own cold-slot `tools/list`
+        // (F13) is not one of them; the raw-token check below still reads it.
+        let forwarded = transport
+            .all
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, _)| method != "tools/list")
+            .count();
         assert_eq!(forwarded, 4, "passthrough={passthrough}");
         assert_raw_token_never_forwarded(&transport, &token);
     }
