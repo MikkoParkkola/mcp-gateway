@@ -159,8 +159,10 @@ async fn an_expired_ask_is_not_charged_to_the_capability() {
         "one backend round per call"
     );
     let (ok, failed) = meta.kill_switch.capability_window_counts("asker", "book");
-    eprintln!("P1 capability window: ok={ok} failed={failed}");
-    assert_eq!(failed, 0, "an expired ask is not a backend failure");
+    assert_eq!(
+        failed, 0,
+        "an expired ask is not a backend failure (window ok={ok} failed={failed})"
+    );
     // Exactly one sample per call: the first round's `input_required`, a
     // success. An expiry sampled as anything, success included, would show here.
     assert_eq!(
