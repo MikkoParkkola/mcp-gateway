@@ -67,11 +67,17 @@ impl MetaMcp {
         backend: &Backend,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Option<(Vec<(String, String)>, Option<String>)> {
-        let proof = CallerProof::new(
+        self.catalogue_credential_for(backend, Self::proof_of(caller))
+            .await
+    }
+
+    /// What `caller` proved: its verified identity, else its credential's
+    /// provenance.
+    pub(super) fn proof_of<'a>(caller: &super::MetaMcpCallerContext<'a>) -> CallerProof<'a> {
+        CallerProof::new(
             caller.verified_identity,
             CallerProvenance::classify(caller.credential_principal),
-        );
-        self.catalogue_credential_for(backend, proof).await
+        )
     }
 
     /// Who the resolver would resolve `server`'s credential for, if anyone.

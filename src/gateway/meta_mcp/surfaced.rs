@@ -219,9 +219,10 @@ impl MetaMcp {
     #[allow(clippy::unnecessary_wraps)]
     pub(super) async fn list_servers(
         &self,
-        scope: super::InvokeScope<'_>,
+        caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Result<Value> {
+        let scope = caller.scope();
         let mut servers: Vec<Value> = Vec::new();
         for b in self.backends.all() {
             if !self.admits_backend(&b.name, scope, session_id) {
