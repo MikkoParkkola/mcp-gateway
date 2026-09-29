@@ -24,6 +24,7 @@ use tokio::io::AsyncWriteExt as _;
 const KEY_ID: &str = "signing-test-current";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+const BEARER: &str = "signing-replay-bearer-2352-0123456789abcdef";
 
 fn backend_result() -> Value {
     json!({"content": [{"type": "text", "text": "signing cache sentinel"}]})
@@ -76,6 +77,20 @@ async fn verify(response: &Value, request_id: &str, nonce: &str) {
     );
 }
 
+/// A client that presents [`BEARER`] on every request.
+fn bearer_client() -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {BEARER}").parse().expect("header"),
+    );
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(IO_TIMEOUT)
+        .build()
+        .expect("client")
+}
+
 fn signature_of(response: &Value) -> String {
     response["result"]["_signature"]["sig"]
         .as_str()
@@ -121,7 +136,11 @@ async fn a_cache_hit_is_signed_for_its_own_nonce() {
 #[tokio::test]
 async fn an_idempotent_replay_is_signed_for_its_own_nonce() {
     let backend = BackendFixture::start(backend_result()).await;
-    let gateway = HttpGateway::start(fixture_config(&backend.url)).await;
+    // An idempotency key needs a verified caller to scope it to, so auth is on.
+    let mut config = fixture_config(&backend.url);
+    config["auth"] = json!({"enabled": true, "bearer_token": BEARER});
+    let mut gateway = HttpGateway::start(config).await;
+    gateway.client = bearer_client();
     let session = gateway.initialize().await;
     let keyed = |id: &str, nonce: &str| {
         let mut request = invoke(json!(id), json!(nonce), json!({}));
