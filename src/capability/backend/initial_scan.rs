@@ -24,6 +24,26 @@ impl CapabilityBackend {
     }
 }
 
+/// Debug builds only: names a gate file. The startup scan holds until it exists,
+/// so a process test can observe the loading state deterministically (#2376).
+/// Compiled out of release builds; the release job checks the name is absent.
+#[cfg(debug_assertions)]
+const HOLD_SCAN_UNTIL: &str = "MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN";
+
+impl CapabilityBackend {
+    /// Wait before the startup scan reads any directory: the pause that lets
+    /// the listener bind first, then (debug builds) the test gate.
+    pub(crate) async fn settle_before_initial_scan(&self) {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        #[cfg(debug_assertions)]
+        if let Some(gate) = std::env::var_os(HOLD_SCAN_UNTIL) {
+            while !std::path::Path::new(&gate).exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
