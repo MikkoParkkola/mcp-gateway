@@ -42,7 +42,7 @@ pub(crate) enum SecretFile {
 /// What a file's mode must protect.
 #[cfg_attr(
     all(windows, not(test)),
-    expect(
+    allow(
         dead_code,
         reason = "the Windows guarded reader calls it from the next #1718 commit"
     )
@@ -82,7 +82,7 @@ impl SecretFile {
 
     #[cfg_attr(
         windows,
-        expect(
+        allow(
             dead_code,
             reason = "the Windows guarded reader calls it from the next #1718 commit"
         )
