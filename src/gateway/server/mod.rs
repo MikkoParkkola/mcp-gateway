@@ -1949,7 +1949,11 @@ impl Gateway {
             None
         };
 
-        tools_changed::spawn_drain(Arc::clone(&state), tools_changed_rx);
+        tools_changed::spawn_drain(
+            Arc::clone(&state),
+            tools_changed_rx,
+            shutdown_tx.subscribe(),
+        );
 
         // Captured before the router takes ownership: the startup banner prints
         // the dashboard link and runs after the bind.
