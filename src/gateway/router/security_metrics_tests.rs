@@ -283,6 +283,7 @@ async fn admin_gate_refusal_counted_without_a_log() {
 
 /// An admin UI mutation by a non-admin is a `ui` denial. The control-plane
 /// pages are not counted as `ui`: that route arrives with AUDIT.3.
+#[cfg(feature = "webui")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admin_ui_denial_counted_and_control_plane_is_not_ui() {
     let fx = fixture(Setup::default()).await;

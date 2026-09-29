@@ -45,6 +45,8 @@ pub(crate) enum DenialRoute {
     Meta,
     Direct,
     Admin,
+    /// The admin UI exists only with the `webui` feature.
+    #[cfg(feature = "webui")]
     Ui,
 }
 
@@ -54,6 +56,7 @@ impl DenialRoute {
             Self::Meta => "meta",
             Self::Direct => "direct",
             Self::Admin => "admin",
+            #[cfg(feature = "webui")]
             Self::Ui => "ui",
         }
     }
