@@ -1193,6 +1193,54 @@
         "src/security/transparency_log_recovery_tests.rs"
       ],
       "note": "Met 2026-09-29 (#2294, merged in #2330 as ebfe1b7b8). A restart that finds .hwm missing chains audit_segment_hwm_missing before writing a fresh mark; live verify fails on it, archive mode warns; the finding rides on every later audit_segment_opened record (hwm_missing_at). Green Tests job in CI run 36609847232."
+    },
+    {
+      "id": "MIK-7116.MIN.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.1). Audited at release tip e83b5fd5a. UNBUILT. The tenant guard reads tenant ids from request arguments only (src/security/firewall/tenant_guard.rs:55-65, arg_keys); ContextDataClass (src/context_integrity/mod.rs:48) carries no tenant; nothing attributes a response to a tenant. Attribution reaches the firewall audit only as a CrossTenantReach finding when a call is refused (src/security/firewall/mod.rs:481-510), so an allowed call leaves no attribution record."
+    },
+    {
+      "id": "MIK-7116.MIN.2",
+      "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.2). Audited at release tip e83b5fd5a. PARTIAL. TenantGuard refuses a principal past max_tenants_per_window distinct tenants in a window (tenant_guard.rs:55-65, default 3, off by default), keyed on the principal (MIK-7116.TENANT.1), with refusal tests in tests/mik_7116_tenant_acs.rs:29-228. With the limit at 1 that blocks an A-then-B pattern, but it counts tenant ids in request arguments, not sensitive data attributed on the response, and the allowed read is not audited (see MIN.1)."
+    },
+    {
+      "id": "MIK-7116.MIN.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.3). Audited at release tip e83b5fd5a. UNBUILT. No exception mechanism exists. Firewall rules (src/security/firewall/mod.rs:74, :154) are static config overrides per tool pattern, not per-caller, not bounded in time and not audited as a grant."
+    },
+    {
+      "id": "MIK-7116.MIN.4",
+      "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.4). Audited at release tip e83b5fd5a. PARTIAL. The guard ships disabled (tenant_guard.rs:67-73) and a firewall rule can set Warn instead of Block (FirewallAction::Warn, mod.rs:180). No fixture corpus and no false-positive measurement exist. The ticket's kill gate (MIN.KILL: one week observe-only on real traffic; fewer than 5 would-block sessions means ship MIN.1 only) cannot complete inside one release day and needs an operator call on how it applies."
+    },
+    {
+      "id": "MIK-7116.MIN.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.5). Audited at release tip e83b5fd5a. UNBUILT. No summarising wrapper or derived-output path exists in src/ (a search for summari* finds only unrelated log helpers)."
+    },
+    {
+      "id": "MIK-7116.MIN.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.6). Audited at release tip e83b5fd5a. UNBUILT. No validation model integration exists; depends on MIN.5."
     }
   ],
   "decisions": [
