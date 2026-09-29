@@ -127,7 +127,13 @@ fn a_lease_proposal_carries_the_proven_pair() {
 #[tokio::test]
 async fn a_3x_bare_exact_grants_file_is_refused_naming_every_row() {
     for name in ["grants-3.4.0.yaml", "grants-3.4.0.json"] {
-        let error = read_identity_grants_file(&fixture(name))
+        // The reader refuses files others may read; a checkout gives the
+        // fixture a broad ACL on Windows, so read an owner-only copy.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        let body = std::fs::read(fixture(name)).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
+        let error = read_identity_grants_file(&path)
             .await
             .expect_err("a bare exact row must not load");
         for needle in [
