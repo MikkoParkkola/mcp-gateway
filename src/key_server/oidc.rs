@@ -400,7 +400,7 @@ impl OidcVerifier {
             .ok_or_else(|| OidcError::UnknownIssuer(issuer.clone()))?;
 
         // Validate issuer URL
-        if !provider.issuer.starts_with("https://") {
+        if !crate::gateway::auth::is_https_url(&provider.issuer) {
             warn!(issuer = %provider.issuer, "OIDC issuer is not HTTPS");
         }
 
@@ -657,7 +657,7 @@ fn validate_discovery_document(
             actual: doc.issuer,
         });
     }
-    if !doc.jwks_uri.starts_with("https://") {
+    if !crate::gateway::auth::is_https_url(&doc.jwks_uri) {
         return Err(OidcError::InsecureJwksUri(doc.jwks_uri));
     }
     Ok(doc.jwks_uri)
