@@ -1214,13 +1214,23 @@ returns a new one. The credential is read from the environment, never from an
 argument, so it does not appear in the command line other users can list; read
 it as above rather than typing it into the command, which would put it in shell
 history. Without `--url`, the gateway address comes from the config, and a config
-that fails to load is an error rather than a guess. The command presents no client
-certificate, so on a listener with `mtls.require_client_cert` call the endpoint
-with your client certificate instead:
-`printf 'Authorization: Bearer %s' "$MCP_GATEWAY_TOKEN" | curl -H @- --cert client.pem --key client-key.pem --cacert ca.pem -X POST https://127.0.0.1:39400/ui/api/dashboard-link`
-(`printf` is a shell builtin and `-H @-` reads the header from stdin, so the
-token never becomes a process argument). Only the static bearer or an admin API
-key may mint a link: a dashboard session or an SSO login gets `403`. The new link
+that fails to load is an error rather than a guess.
+
+On an mTLS listener, pass a client certificate the listener trusts (from
+`mcp-gateway tls issue-client`); `--client-cert` and `--client-key` go together
+and also read `MCP_GATEWAY_CLIENT_CERT` and `MCP_GATEWAY_CLIENT_KEY`:
+
+```bash
+mcp-gateway dashboard-link --client-cert client.crt --client-key client.key
+```
+
+Without `--url` or `--ca-cert`, the server certificate must chain to
+`mtls.ca_cert`, the only root trusted. With `--url`, no config is read: name the server's CA with
+`--ca-cert` (or `MCP_GATEWAY_CA_CERT`), which likewise replaces the built-in
+roots, or leave it out for a server certificate from a public CA. A config that
+requires a client certificate refuses to run without one.
+
+Only the static bearer or an admin API key may mint a link: a dashboard session or an SSO login gets `403`. The new link
 keeps every rule above: single use, from this machine only. A gateway bound to a
 network address (not loopback, not a wildcard) answers `409` and re-arms nothing,
 because a link for that address could never open.

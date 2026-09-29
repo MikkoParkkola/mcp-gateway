@@ -45,7 +45,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76 and 79 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79 and 96 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. The items below print no notice: read them here before upgrading.
@@ -71,6 +71,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 72
 - Item 73
 - Item 74
+- Item 75
 - Item 77
 - Item 78
 - Item 80
@@ -82,6 +83,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
+- Item 100
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -109,6 +111,7 @@ deployment.**
 - Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
 - Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
 - Item 79, only with auth on, identity grants on and a governance store that cannot open
+- Item 96, only for a config, env, key or trust file that a third account owns
 
 **Item 7 permanently fails the backend it names, with one warning, and the gateway starts
 without it.**
@@ -191,7 +194,7 @@ without it.**
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
-| 75 | Reserved: lands with a pending change | None yet |
+| 75 | A backend tool whose description fails the tool-poisoning check is withheld from every tool list and refused by name; `allow_flagged_tools` serves one explicitly; `BackendConfig` gains a field; `security::scope_collision::detect_collisions` is removed | Read the `Tool withheld` warnings; pin a tool you trust; add `allow_flagged_tools` to any `BackendConfig` struct literal; drop calls to `detect_collisions` |
 | 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
@@ -207,11 +210,16 @@ without it.**
 | 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
 | 89 | Reserved: lands with #2195 | None yet |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
-| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
+| 97 | Reserved: lands with #2286 | None yet |
+| 98 | Reserved: lands with #2293 | None yet |
+| 99 | Reserved: lands with #2295 | None yet |
+| 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -920,19 +928,21 @@ authentication, so no client could reach a tool through it.
 
 ## 35. A config or env file other users can read fails the load
 
+> Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
+
 In 3.x a config file readable by other local accounts drew one WARN in the HTTP startup banner,
 stdio never checked it, and env files were never checked at all. Both can hold credentials.
 On Unix the gateway now checks the config file, and every `env_files` entry, before reading it.
 The check follows symlinks, so a Kubernetes `..data` link is judged by the file it points to.
 
-| Mode bits | File owned by the gateway's user | File owned by another user |
-|---|---|---|
-| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused |
-| group write | refused | refused |
-| group read | refused | allowed |
-| owner only (`0600`, `0400`) | allowed | allowed |
+| Mode bits | File owned by the gateway's user | File owned by root | File owned by any other user |
+|---|---|---|---|
+| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused | refused |
+| group write | refused | refused | refused |
+| group read | refused | allowed | refused (item 96) |
+| owner only (`0600`, `0400`) | allowed | allowed | refused (item 96) |
 
-Group read is allowed only on a file the gateway does not own, because there the group is how it
+Group read is allowed only on a file the gateway does not own, and item 96 narrows that to root, because there the group is how it
 reads the file. That is the case for a root-owned Kubernetes projection with `fsGroup`.
 
 - **A refused config file fails every command that loads it**, `doctor` and `config export`
@@ -948,11 +958,12 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
 - **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
   container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
-  user is. `chmod 640` with group 1001 passes only while the file's owner is not UID 1001, because
-  group read on a file the gateway owns is refused.
+  user is. Keeping host ownership with `chmod 640` and group 1001 no longer works: item 96 refuses
+  a file a host user owns.
 - **The fix the error names depends on ownership.** On a file the gateway owns it is
-  `chmod 600`. On a file another user owns, `chmod 600` would lock the gateway out, so it names
-  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
+  `chmod 600`. On a root-owned file, `chmod 600` would lock the gateway out, so it names
+  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`. A file
+  any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
@@ -1620,6 +1631,8 @@ caller.
 
 ## 54. Keys, tokens and credential files others can read, and trust files they can change, are refused
 
+> Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
+
 Item 35's rule, unchanged, now covers four more files that hold secrets. A refusal names the file,
 its mode and the fix, and points at item 35.
 
@@ -1653,7 +1666,7 @@ held to item 35.
   (octal `0440`) on the Secret volume, and `podSecurityContext.fsGroup` set to a group the gateway's
   UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
   `root:root 0644` and is refused.
-- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
+- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it (item 96 refuses any other owner).
 - `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
 
@@ -2129,6 +2142,57 @@ holds whichever saved last.
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
 
+## 75. Tools with a poisoned description are withheld
+
+A backend tool's description goes to the model as instructions. 4.0 checks every tool a backend
+lists against the tool-poisoning rule (AX-010: hidden instructions, secret-file paths,
+exfiltration patterns). A tool that fails it at blocking severity:
+
+- is left out of every tool list the gateway serves: `tools/list` on `/mcp` and `/mcp/{name}`,
+  `gateway_list_tools`, `gateway_search_tools` and surfaced tools;
+- is refused by name, for every caller of that backend, on both routes, once any listing has
+  shown it. The refusal names the tool and the rule, and the backend never receives the call;
+- is logged once per distinct description, as a `Tool withheld` warning naming the backend, the
+  tool, the rule, the findings and a digest of the description.
+
+A warn-level finding (long whitespace runs, control characters, an oversized description) is
+served as before.
+
+A tool name that no listing has ever returned is still forwarded when called by name, because the
+gateway has shown its description to no one. This narrows the original goal ("cannot be invoked by
+name") to "cannot be invoked by name once the gateway has observed its descriptor", by maintainer
+decision. The alternative, refusing every name the caller has not listed first, was rejected
+because it breaks every client that calls a remembered tool name without listing.
+
+The gateway remembers at most 4,096 withheld tool names per backend. A backend that withholds more
+is marked saturated, with one warning naming the cap: from then on every tool of that backend is
+withheld from every list and refused by name, since a name past the cap could not be recorded. The
+mark clears only on restart. A tool entry that cannot be parsed is withheld too, and one such entry
+no longer fails the rest of the list. A backend that lists the same name twice, one copy
+unparseable, has that name withheld in every copy. A name withheld by more than 64 callers stays blocked
+until restart.
+
+To serve a withheld tool you trust, pin its current description:
+
+```yaml
+backends:
+  my-backend:
+    allow_flagged_tools:
+      tool_name: "<64-hex digest from the warning>"
+```
+
+A changed description has a new digest and is withheld again. A pin that is not 64 lower-case hex
+characters is refused at load.
+
+For code that embeds the crate: `BackendConfig` has a new public field, `allow_flagged_tools`, so a
+struct literal that lists every field needs it (`Default::default()` works).
+`security::scope_collision::detect_collisions` and `ScopeCollision` are removed. Nothing in the
+gateway called them, and a tool is always addressed as backend plus name, so two backends sharing a
+name do not collide.
+
+**Action:** after upgrading, look for `Tool withheld` warnings. Pin any tool you have reviewed and
+trust. If you build `BackendConfig` with a full struct literal, add `allow_flagged_tools`.
+
 ## 76. Anomaly detection now learns, and its blocks stand
 
 `security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
@@ -2408,6 +2472,10 @@ satisfy `require_id` and `known_agents` again, set
 `security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
 their source (item 27). Nothing changes with agent identity disabled.
 
+`require_id` with no proof source (no `agent_auth`, no `mtls`, hatch off) used to load and then
+refuse every call; the gateway now refuses to start, naming the fix. Duplicate `principal_labels`
+entries for one principal also fail at load, and the hatch logs a warning on every load.
+
 ## 92. Six meta-tools leave the default tool list
 
 `gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
@@ -2494,6 +2562,52 @@ backend that is down at startup opens its breaker before traffic arrives.
 **Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
 caches warm (`meta_mcp.warm_start`).
 
+## 96. A secret or trust file must belong to the gateway's user or to root
+
+In 3.x the mode check of items 35 and 54 ignored who owned the file, except that it allowed group
+read on a file the gateway did not own. An account that owns a file can `chmod` it, so a secret
+file another account owns could be read by that account, and a trust file (TLS certificate, CRL,
+identity grants, control-plane collection) could be changed by it. The mode check passed.
+
+On Unix the gateway now refuses a config, env, key, token, credential, certificate, CRL, grants
+or control-plane file unless its owner is the gateway's effective user or root (uid 0), whatever
+the mode. The check runs before the mode rules, on the same handle as the read.
+
+- **The error names the file, the owner uid and the fix.** For a secret file the fix is
+  `chown <gateway uid> <file> && chmod 600 <file>`; the `chmod` is needed because a group-read
+  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> <file>`.
+- **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
+  and still loads.
+- **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
+  `chmod 600` it if it holds a secret (leave a certificate or CRL readable). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
+  refused now.
+- **A shared service group** that gives several accounts a file no longer works: give the gateway's
+  user the file, or mount it root-owned.
+- **Windows is not checked.** Owner rules there are tracked in #1718.
+
+**Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
+An owner that is neither the gateway's uid nor `0` needs the `chown`.
+
+## 100. Proven identifiers are compared verbatim
+
+In 3.x, a proven identifier (the `sub` of an agent token the gateway validated, or an mTLS
+client certificate's SAN URI or CN) was trimmed of surrounding whitespace before it keyed
+anything. Grant subjects and per-caller firewall keys were also cut to 512 characters, and
+took only a certificate's first SAN URI. A proven `" admin "` therefore resolved as the
+distinct principal `admin`, and two ids that share a 512-character prefix shared grants and a
+firewall budget.
+
+In 4.0 a proven identifier keys grants, `known_agents`, `principal_labels` and per-caller
+firewall limits exactly as proven: no trimming and no cap. An empty value is skipped. Grants and
+firewall limits pick a certificate's subject by the agent-identity rule: the first non-empty SAN
+URI, else the CN.
+
+**Action:** a grant or allowlist entry that names the bare id no longer matches a padded proven
+id; reissue the credential without the padding. A certificate whose first SAN URI is empty now
+keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
+firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
+API-key owner, not on these subjects.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
@@ -2560,8 +2674,9 @@ These need no action and have no startup notice.
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
   drain that stops early keeps what was read, reports its tool count as "at least", and
   increments `mcp_backend_list_truncated_total{backend,reason}`, where `reason` is
-  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
-  `fill_budget` (120 s spent).
+  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`),
+  `fill_budget` (120 s spent) or `unreadable_page` (a page had no `tools` array; the
+  drain reads on, but the catalogue is never treated as complete).
 
 ## Rolling back
 

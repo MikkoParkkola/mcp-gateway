@@ -44,18 +44,17 @@ impl Fixture {
         logging: bool,
     ) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let firewall = Arc::new(Firewall::from_config(
-            FirewallConfig {
-                enabled,
-                scan_responses,
-                scan_requests: false,
-                audit_log: Some(directory.path().join("firewall.ndjson")),
-                rules,
-                ..FirewallConfig::default()
-            },
-            None,
-        ));
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let config = FirewallConfig {
+            enabled,
+            scan_responses,
+            scan_requests: false,
+            audit_log: Some(directory.path().join("firewall.ndjson")),
+            rules,
+            ..FirewallConfig::default()
+        };
+        let firewall =
+            Arc::new(Firewall::from_config(config, None).with_continuations(meta.continuation()));
         meta.set_firewall(Some(Arc::clone(&firewall)));
         if logging {
             let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -798,3 +797,6 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
     assert_attempt(&events[0], &next);
     fixture.assert_counts(2);
 }
+
+#[path = "response_delivery_tests/minted.rs"]
+mod minted;

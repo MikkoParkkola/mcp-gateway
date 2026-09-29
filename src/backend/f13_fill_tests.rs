@@ -499,9 +499,7 @@ async fn voided_check(
         match voider {
             Voider::Invalidate => backend.invalidate_tools_cache(),
             Voider::Replace => {
-                backend
-                    .remember_listed_tools(None, false, &[edit_tool()])
-                    .await;
+                backend.remember_listed_tools(None, false, &[edit_tool()]);
             }
             Voider::Nothing => {}
         }

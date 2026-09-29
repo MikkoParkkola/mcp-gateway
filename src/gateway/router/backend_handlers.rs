@@ -20,7 +20,6 @@ use super::authorization::{
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
@@ -248,8 +247,14 @@ fn backend_security_error_with_status(
 
 /// Fill missing MCP tool annotation hints on direct backend `tools/list`
 /// responses before returning them to clients.
-fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcResponse) {
+fn normalize_tools_list_response(
+    backend: &crate::backend::Backend,
+    response: &mut JsonRpcResponse,
+) {
+    let backend_name = backend.name.as_str();
     if response.error.is_some() {
+        // Never forward an unjudged list beside an error (#1441).
+        response.result = None;
         return;
     }
 
@@ -281,7 +286,7 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         }
     }
 
-    prepare_tool_metadata(backend_name, &mut tools);
+    backend.prepare_judged_tools(&mut tools);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
@@ -387,65 +392,14 @@ fn resolve_passthrough_headers(
     }
 }
 
-/// Stable actor id for an identity-propagation audit entry (MIK-6740). Uses
-/// the same `issuer`+`subject` derivation as the control-plane governance
-/// audit (`stable_actor_id`) so the two audit trails describe the same actor
-/// under the same id. `"unauthenticated"` covers the non-`required` path,
-/// where a mint/refuse decision can be reached with no verified identity.
-fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>) -> String {
-    verified_identity.map_or_else(
-        || "unauthenticated".to_string(),
-        crate::key_server::oidc::VerifiedIdentity::stable_actor_id,
-    )
-}
+// The audit subject is the resolver's (`MetaMcp::audit_subject_for`); the
+// identity-only form stays in reach of this module's tests.
+#[cfg(test)]
+use crate::identity_propagation::audit_subject;
 
 // One writer for identity-propagation audit on both routes (the direct
 // route used to carry a hand copy of it).
 use crate::identity_propagation::audit_identity_propagation;
-
-/// Resolve just the identity-key session-bucket binding for a notification
-/// (MIK-6735 fix 2), WITHOUT the full propagation/OAuth-isolation enforcement
-/// gate `isolation_guarded` applies to id-bearing requests below.
-///
-/// `isolation_guarded` deliberately excludes `notifications/*` from that gate
-/// (the `idp_refuse` 403 path, `enforce_oauth_isolation`, and tool-policy) —
-/// notifications are fire-and-forget MCP protocol plumbing (e.g.
-/// `notifications/cancelled`), never a caller-data operation, so a
-/// propagation failure must never turn a notification into a hard error.
-/// Before this fix, `backend.notify()` also hardcoded the shared session
-/// bucket unconditionally, so even a successfully resolved per-user identity
-/// went unused and a notification correlating a per-user request could land
-/// on the wrong upstream session.
-///
-/// This is deliberately best-effort and side-effect free (no audit log entry,
-/// no error surfaced to the caller): any resolution failure — including no
-/// identity-propagation config on the backend at all, the overwhelmingly
-/// common case — falls back to `None`, the shared default bucket, exactly
-/// what every notification used unconditionally before this fix (IDP.5).
-async fn resolve_notification_identity_key(
-    state: &AppState,
-    backend: &crate::backend::Backend,
-    name: &str,
-    inbound_headers: &axum::http::HeaderMap,
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-) -> Option<String> {
-    let idp_cfg = backend.identity_propagation_config()?;
-    if idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough {
-        let (_headers, binding) = resolve_passthrough_headers(
-            idp_cfg,
-            inbound_headers,
-            backend.transport_carries_identity_headers(),
-        )
-        .ok()?;
-        return binding;
-    }
-    let (_headers, binding) = state
-        .meta_mcp
-        .resolve_propagation_credential(name, verified_identity)
-        .await
-        .ok()?;
-    binding
-}
 
 /// Dispatch a direct-route request to a backend inside a notification scope.
 ///
@@ -560,6 +514,14 @@ async fn backend_handler_inner(
         .extensions()
         .get::<crate::key_server::oidc::VerifiedIdentity>()
         .cloned();
+    // Classified once for every credential this route resolves, notifications
+    // included (#2190): a validated credential can be the sole operator.
+    let caller = crate::identity_propagation::CallerProof::new(
+        verified_identity.as_ref(),
+        crate::identity_propagation::CallerProvenance::classify(
+            client.as_ref().map(|client| client.principal.as_str()),
+        ),
+    );
     // Inbound headers, captured before the body is consumed, so the passthrough
     // path (ADR-008 rung 2, MIK-6746) can read the caller's own backend
     // credential from the operator-named header.
@@ -707,22 +669,20 @@ async fn backend_handler_inner(
     }
 
     // Handle notifications - forward to backend but return 202 Accepted.
-    // Resolve (best-effort) the same session-bucket identity_key a matching
-    // `request_with_headers` call for this caller would have used (MIK-6735
-    // fix 2), so a notification correlating that request lands on the same
-    // upstream session instead of always the shared default bucket. Deliberately
-    // NOT routed through the `isolation_guarded` enforcement gate below —
-    // notifications stay exempt from the idp_refuse-403 / OAuth-isolation /
-    // tool-policy checks that apply to id-bearing requests.
+    // The bucket is the one a matching `request_with_headers` call for this
+    // caller would use (MIK-6735 fix 2), so a notification correlating that
+    // request lands on the same upstream session. Not routed through the
+    // `isolation_guarded` gate below (no id, no tool policy), but refused where
+    // this caller's request would be refused for its identity (#2240).
     if method.starts_with("notifications/") {
-        let notif_identity_key = resolve_notification_identity_key(
-            &state,
-            &backend,
-            &name,
-            &inbound_headers,
-            verified_identity.as_ref(),
-        )
-        .await;
+        let Ok(notif_identity_key) =
+            notification_key::resolve(&state, &backend, &name, &inbound_headers, caller).await
+        else {
+            // Refused as this caller's request would be (#2240): nothing is
+            // forwarded, and the client breaker is untouched, as for
+            // `direct_refusal`. `{}` is what an accepted notification gets.
+            return (StatusCode::FORBIDDEN, Json(json!({})));
+        };
         return match backend
             .notify_with_headers(&method, params, notif_identity_key.as_deref())
             .await
@@ -857,7 +817,7 @@ async fn backend_handler_inner(
         } else {
             match state
                 .meta_mcp
-                .resolve_propagation_credential_held(&name, verified_identity.as_ref())
+                .resolve_propagation_credential_held(&name, caller)
                 .await
             {
                 Ok((headers, binding, held)) => {
@@ -869,7 +829,8 @@ async fn backend_handler_inner(
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
             }
         };
-        let subject = audit_subject(verified_identity.as_ref());
+        // The principal resolved for (passthrough: the verified identity).
+        let subject = state.meta_mcp.audit_subject_for(&name, caller);
         let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
         match resolved {
             Ok(headers) => {
@@ -1154,7 +1115,7 @@ async fn backend_handler_inner(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
-                normalize_tools_list_response(&name, &mut response);
+                normalize_tools_list_response(&backend, &mut response);
                 // List = invoke: only what this route's `tools/call` admits.
                 let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
                 let client = client.as_ref();
@@ -1442,6 +1403,7 @@ mod direct_audit;
 mod direct_failure;
 mod direct_list;
 mod key_check;
+mod notification_key;
 use direct_failure::DirectFailure;
 
 #[cfg(test)]

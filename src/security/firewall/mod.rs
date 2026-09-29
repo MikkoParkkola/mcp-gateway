@@ -227,6 +227,9 @@ pub struct Firewall {
     memory_scanner: memory_scanner::MemoryScanner,
     /// Credential/PII redactor for response content.
     redactor: redactor::Redactor,
+    /// The continuation state whose envelopes response inspection leaves
+    /// unredacted (#2210). `None` exempts nothing.
+    continuations: Option<Arc<crate::protocol::continuation::ContinuationState>>,
     /// Anomaly detector using transition data.
     anomaly: Option<anomaly::AnomalyDetector>,
     /// Cross-tenant data-minimisation guard, keyed on the authenticated
@@ -313,6 +316,18 @@ impl Firewall {
         self
     }
 
+    /// Leave the envelopes `state` minted unredacted in responses: random
+    /// ciphertext can hold a credential shape (#2210). Only a value that opens
+    /// under its keyring is exempt.
+    #[must_use]
+    pub fn with_continuations(
+        mut self,
+        state: Arc<crate::protocol::continuation::ContinuationState>,
+    ) -> Self {
+        self.continuations = Some(state);
+        self
+    }
+
     /// Create a new firewall from config.
     ///
     /// Compiles all rules, initialises scanners, and opens the audit log if
@@ -354,6 +369,7 @@ impl Firewall {
             input_scanner,
             memory_scanner,
             redactor,
+            continuations: None,
             anomaly,
             tenant_guard,
             budget,
