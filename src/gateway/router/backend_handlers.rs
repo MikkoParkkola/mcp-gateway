@@ -84,14 +84,14 @@ fn direct_control_identity(
 /// 2. `tool_policy.check` — enforces global allow/deny rules.
 /// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
 #[allow(clippy::result_large_err)]
-fn apply_backend_tool_call_security(
+async fn apply_backend_tool_call_security(
     state: &AppState,
     backend_name: &str,
     auth: BackendAuthContext<'_>,
     params: Option<&Value>,
     id: &RequestId,
     backend: &crate::backend::Backend,
-    identity_key: Option<&str>,
+    (slot, failed): (key_check::CallerSlot<'_>, &DirectFailure<'_>),
 ) -> BackendSecurityResult {
     let unnamed = || {
         let message = "tools/call requires params.name";
@@ -174,14 +174,10 @@ fn apply_backend_tool_call_security(
         }
     }
 
-    // MIK-7570.SCHEMA.1 (R2): above the passthrough return, so a passthrough
-    // backend is checked too. A tool result, not a 403, so a model can correct
-    // the call; the early return drops the idempotency reservation unsettled.
-    let call_arguments = params.get("arguments").unwrap_or(&Value::Null);
-    if let Some(text) = backend.undeclared_key_refusal(identity_key, tool_name, call_arguments) {
-        let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
-        let response = JsonRpcResponse::success(id.clone(), result);
-        return Err(build_http_response(&response, StatusCode::OK));
+    // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
+    // passthrough backend is checked too.
+    if let Some(rejection) = key_check::key_refusal(backend, (slot, failed), params, id).await {
+        return Err(rejection);
     }
 
     if backend.passthrough() {
@@ -1047,18 +1043,23 @@ async fn backend_handler_inner(
             params.as_ref(),
             &id,
             &backend,
-            identity_key.as_deref(),
-        ) {
+            ((identity_key.as_deref(), &propagated_headers), &failed),
+        )
+        .await
+        {
             Ok(Some(sanitized_params)) => {
                 // Forward the sanitized params to the backend
-                let forward = dispatch_in_scope(
-                    &backend,
-                    &method,
-                    &id,
-                    Some(sanitized_params),
-                    &propagated_headers,
-                    identity_key.as_deref(),
-                )
+                let forward = Box::pin(dispatch_armed(
+                    idem_reservation.as_mut(),
+                    dispatch_in_scope(
+                        &backend,
+                        &method,
+                        &id,
+                        Some(sanitized_params),
+                        &propagated_headers,
+                        identity_key.as_deref(),
+                    ),
+                ))
                 .await;
                 return match forward {
                     Ok(mut response) => {
@@ -1102,15 +1103,15 @@ async fn backend_handler_inner(
         direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
     } else {
         let key = identity_key.as_deref();
-        dispatch_in_scope(
+        let call = dispatch_in_scope(
             &backend,
             &method,
             &id,
             params.clone(),
             &propagated_headers,
             key,
-        )
-        .await
+        );
+        Box::pin(dispatch_armed(idem_reservation.as_mut(), call)).await
     };
     match forward {
         Ok(mut response) => {
@@ -1152,6 +1153,16 @@ async fn backend_handler_inner(
         // lets a retry re-execute a side effect (ADR-012 consequence 1).
         Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
     }
+}
+
+/// #1962: run a backend dispatch with the reservation armed, so a caller
+/// that disconnects mid-call leaves the key settled, not free.
+async fn dispatch_armed<T>(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    dispatch: impl std::future::Future<Output = T>,
+) -> T {
+    crate::gateway::meta_mcp::MetaMcp::arm_direct_dispatch(reservation);
+    dispatch.await
 }
 
 /// Store the direct route's result under the client's idempotency key so a
@@ -1444,6 +1455,7 @@ pub(super) async fn costs_handler(
 mod direct_audit;
 mod direct_failure;
 mod direct_list;
+mod key_check;
 use direct_failure::DirectFailure;
 
 #[cfg(test)]

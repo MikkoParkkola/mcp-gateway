@@ -109,6 +109,9 @@ impl Backend {
     /// the shared one holds a catalogue this caller was never shown once a
     /// `stateless` backend lists per caller. Read non-blocking — a cold cache
     /// mirrors nothing rather than a `tools/list` under this request's permit.
+    /// Since F13 a `tools/call` rarely finds it cold: R2's check lists a cold
+    /// slot before dispatch, holding no backend permit, so the first call is
+    /// mirrored too.
     fn param_header_set(
         &self,
         method: &str,
@@ -402,9 +405,8 @@ impl Backend {
         error: &Error,
         exchange: &'static str,
     ) {
-        let rate_limited = entry
-            .failsafe
-            .record_dispatch_failure(&error.to_string(), latency);
+        let rate_limited =
+            super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {
             tracing::warn!(
                 error = %error,
@@ -466,7 +468,7 @@ impl Backend {
                     tracing::warn!(latency_ms = latency.as_millis(), "Request rate limited");
                     entry.failsafe.record_rate_limited("rate limited", latency);
                 } else {
-                    entry.failsafe.record_success(latency);
+                    super::fill_check::record_request_success(entry, latency);
                 }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",

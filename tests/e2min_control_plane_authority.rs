@@ -190,6 +190,7 @@ async fn the_snapshot_does_not_advertise_mutation() {
     // The store still holds the audit log, which the page keeps showing.
     store
         .append_audit(&ControlPlaneAuditEvent {
+            grant_change: None,
             event_id: "e1".to_string(),
             actor_id: "alice".to_string(),
             action: ControlPlaneAction::MutateGrant,

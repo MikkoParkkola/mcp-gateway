@@ -121,7 +121,7 @@ fn meta_over(stub: Arc<AsksOnce>) -> MetaMcp {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "srv",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         std::time::Duration::from_secs(300),
     ));

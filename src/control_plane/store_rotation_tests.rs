@@ -7,6 +7,7 @@ use crate::security::TransparencyLogConfig;
 
 fn audit_event(event_id: &str) -> ControlPlaneAuditEvent {
     ControlPlaneAuditEvent {
+        grant_change: None,
         event_id: event_id.to_string(),
         actor_id: "alice".to_string(),
         action: ControlPlaneAction::MutateGrant,
