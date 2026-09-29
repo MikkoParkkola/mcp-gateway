@@ -1948,6 +1948,41 @@ fn revive_server_unregistered_backend_reports_breaker_not_open() {
 // (`MetaMcp::inspect_discovery_value`): see
 // `router/tests/meta_firewall_verdict/list_and_task_block.rs` (#2350).
 
+/// The non-Block arm: under a Warn rule the discovery value is served with
+/// its credential redacted in place (#2350; Block is covered end to end).
+#[cfg(feature = "firewall")]
+#[test]
+fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
+    use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
+
+    let token = format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890");
+    let mut surface = json!({
+        "tools": [{"name": "t", "description": format!("token: {token} for auth")}]
+    });
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: vec![FirewallRule {
+                tool_match: "tools/list".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+            }],
+            ..FirewallConfig::default()
+        },
+        None,
+    ))));
+
+    meta.inspect_discovery_value(&mut surface)
+        .expect("a Warn verdict serves the list");
+    let description = surface["tools"][0]["description"].as_str().unwrap();
+    assert!(
+        description.contains("[REDACTED:credential]"),
+        "{description}"
+    );
+    assert!(!description.contains("ghp_"), "{description}");
+}
+
 // ── Per-action attestation wiring (MIK-5223, B1-IDENT) ────────────────────
 //
 // These exercise the `gateway_invoke` attestation seam directly via the
