@@ -75,6 +75,8 @@ mod direct_guards_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_notification_credential_tests;
+#[cfg(test)]
 mod direct_notification_refusal_tests;
 #[cfg(test)]
 mod direct_sole_operator_tests;

@@ -684,7 +684,7 @@ async fn backend_handler_inner(
             return (StatusCode::FORBIDDEN, Json(json!({})));
         };
         return match backend
-            .notify_with_headers(&method, params, notif_identity_key.as_deref())
+            .notify_with_headers(&method, params, &[], notif_identity_key.as_deref())
             .await
         {
             Ok(()) => {

@@ -1834,13 +1834,14 @@ impl Transport for HttpTransport {
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers(method, params, None).await
+        self.notify_with_headers(method, params, &[], None).await
     }
 
     async fn notify_with_headers(
         &self,
         method: &str,
         params: Option<Value>,
+        _extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
         self.send_notification(method, params, identity_key, self.outbound_era())
