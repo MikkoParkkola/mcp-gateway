@@ -172,6 +172,12 @@ impl HttpGateway {
     /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
         const MAX_ATTEMPTS: u32 = 5;
+        // Every child gets its own task store (relative to its cwd): HOME cannot
+        // isolate it on Windows, and the runner's shared store is single-owner.
+        let mut config = config;
+        if config["tasks"].get("store_dir").is_none() {
+            config["tasks"]["store_dir"] = json!("tasks");
+        }
         for attempt in 1..=MAX_ATTEMPTS {
             match Self::try_start(config.clone(), env).await {
                 Ok(gateway) => return gateway,

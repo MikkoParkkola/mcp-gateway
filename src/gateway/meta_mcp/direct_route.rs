@@ -95,6 +95,25 @@ impl MetaMcp {
     ) {
         super::invoke::arm_for_dispatch(reservation);
     }
+
+    /// The audit subject a credential for `server` is resolved under: the
+    /// same string the credential resolver records, for a route
+    /// that writes its own record (the direct route, #2190).
+    pub(crate) fn audit_subject_for(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> String {
+        let descriptor_id = self
+            .backends
+            .get(server)
+            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        self.caller_principal(descriptor_id.as_deref(), caller)
+            .map_or_else(
+                || crate::identity_propagation::audit_subject(None),
+                crate::personal_accounts::identity::Principal::stable_actor_id,
+            )
+    }
 }
 
 // T9 (test plan "Shared fixture"): counts every reservation attempt into

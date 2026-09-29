@@ -556,7 +556,6 @@ async fn t7b_context_integrity_gates_direct_results() {
 /// T7c (#2204). The withheld result carries the injected instruction nowhere
 /// in the delivered body, including the attached audit's finding evidence.
 #[tokio::test]
-#[ignore = "#2204: withheld result echoes matched evidence"]
 async fn t7c_a_withheld_result_echoes_no_injected_text() {
     use crate::context_integrity::{
         ContextIntegrityKernel, ContextIntegrityPolicy, ContextIntegrityPolicyPreset,

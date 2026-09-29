@@ -45,7 +45,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76 and 79 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79 and 96 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. The items below print no notice: read them here before upgrading.
@@ -110,6 +110,7 @@ deployment.**
 - Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
 - Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
 - Item 79, only with auth on, identity grants on and a governance store that cannot open
+- Item 96, only for a config, env, key or trust file that a third account owns
 
 **Item 7 permanently fails the backend it names, with one warning, and the gateway starts
 without it.**
@@ -208,11 +209,12 @@ without it.**
 | 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
 | 89 | Reserved: lands with #2195 | None yet |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
-| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -921,19 +923,21 @@ authentication, so no client could reach a tool through it.
 
 ## 35. A config or env file other users can read fails the load
 
+> Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
+
 In 3.x a config file readable by other local accounts drew one WARN in the HTTP startup banner,
 stdio never checked it, and env files were never checked at all. Both can hold credentials.
 On Unix the gateway now checks the config file, and every `env_files` entry, before reading it.
 The check follows symlinks, so a Kubernetes `..data` link is judged by the file it points to.
 
-| Mode bits | File owned by the gateway's user | File owned by another user |
-|---|---|---|
-| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused |
-| group write | refused | refused |
-| group read | refused | allowed |
-| owner only (`0600`, `0400`) | allowed | allowed |
+| Mode bits | File owned by the gateway's user | File owned by root | File owned by any other user |
+|---|---|---|---|
+| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused | refused |
+| group write | refused | refused | refused |
+| group read | refused | allowed | refused (item 96) |
+| owner only (`0600`, `0400`) | allowed | allowed | refused (item 96) |
 
-Group read is allowed only on a file the gateway does not own, because there the group is how it
+Group read is allowed only on a file the gateway does not own, and item 96 narrows that to root, because there the group is how it
 reads the file. That is the case for a root-owned Kubernetes projection with `fsGroup`.
 
 - **A refused config file fails every command that loads it**, `doctor` and `config export`
@@ -949,11 +953,12 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
 - **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
   container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
-  user is. `chmod 640` with group 1001 passes only while the file's owner is not UID 1001, because
-  group read on a file the gateway owns is refused.
+  user is. Keeping host ownership with `chmod 640` and group 1001 no longer works: item 96 refuses
+  a file a host user owns.
 - **The fix the error names depends on ownership.** On a file the gateway owns it is
-  `chmod 600`. On a file another user owns, `chmod 600` would lock the gateway out, so it names
-  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
+  `chmod 600`. On a root-owned file, `chmod 600` would lock the gateway out, so it names
+  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`. A file
+  any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
@@ -1621,6 +1626,8 @@ caller.
 
 ## 54. Keys, tokens and credential files others can read, and trust files they can change, are refused
 
+> Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
+
 Item 35's rule, unchanged, now covers four more files that hold secrets. A refusal names the file,
 its mode and the fix, and points at item 35.
 
@@ -1654,7 +1661,7 @@ held to item 35.
   (octal `0440`) on the Secret volume, and `podSecurityContext.fsGroup` set to a group the gateway's
   UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
   `root:root 0644` and is refused.
-- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
+- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it (item 96 refuses any other owner).
 - `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
 
@@ -2460,6 +2467,10 @@ satisfy `require_id` and `known_agents` again, set
 `security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
 their source (item 27). Nothing changes with agent identity disabled.
 
+`require_id` with no proof source (no `agent_auth`, no `mtls`, hatch off) used to load and then
+refuse every call; the gateway now refuses to start, naming the fix. Duplicate `principal_labels`
+entries for one principal also fail at load, and the hatch logs a warning on every load.
+
 ## 92. Six meta-tools leave the default tool list
 
 `gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
@@ -2545,6 +2556,32 @@ backend that is down at startup opens its breaker before traffic arrives.
 
 **Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
 caches warm (`meta_mcp.warm_start`).
+
+## 96. A secret or trust file must belong to the gateway's user or to root
+
+In 3.x the mode check of items 35 and 54 ignored who owned the file, except that it allowed group
+read on a file the gateway did not own. An account that owns a file can `chmod` it, so a secret
+file another account owns could be read by that account, and a trust file (TLS certificate, CRL,
+identity grants, control-plane collection) could be changed by it. The mode check passed.
+
+On Unix the gateway now refuses a config, env, key, token, credential, certificate, CRL, grants
+or control-plane file unless its owner is the gateway's effective user or root (uid 0), whatever
+the mode. The check runs before the mode rules, on the same handle as the read.
+
+- **The error names the file, the owner uid and the fix.** For a secret file the fix is
+  `chown <gateway uid> <file> && chmod 600 <file>`; the `chmod` is needed because a group-read
+  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> <file>`.
+- **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
+  and still loads.
+- **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
+  `chmod 600` it if it holds a secret (leave a certificate or CRL readable). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
+  refused now.
+- **A shared service group** that gives several accounts a file no longer works: give the gateway's
+  user the file, or mount it root-owned.
+- **Windows is not checked.** Owner rules there are tracked in #1718.
+
+**Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
+An owner that is neither the gateway's uid nor `0` needs the `chown`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
