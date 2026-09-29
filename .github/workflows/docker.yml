@@ -6,8 +6,11 @@ on:
     # checks) but publishes nothing: every publishing step below is main-only.
     branches: [main, docs/ranking-1-release-line]
     tags: ['v*']
+  # Pull requests into the release line no longer build the image: it builds
+  # once per merge (the push above). Main keeps its PR run because main
+  # requires the `build` check.
   pull_request:
-    branches: [main, docs/ranking-1-release-line]
+    branches: [main]
 
 # A new push to a pull request cancels that PR's superseded run. Every other
 # event (branch push, tag) gets a group of its own run id, so it is never

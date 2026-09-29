@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """The feature-combination shards cover exactly the documented matrix.
 
-ci.yml runs the supported feature combinations in a few shards, each shard a
+feature-combos.yml runs the supported feature combinations in a few shards, each shard a
 list of combinations. This fails when a combination is missing from every
 shard, appears twice, or is not in docs/release/v4.0.0-supported-matrix.md
 (and the other way round), so a combination cannot silently drop out.
@@ -75,7 +75,7 @@ def self_test() -> list[str]:
 
 def main() -> int:
     errors = self_test()
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    workflow = yaml.safe_load((ROOT / ".github/workflows/feature-combos.yml").read_text(encoding="utf-8"))
     docs = documented((ROOT / "docs/release/v4.0.0-supported-matrix.md").read_text(encoding="utf-8"))
     shards = shard_combos(workflow)
     errors += check(shards, docs)
