@@ -2481,6 +2481,18 @@ class WorkflowWiring(unittest.TestCase):
         self.assertLess(sign, create, "W2: signing must come before the release exists")
         self.assertLess(create, check, "W3: the draft must be verified after it is created")
         self.assertLess(check, publish, "W3: publish only after the draft is verified")
+        # W8 (GH1941.SIGN.1): the release as published is downloaded and
+        # verified again, so a change between the draft check and publication
+        # fails the run instead of passing unseen.
+        recheck = [
+            i for i, b in enumerate(blocks)
+            if i > publish and any(re.search(r"scripts/release/verify-release-assets\.sh\s+\S+", c) for c in joined(b))
+        ]
+        self.assertTrue(recheck, "W8: the published release must be verified again after it is published")
+        recheck_text = "\n".join(joined(blocks[recheck[0]]))
+        self.assertRegex(recheck_text, r"gh release download\b", "W8: the re-check must read what the release serves")
+        self.assertIn("set -euo pipefail", "\n".join(blocks[recheck[0]]), "W8: the re-check must stop on the first failure")
+        self.assertNotRegex("\n".join(blocks[recheck[0]]), r"continue-on-error|if:\s*always\(\)", "W8: the re-check must not be skipped past")
         self.assertIn("draft: true", "\n".join(blocks[create]), "W3: the release must be created as a draft")
         for i in (sign, check, publish):
             text = "\n".join(blocks[i])
