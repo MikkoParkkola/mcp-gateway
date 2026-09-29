@@ -216,6 +216,7 @@ without it.**
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
+| 97 | Reserved: lands with #2286 | None yet |
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 
 
