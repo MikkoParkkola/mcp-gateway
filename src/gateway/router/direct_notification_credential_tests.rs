@@ -354,6 +354,25 @@ async fn an_uncarried_passthrough_refusal_is_audited() {
     );
     assert_eq!(gw.seen(), vec![]);
     assert_eq!(gw.rows("idp_refuse"), 1);
+    assert_eq!(gw.rows("idp_mint"), 0);
+}
+
+/// #2310: on a required backend that cannot carry the credential, a caller
+/// with a principal is refused by the route and an anonymous one by the
+/// resolver; either way exactly one `idp_refuse` row, no `idp_mint`.
+#[tokio::test]
+async fn a_required_uncarried_refusal_is_audited_once_per_caller() {
+    for subject in [Some("alpha"), None] {
+        let gw = gateway(
+            backend_config(stdio(), PropagationStrategyKind::SignedAssertion, true),
+            true,
+        )
+        .await;
+        assert_eq!(notify(&gw, subject, None).await, StatusCode::FORBIDDEN);
+        assert_eq!(gw.seen(), vec![]);
+        assert_eq!(gw.rows("idp_refuse"), 1, "{subject:?}");
+        assert_eq!(gw.rows("idp_mint"), 0, "{subject:?}");
+    }
 }
 
 /// #2310 guard: a caller with no principal mints nothing on a non-required
