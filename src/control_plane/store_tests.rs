@@ -759,6 +759,7 @@ fn write_atomic_creates_the_collection_owner_only_in_an_open_directory() {
 
     write_atomic(&target, b"[]", FaultPoint::None).unwrap();
 
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only("1718-W4", &target, false);
 }
 
@@ -775,6 +776,7 @@ fn write_atomic_replaces_a_stale_open_temp_instead_of_inheriting_its_dacl() {
 
     write_atomic(&target, b"[]", FaultPoint::None).unwrap();
 
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only("1718-W4b", &target, false);
     assert_eq!(std::fs::read(&target).unwrap(), b"[]");
 }

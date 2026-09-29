@@ -20,6 +20,7 @@ fn write_to_dir_creates_key_and_cert_owner_only_in_an_open_directory() {
 
     CertGenerator::write_to_dir(&ca, &out, "x").unwrap();
 
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only(row, &out.join("x.key"), false);
     assert_owner_only(row, &out.join("x.crt"), false);
 }
@@ -39,6 +40,7 @@ fn write_to_dir_over_an_open_existing_cert_replaces_it_owner_only() {
 
     CertGenerator::write_to_dir(&ca, &out, "x").unwrap();
 
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only(row, &out.join("x.key"), false);
     assert_owner_only(row, &out.join("x.crt"), false);
 }

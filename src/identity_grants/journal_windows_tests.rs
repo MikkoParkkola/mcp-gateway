@@ -20,6 +20,7 @@ fn a_new_journal_is_owner_only_in_an_open_directory() {
 
     append_line(&journal, b"one\n").unwrap();
 
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only(row, &journal, false);
     assert_eq!(std::fs::read(&journal).unwrap(), b"one\n");
 }
@@ -99,5 +100,34 @@ fn a_journal_that_is_a_directory_is_refused() {
     assert!(
         appended.is_err(),
         "WT-ASSERT {row}: a directory is not a journal"
+    );
+}
+
+#[test]
+fn a_journal_that_is_a_junction_is_refused_and_its_target_untouched() {
+    let row = "1718-W6e";
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap_or_else(|e| fixture_fail(row, &e.to_string()));
+    let journal = dir.path().join("j");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&journal)
+        .arg(&target)
+        .status();
+    if !made.is_ok_and(|s| s.success()) {
+        fixture_fail(row, "mklink /J failed");
+    }
+
+    let appended = append_line(&journal, b"new\n");
+
+    assert!(
+        appended.is_err(),
+        "WT-ASSERT {row}: a junction is not a journal"
+    );
+    assert_eq!(
+        std::fs::read_dir(&target).unwrap().count(),
+        0,
+        "WT-ASSERT {row}: nothing may be written through the junction"
     );
 }

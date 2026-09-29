@@ -200,3 +200,38 @@ fn secrecy_is_exactly_refusals() {
         "WT-ASSERT S-READ"
     );
 }
+
+/// The fallback for a path no command may be printed for (an apostrophe is
+/// outside the allowlist) still gives the repair for the file's class.
+#[test]
+fn unrunnable_path_fallback_is_class_correct() {
+    let path = r"C:\dir\it's.txt";
+    let found = [PrivacyRefusal::ForeignSid("S-1-1-0".into())];
+    let me = user_sid_string().expect("the runner's SID");
+
+    let secret = windows_remediation(path, &found, Protects::Secrecy);
+    let trust = windows_remediation(path, &found, Protects::Integrity);
+
+    assert!(
+        secret.contains("no command is printed"),
+        "WT-ASSERT F0: {secret}"
+    );
+    assert!(
+        secret.contains(&format!(
+            "grant Full control to the account with SID {me} alone"
+        )),
+        "WT-ASSERT F-SECRET: {secret}"
+    );
+    assert!(
+        trust.contains("remove write, delete, change-permissions and take-ownership rights"),
+        "WT-ASSERT F-TRUST-REMOVE: {trust}"
+    );
+    assert!(
+        trust.contains("keep read access"),
+        "WT-ASSERT F-TRUST-KEEP: {trust}"
+    );
+    assert!(
+        !trust.contains("alone"),
+        "WT-ASSERT F-TRUST-NOT-OWNER-ONLY: {trust}"
+    );
+}
