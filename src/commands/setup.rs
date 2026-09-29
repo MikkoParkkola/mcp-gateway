@@ -16,6 +16,7 @@ use std::process::ExitCode;
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 #[cfg(test)]
 use mcp_gateway::config_persistence::load_config_or_default;
+use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
 use mcp_gateway::{
     cli::InitProfile,
     config::{Config, TransportConfig},
@@ -228,8 +229,8 @@ fn transport_label(transport: &TransportConfig) -> String {
                 .unwrap_or(command.as_str());
             format!("stdio: {short}")
         }
-        TransportConfig::Http { http_url, .. } => format!("http: {http_url}"),
-        TransportConfig::WebSocket { ws_url, .. } => format!("websocket: {ws_url}"),
+        TransportConfig::Http { http_url, .. } => format!("http: {}", redact_url_for_diagnostics(http_url)),
+        TransportConfig::WebSocket { ws_url, .. } => format!("websocket: {}", redact_url_for_diagnostics(ws_url)),
         #[cfg(feature = "a2a")]
         TransportConfig::A2a { a2a_url, .. } => format!("a2a: {a2a_url}"),
     }
