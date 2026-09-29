@@ -5,10 +5,22 @@
 //! Startup installs the backend empty so the listener binds before a large
 //! capability directory is read. Until the scan has loaded every directory the
 //! catalogue is empty or partial, so `/readyz` and `/health` wait on this.
+//!
+//! A backend is born complete. Only the gateway's startup, which loads in the
+//! background, opts in to waiting with [`CapabilityBackend::begin_initial_scan`];
+//! an embedder that loads its own backend synchronously never needs to.
 
 use super::CapabilityBackend;
 
 impl CapabilityBackend {
+    /// Mark the backend as still scanning, until
+    /// [`Self::mark_initial_scan_complete`] runs. Called by startup before it
+    /// spawns the background load.
+    pub(crate) fn begin_initial_scan(&self) {
+        self.initial_scan
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
     /// Record that the startup scan has loaded every configured directory.
     pub(crate) fn mark_initial_scan_complete(&self) {
         // Release pairs with the Acquire below: a probe that sees `true` also
@@ -32,8 +44,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fresh_backend_has_not_finished_its_scan() {
+    fn an_embedded_backend_is_loaded_without_any_marking() {
         let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+        assert!(backend.initial_scan_complete());
+        assert!(backend.status().loaded);
+    }
+
+    #[test]
+    fn a_backend_that_begins_its_scan_is_not_loaded_until_marked() {
+        let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+        backend.begin_initial_scan();
         assert!(!backend.initial_scan_complete());
         assert!(!backend.status().loaded);
 
