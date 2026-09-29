@@ -42,6 +42,65 @@ pub struct AuthConfig {
     /// overrides this hint (see [`AuthConfig::implies_multi_user`]).
     #[serde(default)]
     pub single_user: bool,
+    /// How long a dashboard browser session lives (MIK-7570.SESSION.1).
+    #[serde(default)]
+    pub dashboard_session: DashboardSessionConfig,
+}
+
+/// Lifetime of a dashboard browser session.
+///
+/// A session ends after `idle_timeout_secs` without operator activity, or
+/// `absolute_timeout_secs` after it was opened, whichever comes first. The
+/// dashboard's own 5-second refresh is not activity. Read on every check, so a
+/// reload applies to sessions already open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DashboardSessionConfig {
+    /// Seconds without activity before a session ends (default 1800).
+    pub idle_timeout_secs: u64,
+    /// Seconds from sign-in before a session ends in any case (default 28800).
+    pub absolute_timeout_secs: u64,
+}
+
+impl Default for DashboardSessionConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: 1800,
+            absolute_timeout_secs: 28_800,
+        }
+    }
+}
+
+impl DashboardSessionConfig {
+    /// Refuse a zero limit, and an idle limit longer than the absolute one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidation`] naming the violated bound.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let (idle, absolute) = (self.idle_timeout_secs, self.absolute_timeout_secs);
+        if idle == 0 {
+            return Err(Error::ConfigValidation(
+                "auth.dashboard_session.idle_timeout_secs is 0, which ends every session at \
+                 once; set a positive number of seconds (default 1800)"
+                    .into(),
+            ));
+        }
+        if absolute == 0 {
+            return Err(Error::ConfigValidation(
+                "auth.dashboard_session.absolute_timeout_secs is 0, which ends every session \
+                 at once; set a positive number of seconds (default 28800)"
+                    .into(),
+            ));
+        }
+        if idle > absolute {
+            return Err(Error::ConfigValidation(format!(
+                "auth.dashboard_session.idle_timeout_secs ({idle}) exceeds \
+                 absolute_timeout_secs ({absolute}); the idle limit could never apply"
+            )));
+        }
+        Ok(())
+    }
 }
 
 // Manual `Debug` that redacts the bearer token and API keys (CWE-532, mirrors
@@ -58,6 +117,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("public_paths", &self.public_paths)
             .field("client_circuit_breaker", &self.client_circuit_breaker)
             .field("single_user", &self.single_user)
+            .field("dashboard_session", &self.dashboard_session)
             .finish()
     }
 }
@@ -75,11 +135,24 @@ impl Default for AuthConfig {
             public_paths: default_public_paths(),
             client_circuit_breaker: None,
             single_user: false,
+            dashboard_session: DashboardSessionConfig::default(),
         }
     }
 }
 
 impl AuthConfig {
+    /// This section as a reload compares it for "restart required": without
+    /// `dashboard_session`, which is read on every session check and so
+    /// applies live. Field order is fixed and there are no maps, so plain
+    /// JSON is canonical.
+    pub(crate) fn restart_only_json(&self) -> String {
+        let view = Self {
+            dashboard_session: DashboardSessionConfig::default(),
+            ..self.clone()
+        };
+        serde_json::to_string(&view).unwrap_or_default()
+    }
+
     /// ADR-008 INV-2 (MIK-6752): does this auth configuration imply the gateway
     /// may serve more than one principal?
     ///
@@ -684,3 +757,7 @@ mod api_key_name_tests {
 #[cfg(test)]
 #[path = "api_key_digest_tests.rs"]
 mod api_key_digest_tests;
+
+#[cfg(test)]
+#[path = "auth_dashboard_session_tests.rs"]
+mod dashboard_session_limits_tests;

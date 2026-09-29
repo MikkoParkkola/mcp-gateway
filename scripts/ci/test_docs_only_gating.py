@@ -40,10 +40,12 @@ KEPT = {
     "package-tests", "public-claims", "release-script-tests",
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes",
+    # Release signing's own unit tests; docker-build waits for them.
+    "release-signing-checks",
 }
 # Never run on an ordinary pull request (tag, dispatch or throwaway only).
 NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
-              "packaged-suite-rehearsal"}  # dispatch-only
+              "packaged-suite-rehearsal", "binary-signing-rehearsal", "binary-sbom-rehearsal"}  # dispatch-only
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 
