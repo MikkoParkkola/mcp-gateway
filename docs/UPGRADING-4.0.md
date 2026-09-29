@@ -208,7 +208,7 @@ without it.**
 | 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
 | 89 | Reserved: lands with #2195 | None yet |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
-| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
@@ -2459,6 +2459,10 @@ cannot be compared with short labels, `security.agent_identity.incomparable_proo
 satisfy `require_id` and `known_agents` again, set
 `security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
 their source (item 27). Nothing changes with agent identity disabled.
+
+`require_id` with no proof source (no `agent_auth`, no `mtls`, hatch off) used to load and then
+refuse every call; the gateway now refuses to start, naming the fix. Duplicate `principal_labels`
+entries for one principal also fail at load, and the hatch logs a warning on every load.
 
 ## 92. Six meta-tools leave the default tool list
 
