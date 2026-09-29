@@ -355,7 +355,7 @@ impl Config {
             let detail = match error.kind() {
                 #[cfg(unix)]
                 std::io::ErrorKind::PermissionDenied => {
-                    "The current process must own the file or have narrowly scoped read access, and every containing directory must permit traversal. The official container runs as UID/GID 1001; create an owner-only deployment copy before transferring it with `install -m 600 <source> <deployment-copy>` and `chown 1001:1001 <deployment-copy>`, or grant equivalent group/ACL access. Do not make a credential-bearing config world-readable."
+                    "The current process or root must own the file, and every containing directory must permit traversal. The official container runs as UID/GID 1001; create an owner-only deployment copy before transferring it with `install -m 600 <source> <deployment-copy>` and `chown 1001:1001 <deployment-copy>`; the owner must be that user or root. Do not make a credential-bearing config world-readable."
                 }
                 #[cfg(not(unix))]
                 std::io::ErrorKind::PermissionDenied => {
