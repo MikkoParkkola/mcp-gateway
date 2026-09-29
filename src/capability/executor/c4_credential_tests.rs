@@ -49,7 +49,7 @@ async fn empty_capability_credential_refused_in_every_env_form() {
 async fn unresolved_capability_credential_names_the_absent_env_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let absent = dir.path().join("absent-cap.env");
-    let overlay = EnvOverlay::from_paths(&[absent.clone()]);
+    let overlay = EnvOverlay::from_paths(std::slice::from_ref(&absent));
     let env = Arc::new(LiveEnv::new(Arc::new(overlay), ResolvedEnvFiles::default()));
     let executor = CapabilityExecutor::new().with_env(env);
     for key in [
