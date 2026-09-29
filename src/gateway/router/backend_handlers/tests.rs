@@ -694,7 +694,7 @@ fn normalize_tools_list_response_fills_direct_backend_proxy_annotations() {
         }),
     );
 
-    normalize_tools_list_response("beeper", &mut response);
+    normalize_tools_list_response(&beeper(), &mut response);
 
     let result = response.result.expect("success result");
     // Flipped by A3: the result is rebuilt as `{tools}` alone. An upstream
@@ -752,7 +752,7 @@ fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling(
     );
 
     // WHEN the direct passthrough response is normalized
-    normalize_tools_list_response("beeper", &mut response);
+    normalize_tools_list_response(&beeper(), &mut response);
 
     // THEN the malformed sibling no longer shields the violator: `bad` is
     // gone, `search` survives, and (A3) the unreadable entry is dropped too,
@@ -764,4 +764,15 @@ fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling(
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert_eq!(names, vec!["search"]);
     assert_eq!(tools.len(), 1);
+}
+
+/// A backend named `beeper` with the default configuration, for the
+/// normaliser cells.
+fn beeper() -> crate::backend::Backend {
+    crate::backend::Backend::new(
+        "beeper",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
 }

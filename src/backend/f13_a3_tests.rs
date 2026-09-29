@@ -106,7 +106,7 @@ async fn a3_t8_a_direct_list_ends_the_cooldown() {
     let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
     let _ = check(&backend, "edit", &undeclared()).await;
     // An empty readable list: stored (ending the cooldown), then discardable.
-    backend.remember_listed_tools(None, false, &[]).await;
+    backend.remember_listed_tools(None, false, &[]);
     backend.invalidate_tools_cache();
     lister.set(Mode::Serve);
     let answer = check(&backend, "edit", &undeclared()).await;
@@ -279,7 +279,7 @@ async fn a4_t5_a_failed_refresh_judges_a_newer_list() {
     let args = undeclared();
     let (out, ()) = tokio::join!(check(&backend, "edit", &args), async {
         lister.started.notified().await;
-        backend.remember_listed_tools(None, false, &[other]).await;
+        backend.remember_listed_tools(None, false, &[other]);
         *lister.sleep_per_page.lock() = Duration::from_secs(3600);
         lister.release.notify_one();
     });
@@ -344,7 +344,7 @@ async fn a3_t12_a_fill_voided_by_a_direct_list_stamps_nothing() {
     let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
     let entry = backend.pooled_entry(&PoolKey::Shared);
     let mut guard = super::super::fill_check::FillGuard::arm(Arc::clone(&entry));
-    backend.remember_listed_tools(None, false, &[]).await;
+    backend.remember_listed_tools(None, false, &[]);
     guard.end(super::super::fill_check::FillEnd::Drained);
     drop(guard);
     assert!(
@@ -361,7 +361,7 @@ async fn a3_t13_a_direct_list_ends_the_stale_refresh_cooldown() {
     let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
     let entry = backend.pooled_entry(&PoolKey::Shared);
     *entry.tools_refresh_failed_at.lock() = Some(tokio::time::Instant::now());
-    backend.remember_listed_tools(None, false, &[]).await;
+    backend.remember_listed_tools(None, false, &[]);
     assert!(
         entry.tools_refresh_failed_at.lock().is_none(),
         "the stale-refresh stamp survived"
@@ -382,7 +382,7 @@ fn a3_t14_a_fill_voided_by_a_newer_list_is_judged_from_it() {
         let arguments = undeclared();
         let (out, ()) = tokio::join!(check(&backend, "edit", &arguments), async {
             lister.started.notified().await;
-            backend.remember_listed_tools(None, false, &[newer]).await;
+            backend.remember_listed_tools(None, false, &[newer]);
             lister.release.notify_one();
         });
         out
@@ -405,7 +405,7 @@ fn a3_t15_a_newer_list_without_the_tool_is_a_miss() {
         let arguments = json!({"edits": []});
         let (out, ()) = tokio::join!(check(&backend, "edit", &arguments), async {
             lister.started.notified().await;
-            backend.remember_listed_tools(None, false, &[other]).await;
+            backend.remember_listed_tools(None, false, &[other]);
             lister.release.notify_one();
         });
         out
@@ -431,9 +431,7 @@ async fn a_voided_fill_does_not_restore_a_revoked_resend() {
     let unsafe_now = json!({"name": "edit", "inputSchema": {"type": "object"}});
     let (fill, ()) = tokio::join!(backend.get_tools_for_binding(None, &[]), async {
         lister.started.notified().await;
-        backend
-            .remember_listed_tools(None, false, &[unsafe_now])
-            .await;
+        backend.remember_listed_tools(None, false, &[unsafe_now]);
         lister.release.notify_one();
     });
     let _ = fill;

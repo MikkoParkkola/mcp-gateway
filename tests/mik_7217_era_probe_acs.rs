@@ -107,6 +107,7 @@ impl Fixture {
             passthrough: false,
             allow_cleartext_credentials: false,
             input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
+            allow_flagged_tools: std::collections::BTreeMap::new(),
             runtime_profile: None,
             identity_propagation: None,
             account: None,
