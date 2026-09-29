@@ -28,7 +28,8 @@ sys.stdout.write(os.environ["STUB_GH_RELEASES"])
 """
 
 
-@unittest.skipUnless(shutil.which("jq"), "jq is required")
+# CI must run this, never skip it: a skipped fail-closed check reads as a passed one.
+@unittest.skipUnless(shutil.which("jq") or os.environ.get("CI"), "jq is required")
 class RefusePublishedRelease(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

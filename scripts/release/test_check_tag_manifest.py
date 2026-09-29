@@ -2541,10 +2541,20 @@ class WorkflowWiring(unittest.TestCase):
             conjuncts(job_if("ci.yml", "binary-sbom-rehearsal"))[0],
             "github.event_name == 'workflow_dispatch'",
         )
-        # The fail-closed tests block on every ref.
+        # The fail-closed tests block on every ref but a throwaway PR, whose
+        # `Tests (throwaway)` job runs these same scripts/release/test_*.py suites.
         checks = jobs("ci.yml").get("release-signing-checks")
         self.assertIsNotNone(checks, "ci.yml has no release-signing-checks job")
-        self.assertNotRegex(checks, r"(?m)^ {4}(if|continue-on-error):")
+        self.assertNotRegex(checks, r"(?m)^ {4}continue-on-error:")
+        throwaway_only = (
+            "${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' "
+            "&& github.event.pull_request.head.repo.full_name == github.repository "
+            "&& startsWith(github.head_ref, 'throwaway/')) }}"
+        )
+        self.assertIn(
+            re.findall(r"(?m)^ {4}if:\s*(.*)$", checks), ([], [throwaway_only]),
+            "release-signing-checks must run on every ref but throwaway PRs",
+        )
         for script in ("test_check_release_assets.py", "test_sign_release_assets.py", "test_refuse_published_release.py"):
             self.assertIn(f"scripts/release/{script}", checks)
         self.assertIn("release-signing-checks", needs_of(jobs("ci.yml")["docker-build"]) or "")
