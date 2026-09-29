@@ -45,7 +45,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79 and 96 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79, 96 and 99 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. The items below print no notice: read them here before upgrading.
@@ -83,6 +83,9 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
+- Item 97
+- Item 98
+- Item 100
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -111,6 +114,7 @@ deployment.**
 - Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
 - Item 79, only with auth on, identity grants on and a governance store that cannot open
 - Item 96, only for a config, env, key or trust file that a third account owns
+- Item 99, only on Windows, for a secret file another account can read or change, or a trust file it can change
 
 **Item 7 permanently fails the backend it names, with one warning, and the gateway starts
 without it.**
@@ -215,6 +219,10 @@ without it.**
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
+| 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
+| 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
+| 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
+| 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -961,7 +969,7 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
-- **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
+- **Windows checks ACLs instead of mode bits** (item 99).
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.
 
@@ -2453,7 +2461,7 @@ answered as before.
 In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
 query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
 any client could name itself onto the allowlist. Only a proven principal satisfies them now: the
-mTLS client-certificate subject (first SAN URI, else CN) or the `sub` of an agent token the
+mTLS client-certificate subject (first non-empty SAN URI, else CN) or the `sub` of an agent token the
 gateway validated. The unsigned JWT claim is no longer read; the header and query label are kept
 for telemetry and cost attribution.
 
@@ -2521,7 +2529,7 @@ key on who the caller is, on the meta route and the per-backend `/mcp/{name}` ro
   scored against the caller's previous call on either session.
 - The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
   one session at a time, so that is that session's budget and tenant count.
-- An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
+- An mTLS caller is identified by its certificate's first non-empty SAN URI, else its CN; a renewed
   certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
   CA issuing unique CNs. A certificate with neither is not an identity.
 - The default config has no behaviour change: the budget, the tenant guard and anomaly detection
@@ -2578,10 +2586,120 @@ the mode. The check runs before the mode rules, on the same handle as the read.
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.
-- **Windows is not checked.** Owner rules there are tracked in #1718.
+- **Windows** is covered by item 99.
 
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
+
+## 97. A bearer token and an API key are two users, even with `single_user`
+
+With `auth.single_user: true`, a gateway with an `auth.bearer_token` and one API key counted as
+single-user. Both credentials were served the sole operator's personal accounts, and the
+per-user OAuth isolation guard (ADR-008) stayed off.
+
+In 4.0 the bearer token counts as a credential beside the API keys. Two credentials are two
+users whatever `single_user` says: the sole-operator account is not served to either, and the
+isolation guard is on. The gateway still starts. A bearer-only or one-key-only gateway is
+unchanged, and so is any `auth.bearer_token` spelling (`auto`, `env:`).
+
+**Action:** a personal gateway that added a client key beside its bearer token keeps exactly one
+of the two: remove `auth.bearer_token` or the extra API key.
+
+## 98. A new audit log begins with an open record
+
+In 3.x, the first record in a new audit log was the first caller event, at counter 1.
+
+In 4.0 a new log (one with no records yet) begins with an `audit_segment_opened` record:
+`segment_seq` 0, counter 1, `prev_entry_hash` `genesis`. The first caller record is counter 2.
+A log that already holds records is not changed.
+
+With the record in place, `audit verify` fails a never-rotated log whose high-water mark is
+missing once any caller record follows the open record, so a tail cut is no longer read as
+clean. A log cut back to the open record alone still reads as a fresh log, as does a deleted
+log; only an anchor kept off the host catches that.
+
+The record is signed and chained like any other, so every consumer that follows the chain gets
+it: SIEM export and the NDJSON file sink forward it, the export metrics count it, and
+`audit verify` counts it in `entries_checked`. Readers that select records by session or kind
+(`audit show`, the dashboard's governance view) never show it.
+
+**Action:** where a SIEM rule, export consumer or script matches caller events, skip records
+whose `event` is `audit_segment_opened`. Chain and counter checks need no change: the sequence
+starts at 1 with no gap.
+
+## 99. Windows checks secret and trust files, and creates them owner-only
+
+In 3.x and early 4.0 a Windows gateway created these files with the directory's inherited ACL and
+read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
+the unix mode rules:
+
+- **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
+  files, credential files) are created owner-only: one grant to the gateway's account, nothing
+  inherited. A read is refused when another account is granted access, the owner is someone
+  else, or the DACL inherits or is NULL. A DACL that is not marked protected is refused as
+  inheriting even when it holds no inherited entry: an old-style ACL, which some tools show as
+  protected, is refused too. The repair below marks it protected.
+- **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the
+  control-plane `grants.json` and `policies.json`) may be read by others but never changed by
+  them. A read, and an append to the journal, is refused when another account can write, or the
+  owner is not the gateway's account, SYSTEM or Administrators.
+- A secret file is refused on a volume that keeps no ACLs (FAT, exFAT): Windows accepts the
+  owner-only descriptor there and discards it, so the create is refused: no secret is written;
+  the empty file is removed, and a refusal that could not remove it says so. Keep the config,
+  keys and token files on NTFS or ReFS.
+- The check and the read use one handle. Like unix, a link is followed and its target judged; a
+  directory or other non-regular file is refused.
+- The refusal names every rule broken and prints the PowerShell lines that repair it, for the
+  file's class. `load_client_id` reads a public OAuth client id and is the one exception: it is
+  not checked.
+
+Repair a **secret file** (owner-only, one grant to the gateway's account; `<sid>` is that
+account's SID, which the refusal prints):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+Repair a **trust file** (the gateway's account, SYSTEM and Administrators keep full control,
+Everyone keeps read, so no legitimate reader is locked out and every foreign write is removed):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+When the file has another owner, run the lines as an administrator with `takeown /F '<path>'`
+first and `icacls '<path>' /setowner '*<sid>'` last; the refusal prints them in that order.
+A path with characters outside letters, digits, space and `\ : . _ - ( )` gets a description of
+the same repair instead of commands.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** if a file is refused, run the printed lines in PowerShell (as an
+administrator when it says the file has another owner) and retry.
+
+## 100. Proven identifiers are compared verbatim
+
+In 3.x, a proven identifier (the `sub` of an agent token the gateway validated, or an mTLS
+client certificate's SAN URI or CN) was trimmed of surrounding whitespace before it keyed
+anything. Grant subjects and per-caller firewall keys were also cut to 512 characters, and
+took only a certificate's first SAN URI. A proven `" admin "` therefore resolved as the
+distinct principal `admin`, and two ids that share a 512-character prefix shared grants and a
+firewall budget.
+
+In 4.0 a proven identifier keys grants, `known_agents`, `principal_labels` and per-caller
+firewall limits exactly as proven: no trimming and no cap. An empty value is skipped. Grants and
+firewall limits pick a certificate's subject by the agent-identity rule: the first non-empty SAN
+URI, else the CN.
+
+**Action:** a grant or allowlist entry that names the bare id no longer matches a padded proven
+id; reissue the credential without the padding. A certificate whose first SAN URI is empty now
+keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
+firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
+API-key owner, not on these subjects.
 
 ## Upgrading from 3.5.x: a walkthrough
 

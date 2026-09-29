@@ -57,7 +57,7 @@ fn sections(doc: &str) -> BTreeSet<u32> {
 /// The highest item number published so far. Item numbers are public
 /// identifiers and never renumbered, so deleting the last item (row and
 /// section together) must fail too, not just shrink the range.
-const PUBLISHED_MAX: u32 = 96;
+const PUBLISHED_MAX: u32 = 100;
 
 /// The Change cell of every summary row, by item number.
 fn summary_cells(doc: &str) -> BTreeMap<u32, String> {

@@ -120,6 +120,25 @@ pub(super) fn rewrite_line(file: &Path, index: usize, edit: impl FnOnce(&mut ser
     std::fs::write(file, body).unwrap();
 }
 
+/// Rewrite a fresh log as a pre-D6 one: drop the genesis open record and
+/// re-chain the rest from genesis (unsigned).
+pub(super) fn strip_genesis_open(path: &Path) {
+    let all = lines(path);
+    assert_eq!(event(&all[0]), Some(rotation::EV_OPENED));
+    let c = cfg(path, 12, false);
+    let mut prev = "genesis".to_string();
+    let mut body = String::new();
+    for (i, v) in all[1..].iter().enumerate() {
+        let mut fields = v.as_object().unwrap().clone();
+        fields.remove("entry_hash");
+        let (line, hash) = chain_line(&c, fields, i as u64 + 1, &prev).unwrap();
+        body += &line;
+        body.push('\n');
+        prev = hash;
+    }
+    std::fs::write(path, body).unwrap();
+}
+
 #[test]
 fn rotates_at_max_segment_bytes() {
     let dir = tempfile::tempdir().unwrap();

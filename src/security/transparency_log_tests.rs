@@ -67,7 +67,7 @@ fn basic_write_and_verify_passes() {
     // THEN: verify passes with correct count
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok, "verify must pass: {:?}", result.error_message);
-    assert_eq!(result.entries_checked, 3);
+    assert_eq!(result.entries_checked, 4);
 }
 
 // ── Test 2: modifying response_hash breaks verification ───────────────────
@@ -105,8 +105,9 @@ fn deleted_middle_entry_breaks_verification() {
     // WHEN: the second (middle) line is deleted
     let content = std::fs::read_to_string(tmp.path()).unwrap();
     let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 3, "expected 3 lines");
-    let kept = format!("{}\n{}\n", lines[0], lines[2]); // skip lines[1]
+    assert_eq!(lines.len(), 4, "open record plus 3 entries");
+    // Skip "y" and keep the tail, so the gap is mid-chain, not tail loss.
+    let kept = format!("{}\n{}\n{}\n", lines[0], lines[1], lines[3]);
     std::fs::write(tmp.path(), &kept).unwrap();
 
     // THEN: verify detects the gap
@@ -159,14 +160,16 @@ fn recovery_continues_chain_correctly() {
 
     // THEN: the chain is intact and counters are sequential
     let entries = read_entries(tmp.path());
-    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.len(), 4);
+    // Counter 1 is the genesis open record (#2275).
     assert_eq!(entries[0]["counter"], 1u64);
     assert_eq!(entries[1]["counter"], 2u64);
     assert_eq!(entries[2]["counter"], 3u64);
+    assert_eq!(entries[3]["counter"], 4u64);
 
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok, "recovered chain must pass verification");
-    assert_eq!(result.entries_checked, 3);
+    assert_eq!(result.entries_checked, 4);
 }
 
 // ── Test 6: HMAC signature is present when secret is configured ───────────
@@ -180,16 +183,18 @@ fn hmac_signature_present_when_secret_configured() {
 
     // WHEN: reading the written entry
     let entries = read_entries(tmp.path());
-    let entry = &entries[0];
+    assert_eq!(entries.len(), 2, "open record plus the caller record");
 
-    // THEN: sig and key_id are present and correctly formatted
-    let sig = entry["sig"].as_str().expect("sig must be a string");
-    assert!(
-        sig.starts_with("hmac-sha256:"),
-        "sig must have hmac-sha256 prefix"
-    );
-    assert_eq!(sig.len(), "hmac-sha256:".len() + 64); // 64 hex chars = 32 bytes
-    assert_eq!(entry["key_id"], "test-key");
+    // THEN: sig and key_id are present and correctly formatted on both
+    for entry in &entries {
+        let sig = entry["sig"].as_str().expect("sig must be a string");
+        assert!(
+            sig.starts_with("hmac-sha256:"),
+            "sig must have hmac-sha256 prefix"
+        );
+        assert_eq!(sig.len(), "hmac-sha256:".len() + 64); // 64 hex chars = 32 bytes
+        assert_eq!(entry["key_id"], "test-key");
+    }
 }
 
 // ── Test 7: no sig or key_id when secret is empty ────────────────────────
@@ -203,11 +208,13 @@ fn no_sig_when_secret_empty() {
 
     // WHEN: reading the entry
     let entries = read_entries(tmp.path());
-    let entry = &entries[0];
+    assert_eq!(entries.len(), 2, "open record plus the caller record");
 
-    // THEN: sig and key_id are absent
-    assert!(entry.get("sig").is_none(), "sig must be absent");
-    assert!(entry.get("key_id").is_none(), "key_id must be absent");
+    // THEN: sig and key_id are absent on both
+    for entry in &entries {
+        assert!(entry.get("sig").is_none(), "sig must be absent");
+        assert!(entry.get("key_id").is_none(), "key_id must be absent");
+    }
 }
 
 // ── Test 8: first entry's prev_entry_hash is "genesis" ───────────────────
@@ -220,6 +227,8 @@ fn first_entry_prev_hash_is_genesis() {
 
     let entries = read_entries(tmp.path());
     assert_eq!(entries[0]["prev_entry_hash"], "genesis");
+    // The first caller record chains to the open record, not to genesis.
+    assert_eq!(entries[1]["prev_entry_hash"], entries[0]["entry_hash"]);
 }
 
 // ── Test 9: verify on empty file succeeds ────────────────────────────────
@@ -257,7 +266,7 @@ fn verify_and_show_after_mixed_sessions() {
     // Chain must verify
     let verify = verify_log(tmp.path()).unwrap();
     assert!(verify.ok);
-    assert_eq!(verify.entries_checked, 5);
+    assert_eq!(verify.entries_checked, 6);
 
     // Show must filter correctly
     let even = show_session_entries(tmp.path(), "even").unwrap();
@@ -333,7 +342,17 @@ fn intact_signed_log_passes_signed_verify() {
         "intact signed log must verify: {:?}",
         result.error_message
     );
-    assert_eq!(result.entries_checked, 2);
+    assert_eq!(result.entries_checked, 3);
+}
+
+/// Rewrite the log from `entries`; tamper tests edit `entries[1]`, the caller
+/// record after the open record, so the tail and `.hwm` still agree.
+fn write_entries(path: &Path, entries: &[serde_json::Value]) {
+    let body: String = entries
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap() + "\n")
+        .collect();
+    std::fs::write(path, body).unwrap();
 }
 
 // HMAC.1: stripping the sig cannot bypass the check under a configured secret.
@@ -346,12 +365,8 @@ fn stripped_sig_fails_signed_verify() {
     drop(logger);
 
     let mut entries = read_entries(tmp.path());
-    entries[0].as_object_mut().unwrap().remove("sig");
-    std::fs::write(
-        tmp.path(),
-        format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
-    )
-    .unwrap();
+    entries[1].as_object_mut().unwrap().remove("sig");
+    write_entries(tmp.path(), &entries);
 
     // Hash chain still fine (recompute strips sig anyway), but signed fails.
     assert!(verify_log(tmp.path()).unwrap().ok);
@@ -369,12 +384,8 @@ fn altered_key_id_fails_signed_verify() {
     drop(logger);
 
     let mut entries = read_entries(tmp.path());
-    entries[0]["key_id"] = serde_json::Value::String("attacker-key".to_string());
-    std::fs::write(
-        tmp.path(),
-        format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
-    )
-    .unwrap();
+    entries[1]["key_id"] = serde_json::Value::String("attacker-key".to_string());
+    write_entries(tmp.path(), &entries);
 
     // Hash-only verify passes (key_id is not in entry_hash); signed fails.
     assert!(verify_log(tmp.path()).unwrap().ok);
@@ -395,12 +406,8 @@ fn stripped_key_id_fails_signed_verify() {
     drop(logger);
 
     let mut entries = read_entries(tmp.path());
-    entries[0].as_object_mut().unwrap().remove("key_id");
-    std::fs::write(
-        tmp.path(),
-        format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
-    )
-    .unwrap();
+    entries[1].as_object_mut().unwrap().remove("key_id");
+    write_entries(tmp.path(), &entries);
 
     assert!(verify_log(tmp.path()).unwrap().ok);
     assert!(

@@ -7,7 +7,7 @@ use super::*;
 /// Writes `body` to `dir/name` with `mode` and returns the absolute path.
 fn secret(dir: &std::path::Path, name: &str, body: &[u8], mode: u32) -> std::path::PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, body).expect("write secret");
+    crate::gateway::test_helpers::write_owner_only(&path, body).expect("write secret");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

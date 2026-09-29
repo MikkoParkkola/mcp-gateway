@@ -443,7 +443,8 @@ fn audit_backed_by_verifiable_transparency_log() {
         "governance chain must verify: {:?}",
         result.error_message
     );
-    assert_eq!(result.entries_checked, 2);
+    // Plus the genesis housekeeping record (#2275).
+    assert_eq!(result.entries_checked, 3);
 }
 
 // MIK-6685.STORE.6 — collection files are 0600.
@@ -635,7 +636,8 @@ fn cross_process_audit_append_stays_verifiable() {
         "chain must not fork across processes: {:?}",
         result.error_message
     );
-    assert_eq!(result.entries_checked, 3);
+    // Plus the genesis housekeeping record (#2275).
+    assert_eq!(result.entries_checked, 4);
 }
 
 // MIK-6685.STORE.6 — a malformed control-plane audit line fails closed
@@ -745,4 +747,38 @@ fn set_grant_status_audited_is_field_only_and_audited() {
             .len(),
         1
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn write_atomic_creates_the_collection_owner_only_in_an_open_directory() {
+    // WT-ASSERT 1718-W4: no window in which the collection carries the
+    // directory's inherited DACL.
+    use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+
+    let dir = everyone_full_dir("1718-W4");
+    let target = dir.path().join("grants.json");
+
+    write_atomic(&target, b"[]", FaultPoint::None).unwrap();
+
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
+    assert_owner_only("1718-W4", &target, false);
+}
+
+#[cfg(windows)]
+#[test]
+fn write_atomic_replaces_a_stale_open_temp_instead_of_inheriting_its_dacl() {
+    // WT-ASSERT 1718-W4b: a crash-orphaned temp planted with Everyone:(F) keeps
+    // its DACL through truncate-and-rename unless it is removed first.
+    use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+
+    let dir = everyone_full_dir("1718-W4b");
+    let target = dir.path().join("grants.json");
+    std::fs::write(target.with_extension("json.tmp"), "stale").unwrap();
+
+    write_atomic(&target, b"[]", FaultPoint::None).unwrap();
+
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
+    assert_owner_only("1718-W4b", &target, false);
+    assert_eq!(std::fs::read(&target).unwrap(), b"[]");
 }

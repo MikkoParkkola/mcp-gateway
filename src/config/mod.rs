@@ -44,6 +44,8 @@ use secret_ref::SecretRef;
 pub(crate) use secret_ref::is_template_syntax;
 
 // New items (F18): the one mode-checked read for files outside `config`.
+#[cfg(windows)]
+pub(crate) use secret_file::Protects;
 pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.

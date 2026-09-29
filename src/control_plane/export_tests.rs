@@ -57,9 +57,10 @@ fn forwards_both_sources_in_chain_order() {
     let mut inv_exp = exporter(&dir.path().join("inv"), ExportSource::Invocation, &inv_path);
     std::fs::create_dir_all(dir.path().join("inv")).unwrap();
     let out = inv_exp.poll(&inv_sink).unwrap();
-    assert_eq!(out.forwarded, 2);
+    // Counter 1 is the genesis open record (#2275); it forwards too.
+    assert_eq!(out.forwarded, 3);
     let d = inv_sink.delivered();
-    assert_eq!(d.iter().map(|e| e.counter).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(d.iter().map(|e| e.counter).collect::<Vec<_>>(), [1, 2, 3]);
     assert!(d.iter().all(|e| e.source == ExportSource::Invocation));
     assert!(d[0].entry_hash.starts_with("sha256:"));
     assert_eq!(d[1].prev_entry_hash, d[0].entry_hash);
@@ -67,7 +68,7 @@ fn forwards_both_sources_in_chain_order() {
     let gov_sink = CollectingSink::new();
     std::fs::create_dir_all(dir.path().join("gov")).unwrap();
     let mut gov_exp = exporter(&dir.path().join("gov"), ExportSource::Governance, &gov_path);
-    assert_eq!(gov_exp.poll(&gov_sink).unwrap().forwarded, 1);
+    assert_eq!(gov_exp.poll(&gov_sink).unwrap().forwarded, 2);
     assert_eq!(gov_sink.delivered()[0].source, ExportSource::Governance);
 }
 
@@ -87,10 +88,11 @@ fn cursor_advances_only_after_ack_and_resends() {
     ));
     assert_eq!(exp.cursor().last_entry_hash, "genesis");
 
-    // Sink recovers: the same entry is re-sent (at-least-once) and acked.
+    // Sink recovers: the same entries (genesis open record, #2275, then the
+    // invocation) are re-sent (at-least-once) and acked.
     let sink = CollectingSink::new();
-    assert_eq!(exp.poll(&sink).unwrap().forwarded, 1);
-    assert_eq!(sink.delivered().len(), 1);
+    assert_eq!(exp.poll(&sink).unwrap().forwarded, 2);
+    assert_eq!(sink.delivered().len(), 2);
     assert!(exp.cursor().last_entry_hash.starts_with("sha256:"));
 
     // A fresh exporter reloads the persisted cursor and does NOT re-send.
@@ -105,7 +107,8 @@ fn bounded_batch_reports_lag() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("inv.jsonl");
     let l = logger(&log);
-    for i in 0..5 {
+    // Four invocations after the genesis open record (#2275): five entries.
+    for i in 0..4 {
         l.log_invocation("s", "c", "srv", "t", &format!("r{i}"), &format!("p{i}"))
             .unwrap();
     }
@@ -155,7 +158,8 @@ fn rotation_reanchors_and_resumes() {
 
     let sink = CollectingSink::new();
     let mut exp = exporter(dir.path(), ExportSource::Invocation, &log);
-    assert_eq!(exp.poll(&sink).unwrap().forwarded, 1);
+    // The genesis open record (#2275), then the entry.
+    assert_eq!(exp.poll(&sink).unwrap().forwarded, 2);
     assert!(exp.cursor().last_entry_hash.starts_with("sha256:"));
 
     // Rotate: the old file is replaced by a fresh, shorter chain.
@@ -170,7 +174,7 @@ fn rotation_reanchors_and_resumes() {
     let out = exp.poll(&sink).unwrap();
     assert!(out.reanchored, "shrunk file must re-anchor");
     assert_eq!(out.forwarded, 2, "the open record, then the new entry");
-    assert_eq!(sink.delivered().len(), 3);
+    assert_eq!(sink.delivered().len(), 4);
 }
 
 // MIK-6700 HMAC.3 — the exporter authenticates each entry's sig when a
@@ -253,8 +257,9 @@ fn exporter_with_secret_forwards_intact_signed_log() {
     let mut exp =
         exporter(dir.path(), ExportSource::Governance, &log_path).with_signing_secret(SECRET);
     let out = exp.poll(&sink).unwrap();
-    assert_eq!(out.forwarded, 2);
-    assert_eq!(sink.delivered().len(), 2);
+    // Plus the genesis open record (#2275).
+    assert_eq!(out.forwarded, 3);
+    assert_eq!(sink.delivered().len(), 3);
 }
 
 // MIK-6703 SIEM.RUN.1 — the core NDJSON file sink appends one JSON line per
@@ -272,11 +277,12 @@ fn file_sink_writes_ndjson_and_forwards() {
     let sink = FileExportSink::open(sink_path.clone()).unwrap();
     let mut exp = exporter(dir.path(), ExportSource::Governance, &log_path);
     let out = exp.poll(&sink).unwrap();
-    assert_eq!(out.forwarded, 2);
+    // Plus the genesis open record (#2275).
+    assert_eq!(out.forwarded, 3);
 
     let contents = std::fs::read_to_string(&sink_path).unwrap();
     let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
-    assert_eq!(lines.len(), 2, "one NDJSON line per forwarded entry");
+    assert_eq!(lines.len(), 3, "one NDJSON line per forwarded entry");
     for line in &lines {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(v["source"], "governance");
@@ -539,7 +545,8 @@ fn export_loads_pre_d6_cursor() {
     .unwrap();
     let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
     assert_eq!(exp.cursor().segment_seq, None);
-    assert_eq!(exp.poll(&CollectingSink::new()).unwrap().forwarded, 1);
+    // The genesis open record (#2275), then the event.
+    assert_eq!(exp.poll(&CollectingSink::new()).unwrap().forwarded, 2);
 }
 
 #[test]

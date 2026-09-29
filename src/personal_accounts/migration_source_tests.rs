@@ -233,9 +233,10 @@ fn truncated_json_refuses_as_unparseable_not_as_missing() {
 fn wt10i_foreign_owner_repair_order() {
     use crate::private_fs::PrivacyRefusal as P;
     let me = crate::private_fs::user_sid_string().expect("the runner's SID");
-    let text = super::windows_remediation(
+    let text = crate::private_fs::windows_remediation(
         r"C:\oauth\0123456789abcdef_tokens.json",
         &[P::ForeignOwner("S-1-5-32-544".to_owned())],
+        crate::config::Protects::Secrecy,
     );
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let at = |needle: &str| lines.iter().position(|l| l.contains(needle));

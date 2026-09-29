@@ -297,15 +297,19 @@ fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubj
 /// The authority every certificate-derived grant subject carries.
 const MTLS_AUTHORITY: &str = "mtls";
 
-/// A certificate's subject: its first SAN URI, else its CN. `None` when it has
+/// A certificate's subject, verbatim: its first non-empty SAN URI, else its CN
+/// — the rule `select_mtls_subject` applies for agent identity, so one
+/// certificate is one principal on both paths (#2285). `None` when it has
 /// neither — never its display name, which can be a constant every such
 /// certificate shares.
 fn cert_subject_id(identity: &CertIdentity) -> Option<String> {
     identity
         .san_uris
-        .first()
-        .and_then(|value| trimmed_non_empty(value))
-        .or_else(|| identity.common_name.as_deref().and_then(trimmed_non_empty))
+        .iter()
+        .map(String::as_str)
+        .chain(identity.common_name.as_deref())
+        .find(|value| !value.is_empty())
+        .map(String::from)
 }
 
 /// The key the per-caller firewall controls (anomaly, tenant, budget) score on:
@@ -349,8 +353,11 @@ pub(super) fn caller_key(
         })
 }
 
+/// The verified agent JWT `sub` is the subject verbatim, as on the OIDC path:
+/// never trimmed or truncated, so `" admin "` stays a different principal from
+/// `admin` (#2279). Only the display label is trimmed.
 fn grant_subject_from_oauth_agent(identity: &OAuthAgentIdentity) -> Option<GrantSubject> {
-    let subject = trimmed_non_empty(&identity.client_id)?;
+    let subject = Some(identity.client_id.clone()).filter(|id| !id.is_empty())?;
     let label = trimmed_non_empty(&identity.agent_name);
 
     Some(GrantSubject::new("agent_oauth", subject, label))

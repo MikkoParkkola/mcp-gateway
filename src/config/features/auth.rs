@@ -38,8 +38,9 @@ pub struct AuthConfig {
     /// from credential count alone that only one human is behind the auth. So
     /// unless the operator asserts `single_user = true`, any enabled auth is
     /// treated as multi-user and the per-user OAuth isolation guard stays on.
-    /// More than one API key or any OIDC issuer is a hard multi-user signal that
-    /// overrides this hint (see [`AuthConfig::implies_multi_user`]).
+    /// More than one credential (API keys and the bearer token) or any OIDC
+    /// issuer is a hard multi-user signal that overrides this hint (see
+    /// [`AuthConfig::implies_multi_user`]).
     #[serde(default)]
     pub single_user: bool,
     /// How long a dashboard browser session lives (MIK-7570.SESSION.1).
@@ -161,14 +162,15 @@ impl AuthConfig {
     /// principals *could* be behind it — a single shared API key or bearer token
     /// can be distributed to a whole team and the gateway cannot prove otherwise
     /// — UNLESS the operator explicitly declares [`single_user`](Self::single_user).
-    /// More than one API key, or any configured OIDC issuer (`has_oidc`), is a
-    /// hard multi-user signal that overrides the `single_user` hint.
+    /// More than one credential (API keys and the bearer token), or any
+    /// configured OIDC issuer (`has_oidc`), is a hard multi-user signal that
+    /// overrides the `single_user` hint.
     #[must_use]
     pub fn implies_multi_user(&self, has_oidc: bool) -> bool {
         if !self.enabled {
             return false;
         }
-        let hard_multi_user = self.api_keys.len() > 1 || has_oidc;
+        let hard_multi_user = self.credential_count() > 1 || has_oidc;
         hard_multi_user || !self.single_user
     }
 
@@ -195,10 +197,17 @@ impl AuthConfig {
     ///
     /// Consistent with ADR-008 INV-2's fail-closed reasoning rather than
     /// competing with it: `single_user` is the operator's ASSERTION, and more
-    /// than one API key or any OIDC issuer overrides it, exactly as there.
+    /// than one credential or any OIDC issuer overrides it, exactly as there.
     #[must_use]
     pub fn grants_single_user_principal(&self, has_oidc: bool) -> bool {
-        self.enabled && self.single_user && self.api_keys.len() <= 1 && !has_oidc
+        self.enabled && self.single_user && self.credential_count() <= 1 && !has_oidc
+    }
+
+    /// How many credentials the middleware accepts: each API key, and the
+    /// bearer token in any spelling (`auto` is generated at load, `env:` is
+    /// resolved or the load fails). Each is a caller of its own (#2241).
+    fn credential_count(&self) -> usize {
+        self.api_keys.len() + usize::from(self.bearer_token.is_some())
     }
 
     /// `public_paths` as enforced: the orchestrator probes are public exactly
@@ -495,6 +504,11 @@ mod multi_user_tests {
     }
 }
 
+// #2241: the bearer token is a credential too.
+#[cfg(test)]
+#[path = "auth_credential_count_tests.rs"]
+mod credential_count_tests;
+
 /// MIK-6744 (STORE.1 / O3): the sole-operator principal's own predicate.
 ///
 /// Separate module from `multi_user_tests` on purpose. These are not the same
@@ -506,7 +520,7 @@ mod multi_user_tests {
 mod single_user_principal_tests {
     use super::*;
 
-    fn api_key(name: &str) -> ApiKeyConfig {
+    pub(super) fn api_key(name: &str) -> ApiKeyConfig {
         ApiKeyConfig {
             key: None,
             key_sha256: Some(super::super::api_key::api_key_digest_spec(
@@ -524,7 +538,7 @@ mod single_user_principal_tests {
 
     /// The population this exists for: a 3.x personal gateway that took the
     /// upgrade advice at `commands/upgrade.rs:144` and set `single_user: true`.
-    fn solo() -> AuthConfig {
+    pub(super) fn solo() -> AuthConfig {
         AuthConfig {
             enabled: true,
             bearer_token: Some("the-operator's-own-token".to_string()),
@@ -548,10 +562,12 @@ mod single_user_principal_tests {
         // the same deployment shape, and the operator asserted both are one
         // person. Neither has a second credential to hand to anyone.
         let cfg = AuthConfig {
+            bearer_token: None,
             api_keys: vec![api_key("me")],
             ..solo()
         };
         assert!(cfg.grants_single_user_principal(false));
+        assert!(!cfg.implies_multi_user(false));
     }
 
     /// THE SECURITY CASE. This is the defect §4.1a of the design doc records:

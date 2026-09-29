@@ -290,8 +290,9 @@ pub(crate) fn extract_agent_identity(
     let mtls = cert_identity
         .and_then(select_mtls_subject)
         .map(|id| ProvenPrincipal::new(id, ProofSource::MutualTls));
+    // Verbatim: a proven identifier is compared as proven. Trimming would let
+    // `" admin "` resolve as the distinct principal `admin` (#2243).
     let jwt = verified_jwt_subject
-        .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| ProvenPrincipal::new(s.to_string(), ProofSource::VerifiedJwtSubject));
 
@@ -342,7 +343,6 @@ fn select_mtls_subject(cert: &crate::mtls::identity::CertIdentity) -> Option<Str
         .iter()
         .map(String::as_str)
         .chain(cert.common_name.as_deref())
-        .map(str::trim)
         .find(|s| !s.is_empty())
         .map(String::from)
 }

@@ -1708,7 +1708,7 @@ impl Gateway {
         // isolated. Detection is fail-closed — any enabled auth is treated as
         // multi-user (a single shared API key or bearer can be handed to a whole
         // team; count alone cannot prove otherwise) unless the operator sets
-        // `auth.single_user = true`. More than one API key or any OIDC issuer is
+        // `auth.single_user = true`. More than one credential or any OIDC issuer is
         // a hard multi-user signal. See `AuthConfig::implies_multi_user`.
         let multi_user = self
             .config
@@ -1730,7 +1730,8 @@ impl Gateway {
         // another; if the gateway is ever reached by more than one identity the
         // isolation the guard would have provided is silently gone. We warn
         // rather than refuse because a genuinely single-user deployment is valid.
-        if self.config.auth.single_user {
+        // Only while the assertion actually holds the guard off (#2241).
+        if self.config.auth.single_user && !multi_user {
             let leaky_backends = leaky_single_user_backends(&self.config);
             if !leaky_backends.is_empty() {
                 warn!(
@@ -3868,8 +3869,8 @@ mod tests {
 
         assert_eq!(
             collecting.delivered().len(),
-            1,
-            "recovered poll must forward the pending log entry"
+            2,
+            "recovered poll must forward the genesis open record (#2275) and the pending entry"
         );
     }
 
