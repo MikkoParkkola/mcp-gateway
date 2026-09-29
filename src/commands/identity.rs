@@ -620,6 +620,25 @@ mod tests {
     }
 
     /// C33: the accepted spellings, one per source.
+    /// Runtime keys a proven id verbatim (#2243), so the CLI writes it as
+    /// given; trimming would mint a grant for a different principal. Empty and
+    /// blank ids are still refused (#2284).
+    #[test]
+    fn padded_ids_are_written_verbatim() {
+        let subject = parse_subject_spec("mtls: admin ", None, "subject").unwrap();
+        assert_eq!(subject.subject, " admin ");
+
+        let agent = parse_agent_binding(Some("jwt: runner ".to_string()), false).unwrap();
+        let expected = GrantAgentKey {
+            source: ProofSource::VerifiedJwtSubject,
+            id: " runner ".to_string(),
+        };
+        assert_eq!(agent, GrantAgent::Exact(expected));
+
+        assert!(parse_subject_spec("mtls:  ", None, "subject").is_err());
+        assert!(parse_agent_binding(Some("jwt:  ".to_string()), false).is_err());
+    }
+
     #[test]
     fn a_qualified_agent_flag_keys_the_grant_by_source_and_id() {
         for (value, source) in [
