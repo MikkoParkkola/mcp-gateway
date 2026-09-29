@@ -83,7 +83,7 @@ def problems(doc: Path, root: Path) -> list[str]:
         name = match.group(2)
         pool = defined_lib if match.group(1) else defined
         if not any(name in d for d in pool):
-            found.append(f"validation command matches no test: cargo test {name}")
+            found.append(f"validation command matches no test: cargo test {'--lib ' if match.group(1) else ''}{name}")
     return found
 
 

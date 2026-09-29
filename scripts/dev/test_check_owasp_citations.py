@@ -40,7 +40,7 @@ class OwaspCitations(unittest.TestCase):
 
     def test_a_validation_command_matching_no_test_is_reported(self):
         found = self.problems_in("```bash\ncargo test --lib no_such_test\n```\n")
-        self.assertEqual(found, ["validation command matches no test: cargo test no_such_test"])
+        self.assertEqual(found, ["validation command matches no test: cargo test --lib no_such_test"])
 
     def test_lib_does_not_accept_a_test_that_lives_only_under_tests(self):
         # `cargo test --lib NAME` runs the library target: an integration test
@@ -55,7 +55,7 @@ class OwaspCitations(unittest.TestCase):
             doc.write_text("```bash\ncargo test --lib only_in_tests\ncargo test only_in_tests\n```\n", encoding="utf-8")
             self.assertEqual(
                 guard.problems(doc, root),
-                ["validation command matches no test: cargo test only_in_tests"],
+                ["validation command matches no test: cargo test --lib only_in_tests"],
             )
 
     def test_a_helper_that_is_not_a_test_does_not_satisfy_a_command(self):

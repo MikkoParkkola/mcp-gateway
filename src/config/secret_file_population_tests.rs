@@ -230,7 +230,7 @@ fn population(root: &Path) -> BTreeSet<String> {
     )
     .expect("pattern");
     let inline_test_mod =
-        regex::Regex::new(r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+        regex::Regex::new(r"#\[cfg\(test\)\]\s*(?:pub\s*(?:\([^)]*\))?\s*)?mod\s+\w+\s*\{")
             .expect("pattern");
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
