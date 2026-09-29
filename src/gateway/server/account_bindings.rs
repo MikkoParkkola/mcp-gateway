@@ -225,7 +225,8 @@ fn install_descriptor(
     let mut managed: Option<Arc<VaultStrategy>> = None;
     let strategy: Arc<dyn IdentityPropagation> = match propagation.strategy {
         PropagationStrategyKind::Vault => {
-            let (Some(custody), Some(descriptor)) = (custody, compiled.account.clone()) else {
+            let (Some(custody), Some((descriptor, revision))) = (custody, compiled.account.clone())
+            else {
                 tracing::warn!(
                     account = id,
                     "personal_managed account declared with no started custody; no strategy is \
@@ -237,7 +238,12 @@ fn install_descriptor(
             // the same handle, the same service, the same store the gateway
             // claimed its locks with at startup.
             let erased: Arc<dyn AccountCustody> = Arc::clone(custody);
-            let vault = Arc::new(VaultStrategy::new(erased, descriptor, sole_operator));
+            let vault = Arc::new(VaultStrategy::new(
+                erased,
+                descriptor,
+                revision,
+                sole_operator,
+            ));
             managed = Some(Arc::clone(&vault));
             vault
         }

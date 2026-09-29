@@ -29,6 +29,13 @@ const RESOURCE: &str = "https://www.googleapis.com/drive/v3";
 const SOLE_TOKEN: &str = "synthetic-sole-operator-access-private-material-4b71";
 const ALICE_TOKEN: &str = "synthetic-alice-access-private-material-9f3a71";
 
+/// The descriptor revision every seeded grant carries AND every strategy here
+/// is installed with, so no test in this file crosses the #2249 fence by
+/// accident.
+fn seeded_revision() -> String {
+    "0".repeat(64)
+}
+
 /// RFC 6749's default scheme, as `vault::authorization_value` emits it.
 const SCHEME: &str = "Bearer";
 
@@ -72,7 +79,7 @@ fn unexpired_grant(access_token: &str) -> GrantRecord {
         generation: "fedcba9876543210fedcba9876543210".into(),
         token_revision: 1,
         authorization_epoch: 1,
-        descriptor_revision: "0".repeat(64),
+        descriptor_revision: seeded_revision(),
         scopes: vec!["https://www.googleapis.com/auth/drive.readonly".into()],
         access_token: access_token.into(),
         refresh_token: Some("synthetic-refresh-private-material-8c9d21".into()),
@@ -155,7 +162,7 @@ fn strategy(root: &std::path::Path, sole_operator: bool) -> (VaultStrategy, Arc<
     .expect("custody starts against a seeded store");
     let custody: Arc<dyn AccountCustody> = Arc::new(handle);
     (
-        VaultStrategy::new(custody, descriptor(), sole_operator),
+        VaultStrategy::new(custody, descriptor(), seeded_revision(), sole_operator),
         calls,
     )
 }
@@ -572,9 +579,15 @@ fn a_held_lease_rechecks_only_against_the_vault_that_released_it() {
         let released = Arc::new(VaultStrategy::new(
             Arc::clone(&custody),
             descriptor(),
+            seeded_revision(),
             false,
         ));
-        let reinstalled = Arc::new(VaultStrategy::new(custody, descriptor(), false));
+        let reinstalled = Arc::new(VaultStrategy::new(
+            custody,
+            descriptor(),
+            seeded_revision(),
+            false,
+        ));
 
         let (_credential, held) = released
             .prepare_held(Principal::Verified(&alice), &backend())
