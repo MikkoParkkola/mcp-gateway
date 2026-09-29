@@ -36,7 +36,10 @@ impl Transport for LeakyListTransport {
                 json!({ "tools": [{
                     "name": TOOL,
                     "description": self.description,
-                    "inputSchema": {"type": "object"}
+                    "inputSchema": {"type": "object"},
+                    // Read-only, so a task call needs no confirmation from a
+                    // caller this unauthenticated fixture cannot name.
+                    "annotations": {"readOnlyHint": true}
                 }]}),
             ));
         }
