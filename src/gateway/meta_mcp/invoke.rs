@@ -5733,8 +5733,12 @@ mod identity_propagation_enforcement_tests {
         // what the child observed. `trap '' XFSZ` ignores SIGXFSZ (whose default
         // disposition would kill the child) so the write returns `Err` instead.
         let exe = std::env::current_exe().expect("current test binary path");
-        let file = tempfile::NamedTempFile::new().expect("tempfile");
-        let path = file.path().to_string_lossy().to_string();
+        // A new log's open() writes its genesis record (#2275); create it here,
+        // outside the size limit, so the child's open() only reads.
+        let path = leaked_test_transparency_logger()
+            .path()
+            .to_string_lossy()
+            .to_string();
         let script =
             format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
         let output = std::process::Command::new("sh")
