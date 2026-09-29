@@ -425,10 +425,12 @@ impl<'a> Stream<'a> {
                             Some(field_u64(&entry, "next_segment_seq").unwrap_or(expected + 1));
                     }
                     Some(EV_HWM_MISSING) => self.note_hwm_missing(counter),
-                    Some(EV_EXPIRED) => {
+                    Some(EV_OPENED) => {
                         if let Some(at) = field_u64(&entry, HWM_MISSING_AT) {
                             self.note_hwm_missing(at);
                         }
+                    }
+                    Some(EV_EXPIRED) => {
                         if let (Some(k), Some(lc), Some(fh)) = (
                             field_u64(&entry, "segment_seq"),
                             field_u64(&entry, "last_counter"),

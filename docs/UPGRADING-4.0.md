@@ -2806,8 +2806,8 @@ segment exists, or the active file opens with an open record and holds more than
 gateway first chains an `audit_segment_hwm_missing` record, logs a warning and increments
 `mcp_audit_hwm_missing_total`, then writes the fresh mark. The log keeps running. `audit verify`
 fails on the record in live mode and warns in `--archive` mode. When retention or disk-full
-expiry deletes the segment holding it, the `audit_segment_expired` record carries its counter as
-`hwm_missing_at`, so the failure lasts as long as the log.
+expiry deletes the segment holding it, the finding survives: every later `audit_segment_opened`
+record carries its counter as `hwm_missing_at`, so the failure lasts as long as the log.
 
 A pre-D6 log (no open record) and a log holding only its genesis open record (a crash before
 the first mark) still get a fresh mark without the record. A crash between the first caller

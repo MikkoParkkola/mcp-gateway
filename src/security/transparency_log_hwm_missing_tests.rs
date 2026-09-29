@@ -159,8 +159,8 @@ fn a_crash_before_the_fresh_hwm_does_not_stack_markers() {
     assert_live_fails_on_mark(&path);
 }
 
-/// Retention deletes the segment holding the marker, then the segment holding
-/// the expiry record that carried it: Live verify still fails.
+/// Retention deletes the segment holding the marker, then each segment whose
+/// open record carried it: Live verify still fails.
 #[test]
 fn the_mark_outlives_retention() {
     let dir = tempfile::tempdir().unwrap();
@@ -240,6 +240,29 @@ fn the_mark_outlives_disk_full_expiry() {
         "segment 0 expired"
     );
     assert!(marks(&path).is_empty(), "the marker's segment expired");
+    assert_live_fails_on_mark(&path);
+}
+
+/// A crash after the first seal but before its rename, with `.hwm` missing:
+/// recovery finishes the rotation and still marks the log.
+#[test]
+fn a_crash_between_seal_and_rename_is_marked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(super::segments::sealed_path(&path, 0), &path).unwrap();
+    assert_eq!(
+        event(lines(&path).last().unwrap()),
+        Some("audit_segment_sealed")
+    );
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 9);
+    drop(l);
+    assert_eq!(marks(&path).len(), 1);
     assert_live_fails_on_mark(&path);
 }
 
