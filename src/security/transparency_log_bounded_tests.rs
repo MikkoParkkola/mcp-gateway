@@ -303,14 +303,18 @@ async fn probe_timeout_marks_the_log_stalled() {
         );
         tokio::task::yield_now().await;
     }
-    tokio::time::advance(super::degraded::AUDIT_PROBE_TIMEOUT).await;
+    let probe_bound = super::degraded::AUDIT_PROBE_TIMEOUT;
+    tokio::time::advance(probe_bound.saturating_sub(Duration::from_millis(1))).await;
+    tokio::task::yield_now().await;
+    assert!(!first.is_finished(), "gave up before the probe bound");
+    tokio::time::advance(Duration::from_millis(1)).await;
     assert!(first.await.unwrap().is_err());
     assert!(l.is_stalled(), "the probe timeout did not mark the stall");
 
     let probes = l.hooks.probes.load(std::sync::atomic::Ordering::Acquire);
-    let started = tokio::time::Instant::now();
-    assert!(l.admit().await.is_err());
-    assert_eq!(started.elapsed(), Duration::ZERO, "the next admit waited");
+    // Under the paused clock a call that had to wait would hit this timeout.
+    let next = tokio::time::timeout(Duration::from_millis(1), l.admit()).await;
+    assert!(next.expect("the next admit waited").is_err());
     assert_eq!(
         l.hooks.probes.load(std::sync::atomic::Ordering::Acquire),
         probes,
