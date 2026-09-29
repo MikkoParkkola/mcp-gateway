@@ -47,10 +47,16 @@ pub(crate) const CHAIN_NONCE_META: &str = "io.mcp-gateway/chain-nonce";
 pub(crate) fn chain_nonce_from_params(
     params: Option<&Value>,
 ) -> std::result::Result<Option<String>, &'static str> {
-    let _requested = params
+    match params
         .and_then(|params| params.get("_meta"))
-        .and_then(|meta| meta.get(CHAIN_NONCE_META));
-    Ok(None)
+        .and_then(|meta| meta.get(CHAIN_NONCE_META))
+    {
+        None => Ok(None),
+        Some(Value::String(nonce)) if !nonce.is_empty() && nonce.len() <= 256 => {
+            Ok(Some(nonce.clone()))
+        }
+        Some(_) => Err(CHAIN_NONCE_META),
+    }
 }
 
 /// The out-of-band fields of a `tools/call` — the retry pair, and the

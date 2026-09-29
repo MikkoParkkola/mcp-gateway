@@ -43,20 +43,49 @@ pub struct SignatureChainConfig {
 )]
 impl SignatureChainConfig {
     /// Resolve the secret reference and validate the seed and key id.
+    /// Errors name the field, never the seed.
     pub(crate) fn resolve_with_env(
         &self,
-        _overlay: &crate::config::EnvOverlay,
+        overlay: &crate::config::EnvOverlay,
     ) -> crate::Result<Self> {
-        Ok(self.clone())
+        use base64::Engine as _;
+        let invalid = |field: &str, rule: &str| {
+            crate::Error::ConfigValidation(format!("security.signature_chain.{field} {rule}"))
+        };
+        if self.key_id.is_empty() || self.key_id.len() > 64 {
+            return Err(invalid("key_id", "must be 1 to 64 bytes"));
+        }
+        let seed = crate::config::secret_ref::SecretRef::parse(&self.signing_key)
+            .resolve("security.signature_chain.signing_key", overlay)?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(seed.trim());
+        if !bytes.is_ok_and(|bytes| bytes.len() == 32) {
+            return Err(invalid(
+                "signing_key",
+                "must be a base64 32-byte Ed25519 seed",
+            ));
+        }
+        Ok(Self {
+            signing_key: seed,
+            ..self.clone()
+        })
     }
 
     /// Name of the first identity field that differs between the running and
     /// the reloaded section; a change to any of them requires a restart.
+    /// Adding or removing the section changes the identity, so it reports
+    /// `signing_key`.
     pub(crate) fn restart_changed_field(
-        _running: Option<&Self>,
-        _reloaded: Option<&Self>,
+        running: Option<&Self>,
+        reloaded: Option<&Self>,
     ) -> Option<&'static str> {
-        None
+        match (running, reloaded) {
+            (None, None) => None,
+            (Some(a), Some(b)) if a.signing_key != b.signing_key => Some("signing_key"),
+            (Some(a), Some(b)) if a.key_id != b.key_id => Some("key_id"),
+            (Some(a), Some(b)) if a.emit != b.emit => Some("emit"),
+            (Some(_), Some(_)) => None,
+            _ => Some("signing_key"),
+        }
     }
 }
 
