@@ -160,6 +160,10 @@ async fn stdio_refuses_blocked_responses_with_one_inspection() {
             "tools/call",
             call("gateway_search_tools", json!({ "query": "echo" })),
         ),
+        (
+            "tools/call",
+            call("gateway_search", json!({ "query": "echo" })),
+        ),
     ];
     for (method, params) in cases {
         let (body, inspected) = stdio.send(method, params.clone()).await;
@@ -183,6 +187,10 @@ async fn stdio_serves_allowed_responses_with_one_inspection() {
         (
             "tools/call",
             call("gateway_search_tools", json!({ "query": "echo" })),
+        ),
+        (
+            "tools/call",
+            call("gateway_search", json!({ "query": "echo" })),
         ),
     ];
     for (method, params) in cases {
