@@ -273,4 +273,49 @@ mod tests {
             .expect_err("a refused credential is an error");
         assert!(refused.contains("403"), "{refused}");
     }
+
+    /// A redirect is never followed: the next hop was not checked by
+    /// `check_target`, and a same-host, same-port hop keeps the bearer.
+    #[tokio::test]
+    async fn a_redirect_is_not_followed() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let hop = axum::Router::new().fallback(move || {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::Json(serde_json::json!({ "link": "http://127.0.0.1:1/dashboard" }))
+            }
+        });
+        let hop_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let hop_url = format!(
+            "http://{}/ui/api/dashboard-link",
+            hop_listener.local_addr().expect("addr")
+        );
+        tokio::spawn(async move { axum::serve(hop_listener, hop).await });
+        let redirector = axum::Router::new().fallback(move || {
+            let location = hop_url.clone();
+            async move {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        tokio::spawn(async move { axum::serve(listener, redirector).await });
+
+        let refused = fetch_link(&base, "tok")
+            .await
+            .expect_err("a redirect is an error, not a link");
+        assert!(refused.contains("307"), "{refused}");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "the redirect was followed");
+    }
 }
