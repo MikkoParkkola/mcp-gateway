@@ -266,30 +266,43 @@ pub(super) async fn gateway(multi_user: bool) -> MetaMcp {
 }
 
 /// GIVEN the same three backends on a SINGLE-user gateway
-/// WHEN discovery lists tools
-/// THEN all three catalogues are served.
+/// WHEN an anonymous caller and an identified caller list tools
+/// THEN the anonymous caller gets the two shared catalogues and not the
+/// `required` per-user one, and the identified caller gets all three.
 ///
-/// GREEN TODAY, and it is the control that keeps the case above honest in both
-/// directions. It fails if per-caller catalogues are delivered by degrading the
-/// single-tenant path — the IDP.5 guarantee `pool_key_for` already makes for
-/// transports (`src/backend/pool.rs:169-171`) — and it proves the fixture's
-/// tools are discoverable at all, so the multi-user failure above is the guard
-/// and not an empty cache.
+/// The control that keeps the case above honest in both directions. It fails
+/// if the shared path is degraded to deliver per-caller catalogues (IDP.5),
+/// and it proves the fixture's tools are discoverable at all. A `required`
+/// backend has no identity-free view on any gateway (#2326): its tools reach
+/// only a caller whose fetch carries that caller's identity.
 #[tokio::test]
-async fn single_user_gateway_still_serves_every_catalogue() {
-    let names = super::catalogue_per_caller_tests::listed_for(
-        &gateway(false).await,
-        &super::anonymous_caller(),
-    )
-    .await;
-
-    for expected in [PER_USER_TOOL, SHARED_TOOL, GATEWAY_OAUTH_TOOL] {
+async fn single_user_gateway_serves_each_caller_what_its_fetch_may_carry() {
+    let mut meta = gateway(false).await;
+    let names =
+        super::catalogue_per_caller_tests::listed_for(&meta, &super::anonymous_caller()).await;
+    for expected in [SHARED_TOOL, GATEWAY_OAUTH_TOOL] {
         assert!(
             names.contains(&expected.to_string()),
             "single-tenant discovery lost `{expected}`: {names:?} — isolation \
              must not be bought by breaking the shared path"
         );
     }
+    assert!(
+        !names.contains(&PER_USER_TOOL.to_string()),
+        "a `required` backend was served to a caller with no identity: {names:?}"
+    );
+
+    super::catalogue_per_caller_tests::install_minting(&mut meta);
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    meta.seed_caller_slot_for_test(PER_USER_BACKEND, &alpha)
+        .await;
+    let names =
+        super::catalogue_per_caller_tests::listed_for(&meta, &super::identified_caller(&alpha))
+            .await;
+    assert!(
+        names.contains(&PER_USER_TOOL.to_string()),
+        "a caller with its own slot lost the `required` backend: {names:?}"
+    );
 }
 
 /// T9 — the isolation guard stays fail-closed where the fetch after it is shared.
