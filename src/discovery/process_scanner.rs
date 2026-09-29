@@ -130,18 +130,26 @@ impl ProcessScanner {
     async fn scan_windows(&self) -> Result<Vec<DiscoveredServer>> {
         use tokio::process::Command;
 
-        let output = Command::new("wmic")
-            .args(["process", "get", "ProcessId,CommandLine", "/format:csv"])
+        // wmic is absent from current Windows images (removed from 11 24H2 and
+        // Server 2025), so ask CIM. One "pid command" line per process behind
+        // a header line, the shape `parse_ps_output` reads.
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "'PID COMMAND'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.CommandLine }",
+            ])
             .output()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to run wmic: {e}")))?;
+            .map_err(|e| Error::Internal(format!("Failed to run powershell: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        self.parse_wmic_output(&stdout)
+        Ok(self.parse_ps_output(&stdout))
     }
 
-    /// Parse ps output (macOS/Linux)
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// Parse ps output (macOS/Linux) or the Windows equivalent
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     fn parse_ps_output(&self, output: &str) -> Vec<DiscoveredServer> {
         let mut servers = Vec::new();
 
@@ -207,73 +215,6 @@ impl ProcessScanner {
         }
 
         servers
-    }
-
-    /// Parse wmic output (Windows)
-    #[cfg(target_os = "windows")]
-    fn parse_wmic_output(&self, output: &str) -> Result<Vec<DiscoveredServer>> {
-        let mut servers = Vec::new();
-
-        for line in output.lines().skip(1) {
-            // Skip header
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() < 3 {
-                continue;
-            }
-
-            // WMIC CSV format: Node,CommandLine,ProcessId
-            let command = parts[1];
-            let pid_str = parts[2];
-
-            let pid = pid_str.trim().parse::<u32>().ok();
-
-            // Check against patterns
-            for pattern in &self.patterns {
-                if command
-                    .to_lowercase()
-                    .contains(&pattern.name_pattern.to_lowercase())
-                {
-                    debug!(
-                        "Found MCP server process: {} (PID: {:?})",
-                        pattern.server_name, pid
-                    );
-
-                    let port = Self::extract_port_from_command(command).or(pattern.default_port);
-
-                    let transport = if let Some(port) = port {
-                        TransportConfig::Http {
-                            http_url: format!("http://127.0.0.1:{port}"),
-                            streamable_http: false,
-                            protocol_version: None,
-                        }
-                    } else {
-                        debug!(
-                            "Found {} process but could not determine port/transport",
-                            pattern.server_name
-                        );
-                        continue;
-                    };
-
-                    servers.push(DiscoveredServer::new(
-                        pattern.server_name.clone(),
-                        format!("{} (running)", pattern.description),
-                        DiscoverySource::RunningProcess,
-                        transport,
-                        ServerMetadata {
-                            config_path: None,
-                            pid,
-                            port,
-                            command: Some(command.to_string()),
-                            working_dir: None,
-                        },
-                    ));
-
-                    break;
-                }
-            }
-        }
-
-        Ok(servers)
     }
 
     /// Try to extract port from command line arguments
