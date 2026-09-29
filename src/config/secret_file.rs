@@ -400,9 +400,18 @@ fn refusal_message(
     )
 }
 
+/// `path` as one POSIX shell word, so a copied fix cannot split on a space,
+/// read a leading `-` as an option or run metacharacters. Plain paths stay bare.
+#[cfg(unix)]
+fn shell_arg(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    shlex::try_quote(&text).map_or_else(|_| text.to_string(), std::borrow::Cow::into_owned)
+}
+
 /// The owner refusal: another account owns the file, so it can chmod it at will.
-/// A secret file also needs `chmod 600`: a group-read mode stays refused once
-/// this process owns the file.
+/// `chown` keeps the mode, so the fix also clears what the mode rules refuse: a
+/// secret file needs `chmod 600` (a group-read mode stays refused once this
+/// process owns the file) and a trust file `chmod go-w`.
 #[cfg(unix)]
 fn foreign_owner_message(
     what: SecretFile,
@@ -410,14 +419,15 @@ fn foreign_owner_message(
     (file_uid, euid): (u32, u32),
     why: &str,
 ) -> String {
+    let shown = shell_arg(path);
     let chmod = match what.protects() {
-        Protects::Secrecy => format!(" && chmod 600 {}", path.display()),
-        Protects::Integrity => String::new(),
+        Protects::Secrecy => "chmod 600",
+        Protects::Integrity => "chmod go-w",
     };
     format!(
         "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither this \
          process (uid {euid}) nor root, so that account can change it at will, and {why}. \
-         Fix: chown {euid} {path}{chmod} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
+         Fix: chown {euid} -- {shown} && {chmod} -- {shown} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
         noun = what.noun(),
         path = path.display(),
     )
@@ -512,11 +522,11 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
 fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     let see = format!("(see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})");
     match (what.protects(), owned, what) {
-        (Protects::Integrity, true, _) => format!("Fix: chmod go-w {} {see}.", path.display()),
+        (Protects::Integrity, true, _) => format!("Fix: chmod go-w -- {} {see}.", shell_arg(path)),
         (Protects::Integrity, false, _) => {
             format!("Fix: clear the group- and world-write bits {see}.")
         }
-        (Protects::Secrecy, true, _) => format!("Fix: chmod 600 {} {see}.", path.display()),
+        (Protects::Secrecy, true, _) => format!("Fix: chmod 600 -- {} {see}.", shell_arg(path)),
         (Protects::Secrecy, false, SecretFile::Config | SecretFile::EnvFile) => format!(
             "Fix: clear the world and group-write bits; on Kubernetes give the pod an \
              fsGroup this process is in (the Helm chart pins podSecurityContext.fsGroup \

@@ -84,6 +84,7 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
+pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -1547,13 +1548,13 @@ impl MetaMcp {
     pub(super) fn active_profile(
         &self,
         session_id: Option<&str>,
-    ) -> crate::routing_profile::RoutingProfile {
+    ) -> std::sync::Arc<crate::routing_profile::RoutingProfile> {
         let default_name = self.profile_registry.default_name();
         let name = session_key(session_id).map_or_else(
             || default_name.to_string(),
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
-        self.profile_registry.get(&name)
+        self.profile_registry.get_shared(&name)
     }
 }
 
@@ -2130,28 +2131,27 @@ impl MetaMcp {
         // Operator exposure allow-list. Enforced ahead of the admin gate, not
         // beside it: a meta-tool hidden from `tools/list` but still executable is
         // security theatre, and the admin gate answering first would disclose the
-        // tool's existence to the caller the allow-list is hiding it from. Reaching
-        // this check before the admin gate is what makes the refusal wording below
-        // load-bearing rather than decorative. `exposed_meta_tools` promises
-        // that an unlisted tool "is not callable either". Names outside the
-        // governed meta-tool set - surfaced and backend tools - are unaffected.
-        //
-        // The refusal is worded exactly like the unrecognised-tool fallback below:
-        // an operator hiding a tool must not get a reply confirming it exists and
-        // was deliberately withheld.
+        // tool's existence to the caller the allow-list is hiding it from.
+        // `exposed_meta_tools` promises that an unlisted tool "is not callable
+        // either"; names outside the governed set (surfaced and backend tools)
+        // are unaffected. The refusal is worded exactly like the unrecognised-tool
+        // fallback below: a reply confirming the tool exists would disclose it.
         if !self.meta_tool_exposure.is_exposed(tool_name) {
-            // Built the same way the fallback below builds its no-suggestion
-            // form, and returned through the same helper, so the two answers
-            // are byte-identical. Constructing the response directly here
-            // produced a message without the error type's
-            // "JSON-RPC error -32601: " prefix, and that difference was itself
-            // the disclosure. The fallback's did-you-mean hint is deliberately
-            // not reached: a hidden tool name matches itself, so a suggestion
-            // would name the tool the allow-list is hiding.
+            // Built and returned exactly as the fallback below builds its
+            // no-suggestion form, so the two answers are byte-identical (the
+            // error type's "JSON-RPC error -32601: " prefix was itself a
+            // disclosure). The did-you-mean hint is deliberately not reached:
+            // a hidden tool name matches itself and would name it.
             return error_response_preserving_status(
                 id,
                 &crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
             );
+        }
+        // Answers without the requestState this gateway issued answer nothing
+        // it asked: every tool refuses them, before any dispatch can repeat a
+        // side effect.
+        if let Err(error) = caller.retry.solicited_input_responses() {
+            return error_response_preserving_status(id, &error);
         }
 
         // Admin gate for the meta-tools that change the gateway for every
@@ -2295,7 +2295,7 @@ impl MetaMcp {
         .await
     }
 
-    async fn dispatch_below_gate_shaped(
+    async fn dispatch_below_gate_shaped_in_slot(
         &self,
         target: DispatchTarget<'_>,
         shape: ResultShape,
@@ -2748,6 +2748,12 @@ mod test_callers;
 #[cfg(test)]
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
+#[cfg(test)]
+pub(super) mod grant_audit_fixture;
+#[cfg(test)]
+mod grant_decision_audit_tests;
+#[cfg(test)]
+mod grant_decision_slot_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;

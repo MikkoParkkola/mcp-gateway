@@ -117,11 +117,10 @@ pub(crate) mod log_capture {
         }
     }
 
-    /// Capture every event at DEBUG and above on this thread until the guard
-    /// drops. Run under a current-thread runtime so spawned tasks log here too.
-    pub(crate) fn capture_debug() -> (Captured, tracing::subscriber::DefaultGuard) {
-        // Global interest keeps a callsite first reached without a scoped
-        // subscriber from being cached as disabled for this one.
+    /// Install a process-wide, always-interested Registry once. A callsite
+    /// first reached without a scoped subscriber is otherwise cached as
+    /// disabled, which makes a later scoped capture order-dependent.
+    pub(crate) fn ensure_global_interest() {
         use tracing_subscriber::prelude::*;
         static INTEREST: std::sync::Once = std::sync::Once::new();
         INTEREST.call_once(|| {
@@ -130,6 +129,12 @@ pub(crate) mod log_capture {
                     .with(tracing::level_filters::LevelFilter::TRACE),
             );
         });
+    }
+
+    /// Capture every event at DEBUG and above on this thread until the guard
+    /// drops. Run under a current-thread runtime so spawned tasks log here too.
+    pub(crate) fn capture_debug() -> (Captured, tracing::subscriber::DefaultGuard) {
+        ensure_global_interest();
         let captured = Captured::default();
         let buffer = Arc::clone(&captured.0);
         let subscriber = tracing_subscriber::fmt()

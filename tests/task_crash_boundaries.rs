@@ -273,7 +273,7 @@ async fn refused_like_a_never_minted_id(
 /// discarded. After a restart, principal A's byte-identical retry recovers the
 /// same handle, A can read it, B cannot, and nothing is submitted twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
+async fn a_create_with_a_discarded_ack_is_recovered_by_its_owner_only() {
     let root = temp_root("crash-create-ack");
     let peer = serve_peer(Upstream::Working).await;
     let port = free_port();
