@@ -76,7 +76,8 @@ async fn code_mode(meta: &MetaMcp, caller: &super::super::MetaMcpCallerContext<'
         .expect("code-mode search answers")
 }
 
-/// The four tool-discovery answers for `caller`, aggregate ones only.
+/// The three aggregate tool-discovery answers for `caller`: listing, search
+/// and code-mode search. Each test checks the named listing on its own.
 async fn discover(
     meta: &MetaMcp,
     caller: &super::super::MetaMcpCallerContext<'_>,
@@ -160,7 +161,7 @@ async fn anonymous_caller_is_not_served_a_required_backends_shared_snapshot() {
     assert_eq!(
         requests(&dispatches),
         seeding,
-        "discovery fetched, then filtered"
+        "discovery must not contact the backend beyond the seeding fetch"
     );
 }
 
