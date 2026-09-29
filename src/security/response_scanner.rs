@@ -42,7 +42,7 @@ pub struct ResponseScanner {
     patterns: RegexSet,
     /// Human-readable descriptions for each pattern (same index as regex set).
     descriptions: Vec<String>,
-    /// RegexSet searches run by this instance: the #613 tests' oracle.
+    /// `RegexSet` searches run by this instance: the #613 tests' oracle.
     #[cfg(test)]
     scans: std::sync::atomic::AtomicUsize,
 }
@@ -583,7 +583,7 @@ mod tests {
         );
     }
 
-    /// Perf oracle: a CallToolResult pays one search per string VALUE, not per
+    /// Perf oracle: a `CallToolResult` pays one search per string VALUE, not per
     /// protocol key. {"content":[{"type":"text","text":"hello"}],"isError":false}
     /// has 2 string values and 4 protocol keys.
     #[test]
