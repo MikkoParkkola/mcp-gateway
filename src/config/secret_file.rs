@@ -40,7 +40,6 @@ pub(crate) enum SecretFile {
 }
 
 /// What a file's mode must protect.
-#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Protects {
     /// It holds a secret: others may neither read nor change it.
@@ -74,7 +73,6 @@ impl SecretFile {
         }
     }
 
-    #[cfg(unix)]
     pub(crate) const fn protects(self) -> Protects {
         match self {
             Self::TlsCert | Self::TlsCrl | Self::IdentityGrants | Self::ControlPlaneCollection => {

@@ -163,6 +163,16 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
     found
 }
 
+/// Every rule the descriptor breaks for a file of class `what`.
+pub(crate) fn refusals_for(
+    inspection: &Inspection,
+    user: &Sid,
+    what: crate::config::Protects,
+) -> Vec<PrivacyRefusal> {
+    let _ = what;
+    refusals(inspection, user)
+}
+
 /// Every rule the open object breaks; empty when it is private.
 pub(crate) fn privacy_refusals(file: &File) -> Vec<PrivacyRefusal> {
     match (user(), crate::win_acl::inspect(file)) {
@@ -399,3 +409,7 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "private_fs_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "private_fs_class_tests.rs"]
+mod class_tests;

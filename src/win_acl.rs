@@ -65,6 +65,26 @@ impl Sid {
         }
         out
     }
+
+    /// A SID from its authority and sub-authorities, for synthetic
+    /// `Inspection` values in tests.
+    #[cfg(test)]
+    pub(crate) fn from_parts(authority: u8, subs: &[u32]) -> Self {
+        let mut b = vec![
+            1,
+            u8::try_from(subs.len()).expect("few subs"),
+            0,
+            0,
+            0,
+            0,
+            0,
+            authority,
+        ];
+        for s in subs {
+            b.extend_from_slice(&s.to_le_bytes());
+        }
+        Self(b)
+    }
 }
 
 /// Which kind of object a descriptor is for.
