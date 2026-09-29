@@ -11,7 +11,7 @@
 //! answer to `server/discover`, so no row asserts an era it also sets.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -161,11 +161,14 @@ async fn row_13_logging_set_level_skips_a_modern_backend_and_forwards_to_a_legac
 
 /// A modern peer that also serves `tools/list`, so the catalogue fills through
 /// the same path a running gateway uses.
-struct ModernCatalogue;
+struct ModernCatalogue {
+    requests: AtomicUsize,
+}
 
 #[async_trait::async_trait]
 impl Transport for ModernCatalogue {
     async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        self.requests.fetch_add(1, Ordering::Relaxed);
         let id = RequestId::Number(1);
         match method {
             "server/discover" => Ok(JsonRpcResponse::error(
@@ -220,7 +223,10 @@ async fn discover_6_a_modern_backend_is_visible_in_gateway_search_and_its_breake
         &crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let transport: Arc<dyn Transport> = Arc::new(ModernCatalogue);
+    let peer = Arc::new(ModernCatalogue {
+        requests: AtomicUsize::new(0),
+    });
+    let transport: Arc<dyn Transport> = Arc::clone(&peer) as Arc<dyn Transport>;
     backend.set_transport_for_test(Arc::clone(&transport));
     backend.resolve_era_for_test(&transport).await;
     assert_eq!(
@@ -229,6 +235,7 @@ async fn discover_6_a_modern_backend_is_visible_in_gateway_search_and_its_breake
         "precondition: the fixture must construct a modern peer"
     );
     backend.get_tools_shared().await.expect("catalogue fills");
+    let before = peer.requests.load(Ordering::Relaxed);
 
     // The constructor the search end-to-end fixtures use, so this rides a path
     // already proven to rank and return matches.
@@ -248,12 +255,18 @@ async fn discover_6_a_modern_backend_is_visible_in_gateway_search_and_its_breake
         .expect("gateway_search answers");
 
     assert!(
-        found["matches"]
-            .as_array()
-            .is_some_and(|hits| hits.iter().any(|hit| hit["tool"]
-                .as_str()
-                .is_some_and(|tool| tool.contains("frobnicate_widget")))),
+        found["matches"].as_array().is_some_and(|hits| hits
+            .iter()
+            .any(|hit| hit["tool"] == "modern-cat:frobnicate_widget")),
         "a modern-era backend's tool must appear in gateway_search: {found}"
+    );
+    // Search reads the cached catalogue: it sends the peer nothing, so it has
+    // no failure to record against the breaker (the breaker's own transitions
+    // are pinned in `crate::backend::tests`).
+    assert_eq!(
+        peer.requests.load(Ordering::Relaxed),
+        before,
+        "searching a modern-era backend must not send it a request"
     );
     assert!(
         !backend.is_circuit_tripped(),
