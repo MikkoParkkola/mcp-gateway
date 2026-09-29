@@ -868,8 +868,32 @@ mod http {
         post_answer(state, Some(principal), body).await
     }
 
+    /// POST to the per-backend route `/mcp/{fixture::BACKEND}` as `principal`.
+    ///
+    /// Same headers, auth middleware and verified identity as [`post_as`]; only
+    /// the path differs, so a refusal seen here is the route's and not the
+    /// request's.
+    pub(super) async fn post_direct(
+        state: Arc<AppState>,
+        principal: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let uri = format!("/mcp/{}", fixture::BACKEND);
+        let answer = post_answer_to(state, &uri, Some(principal), body).await;
+        (answer.status, answer.body)
+    }
+
     async fn post_answer(state: Arc<AppState>, principal: Option<&str>, body: Value) -> Answer {
-        let response = send(state, principal, body).await;
+        post_answer_to(state, "/mcp", principal, body).await
+    }
+
+    async fn post_answer_to(
+        state: Arc<AppState>,
+        uri: &str,
+        principal: Option<&str>,
+        body: Value,
+    ) -> Answer {
+        let response = send_to(state, uri, principal, body).await;
         let status = response.status();
         // An admitted `subscriptions/listen` is an OPEN STREAM by design, so
         // draining its body never returns. Content-type is what separates the
@@ -909,10 +933,19 @@ mod http {
         principal: Option<&str>,
         body: Value,
     ) -> axum::http::Response<Body> {
+        send_to(state, "/mcp", principal, body).await
+    }
+
+    async fn send_to(
+        state: Arc<AppState>,
+        uri: &str,
+        principal: Option<&str>,
+        body: Value,
+    ) -> axum::http::Response<Body> {
         let method = body["method"].as_str().unwrap_or_default().to_string();
         let mut builder = Request::builder()
             .method("POST")
-            .uri("/mcp")
+            .uri(uri)
             .header("content-type", "application/json")
             .header("mcp-protocol-version", "2026-07-28")
             .header("mcp-method", &method);
@@ -1126,7 +1159,11 @@ mod dispatch {
 
     use serde_json::json;
 
-    use super::http::{modern, post, post_against, state, state_holding, task_id_of, task_invoke};
+    use axum::http::StatusCode;
+
+    use super::http::{
+        modern, post, post_against, post_direct, state, state_holding, task_id_of, task_invoke,
+    };
 
     /// An id nothing ever created. A negative control, and it stays one.
     const FABRICATED_ID: &str = "task-00000000-0000-4000-8000-000000000000";
@@ -1270,6 +1307,88 @@ mod dispatch {
             fixture.backend.calls(),
             1,
             "an accepted `tasks/update` must not run the tool a second time"
+        );
+        gate.release_all();
+    }
+
+    // =======================================================================
+    // MIK-7311.LIFECYCLE.1 (as amended by the #2268 ruling) — tasks run through
+    // POST /mcp only; POST /mcp/{backend} refuses task access with -32601, as
+    // MIK-7596.OWNER.1 requires.
+    // =======================================================================
+
+    /// A task created and still running on `/mcp` is not reachable through the
+    /// per-backend route, even by its OWNER; `/mcp` still serves it.
+    ///
+    /// The owner sends every call, so the refusal is the route's and not an
+    /// ownership answer. The cross-caller cells (caller B never reaches the
+    /// backend) are `router::direct_tasks_owner_tests`, which an integration
+    /// test cannot import. The code and message are checked together because
+    /// the counted backend answers any forwarded method with success `{}`.
+    #[tokio::test]
+    async fn lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp() {
+        let (fixture, mut gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(15, "mik-7311-lifecycle-1-direct-refusal"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        gate.wait_for_dispatch().await;
+
+        let mut request_id = 16;
+        for (method, params) in [
+            ("tasks/get", json!({ "taskId": task_id })),
+            ("tasks/result", json!({ "taskId": task_id })),
+            ("tasks/update", json!({ "taskId": task_id })),
+            ("tasks/cancel", json!({ "taskId": task_id })),
+            ("subscriptions/listen", json!({ "taskIds": [task_id] })),
+        ] {
+            let (status, body) = post_direct(
+                Arc::clone(&fixture.state),
+                "key-a",
+                modern(request_id, method, params, true),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{method}: {body}");
+            assert_eq!(
+                body.pointer("/error/code"),
+                Some(&json!(-32601)),
+                "{method} on /mcp/{{backend}} is refused -32601: {body}"
+            );
+            assert!(
+                body.pointer("/error/message")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|message| message.contains("use /mcp")),
+                "{method} refusal must point at /mcp: {body}"
+            );
+            assert_eq!(body["id"], json!(request_id), "{method}: {body}");
+            request_id += 1;
+        }
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "no refused call may dispatch the tool again"
+        );
+
+        // Positive control: the same task, same owner, on /mcp is served and
+        // was not cancelled by the refused `tasks/cancel`.
+        let (_, fetched) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(request_id, "tasks/get", json!({ "taskId": task_id }), true),
+        )
+        .await;
+        assert_eq!(
+            fetched.pointer("/result/taskId"),
+            Some(&json!(task_id)),
+            "/mcp still serves the task: {fetched}"
+        );
+        assert_ne!(
+            fetched.pointer("/result/status"),
+            Some(&json!("cancelled")),
+            "a refused per-backend cancel must not cancel the task: {fetched}"
         );
         gate.release_all();
     }

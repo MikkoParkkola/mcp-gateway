@@ -21,7 +21,7 @@ Every product row starts unverified until the release integrator grades evidence
 
 | Criteria | Discriminating test and positive control |
 |---|---|
-| MIK-7311.LIFECYCLE.1 | Through POST /mcp and POST /mcp/{backend}, negotiate per request, start a real slow task, poll, supply requested input, and observe a typed terminal result; no capability produces the required refusal/core result. Cover JSON-RPC failure separately from completed isError tool results. |
+| MIK-7311.LIFECYCLE.1 | Through POST /mcp, negotiate per request, start a real slow task, poll, supply requested input, and observe a typed terminal result; no capability produces the required refusal/core result. Cover JSON-RPC failure separately from completed isError tool results. On POST /mcp/{backend}, `tasks/*` and `subscriptions/listen` naming `taskIds` for that task are refused -32601 without reaching the backend, and POST /mcp still serves the task (MIK-7596.OWNER.1 governs, ruling #2268; per-backend task serving is #2303). |
 | MIK-7311.LIFECYCLE.2 | Disconnect after accepting a task, reconnect as the same and a different principal; original caller can poll/control, other caller cannot learn existence or mutate it. |
 | MIK-7311.LIFECYCLE.3 | Immediately poll the returned handle; kill/restart the gateway at create-before-ack and settlement boundaries; retained handles/outcomes remain queryable with owner checks. |
 | MIK-7311.LIFECYCLE.4 | Backend records a write before response loss; restart gateway, recover a known upstream job or report interruption/uncertainty; count effects and prove no silent replay. A read-only recoverable job is the positive control. |
