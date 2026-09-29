@@ -45,7 +45,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54 and 76 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76 and 79 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. The items below print no notice: read them here before upgrading.
@@ -78,6 +78,8 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 85
 - Item 86
 - Item 87
+- Item 88
+- Item 95
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -104,6 +106,7 @@ deployment.**
 - Item 51, only for a `role: admin` rule whose only condition is `domain`
 - Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
 - Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
+- Item 79, only with auth on, identity grants on and a governance store that cannot open
 
 **Item 7 permanently fails the backend it names, with one warning, and the gateway starts
 without it.**
@@ -190,7 +193,7 @@ without it.**
 | 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
-| 79 | Reserved: lands with a pending change | None yet |
+| 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
@@ -199,12 +202,14 @@ without it.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
-| 88 | Reserved: lands with #2183 | None yet |
+| 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
 | 89 | Reserved: lands with #2195 | None yet |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
+| 94 | Reserved: lands with #2209 | None yet |
+| 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2183,6 +2188,28 @@ directory share its accounts.
 
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
 
+## 79. Identity grant changes are recorded in the governance log, and need it
+
+`identity grants` CLI changes, edits made directly to the grant file, and the grants each
+start serves are now governance audit records (actor `unknown`, action `mutate_grant`).
+
+- With auth on and identity grants on, the gateway refuses to start (HTTP and `serve --stdio`)
+  when the governance store cannot open, instead of starting without it: "identity grants need
+  the governance audit log when auth is on". Set `control_plane.store_dir` to a writable
+  directory. With auth off nothing changes.
+- The CLI writes a journal beside the grant file (`<grant file>.journal.jsonl`, mode 0600). Keep
+  it with the grant file; deleting it makes the next start record the history as indeterminate.
+- A grant change that is applied but cannot be recorded stays applied, and the reload outcome
+  says `UNRECORDED`. If the audit plan cannot be written first, the reload is refused and a start
+  serves no grants until it can.
+- The gateway reads the grant file under a lock file beside it. On a read-only filesystem (for
+  example a Kubernetes Secret or ConfigMap mount) it reads without the lock. When it cannot
+  create the lock because the directory is missing or it may not write there, the grant file
+  counts as unreadable: with `fail_on_error` the start is refused, otherwise no grants are
+  served until a reload can read them.
+- `ControlPlaneAuditEvent` gains a `grant_change` field, so a struct literal of it in code that
+  builds against this crate needs `grant_change: None`. Serialised events without it are unchanged.
+
 ## 80. Discovery keeps env, headers and argument boundaries
 
 `mcp-gateway cap discover` and the setup wizard import MCP servers from client config files
@@ -2306,6 +2333,25 @@ by URL already do:
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
 
+## 88. The HTTP listener gives open requests `server.shutdown_timeout`, then stops
+
+After SIGTERM or Ctrl+C, a plain-HTTP gateway waited for every open request to finish,
+with no limit. One request that never finished, such as a hung upstream call or a long
+stream, kept the process running until the orchestrator killed it. The mTLS listener waited
+a fixed 30 seconds whatever the config said.
+
+In 4.0 both listeners stop the same way (#2147):
+
+- New connections are refused as soon as the signal arrives.
+- Open requests get `server.shutdown_timeout` (default 30 s) to finish. Requests still
+  running at the deadline, including open event streams, are cut.
+- The gateway then saves its state and waits, within the same bound, for any in-flight
+  work the cut released, before it stops its backends.
+
+**Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
+orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) above
+twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
+
 ## 90. A request header naming an unserved protocol version is refused
 
 3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
@@ -2363,6 +2409,29 @@ A rule whose own `backends` list is empty is a different case, covered in item 3
 **Action:** a client that requests scopes must request only ones its matching rule allows. A
 requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
 gets 403 `access_denied`, whose message reads as though no policy matched.
+
+## 95. List fills count toward the breaker and the rate limiter
+
+In 3.x, a list fill (the `tools/list`, `resources/list`, `resources/templates/list` or
+`prompts/list` a cold cache sends for discovery, `gateway_search`, `gateway_list_tools`,
+resources or prompts) went straight to the backend. It ignored an open circuit breaker,
+spent no `failsafe.rate_limit` token, and its outcome never reached the breaker.
+
+In 4.0 every list fill a request starts, including the background refresh a discovery request
+starts, is gated like a tool call:
+
+- An open breaker refuses it with the circuit-open error, and sends nothing.
+- It spends one `failsafe.rate_limit` token from the same budget as tool calls. A cold-cache
+  burst over N list keys spends N tokens.
+- A list that cannot be reached counts as a failure toward the breaker. A throttled answer counts
+  as neither. An answer that arrives but cannot be used counts as reachable, is logged as a
+  warning and is counted in `mcp_backend_requests_total{status="list_unusable"}`.
+
+Startup warm-up fills are never refused and spend no token, but their outcome is recorded, so a
+backend that is down at startup opens its breaker before traffic arrives.
+
+**Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
+caches warm (`meta_mcp.warm_start`).
 
 ## Upgrading from 3.5.x: a walkthrough
 

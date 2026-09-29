@@ -45,7 +45,7 @@ pub(crate) use secret_ref::is_template_syntax;
 
 // New items (F18), not widened ones: the one mode-checked read for files
 // outside `config`.
-pub(crate) use secret_file::{CheckedFile, read_checked_file};
+pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
@@ -1291,7 +1291,9 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
-    /// Graceful shutdown timeout.
+    /// Graceful shutdown timeout: how long the HTTP listener gives open
+    /// requests after the signal before it cuts them, and then how long the
+    /// in-flight drain may wait (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
     /// Maximum request body size (bytes) on every route. Read once at startup:
