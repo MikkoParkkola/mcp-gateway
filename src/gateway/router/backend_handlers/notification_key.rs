@@ -23,10 +23,10 @@ pub(super) async fn resolve(
     verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
 ) -> Result<Option<String>, ()> {
     let idp_cfg = backend.identity_propagation_config();
-    let binding = match idp_cfg
+    let binding = if let Some(cfg) = idp_cfg
         .filter(|c| c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough)
     {
-        Some(cfg) => match super::resolve_passthrough_headers(
+        match super::resolve_passthrough_headers(
             cfg,
             inbound_headers,
             backend.transport_carries_identity_headers(),
@@ -47,15 +47,14 @@ pub(super) async fn resolve(
                 }
                 return Err(());
             }
-        },
-        None => {
-            let (_headers, binding, _held) = state
-                .meta_mcp
-                .resolve_propagation_credential_held(name, verified_identity)
-                .await
-                .map_err(|_| ())?;
-            binding
         }
+    } else {
+        let (_headers, binding, _held) = state
+            .meta_mcp
+            .resolve_propagation_credential_held(name, verified_identity)
+            .await
+            .map_err(|_| ())?;
+        binding
     };
     if binding.is_none() {
         state
