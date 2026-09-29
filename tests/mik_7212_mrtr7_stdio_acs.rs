@@ -268,11 +268,11 @@ async fn mik_1991_a_handshake_without_elicitation_keeps_the_question_out() {
     let lines = session.collect_lines(COLLECT_WINDOW).await;
     let frames = frames_lenient(&lines);
 
-    // Control: the backend was reached, so "no question" is the bridge's
-    // refusal and not an unreached fixture.
+    // Control: the call itself reached the backend, so "no question" is the
+    // bridge's refusal and not a dropped `tools/call`.
     assert!(
-        saw_method(&received, "initialize"),
-        "the fixture backend was never reached: {lines:?}"
+        saw_method(&received, "tools/call"),
+        "the call never reached the fixture backend: {lines:?}"
     );
     assert!(
         prompts_in(&frames).is_empty(),
