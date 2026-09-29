@@ -175,13 +175,12 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && self.admits_backend(&cap.name, scope, session_id)
         {
+            // Names only: this runs on every initialize and tools/list, and
+            // `get_tools()` deep-clones every definition's schemas (#2110).
             let admitted = cap
-                .get_tools()
+                .list()
                 .iter()
-                .filter(|t| {
-                    self.may_invoke(&cap.name, &t.name, scope, session_id)
-                        .is_ok()
-                })
+                .filter(|name| self.may_invoke(&cap.name, name, scope, session_id).is_ok())
                 .count();
             total = total.plus(admitted);
             servers += 1;
