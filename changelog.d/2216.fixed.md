@@ -1,0 +1,1 @@
+- A bridged exchange whose retry round returns a malformed `input_required` result now fails as an upstream fault instead of being recorded as the completed call under the caller's idempotency key.
