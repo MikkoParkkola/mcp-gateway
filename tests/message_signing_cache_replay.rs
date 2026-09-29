@@ -11,7 +11,7 @@
 //! dispatches.
 
 #[path = "common/signing_gateway.rs"]
-mod signing_gateway;
+pub mod signing_gateway;
 
 use std::path::PathBuf;
 use std::process::Stdio;
