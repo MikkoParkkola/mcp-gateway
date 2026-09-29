@@ -183,16 +183,18 @@ fn hmac_signature_present_when_secret_configured() {
 
     // WHEN: reading the written entry
     let entries = read_entries(tmp.path());
-    let entry = &entries[0];
+    assert_eq!(entries.len(), 2, "open record plus the caller record");
 
-    // THEN: sig and key_id are present and correctly formatted
-    let sig = entry["sig"].as_str().expect("sig must be a string");
-    assert!(
-        sig.starts_with("hmac-sha256:"),
-        "sig must have hmac-sha256 prefix"
-    );
-    assert_eq!(sig.len(), "hmac-sha256:".len() + 64); // 64 hex chars = 32 bytes
-    assert_eq!(entry["key_id"], "test-key");
+    // THEN: sig and key_id are present and correctly formatted on both
+    for entry in &entries {
+        let sig = entry["sig"].as_str().expect("sig must be a string");
+        assert!(
+            sig.starts_with("hmac-sha256:"),
+            "sig must have hmac-sha256 prefix"
+        );
+        assert_eq!(sig.len(), "hmac-sha256:".len() + 64); // 64 hex chars = 32 bytes
+        assert_eq!(entry["key_id"], "test-key");
+    }
 }
 
 // ── Test 7: no sig or key_id when secret is empty ────────────────────────
@@ -206,11 +208,13 @@ fn no_sig_when_secret_empty() {
 
     // WHEN: reading the entry
     let entries = read_entries(tmp.path());
-    let entry = &entries[0];
+    assert_eq!(entries.len(), 2, "open record plus the caller record");
 
-    // THEN: sig and key_id are absent
-    assert!(entry.get("sig").is_none(), "sig must be absent");
-    assert!(entry.get("key_id").is_none(), "key_id must be absent");
+    // THEN: sig and key_id are absent on both
+    for entry in &entries {
+        assert!(entry.get("sig").is_none(), "sig must be absent");
+        assert!(entry.get("key_id").is_none(), "key_id must be absent");
+    }
 }
 
 // ── Test 8: first entry's prev_entry_hash is "genesis" ───────────────────
@@ -223,6 +227,8 @@ fn first_entry_prev_hash_is_genesis() {
 
     let entries = read_entries(tmp.path());
     assert_eq!(entries[0]["prev_entry_hash"], "genesis");
+    // The first caller record chains to the open record, not to genesis.
+    assert_eq!(entries[1]["prev_entry_hash"], entries[0]["entry_hash"]);
 }
 
 // ── Test 9: verify on empty file succeeds ────────────────────────────────
