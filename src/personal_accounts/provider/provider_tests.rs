@@ -874,7 +874,7 @@ async fn invalid_grant_maps_distinctly_and_failures_leak_no_response_bytes() {
 
 #[path = "provider_tests/grant_flow_tests.rs"]
 mod grant_flow_tests;
-#[path = "provider_tests/pinned_userinfo_tests.rs"]
-mod pinned_userinfo_tests;
 #[path = "provider_tests/missing_refresh_token_tests.rs"]
 mod missing_refresh_token_tests;
+#[path = "provider_tests/pinned_userinfo_tests.rs"]
+mod pinned_userinfo_tests;
