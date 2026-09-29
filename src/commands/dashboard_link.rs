@@ -122,13 +122,14 @@ pub fn dashboard_link_base(
 ///
 /// A message naming the target and asking for `https://` or a loopback URL.
 pub(crate) fn check_target(base: &str) -> Result<(), String> {
-    let url = reqwest::Url::parse(base).map_err(|e| format!("not a URL: {base} ({e})"))?;
+    let shown = mcp_gateway::security::sanitize::redact_url_for_diagnostics(base);
+    let url = reqwest::Url::parse(base).map_err(|e| format!("not a URL: {shown} ({e})"))?;
     match url.scheme() {
         "https" => return Ok(()),
         "http" => {}
         other => {
             return Err(format!(
-                "unsupported scheme {other}: in {base}; use https:// or http://"
+                "unsupported scheme {other}: in {shown}; use https:// or http://"
             ));
         }
     }
@@ -142,7 +143,7 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "refusing to send the admin credential in cleartext to {base}; \
+            "refusing to send the admin credential in cleartext to {shown}; \
              use https:// or a loopback address"
         ))
     }
@@ -178,7 +179,7 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| transport_error(base, &e, tls))?;
+        .map_err(|e| transport_error(base, e, tls))?;
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap_or_default();
     if !status.is_success() {
@@ -222,10 +223,14 @@ fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, String> {
 
 /// A transport failure with its causes, and on `https` the TLS material the
 /// operator did not give.
-fn transport_error(base: &str, error: &reqwest::Error, tls: &LinkTls) -> String {
+fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
     use std::fmt::Write as _;
-    let mut message = format!("could not reach the gateway at {base}: {error}");
-    let mut cause = std::error::Error::source(error);
+    // Neither `--url` nor the error's own request URL may carry userinfo or a
+    // query token to the terminal.
+    let shown = mcp_gateway::security::sanitize::redact_url_for_diagnostics(base);
+    let error = error.without_url();
+    let mut message = format!("could not reach the gateway at {shown}: {error}");
+    let mut cause = std::error::Error::source(&error);
     while let Some(inner) = cause {
         let _ = write!(message, ": {inner}");
         cause = inner.source();
@@ -398,6 +403,21 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move { axum::serve(listener, app).await });
         format!("http://{addr}")
+    }
+
+    /// A `--url` carrying userinfo or a query token must not reach stderr.
+    #[tokio::test]
+    async fn errors_never_echo_url_credentials() {
+        for base in [
+            "http://user:PW1@10.0.0.5:9/x?token=Q1",
+            "http://user:PW1@127.0.0.1:1/x?token=Q1",
+            "ftp://user:PW1@h/x?token=Q1",
+        ] {
+            let err = fetch_link(base, "tok").await.expect_err(base);
+            assert!(!err.contains("PW1") && !err.contains("Q1"), "{err}");
+        }
+        let err = super::check_target("not a url:PW1@?token=Q1").expect_err("unparseable");
+        assert!(!err.contains("PW1") && !err.contains("Q1"), "{err}");
     }
 
     #[tokio::test]

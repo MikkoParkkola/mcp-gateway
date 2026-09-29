@@ -66,7 +66,7 @@ backend" and "fails a capability file" first.**
 | 39 | `server.request_timeout` is ignored with a warning; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
-| 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
+| 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit; library users: the `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` modules are removed |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 | 44 | `file:` secret references; a literal starting `file:` is now a reference | Point `file:` at an absolute, owner-only (or group-read via `fsGroup`) file; change a literal secret that starts with `file:` |
 | 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
@@ -120,12 +120,12 @@ backend" and "fails a capability file" first.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
-| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
+| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container), then `chmod 600` a secret or `chmod go-w` a trust file; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 | 99 | Windows: the config, OAuth token and client files, and generated mTLS certificates and keys are created owner-only; those and the secret files it only reads (env files, `file:` targets, TLS keys and credential files) are refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
-| 101 | Reserved: lands with #2294 | None yet |
+| 101 | A restart that finds the audit log's `.hwm` missing, on a log that went through segment handling, writes an `audit_segment_hwm_missing` record; `audit verify` then fails the log for as long as it is kept | Investigate how the mark went missing; archive the log and start a new one to clear the failure |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 
 
@@ -1189,6 +1189,8 @@ A sender that bursts above the limit loses events: most providers, GitHub includ
 retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0`. The value is
 read at startup; a reload that changes `webhooks` needs a restart.
 
+Library users: the `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` modules are removed. Nothing in the gateway constructed either; drop the imports.
+
 ## 43. With auth on, the audit log is required and fails closed
 
 **Startup:** prints a notice; refuses to start, only with auth on and no working audit log
@@ -1512,8 +1514,8 @@ deletes a segment before it was exported, the exporter re-anchors, reports `rean
 counts the skipped segments in `mcp_audit_export_segments_skipped_total`.
 
 The log now carries housekeeping records that SIEM tailers and `control_plane.export`
-consumers see: `audit_segment_sealed`, `audit_segment_opened`, `audit_segment_expired`, and a
-rare `audit_segment_torn_tail_dropped`. A parser that rejects an `event` value it does not know
+consumers see: `audit_segment_sealed`, `audit_segment_opened`, `audit_segment_expired`, and the
+rare `audit_segment_torn_tail_dropped` and `audit_segment_hwm_missing` (item 101). A parser that rejects an `event` value it does not know
 must accept these.
 
 Deleting or truncating the active `transparency.jsonl` is now detected. A
@@ -2704,12 +2706,12 @@ or control-plane file unless its owner is the gateway's effective user or root (
 the mode. The check runs before the mode rules, on the same handle as the read.
 
 - **The error names the file, the owner uid and the fix.** For a secret file the fix is
-  `chown <gateway uid> <file> && chmod 600 <file>`; the `chmod` is needed because a group-read
-  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> <file>`.
+  `chown <gateway uid> -- <file> && chmod 600 -- <file>`; the `chmod` is needed because a group-read
+  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> -- <file> && chmod go-w -- <file>`: `chown` keeps a group- or world-write bit, which the trust rule still refuses. The printed command quotes the path and ends options with `--`.
 - **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
   and still loads.
 - **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
-  `chmod 600` it if it holds a secret (leave a certificate or CRL readable). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
+  `chmod 600` it if it holds a secret (a certificate or CRL keeps its read bits; `chmod go-w` it if others can write it). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.
@@ -2838,6 +2840,34 @@ id; reissue the credential without the padding. A certificate whose first SAN UR
 keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
 firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
 API-key owner, not on these subjects.
+
+## 101. A restart records a missing high-water mark
+
+**Startup:** no notice
+
+In early 4.0, a restart that found `<path>.hwm` missing wrote a fresh mark from whatever the
+active file held. Deleting `.hwm`, cutting the tail and restarting therefore made
+`audit verify` pass again (item 98 and the expiry case of item 49 caught the cut only until
+that restart).
+
+In 4.0, when `.hwm` is missing at startup and the log went through segment handling (a sealed
+segment exists, or the active file opens with an open record and holds more than it), the
+gateway first chains an `audit_segment_hwm_missing` record, logs a warning and increments
+`mcp_audit_hwm_missing_total`, then writes the fresh mark. The log keeps running. `audit verify`
+fails on the record in live mode and warns in `--archive` mode. When retention or disk-full
+expiry deletes the segment holding it, the finding survives: every later `audit_segment_opened`
+record carries its counter as `hwm_missing_at`, so the failure lasts as long as the log.
+
+A pre-D6 log (no open record) and a log holding only its genesis open record (a crash before
+the first mark) still get a fresh mark without the record. A crash between the first caller
+record and its first mark is indistinguishable from a cut and is recorded. A changed
+`shared_secret` makes the old mark unreadable and is recorded too. So is a torn final line the
+mark already counted (a committed record, not a crash mid-write), and a record recovery cannot
+verify (edited, unlinked or oversized).
+
+**Action:** treat the record as possible tail loss and investigate. To clear the live failure,
+archive the log's files together and let the gateway start a new log. Like the other
+`audit_segment_*` records (item 49), SIEM rules that match caller events can skip it.
 
 ## 102. Per-caller backend slots are capped
 

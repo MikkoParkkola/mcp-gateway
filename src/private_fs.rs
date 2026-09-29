@@ -338,7 +338,10 @@ pub(crate) fn windows_remediation(
     use PrivacyRefusal as P;
     use std::fmt::Write as _;
     let Some(me) = user_sid_string() else {
-        return format!(" ({found:?})");
+        // Ends in a line break, as every other branch does: a caller appends.
+        return format!(
+            " ({found:?}). The gateway account could not be resolved, so no repair command is printed.\n"
+        );
     };
     let literal: String = path
         .chars()

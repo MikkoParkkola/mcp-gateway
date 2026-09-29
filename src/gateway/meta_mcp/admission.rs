@@ -111,7 +111,7 @@ impl MetaMcp {
         server: &str,
         tool: &str,
         arguments: &Value,
-        representation: &Value,
+        representation: impl FnOnce() -> Value,
         request_id: &RequestId,
     ) -> Result<SyncAdmission> {
         self.admit_operation(
@@ -145,7 +145,8 @@ impl MetaMcp {
         // Paying for that copy before the branch that decides whether it is
         // needed is what this parameter exists to avoid (NFR.WORKLOAD.1).
         operation: impl FnOnce() -> Value,
-        representation: &Value,
+        // A thunk for the same reason: the unkeyed path never reads it (#613).
+        representation: impl FnOnce() -> Value,
         read_only: bool,
         // (backend, tool) for the un-keyed warn only; never an identity.
         target: (&str, &str),
@@ -187,11 +188,12 @@ impl MetaMcp {
             })
             .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
         let operation = operation();
+        let representation = representation();
         let request = Request {
             principal: &principal,
             key,
             operation: &operation,
-            representation,
+            representation: &representation,
             mode: Mode::Sync,
         };
         let round = retry.key_discriminator();
@@ -307,7 +309,7 @@ impl MetaMcp {
                 server,
                 tool,
                 &operation_arguments,
-                &self.meta_representation(tool_name, full, session),
+                || self.meta_representation(tool_name, full, session),
                 id,
             );
         }
@@ -346,7 +348,7 @@ impl MetaMcp {
             // Handed over as a thunk to match the parameter; the saving on this
             // path is the callee's, not the caller's.
             || operation,
-            &self.meta_representation(tool_name, false, session),
+            || self.meta_representation(tool_name, false, session),
             read_only,
             ("gateway", tool_name),
             id,
