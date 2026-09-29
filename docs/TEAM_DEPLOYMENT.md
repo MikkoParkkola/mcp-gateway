@@ -194,7 +194,7 @@ itself, from `auth.mode`. Anything you put under `config.auth` is replaced.
 |---|---|
 | `credential` (default) | `auth.enabled: true` with one bearer token from the Secret `auth.existingSecret` (key `auth.secretKey`), `public_paths: ["/health"]`, and the audit log at `/var/lib/mcp-gateway/audit/transparency.jsonl` on the `audit` volume |
 | `api_keys` | `auth.enabled: true` with one `auth.api_keys` entry per `auth.apiKeys` item: `key_sha256: env:GATEWAY_API_KEY_<i>`, filled from the Secret key `apiKeys[i].secretKey`, which holds the digest from `mcp-gateway hash-key`, never the key. No master bearer. `backends` is required |
-| `oidc` | `auth.enabled: true` and `key_server` with the providers and policies from `auth.oidc`; `key_server.admin_token` from `auth.oidc.adminTokenSecretKey` when set. No master bearer. Forces one replica and `Recreate` |
+| `oidc` | `auth.enabled: true` and `key_server` with the providers and policies from `auth.oidc`; `key_server.admin_token` from the `adminTokenSecretKey` entry of `auth.oidc` when set. No master bearer. Forces one replica and `Recreate` |
 | `mesh` | no `auth` section and `server.allow_unauthenticated_network_bind: true`, for a service mesh that authenticates before traffic reaches the pod. No audit volume |
 
 In every mode but `mesh`, `server.cleartextHttp` becomes `server.cleartext_http`:
