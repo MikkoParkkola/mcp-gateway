@@ -8,37 +8,29 @@ use axum::response::IntoResponse;
 use super::super::AppState;
 use super::super::identity::{caller_grant_subject, identity_refusal_response, subject_key};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::auth::live::held_credential;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::session_id::SessionOwner;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 
-/// A stable owner key for a session.
+/// A stable owner key for a caller that proved no grant subject.
 ///
 /// Not the display name: `name` is operator-configured and two API keys may
 /// share one, which would let them attach to each other's sessions. The key
 /// records whether a credential was actually validated, so an API key named
 /// "anonymous" cannot claim the unauthenticated identity's sessions.
-///
-/// A proven subject (`identity::subject_key`) outranks the credential alone, so
-/// two people behind one shared key never share a session; the credential is
-/// kept beside it, so one person's two credentials never share one either.
-pub(super) fn session_owner(
-    client: Option<&AuthenticatedClient>,
-    subject: Option<String>,
-) -> SessionOwner {
-    // The validated principal, a digest of the secret: two API keys
-    // configured with the same display name are different owners.
-    let credential = client
-        .filter(|c| c.authenticated && !c.principal.is_empty())
-        .map(|c| c.principal.clone());
-    match (subject, credential) {
-        (Some(key), credential) => SessionOwner::Subject { key, credential },
-        (None, Some(principal)) => SessionOwner::Credential(principal),
+pub(super) fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
+    match client {
+        // The validated principal, a digest of the secret: two API keys
+        // configured with the same display name are different owners.
+        Some(c) if c.authenticated && !c.principal.is_empty() => {
+            SessionOwner::Credential(c.principal.clone())
+        }
         // Every other caller, named or not, is one class: an unvalidated name is
         // not a credential. Only the minted session id separates them (F9).
-        (None, None) => SessionOwner::Anonymous,
+        _ => SessionOwner::Anonymous,
     }
 }
 
@@ -72,6 +64,17 @@ pub(super) async fn request_session_owner(
     )
     .await
     .map_err(|refusal| identity_refusal_response(refusal).into_response())?;
-    let owner = session_owner(client, subject_key(subject.as_ref(), cert));
+    // A proven subject outranks the credential, so two people behind one shared
+    // key never share a session. The credential half is what was presented,
+    // not the principal (a delegated bearer's principal is its stable actor),
+    // so one person's two credentials never share one either: a resumed
+    // session's held credential is overwritten (GH1942.HARDEN.1 row 9).
+    let owner = match subject_key(subject.as_ref(), cert) {
+        Some(key) => SessionOwner::Subject {
+            key,
+            credential: held_credential(headers).map(|held| held.digest()),
+        },
+        None => session_owner(client),
+    };
     Ok((subject, owner))
 }

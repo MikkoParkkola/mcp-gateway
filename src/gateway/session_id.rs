@@ -16,8 +16,9 @@ use sha2::{Digest, Sha256};
 ///
 /// `Credential` carries the validated principal exactly, so ownership equality
 /// is exact. `Subject` is a caller that proved a grant subject (the length-
-/// prefixed `CallerKey` subject form) plus the credential it presented, if
-/// any: two people behind one shared key are two owners, and one person's two
+/// prefixed `CallerKey` subject form) plus a digest of the credential it
+/// presented, if any (not the principal, which for a delegated bearer is its
+/// stable actor): two people behind one shared key are two owners, and one person's two
 /// credentials are two owners too, because a resumed session's held
 /// credential is overwritten (GH1942.HARDEN.1 row 9). Every caller with
 /// neither is `Anonymous`, whatever name it carries: an unvalidated name is
