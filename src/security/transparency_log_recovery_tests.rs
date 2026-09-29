@@ -346,7 +346,7 @@ fn rotation_leaves_no_degraded_window() {
 
 /// A log whose only sealed segment disk-full expiry removed, with `.hwm`
 /// deleted and the active tail cut back by two records.
-fn expired_last_sealed_then_tail_cut(path: &Path) {
+pub(super) fn expired_last_sealed_then_tail_cut(path: &Path) {
     let l = one_sealed(path);
     l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
     append(&l, 1);

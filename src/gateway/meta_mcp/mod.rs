@@ -1032,38 +1032,52 @@ impl MetaMcp {
         self.firewall = firewall;
     }
 
-    /// Firewall-scan an aggregated tool-list / search response value in place
-    /// (OWASP ASI01 tool-poisoning). Backend-supplied `description` strings are
-    /// scanned for prompt injection and have embedded credentials redacted
-    /// before the discovery response reaches the client.
+    /// Inspect a `gateway_list_tools` / `gateway_search_tools` result once, on
+    /// the canonical value before it is serialised into `content[].text`
+    /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
+    /// escaped copy hides a quoted key or a split injection phrase from them.
+    /// A Block (or no admitting target) refuses the call; otherwise credentials
+    /// are redacted in place. The router or delivery pass still inspects the
+    /// served form: a name alone cannot prove this pass ran (a backend tool may
+    /// share the name), so neither pass is skipped.
     ///
-    /// No-op when the firewall is absent or response scanning is disabled — the
-    /// same gate the `tools/call` path uses ([`Firewall::check_response`]
-    /// short-circuits), so behavior is unchanged when the feature/config is off.
+    /// # Errors
+    /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
     #[cfg(feature = "firewall")]
-    pub(super) fn scan_tool_list_value(&self, value: &mut serde_json::Value) {
+    pub(super) fn inspect_discovery_value(&self, value: &mut serde_json::Value) -> Result<()> {
+        use crate::security::firewall::FirewallAction;
         let Some(ref fw) = self.firewall else {
-            return;
+            return Ok(());
         };
         let verdict = fw.check_response(
             "meta:tools/list",
-            "meta-mcp",
+            "gateway",
             "tools/list",
             value,
             "meta-mcp",
         );
-        if verdict.action == crate::security::firewall::FirewallAction::Warn {
+        if !verdict.allowed || verdict.action == FirewallAction::Block {
             tracing::warn!(
                 findings = verdict.findings.len(),
-                "Firewall: meta tools/list response warning"
+                "Firewall: discovery response blocked"
+            );
+            return Err(Error::ResponseFirewallRefused);
+        }
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(
+                findings = verdict.findings.len(),
+                "Firewall: discovery response warning"
             );
         }
+        Ok(())
     }
 
-    /// No-op tool-list scan when the `firewall` feature is disabled.
+    /// No discovery inspection when the `firewall` feature is disabled.
     #[cfg(not(feature = "firewall"))]
-    #[allow(clippy::unused_self)]
-    pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(super) fn inspect_discovery_value(&self, _value: &mut serde_json::Value) -> Result<()> {
+        Ok(())
+    }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
