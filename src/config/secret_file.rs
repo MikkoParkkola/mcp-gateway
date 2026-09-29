@@ -13,6 +13,8 @@ use crate::{Error, Result};
 /// The UPGRADING-4.0 item that documents this rule. One place to renumber.
 #[cfg(unix)]
 const UPGRADE_ITEM: u32 = 35;
+/// The item that adds the owner rule.
+const OWNER_UPGRADE_ITEM: u32 = 96;
 
 /// Which kind of file is read. It sets the wording, the rule and the size cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,12 +127,13 @@ pub(crate) enum Refusal {
 /// root, so it can change a file it owns whatever the mode says.
 #[cfg(unix)]
 #[must_use]
-const fn foreign_owner(_file_uid: u32, _euid: u32) -> bool {
-    false // stub: the owner rule lands with the implementation commit
+const fn foreign_owner(file_uid: u32, euid: u32) -> bool {
+    file_uid != euid && file_uid != 0
 }
 
 #[cfg(unix)]
-/// The rule on `mode & 0o777`, given who owns the file and who we are.
+/// The rule given who owns the file and who we are: the owner is this process
+/// or root, then the mode (`mode & 0o777`) rule below.
 ///
 /// Group read is allowed only on a file this process does not own: there the
 /// group bit is how it reads the file, as with a root-owned Kubernetes
@@ -154,9 +157,9 @@ pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option
 }
 
 #[cfg(unix)]
-/// The integrity rule on `mode & 0o777`: others may read, not write. Whoever
-/// owns the file, a group or world write bit lets someone else change whom the
-/// gateway trusts.
+/// The integrity rule: the owner is this process or root, and on `mode & 0o777`
+/// others may read, not write. A group or world write bit lets someone else
+/// change whom the gateway trusts, and so does a foreign owner, who can chmod.
 #[must_use]
 pub(crate) fn integrity_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
     if foreign_owner(file_uid, euid) {
@@ -328,8 +331,11 @@ fn refusal_message(
         Protects::Secrecy => "it can hold credentials",
         Protects::Integrity => "it decides whom the gateway trusts",
     };
+    if refusal == Refusal::ForeignOwner {
+        return foreign_owner_message(what, path, (file_uid, euid), why);
+    }
     let lets = match refusal {
-        Refusal::ForeignOwner => String::new(),
+        Refusal::ForeignOwner => String::new(), // answered above
         Refusal::World if what.protects() == Protects::Secrecy && mode & 0o004 != 0 => {
             "lets other users read it".to_string()
         }
@@ -342,6 +348,29 @@ fn refusal_message(
         what.noun(),
         path.display(),
         refusal_fix(path, file_uid == euid, what)
+    )
+}
+
+/// The owner refusal: another account owns the file, so it can chmod it at will.
+/// A secret file also needs `chmod 600`: a group-read mode stays refused once
+/// this process owns the file.
+#[cfg(unix)]
+fn foreign_owner_message(
+    what: SecretFile,
+    path: &Path,
+    (file_uid, euid): (u32, u32),
+    why: &str,
+) -> String {
+    let chmod = match what.protects() {
+        Protects::Secrecy => format!(" && chmod 600 {}", path.display()),
+        Protects::Integrity => String::new(),
+    };
+    format!(
+        "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither this \
+         process (uid {euid}) nor root, so that account can change it at will, and {why}. \
+         Fix: chown {euid} {path}{chmod} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
+        noun = what.noun(),
+        path = path.display(),
     )
 }
 
