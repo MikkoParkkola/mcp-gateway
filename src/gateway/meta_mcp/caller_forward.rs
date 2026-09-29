@@ -16,6 +16,7 @@ use serde_json::Value;
 use super::MetaMcp;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::authz::authorize_backend;
+use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -24,6 +25,20 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 pub(super) type ForwardCredential = (Vec<(String, String)>, Option<String>);
 
 impl MetaMcp {
+    /// What a protocol-level handler's caller proved: its verified identity,
+    /// else the provenance of the credential its client presented (#2231).
+    ///
+    /// The router passes the client whose principal also fills the caller
+    /// context, so a listing and `gateway_invoke` classify one caller alike;
+    /// stdio passes its own client carrying `STDIO_CREDENTIAL_PRINCIPAL`.
+    pub(super) fn handler_proof<'a>(
+        client: Option<&'a AuthenticatedClient>,
+        verified_identity: Option<&'a VerifiedIdentity>,
+    ) -> CallerProof<'a> {
+        let principal = client.map(|c| c.principal.as_str());
+        CallerProof::new(verified_identity, CallerProvenance::classify(principal))
+    }
+
     /// The refusal `tools/call` gives when `backend` is outside `client`'s
     /// scope (`-32003`, answered 403), if it is.
     pub(super) fn scope_refusal(
@@ -53,9 +68,9 @@ impl MetaMcp {
 
     /// The caller's credential for `prompts/get`, or the refusal.
     ///
-    /// Resolved by the resolver `gateway_invoke` uses, so a `required`
-    /// backend is refused, never reached over the shared session, when the
-    /// caller carries no verified identity or the mint fails. Only a
+    /// Resolved by the resolver `gateway_invoke` uses, for the caller `caller`
+    /// proves, so a `required` backend is refused, never reached over the
+    /// shared session, when no principal is found or the mint fails. Only a
     /// propagating backend is resolved: the resolver also refuses an
     /// account-bound backend with no strategy, which is `gateway_invoke`'s
     /// rule, and here that backend stays on the INV-2 terms below.
@@ -67,7 +82,7 @@ impl MetaMcp {
         &self,
         id: &RequestId,
         backend: &crate::backend::Backend,
-        verified_identity: Option<&VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Result<ForwardCredential, Box<JsonRpcResponse>> {
         let isolation = |binding: Option<&str>| {
             let carries_identity = backend.fetch_carries_caller_identity(binding);
@@ -80,14 +95,15 @@ impl MetaMcp {
                     ))
                 })
         };
-        // An identity-free caller's verdict needs no mint, so it is judged
-        // first: a request refused anyway writes no identity audit record.
-        if verified_identity.is_none() {
+        // A caller no principal is found for needs no mint, so its verdict is
+        // judged first: a request refused anyway writes no identity audit record.
+        if self.principal_for_server(&backend.name, caller).is_none() {
             isolation(None)?;
         }
         let credential = if backend.identity_propagation_config().is_some() {
-            self.resolve_propagation_credential(&backend.name, verified_identity)
+            self.resolve_propagation_credential_held(&backend.name, caller)
                 .await
+                .map(|(headers, binding, _lease)| (headers, binding))
                 .map_err(|e| {
                     Box::new(JsonRpcResponse::error(
                         Some(id.clone()),
