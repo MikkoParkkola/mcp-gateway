@@ -1,0 +1,76 @@
+# Frozen: the startup marker of every item that existed when the intro lists were
+# replaced by per-section markers. Items added later are not listed here.
+1	prints a notice
+2	prints a notice; refuses to start
+3	prints a notice
+4	prints a notice
+5	no notice, a license change rather than a change to running behaviour
+6	prints a notice
+7	no notice, decided per backend; fails a backend, with one warning, and the gateway starts without it
+8	no notice, decided per backend; refuses to start, with an error that names the backend
+9	no notice, a removed CLI surface rather than a change to running behaviour
+10	no notice, changes the shipped deployment files, not the binary's behaviour on an existing route
+11	prints a notice
+12	no notice, the start is refused with its own error, which names the setting or file; refuses to start
+13	no notice, the start is refused with its own error, which names the setting or file; refuses to start
+14	no notice
+15	no notice
+16	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only while `trust_caller_identity_headers` is still set
+17	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a `key_server` rule without a configured issuer or with a blank matcher
+21	no notice, changes the shipped deployment files, not the binary's behaviour on an existing route
+22	no notice
+23	prints a notice
+24	prints a notice
+25	prints a notice
+26	prints a notice
+27	prints a notice; refuses to start, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
+28	no notice
+29	no notice, the start is refused with its own error, which names the setting or file; refuses to start
+30	prints a notice; refuses to start, only for a bad `GATEWAY_ATTESTATION_MODE`
+31	prints a notice
+32	prints a notice
+33	prints a notice
+34	prints a notice; refuses to start
+35	no notice, the start is refused with its own error, which names the setting or file; refuses to start
+36	no notice
+37	prints a notice; refuses to start, only above one declared replica
+38	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a credential over plain HTTP on a network bind without mTLS
+39	prints a notice; refuses to start, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+40	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
+41	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for an API key configured as plaintext `key`
+42	no notice
+43	prints a notice; refuses to start, only with auth on and no working audit log
+44	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
+45	prints a notice
+46	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for `enforce` without a signing key
+47	prints a notice
+48	prints a notice
+49	prints a notice
+50	no notice
+51	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a `role: admin` rule whose only condition is `domain` (and warns once per process for each distinct `role: admin` rule)
+52	no notice
+53	no notice
+54	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
+55	prints a notice
+58	prints a notice
+60	no notice, decided per capability file; fails a capability file, with an error that names the file
+61	no notice
+63	no notice
+64	no notice, decided per capability file; fails a capability file, with an error that names the file
+65	no notice
+66	no notice
+67	no notice
+68	no notice
+70	no notice
+72	no notice
+73	no notice
+74	no notice
+76	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `anomaly_detection` on and an out-of-range anomaly threshold
+77	no notice
+78	no notice
+80	no notice
+83	no notice
+84	no notice
+85	no notice
+86	no notice
+87	no notice

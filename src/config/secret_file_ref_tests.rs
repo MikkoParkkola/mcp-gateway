@@ -7,7 +7,7 @@ use super::*;
 /// Writes `body` to `dir/name` with `mode` and returns the absolute path.
 fn secret(dir: &std::path::Path, name: &str, body: &[u8], mode: u32) -> std::path::PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, body).expect("write secret");
+    crate::gateway::test_helpers::write_owner_only(&path, body).expect("write secret");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -252,5 +252,29 @@ fn api_key_digest_file_ref_resolves() {
     assert_eq!(
         cfg.auth.api_keys[0].key_sha256.as_deref(),
         Some(digest.as_str())
+    );
+}
+
+/// #2251: a rotated `server.metrics_token` file is a startup-only rotation the
+/// reload must report, because the route keeps the token it was built with.
+#[test]
+fn rotated_metrics_token_file_is_reported() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tok = secret(dir.path(), "metrics", b"old-token\n", 0o600);
+    let yaml = format!("server:\n  metrics_token: 'file:{}'\n", tok.display());
+    let path = config_file(dir.path(), &yaml);
+    let startup = Config::load_evaluated(Some(&path)).expect("startup load");
+    assert!(
+        startup
+            .overlay
+            .rotated_secret_files(&startup.overlay)
+            .is_empty(),
+        "an unchanged file is not a rotation"
+    );
+    crate::gateway::test_helpers::write_owner_only(&tok, b"new-token\n").expect("rotate");
+    let reloaded = Config::load_evaluated(Some(&path)).expect("reload");
+    assert_eq!(
+        reloaded.overlay.rotated_secret_files(&startup.overlay),
+        vec![format!("file:{}", tok.display())]
     );
 }

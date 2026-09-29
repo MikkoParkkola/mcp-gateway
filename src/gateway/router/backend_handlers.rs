@@ -675,7 +675,7 @@ async fn backend_handler_inner(
     // `isolation_guarded` gate below (no id, no tool policy), but refused where
     // this caller's request would be refused for its identity (#2240).
     if method.starts_with("notifications/") {
-        let Ok(notif_identity_key) =
+        let Ok(notification_key::Resolved { headers, binding }) =
             notification_key::resolve(&state, &backend, &name, &inbound_headers, caller).await
         else {
             // Refused as this caller's request would be (#2240): nothing is
@@ -684,7 +684,7 @@ async fn backend_handler_inner(
             return (StatusCode::FORBIDDEN, Json(json!({})));
         };
         return match backend
-            .notify_with_headers(&method, params, notif_identity_key.as_deref())
+            .notify_with_headers(&method, params, &headers, binding.as_deref())
             .await
         {
             Ok(()) => {

@@ -354,12 +354,8 @@ mod c4_tests {
     fn env_template_empty_errors() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("c4.env");
-        std::fs::write(&path, "MCP_GW_C4_BLANK_TPL=\n").expect("write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
-        }
+        crate::gateway::test_helpers::write_owner_only(&path, "MCP_GW_C4_BLANK_TPL=\n")
+            .expect("write");
         let overlay = crate::config::EnvOverlay::from_paths(&[path]);
         let env = std::sync::Arc::new(crate::config::LiveEnv::new(
             std::sync::Arc::new(overlay),

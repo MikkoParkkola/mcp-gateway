@@ -1973,7 +1973,11 @@ impl Gateway {
             None
         };
 
-        tools_changed::spawn_drain(Arc::clone(&state), tools_changed_rx);
+        tools_changed::spawn_drain(
+            Arc::clone(&state),
+            tools_changed_rx,
+            shutdown_tx.subscribe(),
+        );
 
         // Captured before the router takes ownership: the startup banner prints
         // the dashboard link and runs after the bind.
@@ -3893,8 +3897,8 @@ mod tests {
 
         assert_eq!(
             collecting.delivered().len(),
-            1,
-            "recovered poll must forward the pending log entry"
+            2,
+            "recovered poll must forward the genesis open record (#2275) and the pending entry"
         );
     }
 

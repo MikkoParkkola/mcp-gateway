@@ -410,6 +410,125 @@ mod win_privileged {
             "WT-ASSERT W-T15/exfat/judge"
         );
     }
+
+    // W-T15c: the shared private create refuses a volume that drops ACLs and
+    // leaves no file behind, so no caller can write a secret there.
+    #[test]
+    #[ignore = "needs the privileged CI step"]
+    fn wt15c_private_create_refuses_volumes_without_acls() {
+        for (var, row) in [
+            ("MGW_FAT32_ROOT", "W-T15c/fat32"),
+            ("MGW_EXFAT_ROOT", "W-T15c/exfat"),
+        ] {
+            let path = root_from(var, row).join("mgw-private-create.key");
+            let Err(err) = crate::config_persistence::create_new_private(&path) else {
+                panic!("WT-ASSERT {row}: created on a volume without ACLs");
+            };
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "WT-ASSERT {row}: {err}"
+            );
+            assert!(!path.exists(), "WT-ASSERT {row}: refused file left behind");
+        }
+    }
+}
+
+// W-T15d/e: a create the volume check refuses leaves no file behind. The
+// check's answer is forced (the hook runs at the refusal, before cleanup), so
+// these run unprivileged on NTFS; the real FAT and exFAT volumes are W-T15c.
+fn refuse_create(path: &Path, share: Share, hook: fn(&Path)) -> io::Error {
+    crate::win_acl::NO_ACLS.with(|forced| forced.set(Some(hook)));
+    let result = create_file_private(path, share);
+    crate::win_acl::NO_ACLS.with(|forced| forced.set(None));
+    let err = result.expect_err("WT-ASSERT W-T15d: created on a volume without ACLs");
+    assert_eq!(
+        err.kind(),
+        io::ErrorKind::PermissionDenied,
+        "WT-ASSERT W-T15d: {err}"
+    );
+    err
+}
+
+fn gone(path: &Path) -> bool {
+    matches!(std::fs::metadata(path), Err(e) if e.kind() == io::ErrorKind::NotFound)
+}
+
+fn open_shared(path: &Path, share: u32) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(share)
+        .open(path)
+}
+
+thread_local! {
+    static HELD: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
+}
+
+// W-T15d: an unshared create is deleted through its own handle, which no
+// other opener can join, even one that shares everything.
+#[test]
+fn wt15d_refused_private_create_leaves_no_file() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("refused.key");
+    let err = refuse_create(&path, Share::Exclusive, |path| {
+        let joined =
+            open_shared(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).map(drop);
+        assert_eq!(
+            joined.as_ref().err().and_then(io::Error::raw_os_error),
+            Some(32),
+            "WT-ASSERT W-T15d: another opener joined the refused handle"
+        );
+    });
+    assert!(
+        !err.to_string().contains("could not be removed"),
+        "WT-ASSERT W-T15d: {err}"
+    );
+    assert!(gone(&path), "WT-ASSERT W-T15d: refused file left behind");
+}
+
+// W-T15e: a sidecar create is deleted by a DELETE reopen; a reader holding it
+// without delete sharing makes that fail, and the failure is reported.
+#[test]
+fn wt15e_refused_sidecar_is_removed_or_reported() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("refused.lock");
+    refuse_create(&path, Share::LockSidecar, |_| {});
+    assert!(gone(&path), "WT-ASSERT W-T15e: refused sidecar left behind");
+    let err = refuse_create(&path, Share::LockSidecar, |path| {
+        let held = open_shared(path, FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .expect("WT-FIXTURE W-T15e: a sharing reader opens");
+        HELD.with(|slot| *slot.borrow_mut() = Some(held));
+    });
+    HELD.with(|slot| drop(slot.borrow_mut().take()));
+    assert!(
+        err.to_string()
+            .contains("the empty file could not be removed"),
+        "WT-ASSERT W-T15e: a failed removal was not reported: {err}"
+    );
+}
+
+// #2305: a device handle is refused as not regular, for both classes and by
+// the store judge, before any attribute or DACL is read.
+#[test]
+fn device_handle_refuses_as_not_regular() {
+    let nul = File::open("NUL").expect("WT-FIXTURE #2305: NUL opens");
+    for what in [
+        crate::config::Protects::Secrecy,
+        crate::config::Protects::Integrity,
+    ] {
+        assert_eq!(
+            file_refusals_for(&nul, what),
+            vec![PrivacyRefusal::NotRegular],
+            "WT-ASSERT #2305/{what:?}"
+        );
+    }
+    assert_eq!(
+        judge_file(&nul),
+        Err(PrivacyRefusal::NotRegular),
+        "WT-ASSERT #2305/judge"
+    );
 }
 
 // W-T6: a symlink at a record name is judged as a reparse point on the handle

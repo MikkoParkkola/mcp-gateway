@@ -37,20 +37,15 @@ fn an_operator_set_cache_is_left_alone() {
 
 #[test]
 fn only_npm_invoking_commands_get_a_cache() {
-    for cmd in [
-        "npx -y pkg",
-        "/usr/local/bin/npx -y pkg",
-        "pnpm dlx pkg",
-        "npm exec pkg",
-    ] {
+    for cmd in ["npx -y pkg", "/usr/local/bin/npx -y pkg", "npm exec pkg"] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert!(out.contains_key("npm_config_cache"), "{cmd} was missed");
     }
     for cmd in ["uvx meilisearch-mcp", "vikunja-mcp", "sh -c 'x'"] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
         assert!(
-            !out.contains_key("npm_config_cache"),
-            "{cmd} was given an npm cache it cannot use"
+            out.is_empty(),
+            "{cmd} was given a cache variable it cannot use"
         );
     }
 }
@@ -89,4 +84,43 @@ fn a_name_cannot_escape_the_state_directory() {
             "{hostile:?} left an unsafe character: {path}"
         );
     }
+}
+
+// #2258
+#[test]
+fn names_that_sanitize_alike_get_distinct_cache_dirs() {
+    for (a, b) in [
+        ("team.alpha", "team_alpha"),
+        ("Alpha", "alpha"),
+        ("", "unnamed"),
+    ] {
+        let x = isolated_package_manager_env(a, "npx -y pkg", HashMap::new());
+        let y = isolated_package_manager_env(b, "npx -y pkg", HashMap::new());
+        assert_ne!(
+            x["npm_config_cache"], y["npm_config_cache"],
+            "{a:?} vs {b:?}"
+        );
+    }
+}
+
+// #2258
+#[test]
+fn each_runner_gets_the_variable_it_reads() {
+    for (cmd, var) in [
+        ("npx -y pkg", "npm_config_cache"),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR"),
+        ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER"),
+    ] {
+        let out = isolated_package_manager_env("thing", cmd, HashMap::new());
+        assert_eq!(out.len(), 1, "{cmd}: {out:?}");
+        assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
+    }
+    let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
+    assert_eq!(out.len(), 2, "{out:?}");
+    assert!(out["pnpm_config_store_dir"].contains("pkg-cache"));
+    assert_eq!(out["pnpm_config_store_dir"], out["npm_config_store_dir"]);
+    let mut env = HashMap::new();
+    env.insert("BUN_INSTALL_CACHE_DIR".to_string(), "/mine".to_string());
+    let out = isolated_package_manager_env("thing", "bunx pkg", env);
+    assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
 }

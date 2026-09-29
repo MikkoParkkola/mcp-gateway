@@ -1,121 +1,25 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of the
-items listed under the bold heading below refuses it.
+change to your configuration on upgrade. It starts on an unchanged configuration unless an item
+below refuses it.
 
-On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-the items below, then stamps the new version. The notice is printed rather than logged, so
-`--log-level error` and `RUST_LOG` filters cannot swallow it.
+Each item's section begins with its startup behaviour, in one line:
 
-- Item 1
-- Item 2
-- Item 3
-- Item 4
-- Item 6
-- Item 11
-- Item 23
-- Item 24
-- Item 25
-- Item 26
-- Item 27
-- Item 30
-- Item 31
-- Item 32
-- Item 33
-- Item 34
-- Item 37
-- Item 39
-- Item 43
-- Item 45
-- Item 47
-- Item 48
-- Item 49
-- Item 55
-- Item 58
-- Item 59
-- Item 90
-- Item 91
-- Item 92
-- Item 93
+- **Startup:** prints a notice: the first `serve` after the upgrade prints a one-time notice to
+  stderr naming the item, then stamps the new version. The notice is printed rather than logged,
+  so `--log-level error` and `RUST_LOG` filters cannot swallow it.
+- **Startup:** no notice: nothing is printed at startup; read the item before upgrading. A reason
+  may follow, such as a change that is decided per backend or per capability file.
+- **Startup:** refuses to start: the gateway refuses to start, with its own error naming the
+  setting or file, until the setting is changed. A condition may follow. Such an item needs no
+  separate notice: the error would only be repeated.
+- **Startup:** fails a backend: the gateway starts, but permanently fails the backend it names.
+- **Startup:** fails a capability file: the gateway starts, but refuses an affected capability
+  file at load with an error that names it.
 
-The rest of the list has no startup notice. Items 5 and 9 are
-changes to the license and to a removed CLI surface rather than to running behaviour. Items
-7 and 8 are decided per backend, so there is no single moment at startup at which
-the binary could know whether a given deployment is affected; item 8 refuses the start with an
-error that names the backend. Item 10 changes the shipped
-deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79 and 96 refuse the start with their own error, which names
-the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
-`role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. The items below print no notice: read them here before upgrading.
-
-- Item 14
-- Item 15
-- Item 22
-- Item 28
-- Item 36
-- Item 42
-- Item 50
-- Item 52
-- Item 53
-- Item 61
-- Item 63
-- Item 65
-- Item 66
-- Item 67
-- Item 68
-- Item 69
-- Item 70
-- Item 71
-- Item 72
-- Item 73
-- Item 74
-- Item 75
-- Item 77
-- Item 78
-- Item 80
-- Item 83
-- Item 84
-- Item 85
-- Item 86
-- Item 87
-- Item 88
-- Item 94
-- Item 95
-- Item 97
-- Item 100
-
-**These items refuse the gateway's start. Read them first if you are upgrading a running
-deployment.**
-
-- Item 2
-- Item 8
-- Item 12
-- Item 13
-- Item 16, only while `trust_caller_identity_headers` is still set
-- Item 17, only for a `key_server` rule without a configured issuer or with a blank matcher
-- Item 27, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
-- Item 29
-- Item 30, only for a bad `GATEWAY_ATTESTATION_MODE`
-- Item 34
-- Item 35
-- Item 37, only above one declared replica
-- Item 38, only for a credential over plain HTTP on a network bind without mTLS
-- Item 39, only while `server.request_timeout` is set or `server.max_body_size` is `0`
-- Item 40, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
-- Item 41, only for an API key configured as plaintext `key`
-- Item 43, only with auth on and no working audit log
-- Item 44, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
-- Item 46, only for `enforce` without a signing key
-- Item 51, only for a `role: admin` rule whose only condition is `domain`
-- Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
-- Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
-- Item 79, only with auth on, identity grants on and a governance store that cannot open
-- Item 96, only for a config, env, key or trust file that a third account owns
-
-**Item 7 permanently fails the backend it names, with one warning, and the gateway starts
-without it.**
+**If you are upgrading a running deployment, search this guide for "refuses to start", "fails a
+backend" and "fails a capability file" first.**
 
 ## What changed
 
@@ -182,7 +86,7 @@ without it.**
 | 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
-| 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
+| 62 | A bridged input exchange that runs out of rounds returns the backend's last question with a continuation instead of `-32003` | A client that treated `-32003` as final: answer the returned `inputRequests` and resend with the `requestState` it carries, or treat it as unfinished |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
 | 65 | `/readyz` and `/health` answer 503 until the startup capability scan has loaded every directory; the compose healthcheck probes `/readyz` | Size a startup probe to cover the scan; expect `/health` 503 for the first moments after start |
@@ -218,12 +122,14 @@ without it.**
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
 | 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
-| 98 | Reserved: lands with #2293 | None yet |
-| 99 | Reserved: lands with #2295 | None yet |
+| 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
+| 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
+
+**Startup:** prints a notice
 
 Tokens stored by 3.x are **not migrated**. Nothing is lost and nothing is silently reused
 under a new key: each OAuth backend simply re-authenticates on its next use.
@@ -233,6 +139,8 @@ deployment is unattended, trigger each backend deliberately rather than discover
 on a user's first call.
 
 ## 2. A malformed line in an `env_files` file now fails startup
+
+**Startup:** prints a notice; refuses to start
 
 In 3.x a line that could not be parsed was skipped silently, so a typo cost one missing
 environment variable and the gateway started anyway — usually failing later, somewhere
@@ -247,6 +155,8 @@ throwaway environment. A refused start with a line number is a one-minute fix; a
 during a deploy window is not.
 
 ## 3. Protocol version `2024-10-07` is no longer advertised
+
+**Startup:** prints a notice
 
 `2024-10-07` is not a revision the MCP specification has ever defined. It was listed in the
 gateway's supported set from the first negotiation commit until 4.0.0, where it was removed
@@ -268,6 +178,8 @@ getting the fallback all along.
 
 ## 4. Rate-limited backend responses no longer count as failures
 
+**Startup:** prints a notice
+
 HTTP 429 and its equivalents are excluded from the error budgets and from the circuit breaker
 (GH #475). In 3.x a backend that was merely busy could be tripped open and taken out of
 rotation — the gateway punished a backend for applying backpressure correctly.
@@ -284,6 +196,8 @@ in #1613, and this paragraph changes when it lands.
 
 ## 5. One license across the repository
 
+**Startup:** no notice, a license change rather than a change to running behaviour
+
 4.0.0 retires the MIT core and the per-file allowlist that enumerated it. Every first-party file
 in this repository is now under the **PolyForm Noncommercial License 1.0.0**
 ([ADR-013](adr/ADR-013-single-noncommercial-license.md), [LICENSES.md](../LICENSES.md)).
@@ -293,6 +207,8 @@ Noncommercial use is unaffected. Commercial use requires a commercial license �
 is the change to route past whoever approves your licensing, not a runtime concern.
 
 ## 6. Responses are cached only for a known protocol revision
+
+**Startup:** prints a notice
 
 The response cache is now keyed by the protocol revision the request was served under, and a
 request whose revision cannot be identified is not cached at all
@@ -316,6 +232,11 @@ session. Either restores caching; neither requires a configuration change.
 
 ## 7. An OAuth backend must be on TLS or loopback
 
+**Startup:** no notice, decided per backend; fails a backend, with one warning, and the gateway starts without it
+
+This is decided per backend, so there is no single moment at startup at which the binary could
+know whether a given deployment is affected, and no startup notice names it.
+
 The bearer token an OAuth backend's transport attaches is a replayable credential, so it no longer
 goes on the wire in cleartext. `https://` is always accepted; `http://` only when the host is
 loopback (`localhost`, `127.0.0.0/8` or `::1`). Anything else fails the backend with
@@ -326,6 +247,11 @@ Put TLS in front of the backend, or move it to a loopback address. There is no o
 without OAuth may still use plain `http://`.
 
 ## 8. A credential-bearing backend on plain `http://` is refused at load
+
+**Startup:** no notice, decided per backend; refuses to start, with an error that names the backend
+
+This is decided per backend, so there is no single moment at startup at which the binary could
+know whether a given deployment is affected, and no startup notice names it.
 
 An enabled backend whose `http_url` or `a2a_url` is `http://` to a host off this machine, and
 whose configuration carries a credential, fails the load. Credential-bearing means an `oauth`
@@ -338,12 +264,16 @@ still refused, flag or not.
 
 ## 9. The savings estimates are gone from stats
 
+**Startup:** no notice, a removed CLI surface rather than a change to running behaviour
+
 The `stats --price` flag, the `gateway_get_stats` `price_per_million` argument, and the
 `tokens_saved` and `estimated_savings_usd` response fields are removed. They were estimates with no
 measured basis. Drop `--price` from scripts, and compute cost from `total_cached_tokens` with your
 own price.
 
 ## 10. Probes read `/livez` and `/readyz`, not `/health`
+
+**Startup:** no notice, changes the shipped deployment files, not the binary's behaviour on an existing route
 
 > Superseded in part by item 65: `/readyz` also waits for the startup capability scan, and the compose healthcheck now probes `/readyz`.
 
@@ -373,6 +303,8 @@ state, so keep it for dashboards and alerts.
 
 ## 11. Webhook notifications are opt-in and scoped to the caller
 
+**Startup:** prints a notice
+
 A capability webhook's `notify` now defaults to `false`. In 3.x it defaulted to `true`, and the
 event went to every connected session regardless of who owned it. With `notify: true`, a session
 now receives the event only if its API key may access the capability backend
@@ -393,6 +325,8 @@ Installs already stamped 4.0.0 by a pre-release build get this notice once, on t
 
 ## 12. API key names must be non-empty and unique
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start
+
 An API key's `name` is its identity-grant subject (`api_key:<name>`). In 3.x names were
 optional and could repeat, so two keys named alike held each other's personal-capability grants
 and a nameless key could hold none. Config load now refuses an empty or whitespace-only name,
@@ -401,6 +335,8 @@ duplicate. Give each key its own name; renaming a key moves its grants, so updat
 `api_key:` grant subjects to match.
 
 ## 13. Identity grants match on authority and subject
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start
 
 Three changes to `security.identity_grants`, all in `docs/identity_grants.md`:
 
@@ -421,6 +357,8 @@ Three changes to `security.identity_grants`, all in `docs/identity_grants.md`:
 `GrantScope::Write` and `IdentityGrantScopeArg::Write` are removed.
 
 ## 14. Cached and idempotent results are kept per caller
+
+**Startup:** no notice
 
 In 3.x, callers authenticated only by an API key or the admin bearer shared one response-cache
 namespace and one idempotency key space. Two keys calling one tool with one set of arguments got
@@ -447,6 +385,8 @@ No configuration changes. What to expect:
   `direct`).
 
 ## 15. Discovery shows a caller only what it could invoke
+
+**Startup:** no notice
 
 In 3.x, invocation was checked per caller but most discovery was not. A key scoped to one backend
 was shown every other backend's tool names, schemas and counts, and a tool denied by the global
@@ -496,6 +436,8 @@ operator's unfiltered view.
 
 ## 16. Caller identity headers need a proven source
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only while `trust_caller_identity_headers` is still set
+
 In 3.x, `security.identity_grants.trust_caller_identity_headers: true` let any client that could
 reach the gateway pick its own grant subject and authority with `X-Gateway-Identity-*` or
 `Cf-Access-Authenticated-User-*`. Nothing checked that the request came through the proxy, and
@@ -533,6 +475,8 @@ Embedders: `MetaMcp::with_trusted_identity_headers(bool)` and
 `token_age: TokenAgeCap` (`MaxIat(secs)` keeps the old behaviour).
 
 ## 17. Key-server OIDC rules need an issuer and a verified email
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a `key_server` rule without a configured issuer or with a blank matcher
 
 > Superseded in part by item 51: a `role: admin` rule whose only condition is `domain` now fails the load.
 
@@ -574,6 +518,8 @@ IdP could satisfy a rule written for the first.
 
 ## 21. The Helm chart and enterprise-alpha manifests start
 
+**Startup:** no notice, changes the shipped deployment files, not the binary's behaviour on an existing route
+
 > Superseded in part by item 25: grant and policy edits are refused on every install, not only in a chart install.
 
 The chart has never been able to start, from its introduction (#292, which already had
@@ -612,6 +558,8 @@ Both still serve the bearer token over plain HTTP inside the cluster. Item 38 ma
 declared choice, `cleartext_http: cluster_internal`, rather than a silent one.
 ## 22. The governance store location is configurable
 
+**Startup:** no notice
+
 > Superseded in part by item 25: the store no longer takes grant or policy edits.
 
 New `control_plane.store_dir`. When it is unset, the store stays at
@@ -629,6 +577,8 @@ takes no new grant or policy edit, but it still holds the governance audit log a
 that 4.1 will import as drafts, so keep `store_dir` persistent on Helm.
 
 ## 23. `logging/setLevel` needs an admin key
+
+**Startup:** prints a notice
 
 In 3.x any caller could send `logging/setLevel` to `POST /mcp`. The gateway forwarded the level
 over its own credential to every running shared backend, so a key scoped to one backend could
@@ -651,6 +601,8 @@ gateway's own `notifications/message` already follow that level.
 
 ## 24. Backend edits notify only the callers of that backend
 
+**Startup:** prints a notice
+
 In 3.x, adding, removing or reviving a backend from the admin UI sent
 `notifications/tools/list_changed` to every session on the legacy GET stream. The frame has no
 content, but its timing told every caller that an operator had edited some backend, including
@@ -669,6 +621,8 @@ Nothing errors: a client that is no longer told keeps its cached tool list until
 `tools/list`. Listeners on `subscriptions/listen` are scoped the same way; see item 26.
 
 ## 25. Admin-panel grant and policy edits are refused
+
+**Startup:** prints a notice
 
 In 3.x, `POST /ui/api/control-plane/grants`, `…/policies` and `…/decisions` wrote to the
 control-plane store (`store/` under the directory from item 22) and answered 200. Dispatch never
@@ -697,6 +651,8 @@ hand-edit them.**
 
 ## 26. `subscriptions/listen` needs a credential and is scoped to it
 
+**Startup:** prints a notice
+
 Authenticated gateways only; with authentication off nothing changes.
 
 In 3.x every `subscriptions/listen` stream shared one channel with no caller identity: each
@@ -716,6 +672,8 @@ Re-subscribe with a fresh credential. Task notifications keep their open-time ow
 revoked listener on a quiet gateway holds its slot until the next notification it would receive.
 
 ## 27. Exact agent grants name their proof source
+
+**Startup:** prints a notice; refuses to start, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
 
 In 3.x an identity grant bound to `agent: {exact: runner}` (written `agent: !exact runner` in
 YAML) matched any caller whose proven agent id was `runner`. An mTLS subject and an agent-JWT
@@ -744,6 +702,8 @@ A `source: declared` entry refuses load when `agent_identity.enabled` is true an
 `allow_unverified_agent_identity` is false; with agent identity disabled it loads with a warning.
 
 ## 28. A modern `tools/call` without an idempotency key is admitted, unprotected
+
+**Startup:** no notice
 
 The vendor `_meta` key `io.mcp-gateway/idempotency-key` makes a side-effecting
 call at-most-once: a re-issue after a broken stream, under a new request id, is
@@ -787,6 +747,8 @@ it forgot can warn again inside the 10 minutes.
 
 ## 29. A config key the gateway does not read fails the load
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start
+
 In 3.x the config file could carry keys nothing read, and they were dropped in silence. A
 misspelling therefore looked like a setting: `key_server: {enabeld: true}` loaded, and the key
 server stayed off.
@@ -829,6 +791,8 @@ enterprise-alpha manifest or in the config `mcp-gateway init` writes is refused.
 
 ## 30. Attestation is off by default, and a bad mode fails startup
 
+**Startup:** prints a notice; refuses to start, only for a bad `GATEWAY_ATTESTATION_MODE`
+
 In 3.x an unset `GATEWAY_ATTESTATION_MODE` attached an observe-mode validator, and any value
 the gateway did not recognise, `enforce` included, logged a warning and fell back to observe.
 A deployment that set `enforce` ran unenforced and was told so only in a log line.
@@ -843,6 +807,8 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
   `GATEWAY_ATTESTATION_MODE=observe`. Deleting the variable turns attestation off.
 
 ## 31. Tool calls with undeclared argument keys are refused
+
+**Startup:** prints a notice
 
 A `tools/call` whose arguments carry a key the tool's `inputSchema` does not declare, at the top
 level or nested inside objects and arrays, now returns `isError: true` and never reaches the
@@ -870,6 +836,8 @@ error".
 
 ## 32. An API key or key-server rule with no `backends` reaches no backend
 
+**Startup:** prints a notice
+
 In 3.x an `auth.api_keys[]` entry without `backends` (or with `backends: []`) reached every
 backend, including one added later. It now reaches none: `"*"` is the only wildcard. Add
 `backends: ["*"]` for the old behaviour, or list the backends the key needs. The gateway starts
@@ -885,6 +853,8 @@ A token request whose `backends:` scope names none of the rule's backends is als
 granted backends.
 
 ## 33. `/metrics` requires its own scrape token
+
+**Startup:** prints a notice
 
 > Superseded in part by item 44: `server.metrics_token` also accepts a `file:` reference.
 
@@ -915,6 +885,8 @@ restart, not on a config reload.
 
 ## 34. The inbound WebSocket listener is removed, and `server.ws_port` fails the load
 
+**Startup:** prints a notice; refuses to start
+
 In 3.x, `server.ws_port` spawned a WebSocket listener beside the HTTP server. It only echoed
 text frames back: it never served MCP, sat outside the Origin/Host guard and had no
 authentication, so no client could reach a tool through it.
@@ -928,6 +900,8 @@ authentication, so no client could reach a tool through it.
   removed.
 
 ## 35. A config or env file other users can read fails the load
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start
 
 > Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
 
@@ -967,7 +941,7 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
-- **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
+- **Windows checks ACLs instead of mode bits** (item 99).
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.
 
@@ -983,6 +957,8 @@ CA key, and a write-only form of it to certificates, CRLs and grant and policy f
 
 ## 36. The Helm chart pins its pod identity and caps its `state` volume
 
+**Startup:** no notice
+
 - **`podSecurityContext.runAsUser`, `runAsGroup` and `fsGroup` accept only 1001**, the image's
   UID/GID. The values schema refuses any other value, root included, so `helm lint` and
   `helm template` fail; a template guard refuses it again when schema validation is skipped.
@@ -997,6 +973,8 @@ CA key, and a write-only form of it to certificates, CRLs and grant and policy f
   Kubernetes API; run `mcp-gateway kubernetes` from a place that has kubectl credentials.
 
 ## 37. More than one replica is refused while per-process state is on
+
+**Startup:** prints a notice; refuses to start, only above one declared replica
 
 Key-server tokens, managed accounts custody and task records each live in one process. Behind
 a Service with no session affinity, a token minted on one pod is a 401 on another, a revoke
@@ -1025,6 +1003,8 @@ reaches one pod, and a task created on one pod is not found on another.
   per-process state".
 
 ## 38. A credential over plain HTTP on a network bind refuses the start
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a credential over plain HTTP on a network bind without mTLS
 
 In 3.x a gateway with `auth.enabled` bound to `0.0.0.0` served bearer tokens and API keys over
 plain HTTP without a word. It now refuses to serve when all of these hold:
@@ -1074,6 +1054,8 @@ The shipped deployments keep starting (item 21):
 
 ## 39. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
 
+**Startup:** prints a notice; refuses to start, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+
 In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
 backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
 other route, webhooks included, used the framework's 2 MiB default.
@@ -1095,6 +1077,8 @@ other route, webhooks included, used the framework's 2 MiB default.
   to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
 
 ## 40. A secret reference that resolves to nothing fails the load
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
 
 > Superseded in part by item 41: API keys are `key_sha256` digests, so the `env:` reference checked here is `auth.api_keys[].key_sha256`.
 
@@ -1139,6 +1123,8 @@ running with `/metrics` closed (item 33). No error prints a secret value.
 
 ## 41. API keys are configured as sha256 digests, with optional expiry
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for an API key configured as plaintext `key`
+
 In 3.x `auth.api_keys[].key` held the key itself, or `env:VAR` whose value was the key. Anyone
 who could read the config, the environment or a debug log could replay it. The gateway only
 ever needs the key's hash, so 4.0 stores the digest instead.
@@ -1179,6 +1165,8 @@ ever needs the key's hash, so 4.0 stores the digest instead.
 
 ## 42. `webhooks.rate_limit` is enforced
 
+**Startup:** no notice
+
 Before 4.0 the key was parsed and ignored. Each webhook endpoint now accepts at most
 `rate_limit` requests per minute (burst up to the same number) and answers `429` with
 `Retry-After: 60` beyond that. Only requests that pass the signature check count, so unsigned
@@ -1189,6 +1177,8 @@ retry a `429`. Set `webhooks.rate_limit` above your busiest sender's peak, or `0
 read at startup; a reload that changes `webhooks` needs a restart.
 
 ## 43. With auth on, the audit log is required and fails closed
+
+**Startup:** prints a notice; refuses to start, only with auth on and no working audit log
 
 > Superseded in part by item 49: the log rotates, and a full volume expires old segments by default instead of stopping calls.
 
@@ -1261,6 +1251,8 @@ named an API-key label rather than a person and skipped every refused or failed 
 
 ## 44. Secrets can be read from files with `file:`, and a literal starting `file:` is now a reference
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
+
 Wherever a whole-value secret takes `env:NAME`, it now also takes `file:/absolute/path`:
 `auth.bearer_token`, `auth.api_keys[].key_sha256` (the file holds the digest), `agent_auth.agents[].hs256_secret`,
 `key_server.admin_token`, `security.message_signing.shared_secret` and `previous_secret`,
@@ -1316,6 +1308,8 @@ The Helm chart does not yet mount extra Secret volumes for you.
 
 ## 45. `/health` reports an open circuit breaker
 
+**Startup:** prints a notice
+
 In 3.x an open breaker never showed anywhere. The breaker reported its state as `"open"`, and
 `/health`, the admin panel and the redacted `/ui/api/status` compared it against `"Open"`, so
 the comparison never matched. `/health` went to 503 only when the health tracker also failed.
@@ -1331,6 +1325,8 @@ the comparison never matched. `/health` went to 503 only when the health tracker
   `half_open`).
 
 ## 46. Attestation `enforce` enforces on every route
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for `enforce` without a signing key
 
 In 3.x `enforce` ran as observe (item 30). In 4.0.0 `GATEWAY_ATTESTATION_MODE=enforce` refuses,
 with JSON-RPC -32002, every call whose token is missing, forged, expired or not scoped to the
@@ -1380,6 +1376,8 @@ tool.
 
 ## 47. WebSocket backends (`ws_url`)
 
+**Startup:** prints a notice
+
 A backend can be reached over WebSocket:
 
 ```yaml
@@ -1415,6 +1413,8 @@ backends:
 
 ## 48. A backend that fails to start counts toward its circuit breaker
 
+**Startup:** prints a notice
+
 In 3.x a start failure (a stdio command that cannot spawn, an HTTP or WebSocket backend that
 cannot connect) was returned to the caller and never recorded, so only health probes could trip
 the breaker. It now counts on every transport, on the request and the notification path. Once
@@ -1432,6 +1432,8 @@ error can name the configured command.
 variant no longer compiles; match `CircuitOpen { backend, .. }`.
 
 ## 49. The audit log rotates, and verify spans its segments
+
+**Startup:** prints a notice
 
 With auth on, the audit log is required (item 43). Before this release it grew until its
 volume filled, and then every call was refused with `storage_full`. It now rotates at 64 MiB.
@@ -1509,6 +1511,8 @@ A log written before this release is read as segment 0 and verifies unchanged. I
 256 MiB, verify still refuses it; archive it before upgrading.
 ## 50. A stalled audit disk answers 503 within seconds instead of hanging
 
+**Startup:** no notice
+
 With auth on, every tool call waits for its audit record (item 43). Before this release a
 filesystem that stopped answering (a hung NFS mount, a throttled volume) blocked that write
 indefinitely, and the blocked writes used up the server's worker threads until the gateway stopped
@@ -1534,6 +1538,8 @@ That record has no `response_delivery_attempt` record after it: an invocation re
 delivery attempt means the result was withheld.
 
 ## 51. SSO admin rules now grant full gateway admin
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a `role: admin` rule whose only condition is `domain` (and warns once per process for each distinct `role: admin` rule)
 
 A `control_plane.role_mapping` rule with `role: admin` used to make its identity
 an admin of the control plane only. Everything else (the admin meta-tools and the
@@ -1580,6 +1586,8 @@ control_plane:
 
 ## 52. The gateway advertises only the change notifications it delivers
 
+**Startup:** no notice
+
 3.x advertised `resources.subscribe`, `resources.listChanged` and `prompts.listChanged` as
 `true`, but never sent `notifications/resources/updated`, `resources/list_changed` or
 `prompts/list_changed`. A client that subscribed waited forever and got no error. Now:
@@ -1609,6 +1617,8 @@ stdio, `tools.listChanged`).
 
 ## 53. A gateway rate-limit refusal is no longer reported as an open circuit breaker
 
+**Startup:** no notice
+
 When a backend's own `failsafe.rate_limit` ran out of tokens, the gateway refused the
 call with "Circuit breaker open for backend 'x'", although the breaker was closed, and
 counted each refusal as a backend failure in the error budgets. One caller's burst past
@@ -1631,6 +1641,8 @@ caller.
   failure.
 
 ## 54. Keys, tokens and credential files others can read, and trust files they can change, are refused
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
 
 > Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
 
@@ -1673,6 +1685,8 @@ held to item 35.
 
 ## 55. Answers without the gateway's `requestState` are refused
 
+**Startup:** prints a notice
+
 A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
 refused with `-32602` ("inputResponses are not accepted without the requestState this
 gateway issued") instead of being forwarded to the backend.
@@ -1686,6 +1700,8 @@ gateway issued") instead of being forwarded to the backend.
   the same key can be used for a corrected call.
 
 ## 58. Session ids are always minted by the gateway
+
+**Startup:** prints a notice
 
 A legacy HTTP session id is the only thing that proves a session is yours when
 the caller has no credential, so the gateway now treats it as a secret.
@@ -1727,6 +1743,8 @@ the caller has no credential, so the gateway now treats it as a secret.
   that session is already live.
 
 ## 59. A tool call on a cold catalogue lists the backend first
+
+**Startup:** prints a notice
 
 The first time a caller uses a tool the gateway has not yet listed for it, the gateway lists that
 backend's tools once, as that caller, before judging the call (§31). Before this release such a
@@ -1790,6 +1808,8 @@ release; a test fails the build if either constant changes without this text.
 
 ## 60. Capability pins read CRLF line endings as LF
 
+**Startup:** no notice, decided per capability file; fails a capability file, with an error that names the file
+
 A capability's `sha256:` pin used to be computed over the file's raw bytes. A pinned file that
 Git checked out with CRLF line endings on Windows (`core.autocrlf`), or that an editor re-saved
 with them, hashed differently, and the capability was refused as tampered ("Capability hash
@@ -1813,6 +1833,8 @@ pin line holds only the pin: text after a CR, NEL, LS or PS on it is hashed by t
 and dropped by `grep -v` (item 64).
 
 ## 61. A backend that refuses a managed account's token forces one refresh, then a reconnect
+
+**Startup:** no notice
 
 In 3.x and in the 4.0 betas, a managed personal account (`accounts.descriptors`,
 `mode: personal_managed`) was refreshed only when its token expired. If the provider revoked
@@ -1854,7 +1876,37 @@ custody does not start, and with it the gateway. The file is sealed, so the fiel
 removed by hand. It is removed for an account when that account's token next rotates or the
 user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
 
+## 62. A bridged exchange that runs out of rounds can be resumed
+
+**Startup:** no notice
+
+The gateway asks a 2025-era (legacy) client a backend's questions in-band and retries the
+backend with the answers, for a bounded number of rounds (three). When a backend was still asking after
+the last round, the call failed with `-32003` ("asked for input and the bridged exchange
+could not be completed"). The backend's progress was lost, and a retry started over.
+
+Now the call returns the backend's **last** interim result: its `inputRequests`, and a
+`requestState` holding a gateway-sealed continuation of that round. Resending `tools/call`
+with the answers in `inputResponses` and that `requestState` resumes the exchange where the
+backend stopped. The continuation is bound to the caller like any other (MRTR.2). The last
+round is held to the client's declared capabilities, its per-request capability list and the
+response firewall first, so an undeclared question is still refused with the capability it
+needs. The idempotency key is not settled, as before: a backend that stopped to ask has not
+acted.
+
+For code that uses the library's `mcp_gateway::gateway::input_bridge` module directly:
+`BridgeError` is now `#[non_exhaustive]`; `RoundsExhausted` carries the last round
+(`last`); and a new `Undeclared` variant, itself `#[non_exhaustive]`, reports a last round
+that asks for a capability, mode or method the session never declared. `InputBridge::run`
+never hands back such a round.
+
+Action: a client that treated `-32003` from a bridged call as final now gets a result it can
+answer. If it cannot answer, it can treat the result as unfinished, the same as any
+`input_required` result. Library code that matches on `BridgeError` needs a wildcard arm.
+
 ## 63. Error results are never served from a response cache
+
+**Startup:** no notice
 
 In 3.x and in the 4.0 betas, the response cache stored an error result like any answer and
 served it to every later call with the same key until the TTL ran out (60 s by default). That
@@ -1876,6 +1928,8 @@ for that; they are the load-shedding controls.
 
 ## 64. Text after a line break inside a pin line is hashed
 
+**Startup:** no notice, decided per capability file; fails a capability file, with an error that names the file
+
 The pin hash excludes a capability's top-level `sha256:` line. YAML also ends a line at a
 lone carriage return (CR not followed by LF), NEL (U+0085), LS (U+2028) and PS (U+2029), so
 text after one of those on that line is parsed as content, and it was excluded from the hash
@@ -1888,6 +1942,8 @@ file before re-pinning it, since the text after the break is content that was no
 the old pin: `mcp-gateway cap pin path/to/capability.yaml`.
 
 ## 65. Readiness waits for the capability catalogue
+
+**Startup:** no notice
 
 The capability catalogue loads in the background after the listener binds, so a large
 capability directory does not delay startup. Until now, `/readyz` and `/health` answered 200
@@ -1913,6 +1969,8 @@ window.
 
 ## 66. A callback-registration admin denial is a refusal, not a configuration error
 
+**Startup:** no notice
+
 A capability that registers a caller-supplied address with a third party (a webhook or
 callback URL) is reserved for admin callers. A non-admin call to one was refused with a
 configuration error: HTTP 400, JSON-RPC -32603, a message starting "Configuration error:",
@@ -1929,6 +1987,8 @@ and an audit record with outcome `error`. It is now refused like an admin-only t
 "Configuration error" text for this refusal needs to match 403/-32600 instead.
 
 ## 67. Task calls on per-backend routes are refused
+
+**Startup:** no notice
 
 `POST /mcp/{name}` forwarded `tasks/get`, `tasks/update`, `tasks/cancel` and every other
 `tasks/*` method to the backend unchanged, with no owner check. Callers allowed on the same
@@ -1947,6 +2007,8 @@ In 4.0, task calls on per-backend routes are refused until they carry an owner c
 gets -32601. Create and follow tasks through `POST /mcp` instead.
 
 ## 68. Windows runs the task and personal-account stores, owner-only
+
+**Startup:** no notice
 
 Before 4.0 both stores refused to start on Windows: their custody lock and their privacy
 checks existed only for unix. In 4.0 they run on Windows with protection equivalent to the unix
@@ -1971,6 +2033,8 @@ mapped drive or a junction. If a 3.x token migration is refused, run the printed
 in PowerShell (as an administrator when it says the file has another owner) and retry.
 
 ## 69. Per-backend routes run the same dispatch controls as `gateway_invoke`
+
+**Startup:** no notice
 
 `POST /mcp/{name}` `tools/call` skipped controls that `gateway_invoke` enforces: the kill
 switch, capability auto-disable, the session's routing profile, cost budgets, the error budget,
@@ -1998,6 +2062,8 @@ In 4.0, both routes run one implementation of each control:
 
 ## 70. Secrets stay out of the request URI and its trace
 
+**Startup:** no notice
+
 The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
 secrets travelled there: a raw session id in `GET /api/costs?session=<id>`, and the one-time
 dashboard link value in `/dashboard?bootstrap=<value>`. With `tower_http=debug` logging on, both
@@ -2022,6 +2088,8 @@ the link is refused with 409 whichever way it is opened, until #2130 lands: enab
 listener serves HTTPS, or remove `public_url`, to sign in by link.
 
 ## 71. Dashboard sessions expire, and logout ends them
+
+**Startup:** no notice
 
 A dashboard session opened from the startup link used to last as long as the gateway
 process. Its cookie said `Max-Age=86400`, but the server never enforced that, so a copied
@@ -2069,6 +2137,8 @@ Library users: `DashboardBootstrap::issue_session` and `session_is_valid` are re
 
 ## 72. Env files are polled, and a failed reload is retried
 
+**Startup:** no notice
+
 A 3.x gateway and earlier 4.0 betas watched each env file's directory, fixed at startup. An
 env file reached through a link (`current/.env` after a release switch, or an env file that
 is itself a symlink) kept reloading from the old target, and no change was seen on NFS or
@@ -2099,6 +2169,8 @@ fixed or reverted, so fix it rather than waiting for the next file event.
 
 ## 73. Task calls to surfaced tools are confirmed unless known to be harmless
 
+**Startup:** no notice
+
 The confirmation gate for a task-augmented `tools/call` to a surfaced tool read the tool's
 `destructiveHint` from the shared tool list. On a backend with `identity_propagation`, calls
 run on the caller's own session, whose tool list the shared one does not describe; an empty or
@@ -2128,6 +2200,8 @@ In 4.0:
 
 ## 74. A stdio gateway writes `costs.json`
 
+**Startup:** no notice
+
 With `cost_governance` enabled, a stdio gateway (`mcp-gateway --stdio`) loaded today's spend
 from `costs.json` at startup but never saved it, so each restart reset the daily budgets.
 
@@ -2145,6 +2219,8 @@ holds whichever saved last.
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
 
 ## 75. Tools with a poisoned description are withheld
+
+**Startup:** no notice
 
 A backend tool's description goes to the model as instructions. 4.0 checks every tool a backend
 lists against the tool-poisoning rule (AX-010: hidden instructions, secret-file paths,
@@ -2197,6 +2273,8 @@ trust. If you build `BackendConfig` with a full struct literal, add `allow_flagg
 
 ## 76. Anomaly detection now learns, and its blocks stand
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `anomaly_detection` on and an out-of-range anomaly threshold
+
 `security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
 against a transition record that nothing wrote to, so every call scored a neutral 0.5 and no
 threshold above 0.5 ever flagged or blocked anything. The detector now learns from the calls the
@@ -2228,6 +2306,8 @@ real refusals once each tool has 20 recorded transitions. Check that `anomaly_th
 0.5, and drop any firewall rule you relied on to soften anomaly blocks.
 
 ## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
+
+**Startup:** no notice
 
 Capability calls, OpenAPI import by URL (`mcp-gateway cap import`), capability discovery
 (`mcp-gateway cap discover`) and the web UI's import followed `HTTP_PROXY`, `HTTPS_PROXY`
@@ -2262,6 +2342,8 @@ example downloaded and imported from a file.
 
 ## 78. A stdio gateway serves its local operator's personal accounts
 
+**Startup:** no notice
+
 A `personal_managed` account served a stdio gateway's caller only when HTTP auth was on with
 `auth.single_user: true`, at most one API key, no OIDC issuer and no identity adapter. A stdio gateway
 with the default `auth.enabled: false` refused every account-bound call with "the request
@@ -2281,6 +2363,8 @@ directory share its accounts.
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
 
 ## 79. Identity grant changes are recorded in the governance log, and need it
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with auth on, identity grants on and a governance store that cannot open
 
 `identity grants` CLI changes, edits made directly to the grant file, and the grants each
 start serves are now governance audit records (actor `unknown`, action `mutate_grant`).
@@ -2303,6 +2387,8 @@ start serves are now governance audit records (actor `unknown`, action `mutate_g
   builds against this crate needs `grant_change: None`. Serialised events without it are unchanged.
 
 ## 80. Discovery keeps env, headers and argument boundaries
+
+**Startup:** no notice
 
 `mcp-gateway cap discover` and the setup wizard import MCP servers from client config files
 (Claude, Cursor, Windsurf, Codex, Zed). They used to keep only the command line or URL:
@@ -2339,6 +2425,8 @@ credentials the client config held. Library users replace struct literals with
 
 ## 83. `MigratedCredential` has a public `reachability` field
 
+**Startup:** no notice
+
 `accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
 when the configuration asserts a single user, in each case through a REST capability or an MCP
 backend bound to the account; over HTTP the direct `/mcp/{name}` route still needs a verified
@@ -2351,6 +2439,8 @@ library users, the report type
 destructures it without a trailing `..`, no longer compiles; read the fields of the value `migrate_legacy_credential_offline` returns instead.
 
 ## 84. Capability OAuth refresh sends tokens only where the capability may call
+
+**Startup:** no notice
 
 A capability with an `oauth:` credential refreshes an expired token by sending the refresh
 token, the client ID and any client secret to its `auth.token_endpoint`. That endpoint was
@@ -2373,6 +2463,8 @@ proxy resolves the name, so the refresh goes through it. An IP-literal private e
 refused either way.
 
 ## 85. The response firewall scans object keys
+
+**Startup:** no notice
 
 Before 4.0, the response firewall scanned only the values in a backend's JSON, so a
 credential or prompt injection placed in an object key reached the client unchanged. In
@@ -2398,6 +2490,8 @@ object keys, expect those keys to be renamed; use other key names.
 
 ## 86. `kubernetes controller --watch --format json` prints JSON Lines
 
+**Startup:** no notice
+
 A watch runs until it is stopped, so its JSON output is a stream. Each reconcile cycle now
 prints its report as one compact JSON document on its own line (JSON Lines, also called NDJSON).
 Earlier releases printed each report as indented JSON over many lines, so no line parsed on its
@@ -2407,6 +2501,8 @@ own. Without `--watch`, `--format json` still prints one indented document (#190
 with `jq -c .` or a line-by-line JSON reader.
 
 ## 87. `cap import-url` refuses names that resolve to internal addresses
+
+**Startup:** no notice
 
 `mcp-gateway cap import-url` refused a private or loopback IP address written in the URL,
 but a host name was resolved when the request was sent and never checked. A name that
@@ -2427,6 +2523,8 @@ by URL already do:
 
 ## 88. The HTTP listener gives open requests `server.shutdown_timeout`, then stops
 
+**Startup:** no notice
+
 After SIGTERM or Ctrl+C, a plain-HTTP gateway waited for every open request to finish,
 with no limit. One request that never finished, such as a hung upstream call or a long
 stream, kept the process running until the orchestrator killed it. The mTLS listener waited
@@ -2446,6 +2544,8 @@ twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
 
 ## 90. A request header naming an unserved protocol version is refused
 
+**Startup:** prints a notice
+
 3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
 4.0.0 reads it. A header that names a revision the gateway does not serve gets HTTP 400 with
 JSON-RPC error `-32022` ("unsupported protocol version"), and `data.supportedVersions` lists the
@@ -2456,6 +2556,8 @@ answered as before.
 **Action:** a client that sends this header must send a revision the gateway serves, or omit it.
 
 ## 91. Agent identity rests on proof, not on a label the caller sends
+
+**Startup:** prints a notice
 
 In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
 query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
@@ -2480,6 +2582,8 @@ entries for one principal also fail at load, and the hatch logs a warning on eve
 
 ## 92. Six meta-tools leave the default tool list
 
+**Startup:** prints a notice
+
 `gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
 `gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list` unconditionally.
 Each is now listed only when it can answer: a cost registry, a non-empty playbook engine, a
@@ -2495,6 +2599,8 @@ behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gatew
 
 ## 93. The key server refuses a token request that misses the policy
 
+**Startup:** prints a notice
+
 In 3.x, a token request to the key server whose requested backends or tools did not overlap the
 matching policy rule got an empty scope list, and an empty list means "all": the token reached
 every backend and tool. The exchange now answers 403 and issues no token. A request that leaves
@@ -2507,6 +2613,8 @@ requested backend outside the rule gets 403 `no_backends_granted`; a requested t
 gets 403 `access_denied`, whose message reads as though no policy matched.
 
 ## 94. Per-caller firewall limits key on the caller, on every route
+
+**Startup:** no notice
 
 The firewall's per-caller controls (the call budget, the tenant guard and anomaly detection) now
 key on who the caller is, on the meta route and the per-backend `/mcp/{name}` route alike:
@@ -2543,6 +2651,8 @@ issues unique CNs, since two certificates with one CN share their limits.
 
 ## 95. List fills count toward the breaker and the rate limiter
 
+**Startup:** no notice
+
 In 3.x, a list fill (the `tools/list`, `resources/list`, `resources/templates/list` or
 `prompts/list` a cold cache sends for discovery, `gateway_search`, `gateway_list_tools`,
 resources or prompts) went straight to the backend. It ignored an open circuit breaker,
@@ -2566,6 +2676,8 @@ caches warm (`meta_mcp.warm_start`).
 
 ## 96. A secret or trust file must belong to the gateway's user or to root
 
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a config, env, key or trust file that a third account owns
+
 In 3.x the mode check of items 35 and 54 ignored who owned the file, except that it allowed group
 read on a file the gateway did not own. An account that owns a file can `chmod` it, so a secret
 file another account owns could be read by that account, and a trust file (TLS certificate, CRL,
@@ -2585,12 +2697,14 @@ the mode. The check runs before the mode rules, on the same handle as the read.
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.
-- **Windows is not checked.** Owner rules there are tracked in #1718.
+- **Windows** is covered by item 99.
 
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
 
 ## 97. A bearer token and an API key are two users, even with `single_user`
+
+**Startup:** no notice
 
 With `auth.single_user: true`, a gateway with an `auth.bearer_token` and one API key counted as
 single-user. Both credentials were served the sole operator's personal accounts, and the
@@ -2604,7 +2718,89 @@ unchanged, and so is any `auth.bearer_token` spelling (`auto`, `env:`).
 **Action:** a personal gateway that added a client key beside its bearer token keeps exactly one
 of the two: remove `auth.bearer_token` or the extra API key.
 
+## 98. A new audit log begins with an open record
+
+**Startup:** no notice
+
+In 3.x, the first record in a new audit log was the first caller event, at counter 1.
+
+In 4.0 a new log (one with no records yet) begins with an `audit_segment_opened` record:
+`segment_seq` 0, counter 1, `prev_entry_hash` `genesis`. The first caller record is counter 2.
+A log that already holds records is not changed.
+
+With the record in place, `audit verify` fails a never-rotated log whose high-water mark is
+missing once any caller record follows the open record, so a tail cut is no longer read as
+clean. A log cut back to the open record alone still reads as a fresh log, as does a deleted
+log; only an anchor kept off the host catches that.
+
+The record is signed and chained like any other, so every consumer that follows the chain gets
+it: SIEM export and the NDJSON file sink forward it, the export metrics count it, and
+`audit verify` counts it in `entries_checked`. Readers that select records by session or kind
+(`audit show`, the dashboard's governance view) never show it.
+
+**Action:** where a SIEM rule, export consumer or script matches caller events, skip records
+whose `event` is `audit_segment_opened`. Chain and counter checks need no change: the sequence
+starts at 1 with no gap.
+
+## 99. Windows checks secret and trust files, and creates them owner-only
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only on Windows, for a secret file another account can read or change, or a trust file it can change
+
+In 3.x and early 4.0 a Windows gateway created these files with the directory's inherited ACL and
+read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
+the unix mode rules:
+
+- **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
+  files, credential files) are created owner-only: one grant to the gateway's account, nothing
+  inherited. A read is refused when another account is granted access, the owner is someone
+  else, or the DACL inherits or is NULL. A DACL that is not marked protected is refused as
+  inheriting even when it holds no inherited entry: an old-style ACL, which some tools show as
+  protected, is refused too. The repair below marks it protected.
+- **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the
+  control-plane `grants.json` and `policies.json`) may be read by others but never changed by
+  them. A read, and an append to the journal, is refused when another account can write, or the
+  owner is not the gateway's account, SYSTEM or Administrators.
+- A secret file is refused on a volume that keeps no ACLs (FAT, exFAT): Windows accepts the
+  owner-only descriptor there and discards it, so the create is refused: no secret is written;
+  the empty file is removed, and a refusal that could not remove it says so. Keep the config,
+  keys and token files on NTFS or ReFS.
+- The check and the read use one handle. Like unix, a link is followed and its target judged; a
+  directory or other non-regular file is refused.
+- The refusal names every rule broken and prints the PowerShell lines that repair it, for the
+  file's class. `load_client_id` reads a public OAuth client id and is the one exception: it is
+  not checked.
+
+Repair a **secret file** (owner-only, one grant to the gateway's account; `<sid>` is that
+account's SID, which the refusal prints):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+Repair a **trust file** (the gateway's account, SYSTEM and Administrators keep full control,
+Everyone keeps read, so no legitimate reader is locked out and every foreign write is removed):
+
+```powershell
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;<sid>)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)', 'Access')
+(Get-Item -LiteralPath '<path>').SetAccessControl($acl)
+```
+
+When the file has another owner, run the lines as an administrator with `takeown /F '<path>'`
+first and `icacls '<path>' /setowner '*<sid>'` last; the refusal prints them in that order.
+A path with characters outside letters, digits, space and `\ : . _ - ( )` gets a description of
+the same repair instead of commands.
+
+Unix behaviour is unchanged.
+
+**Action (Windows only):** if a file is refused, run the printed lines in PowerShell (as an
+administrator when it says the file has another owner) and retry.
+
 ## 100. Proven identifiers are compared verbatim
+
+**Startup:** no notice
 
 In 3.x, a proven identifier (the `sub` of an agent token the gateway validated, or an mTLS
 client certificate's SAN URI or CN) was trimmed of surrounding whitespace before it keyed

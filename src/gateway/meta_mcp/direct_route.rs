@@ -104,15 +104,33 @@ impl MetaMcp {
         server: &str,
         caller: crate::identity_propagation::CallerProof<'_>,
     ) -> String {
+        self.principal_for(server, caller).map_or_else(
+            || crate::identity_propagation::audit_subject(None),
+            crate::personal_accounts::identity::Principal::stable_actor_id,
+        )
+    }
+
+    /// Whether the credential resolver has a principal to mint for `server`
+    /// under (#2310). Without one it mints nothing: a non-required backend
+    /// keeps its static credential (IDP.5).
+    pub(crate) fn has_principal_for(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> bool {
+        self.principal_for(server, caller).is_some()
+    }
+
+    fn principal_for<'a>(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'a>,
+    ) -> Option<crate::personal_accounts::identity::Principal<'a>> {
         let descriptor_id = self
             .backends
             .get(server)
             .and_then(|b| b.account_descriptor_id().map(str::to_owned));
         self.caller_principal(descriptor_id.as_deref(), caller)
-            .map_or_else(
-                || crate::identity_propagation::audit_subject(None),
-                crate::personal_accounts::identity::Principal::stable_actor_id,
-            )
     }
 }
 
