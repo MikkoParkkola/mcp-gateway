@@ -193,9 +193,11 @@ itself, from `auth.mode`. Anything you put under `config.auth` is replaced.
 | `auth.mode` | What the chart renders |
 |---|---|
 | `credential` (default) | `auth.enabled: true` with one bearer token from the Secret `auth.existingSecret` (key `auth.secretKey`), `public_paths: ["/health"]`, and the audit log at `/var/lib/mcp-gateway/audit/transparency.jsonl` on the `audit` volume |
+| `api_keys` | `auth.enabled: true` with one `auth.api_keys` entry per `auth.apiKeys` item: `key_sha256: env:GATEWAY_API_KEY_<i>`, filled from the Secret key `apiKeys[i].secretKey`, which holds the digest from `mcp-gateway hash-key`, never the key. No master bearer. `backends` is required |
+| `oidc` | `auth.enabled: true` and `key_server` with the providers and policies from `auth.oidc`; `key_server.admin_token` from `auth.oidc.adminTokenSecretKey` when set. No master bearer. Forces one replica and `Recreate` |
 | `mesh` | no `auth` section and `server.allow_unauthenticated_network_bind: true`, for a service mesh that authenticates before traffic reaches the pod. No audit volume |
 
-In `credential` mode, `server.cleartextHttp` becomes `server.cleartext_http`:
+In every mode but `mesh`, `server.cleartextHttp` becomes `server.cleartext_http`:
 
 | `server.cleartextHttp` | Effect in the chart |
 |---|---|
@@ -224,16 +226,27 @@ pod, and the audit log with it. Keep `replicaCount: 1`; the chart refuses more
 while per-process state is on
 ([Replica Count and per-process state](DEPLOYMENT.md#replica-count-and-per-process-state)).
 
-**What the chart cannot do yet.** The chart has no values of its own for API
-keys or the key server. Because it replaces `config.auth`, API keys cannot be
-set through it at all: `credential` mode is one shared bearer token, with one
-reach for every caller. A `config.key_server` block is rendered as written and
-reaches the gateway, but the chart has no Secret
-wiring for its `admin_token`, and its tests do not cover that setup. First-class
-API-key and OIDC support in the chart is still to come before 4.0.0 (see
-[Known gaps](release/4.0.0-beta.2-notes.md#known-gaps)). Until then, for
-per-person reach use a gateway config you deploy yourself, as in
-[the example above](#a-team-config-that-loads).
+```yaml
+# Helm values: two people with their own keys, state kept on a claim
+auth:
+  mode: api_keys
+  existingSecret: mcp-gateway-keys   # keys alice, bob: `printf %s "$KEY" | mcp-gateway hash-key`
+  apiKeys:
+    - {name: alice, secretKey: alice, backends: ["*"], admin: true}
+    - {name: bob, secretKey: bob, backends: ["github"], expiresAt: "2026-12-31T00:00:00Z"}
+persistence:
+  enabled: true
+```
+
+`persistence.enabled` puts the `state` volume (task store, and the control-plane
+store at `/var/lib/mcp-gateway/control-plane`) on a claim, forces one replica and
+`Recreate`, and sets `fsGroupChangePolicy: OnRootMismatch`.
+
+Backend secrets referenced as `env:VAR` come in through `extraEnv` (EnvVar list)
+or `envFrom` (each entry needs a `prefix`). The chart refuses names starting
+`MCP_GATEWAY_` in any case, since those override gateway config, and its own
+`HOME`, `GATEWAY_API_KEY_*` and `GATEWAY_KS_ADMIN_TOKEN`. Every value is
+readable by the gateway and its stdio backends, so scope the Secret to them.
 
 ## Before you hand out credentials
 

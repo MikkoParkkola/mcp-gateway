@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# shellcheck shell=bash
 # MIK-7570.CHART.2: auth modes, backend secrets and persistence. Sourced by
 # helm-chart-smoke.sh, which defines CHART, HELM and fail().
 
@@ -36,9 +37,10 @@ echo "== helm_api_keys_mode_renders_keys_not_bearer =="
 ak="$(render "${KEYS[@]}")" || fail "api_keys mode refused: $(tail -3 <<<"$ak")"
 grep -qE '^ +key_sha256: env:GATEWAY_API_KEY_0$' <<<"$ak" || fail "api key 0 is not env:GATEWAY_API_KEY_0"
 grep -qE '^ +key_sha256: env:GATEWAY_API_KEY_1$' <<<"$ak" || fail "api key 1 is not env:GATEWAY_API_KEY_1"
-grep -qE '^ +admin: true$' <<<"$ak" || fail "apiKeys[1].admin not rendered"
+grep -qE '^ +(- )?admin: true$' <<<"$ak" || fail "apiKeys[1].admin not rendered"
 ! grep -q 'bearer_token' <<<"$ak" || fail "api_keys mode renders the master bearer"
-! grep -qE '^ +key: ' <<<"$ak" || fail "api_keys mode renders a plaintext key field"
+akcm="$(render "${KEYS[@]}" --show-only templates/configmap.yaml || true)"
+! grep -qE '^ +(- )?key: ' <<<"$akcm" || fail "api_keys mode renders a plaintext key field"
 
 echo "== helm_api_keys_without_backends_fails =="
 refused "key without backends" "backends" --set auth.mode=api_keys --set auth.existingSecret=keys \
@@ -53,7 +55,7 @@ grep -qE '^ +enabled: true$' <<<"$key_server" || fail "oidc mode does not enable
 ! grep -q 'bearer_token' <<<"$oi" || fail "oidc mode renders the master bearer"
 grep -q 'type: Recreate' <<<"$(render "${OIDC[@]}" --set config.server.modern_protocol=false || true)" \
   || fail "oidc mode keeps a rolling strategy (per-process token store)"
-refused "oidc with two replicas" "key_server" "${OIDC[@]}" --set replicaCount=2 --set config.server.modern_protocol=false
+refused "oidc with two replicas" "key server" "${OIDC[@]}" --set replicaCount=2 --set config.server.modern_protocol=false
 refused "oidc without a provider" "providers" --set auth.mode=oidc
 
 echo "== helm_non_mesh_modes_render_cleartext_and_network_policy =="
@@ -80,7 +82,7 @@ for p in MCP_GATEWAY_X MCP_ M mcp_gateway_ MCP_GATEWAY; do
 done
 ef="$(render --set 'envFrom[0].secretRef.name=s' --set 'envFrom[0].prefix=BACKEND_')" \
   || fail "envFrom BACKEND_ refused: $(tail -3 <<<"$ef")"
-grep -qE '^ +prefix: "?BACKEND_"?$' <<<"$ef" || fail "envFrom BACKEND_ not rendered"
+grep -qE '^ +(- )?prefix: "?BACKEND_"?$' <<<"$ef" || fail "envFrom BACKEND_ not rendered"
 
 echo "== helm_secret_injection_per_mode =="
 envnames() { sed -n '/^kind: Deployment/,$p' | { grep -oE 'name: (MCP_GATEWAY_TOKEN|GATEWAY_API_KEY_[0-9]+|GATEWAY_KS_ADMIN_TOKEN)$' || true; } | awk '{print $2}' | sort | paste -sd, - || true; }
@@ -107,3 +109,7 @@ refused "persistence with two replicas" "persistence" --set persistence.enabled=
 ex="$(render --set persistence.enabled=true --set persistence.existingClaim=mine || true)"
 ! grep -q '^kind: PersistentVolumeClaim' <<<"$ex" || fail "existingClaim still renders a PVC"
 grep -qE 'claimName: "?mine"?' <<<"$ex" || fail "existingClaim not mounted"
+refused "oidc policy matching a whole issuer" "match" --set auth.mode=oidc \
+  --set 'auth.oidc.providers[0].issuer=https://idp.acme.test' \
+  --set 'auth.oidc.policies[0].match.issuer=https://idp.acme.test' \
+  --set 'auth.oidc.policies[0].scopes.backends[0]=*'

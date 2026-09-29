@@ -147,10 +147,26 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "maxSegmentBytes": {"type": "integer", "minimum": 1048576, "maximum": 134217728},
-            "retainSegments": {"type": "integer", "minimum": 1},
-            "onDiskFull": {"type": "string", "enum": ["expire_oldest", "refuse"]},
-            "maxSegmentAgeSecs": {"type": "integer", "minimum": 0}
+            "maxSegmentBytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 134217728
+            },
+            "retainSegments": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "onDiskFull": {
+              "type": "string",
+              "enum": [
+                "expire_oldest",
+                "refuse"
+              ]
+            },
+            "maxSegmentAgeSecs": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         }
       }
@@ -272,19 +288,207 @@
           "type": "string",
           "enum": [
             "credential",
+            "api_keys",
+            "oidc",
             "mesh"
           ],
-          "description": "credential: tools require a bearer token from the Secret named below. mesh: a service mesh authenticates first, so server.allow_unauthenticated_network_bind is set and no token is rendered."
+          "description": "credential: tools require the master bearer token from existingSecret. api_keys: each key in apiKeys is a client with its own backends; the Secret holds each key's sha256 digest. oidc: the key server exchanges OIDC ID tokens for gateway tokens under auth.oidc. mesh: a service mesh authenticates first, so server.allow_unauthenticated_network_bind is set and no credential is rendered."
         },
         "existingSecret": {
           "type": "string",
           "minLength": 1,
-          "description": "credential mode only: the Secret holding the bearer token. Must not be empty \u2014 the rendered config references env:MCP_GATEWAY_TOKEN and a pod without it fails configuration validation."
+          "description": "The Secret holding this mode's credentials: the bearer token (credential), each API key digest (api_keys), or the key-server admin token (oidc, only with adminTokenSecretKey)."
         },
         "secretKey": {
           "type": "string",
           "minLength": 1,
           "default": "token"
+        },
+        "apiKeys": {
+          "type": "array",
+          "description": "api_keys mode: one client per entry. The Secret key named by secretKey holds `sha256:<hex>` from `mcp-gateway hash-key`, never the key.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "secretKey",
+              "backends"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "secretKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "backends": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "Backends this key may call; [\"*\"] is all. Required: an empty list grants none."
+              },
+              "admin": {
+                "type": "boolean"
+              },
+              "rateLimit": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "allowedTools": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "deniedTools": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "expiresAt": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional RFC 3339 expiry."
+              }
+            }
+          }
+        },
+        "oidc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "issuer"
+                ],
+                "properties": {
+                  "issuer": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "audiences": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "allowedDomains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "jwksUri": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "discoveryUrl": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "policies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "match",
+                  "scopes"
+                ],
+                "properties": {
+                  "match": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "issuer"
+                    ],
+                    "properties": {
+                      "issuer": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "domain": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "email": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "group": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "anyOf": [
+                      {
+                        "required": [
+                          "domain"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "email"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "group"
+                        ]
+                      }
+                    ],
+                    "description": "Names an issuer and at least one of domain, email or group: a rule matching every identity of an issuer is refused at startup (UPGRADING-4.0 item 17)."
+                  },
+                  "scopes": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "backends": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "tools": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "rateLimit": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "adminTokenSecretKey": {
+              "type": "string",
+              "description": "Optional: the key in existingSecret holding key_server.admin_token."
+            }
+          }
         }
       },
       "required": [
@@ -317,6 +521,62 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "api_keys"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "existingSecret",
+              "apiKeys"
+            ],
+            "properties": {
+              "apiKeys": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "oidc"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "oidc"
+            ],
+            "properties": {
+              "oidc": {
+                "required": [
+                  "providers",
+                  "policies"
+                ],
+                "properties": {
+                  "providers": {
+                    "minItems": 1
+                  },
+                  "policies": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
         }
       ]
     },
@@ -332,6 +592,70 @@
             "refuse"
           ],
           "description": "credential mode only: who protects bearer tokens sent over plain HTTP on the pod's 0.0.0.0 bind (rendered as server.cleartext_http). cluster_internal: callers reach the pod only over the cluster network by its Service name; the chart then renders an ingress-only NetworkPolicy and refuses a non-ClusterIP Service or a public_url other than this release's Service name. tls_terminated_upstream: an ingress or proxy terminates TLS in front of the pod. refuse: the gateway will not start without mTLS."
+        }
+      }
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "description": "Extra container env (EnvVar[]), rendered after the chart's own. Names starting MCP_GATEWAY_ (any case) and chart-owned names are refused: MCP_GATEWAY_* variables override config."
+    },
+    "envFrom": {
+      "type": "array",
+      "description": "EnvFromSource[] for backend secrets. Each entry needs a prefix outside MCP_GATEWAY_, so no key can become a config override.",
+      "items": {
+        "type": "object",
+        "required": [
+          "prefix"
+        ],
+        "properties": {
+          "prefix": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Keep the state volume (task store, control-plane store) on a PersistentVolumeClaim. Forces one replica and the Recreate strategy.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "existingClaim": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "minLength": 1
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "ReadWriteOnce",
+              "ReadWriteOncePod",
+              "ReadWriteMany"
+            ]
+          }
         }
       }
     }
