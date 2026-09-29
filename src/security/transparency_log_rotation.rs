@@ -71,7 +71,7 @@ pub(super) fn is_oversized(e: &io::Error) -> bool {
 pub(super) struct SegState {
     pub(super) seq: u64,
     pub(super) opened_at: u64,
-    /// `(dev, ino)` from `fstat` at open; compared with `stat(path)` on
+    /// The open handle's `file_id` at open; compared with `path_id(path)` on
     /// every append to notice a rotation by another writer (2.8).
     pub(super) id: FileId,
     /// Whether the active file holds more than its open record.
@@ -110,8 +110,12 @@ pub(super) fn path_id(path: &Path) -> io::Result<FileId> {
     #[cfg(windows)]
     let file = {
         use std::os::windows::fs::OpenOptionsExt;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
         const SHARE_ALL: u32 = 0x7; // FILE_SHARE_READ | WRITE | DELETE
-        OpenOptions::new().access_mode(0x80) // FILE_READ_ATTRIBUTES.share_mode(SHARE_ALL).open(path)?
+        OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(SHARE_ALL)
+            .open(path)?
     };
     #[cfg(not(windows))]
     let file = File::open(path)?;

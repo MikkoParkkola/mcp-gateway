@@ -517,7 +517,16 @@ fn mik_1528_two_distinct_files_have_distinct_identities() {
             fb.metadata().unwrap().created().unwrap()
         );
     }
-    assert_ne!(file_id(&fa).unwrap(), file_id(&fb).unwrap());
-    assert_eq!(file_id(&fa).unwrap(), path_id(&a).unwrap());
-    assert_ne!(path_id(&a).unwrap(), path_id(&b).unwrap());
+    assert_ne!(
+        rotation::file_id(&fa).unwrap(),
+        rotation::file_id(&fb).unwrap()
+    );
+    assert_eq!(
+        rotation::file_id(&fa).unwrap(),
+        rotation::path_id(&a).unwrap()
+    );
+    assert_ne!(
+        rotation::path_id(&a).unwrap(),
+        rotation::path_id(&b).unwrap()
+    );
 }
