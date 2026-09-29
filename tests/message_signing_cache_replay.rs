@@ -77,10 +77,16 @@ async fn verify(response: &Value, request_id: &str, nonce: &str) {
     );
 }
 
-/// A fresh nonce per request, made at run time rather than written into the
-/// test, so each run signs over values no earlier run used.
-fn fresh_nonce(tag: &str) -> String {
-    format!("{tag}-{}-{}", std::process::id(), now_unix())
+/// A fresh random nonce per request, made at run time rather than written
+/// into the test: each `RandomState` is seeded anew, so no two calls repeat.
+fn fresh_nonce() -> String {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    format!(
+        "{:016x}",
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    )
 }
 
 /// A client that presents [`BEARER`] on every request.
@@ -113,8 +119,8 @@ async fn a_cache_hit_is_signed_for_its_own_nonce() {
     config["cache"] = json!({"enabled": true, "default_ttl": "5m", "max_entries": 100});
     let gateway = HttpGateway::start(config).await;
     let session = gateway.initialize().await;
-    let cache_nonce_1 = fresh_nonce("cache-1");
-    let cache_nonce_2 = fresh_nonce("cache-2");
+    let cache_nonce_1 = fresh_nonce();
+    let cache_nonce_2 = fresh_nonce();
 
     let first = gateway
         .call(
@@ -154,8 +160,8 @@ async fn an_idempotent_replay_is_signed_for_its_own_nonce() {
     let mut gateway = HttpGateway::start(config).await;
     gateway.client = bearer_client();
     let session = gateway.initialize().await;
-    let replay_nonce_1 = fresh_nonce("replay-1");
-    let replay_nonce_2 = fresh_nonce("replay-2");
+    let replay_nonce_1 = fresh_nonce();
+    let replay_nonce_2 = fresh_nonce();
     let keyed = |id: &str, nonce: &str| {
         let mut request = invoke(json!(id), json!(nonce), json!({}));
         request["params"]["_meta"] = json!({(IDEMPOTENCY_KEY_META): "signing-replay-key-2352"});
