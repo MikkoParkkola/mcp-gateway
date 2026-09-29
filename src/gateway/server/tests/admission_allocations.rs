@@ -79,6 +79,9 @@ fn unkeyed_admission_does_not_build_the_representation() {
     }
     let small = meta_with("x");
     let big = meta_with(&"x".repeat(PAD));
+    // A fixture that never installed the pad would read as two equal totals.
+    assert_eq!(small.active_profile(None).description.len(), 1);
+    assert_eq!(big.active_profile(None).description.len(), PAD);
     // Warm both once so lazily built state is not billed to either reading.
     bytes_for(&small);
     bytes_for(&big);
