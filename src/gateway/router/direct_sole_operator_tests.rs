@@ -265,7 +265,9 @@ async fn d5_direct_refusal_audit_names_the_sole_operator() {
         .filter(|entry| entry["action"] == "idp_refuse" && entry["backend"] == BACKEND)
         .map(|entry| entry["subject"].clone())
         .collect();
-    assert!(!subjects.is_empty(), "no refusal was audited: {raw}");
+    // Two records, the resolver's and the direct route's own: a lost direct
+    // record must fail here, not pass on the resolver's alone.
+    assert_eq!(subjects.len(), 2, "{raw}");
     let operator = DirectAccountGateway::operator_subject();
     assert!(
         subjects.iter().all(|subject| *subject == operator.as_str()),
