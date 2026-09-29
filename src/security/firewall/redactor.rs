@@ -629,50 +629,44 @@ mod tests {
         );
     }
 
-    // ── #2210: token shapes inside an opaque base64url run ──────────────────
+    // ── #2210: a real token is redacted wherever it sits ────────────────────
 
-    /// A token-shaped run with envelope characters on both sides is ciphertext,
-    /// not a credential. Split with `concat!` so no literal token sits here.
+    /// A token glued after letters or digits is still a credential. Split with
+    /// `concat!` so no literal token sits here.
     #[test]
-    fn a_token_shape_inside_a_base64url_run_is_not_a_credential() {
-        for inner in [
+    fn a_token_glued_after_letters_or_digits_is_redacted() {
+        for token in [
             concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789"),
-            concat!("gh", "r_abcdefghijklmnopqrstuvwxyz0123456789"),
+            concat!("gh", "s_abcdefghijklmnopqrstuvwxyz0123456789"),
             concat!("xo", "xb-1234567890abcdef"),
         ] {
-            let text = format!("q7Zx-_9Kd2{inner}Wm3-Qe_8rT1vLp0aB9");
-            let mut v = json!({ "requestState": text, text.clone(): 1 });
-            let findings = redactor().scan_and_redact(&mut v);
-            assert!(findings.is_empty(), "{inner}: {findings:?}");
-            assert_eq!(v["requestState"], text);
+            for glued in [
+                format!("abc{token}"),
+                format!("9{token}"),
+                format!("x-{token}"),
+            ] {
+                let mut v = json!({ "t": glued });
+                let findings = redactor().scan_and_redact(&mut v);
+                assert_eq!(findings.len(), 1, "{glued}: {findings:?}");
+                assert!(!v["t"].as_str().unwrap().contains(token), "{glued}");
+            }
         }
     }
 
-    /// An envelope can start or end with the token shape: an edge on one side
-    /// and an envelope character on the other still does not border it.
+    /// A token followed by more token characters is still a credential.
     #[test]
-    fn a_token_shape_at_either_end_of_a_run_is_not_a_credential() {
-        let inner = concat!("gh", "s_abcdefghijklmnopqrstuvwxyz0123456789");
-        for text in [
-            format!("{inner}Wm3-Qe_8rT1"),
-            format!("q7Zx-_9Kd2{inner}"),
-            format!("say {inner}Wm3"),
-            format!("q7Zx{inner} ok"),
+    fn a_token_followed_by_a_suffix_is_redacted() {
+        let token = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
+        for glued in [
+            format!("{token}_suffix"),
+            format!("{token}-more"),
+            format!("{token}Z9"),
         ] {
-            let mut v = json!({ "requestState": text });
+            let mut v = json!({ "t": glued });
             let findings = redactor().scan_and_redact(&mut v);
-            assert!(findings.is_empty(), "{text}: {findings:?}");
-            assert_eq!(v["requestState"], text);
+            assert_eq!(findings.len(), 1, "{glued}: {findings:?}");
+            assert!(!v["t"].as_str().unwrap().contains(token), "{glued}");
         }
-    }
-
-    /// The accepted residual: a shape ending a run right after '-' or '_' is
-    /// read as a credential, the price of redacting `x-<token>` keys.
-    #[test]
-    fn a_token_shape_ending_a_run_after_a_hyphen_is_redacted() {
-        let text = concat!("q7Zx-_9Kd2-", "gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
-        let mut v = json!({ "t": text });
-        assert_eq!(redactor().scan_and_redact(&mut v).len(), 1);
     }
 
     /// Two real tokens sharing one space are both still redacted.

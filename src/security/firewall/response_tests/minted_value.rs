@@ -1,49 +1,156 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! #2210: an opaque base64url value the gateway mints is never read as a
-//! credential. Random ciphertext holds a GitHub-token-shaped run (a `gh?_`
-//! prefix plus 36 letters and digits) about once in 20,000 envelopes; the
-//! redactor then rewrote the protected `requestState` and the whole
-//! continuation was refused.
+//! #2210: a continuation this gateway minted is never read as a credential.
+//! Random ciphertext holds a GitHub-token-shaped run (a `gh?_` prefix plus 36
+//! letters and digits) about once in 20,000 envelopes; the redactor then
+//! rewrote the protected `requestState` and the whole continuation was
+//! refused. Only a value that opens under this gateway's own keyring is
+//! exempt: a backend string of the same shape is not.
 
-use serde_json::json;
+use std::sync::Arc;
+
+use serde_json::{Value, json};
 
 use super::{correlation, response_fixture, response_rule, target};
-use crate::security::firewall::{FirewallAction, FirewallConfig};
+use crate::protocol::continuation::{ContinuationState, Keyring, Payload, now_unix_secs};
+use crate::security::firewall::redactor::Redactor;
+use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig};
 use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
 
-/// A continuation envelope shape: URL-safe base64 with a token-shaped run in
-/// the middle, bordered on both sides by more envelope characters. Split with
-/// `concat!` so the source never holds a token-shaped literal.
-const ENVELOPE: &str = concat!(
-    "q7Zx-_9Kd2",
-    "gh",
-    "p_abcdefghijklmnopqrstuvwxyz0123456789",
-    "Wm3-Qe_8rT1vLp0aB9"
-);
+/// Bytes of the token head a tamper may touch; the credential-shaped run is
+/// required to sit past it so the tampered copy still holds one.
+const HEAD: usize = 16;
 
-#[test]
-fn a_minted_envelope_with_a_token_shaped_run_is_delivered_unchanged() {
-    let (firewall, _dir, _path) = response_fixture(FirewallConfig {
+fn credential_shaped(text: &str) -> bool {
+    !Redactor::new()
+        .scan_and_redact(&mut Value::String(text.to_owned()))
+        .is_empty()
+}
+
+/// Mint envelopes until one holds a credential-shaped run after its head. A
+/// padded payload lengthens the ciphertext so a run turns up within a few
+/// hundred mints.
+fn mint_credential_shaped(keyring: &Keyring) -> String {
+    let padding = "x".repeat(3000);
+    (0..200_000)
+        .find_map(|_| {
+            let payload = Payload::mint(
+                "backend-a".into(),
+                Some(padding.clone()),
+                "principal".into(),
+                "digest".into(),
+                "replica".into(),
+                "hold".into(),
+                now_unix_secs(),
+            );
+            let token = keyring.mint(&payload).expect("a fresh payload seals");
+            credential_shaped(&token[HEAD..]).then_some(token)
+        })
+        .expect("ciphertext holds a credential-shaped run within 200,000 mints")
+}
+
+/// The directory is returned so the audit file outlives the test body.
+fn firewall_over(state: &Arc<ContinuationState>) -> (Firewall, tempfile::TempDir) {
+    let (firewall, dir, _path) = response_fixture(FirewallConfig {
         rules: vec![response_rule("inspect_me", FirewallAction::Allow)],
         ..FirewallConfig::default()
     });
-    let mut response = json!({
+    (firewall.with_continuations(Arc::clone(state)), dir)
+}
+
+fn input_required(state: &str) -> Value {
+    json!({
         "resultType": "input_required",
         "inputRequests": {"q1": {"params": {"message": "Choose"}}},
-        "requestState": ENVELOPE,
-    });
-    let verdict = firewall
+        "requestState": state,
+    })
+}
+
+fn inspect(
+    firewall: &Firewall,
+    response: &mut Value,
+    mutation: ResponseMutationPolicy,
+) -> crate::security::firewall::FirewallVerdict {
+    firewall
         .check_response_artifact(
-            &mut response,
+            response,
             &[target("backend-a", "inspect_me")],
             &correlation(),
             ResponseArtifactKind::FinalResponse,
-            ResponseMutationPolicy::PreserveInputRequired,
+            mutation,
         )
-        .expect("nonempty server-bound targets");
-    assert!(verdict.allowed, "envelope refused: {:?}", verdict.findings);
-    assert!(verdict.findings.is_empty(), "{:?}", verdict.findings);
-    assert_eq!(response["requestState"], ENVELOPE);
+        .expect("nonempty server-bound targets")
+}
+
+#[test]
+fn a_minted_continuation_with_a_token_shaped_run_is_delivered_unchanged() {
+    let state = Arc::new(ContinuationState::new());
+    let (firewall, _dir) = firewall_over(&state);
+    let token = mint_credential_shaped(state.keyring());
+    for mutation in [
+        ResponseMutationPolicy::Redact,
+        ResponseMutationPolicy::PreserveInputRequired,
+        ResponseMutationPolicy::Immutable,
+    ] {
+        let mut response = input_required(&token);
+        let verdict = inspect(&firewall, &mut response, mutation);
+        assert!(
+            verdict.allowed,
+            "{mutation:?} refused: {:?}",
+            verdict.findings
+        );
+        assert!(verdict.findings.is_empty(), "{:?}", verdict.findings);
+        assert_eq!(response["requestState"], token, "{mutation:?}");
+    }
+}
+
+#[test]
+fn a_continuation_minted_by_another_keyring_is_still_redacted() {
+    let state = Arc::new(ContinuationState::new());
+    let (firewall, _dir) = firewall_over(&state);
+    let foreign = mint_credential_shaped(ContinuationState::new().keyring());
+    let mut response = input_required(&foreign);
+    let verdict = inspect(&firewall, &mut response, ResponseMutationPolicy::Redact);
+    assert!(!verdict.findings.is_empty());
+    assert_ne!(response["requestState"], foreign);
+}
+
+#[test]
+fn a_tampered_continuation_is_still_redacted() {
+    let state = Arc::new(ContinuationState::new());
+    let (firewall, _dir) = firewall_over(&state);
+    let token = mint_credential_shaped(state.keyring());
+    let mut chars: Vec<char> = token.chars().collect();
+    chars[5] = if chars[5] == 'A' { 'B' } else { 'A' };
+    let tampered: String = chars.into_iter().collect();
+    let mut response = input_required(&tampered);
+    let verdict = inspect(&firewall, &mut response, ResponseMutationPolicy::Redact);
+    assert!(!verdict.findings.is_empty());
+    assert_ne!(response["requestState"], tampered);
+}
+
+#[test]
+fn a_foreign_continuation_in_a_protected_field_is_refused() {
+    let state = Arc::new(ContinuationState::new());
+    let (firewall, _dir) = firewall_over(&state);
+    let foreign = mint_credential_shaped(ContinuationState::new().keyring());
+    let mut response = input_required(&foreign);
+    let verdict = inspect(
+        &firewall,
+        &mut response,
+        ResponseMutationPolicy::PreserveInputRequired,
+    );
+    assert!(!verdict.allowed);
+    assert_eq!(response["requestState"], foreign, "refusal restores it");
+}
+
+#[test]
+fn a_firewall_without_a_keyring_redacts_every_continuation() {
+    let state = Arc::new(ContinuationState::new());
+    let token = mint_credential_shaped(state.keyring());
+    let (firewall, _dir, _path) = response_fixture(FirewallConfig::default());
+    let mut response = input_required(&token);
+    let verdict = inspect(&firewall, &mut response, ResponseMutationPolicy::Redact);
+    assert!(!verdict.findings.is_empty());
 }
