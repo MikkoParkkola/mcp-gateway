@@ -219,6 +219,24 @@ lists the backend's tools once, as that caller, before judging the call (see
 | `standard` | JSON Schema's default: only `additionalProperties: false` closes a level. |
 | `off` | No check. |
 
+## Tools with a poisoned description
+
+Every tool a backend lists is checked with the tool-poisoning rule (AX-010). A tool that fails it
+at blocking severity is left out of every tool list and refused by name, for every caller of the
+backend, once any listing has shown it. The gateway logs a `Tool withheld` warning once per
+distinct description, with the rule's findings and a digest.
+
+`allow_flagged_tools` serves a tool you have reviewed, pinned to that digest:
+
+```yaml
+backends:
+  my-backend:
+    allow_flagged_tools:
+      tool_name: "<64-hex digest from the warning>"
+```
+
+A changed description gets a new digest and is withheld again. See UPGRADING-4.0 §75.
+
 ## First-time OAuth interactive authorization
 
 The first time an OAuth backend is exercised, the gateway opens a browser tab

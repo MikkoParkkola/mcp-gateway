@@ -298,6 +298,9 @@ backends:
   #                               # `additionalProperties` counts as closed;
   #                               # `standard` follows JSON Schema's open
   #                               # default; `off` skips the check.
+  #   allow_flagged_tools:        # Serve a tool whose description failed the
+  #     tool_name: "<digest>"     # tool-poisoning check, pinned to the digest
+  #                               # its `Tool withheld` warning logs.
   #   env:
   #     TAVILY_API_KEY: "${TAVILY_API_KEY}"
   #   cwd: /tmp                   # Working directory (stdio only)

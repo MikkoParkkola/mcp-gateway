@@ -20,7 +20,6 @@ use super::authorization::{
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
@@ -248,8 +247,14 @@ fn backend_security_error_with_status(
 
 /// Fill missing MCP tool annotation hints on direct backend `tools/list`
 /// responses before returning them to clients.
-fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcResponse) {
+fn normalize_tools_list_response(
+    backend: &crate::backend::Backend,
+    response: &mut JsonRpcResponse,
+) {
+    let backend_name = backend.name.as_str();
     if response.error.is_some() {
+        // Never forward an unjudged list beside an error (#1441).
+        response.result = None;
         return;
     }
 
@@ -281,7 +286,7 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         }
     }
 
-    prepare_tool_metadata(backend_name, &mut tools);
+    backend.prepare_judged_tools(&mut tools);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
@@ -1151,7 +1156,7 @@ async fn backend_handler_inner(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
-                normalize_tools_list_response(&name, &mut response);
+                normalize_tools_list_response(&backend, &mut response);
                 // List = invoke: only what this route's `tools/call` admits.
                 let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
                 let client = client.as_ref();
