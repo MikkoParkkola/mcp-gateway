@@ -620,19 +620,6 @@ fn apply_cli_overrides_and_validate(
     config.validate_with_env(overlay)
 }
 
-/// The config file discovery finds when `named` is `None` (#1868).
-fn discovered_config(named: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
-    named.is_none().then(Config::fallback_config_path).flatten()
-}
-
-/// Watch and hot-reload a discovered config, as a named one is.
-fn watch_discovered(gateway: Gateway, discovered: Option<std::path::PathBuf>) -> Gateway {
-    match discovered {
-        Some(path) => gateway.with_watched_config(path),
-        None => gateway,
-    }
-}
-
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
 /// Resolve the effective `--config` path for the **stdio** serve command only.
 ///
@@ -673,12 +660,11 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // Found once here and handed to the loader, so the file watched is the
     // file loaded (#1868). Not `config_path`: that also picks the governance
     // store and allows admin config writes, which stay as they were.
-    let discovered = discovered_config(config_path.as_deref());
-    let load_path = config_path.as_deref().or(discovered.as_deref());
+    let (discovered, load_path) = discovered_config::resolve(config_path.as_deref());
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match Config::load_evaluated(load_path) {
+    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
@@ -706,7 +692,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // the environment afterwards would validate against an empty one and would
     // reach serving with no custody at all.
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
-        Ok(g) => watch_discovered(g, discovered),
+        Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
             eprintln!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
@@ -739,9 +725,8 @@ async fn run_server(cli: Cli) -> ExitCode {
     // serve_config_path / run_stdio_server.
     // See `run_stdio_server`: discovery runs once, here, and only when no
     // config was named.
-    let discovered = discovered_config(cli.config.as_deref());
-    let load_path = cli.config.as_deref().or(discovered.as_deref());
-    let (config, env) = match Config::load_evaluated(load_path) {
+    let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
+    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
@@ -775,7 +760,7 @@ async fn run_server(cli: Cli) -> ExitCode {
     // See `run_stdio_server`: the constructor owns validation-against-overlay
     // and the custody bring-up, and both must complete before `run` serves.
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
-        Ok(g) => watch_discovered(g, discovered),
+        Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
             error!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
@@ -813,6 +798,8 @@ pub fn write_discovered_to_config(
     Ok(path)
 }
 
+#[path = "main_discovered_config.rs"]
+mod discovered_config;
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
