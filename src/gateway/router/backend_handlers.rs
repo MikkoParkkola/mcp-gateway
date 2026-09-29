@@ -404,7 +404,7 @@ async fn resolve_notification_identity_key(
     backend: &crate::backend::Backend,
     name: &str,
     inbound_headers: &axum::http::HeaderMap,
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    caller: crate::identity_propagation::CallerProof<'_>,
 ) -> Option<String> {
     let idp_cfg = backend.identity_propagation_config()?;
     if idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough {
@@ -416,9 +416,11 @@ async fn resolve_notification_identity_key(
         .ok()?;
         return binding;
     }
-    let (_headers, binding) = state
+    // The request's own proof, so a notification selects the bucket the
+    // caller's requests do, the sole operator's included (#2190).
+    let (_headers, binding, _lease) = state
         .meta_mcp
-        .resolve_propagation_credential(name, verified_identity)
+        .resolve_propagation_credential_held(name, caller)
         .await
         .ok()?;
     binding
@@ -537,6 +539,12 @@ async fn backend_handler_inner(
         .extensions()
         .get::<crate::key_server::oidc::VerifiedIdentity>()
         .cloned();
+    // What the request established about its caller, classified once for every
+    // credential this route resolves (#2190): a validated credential can be the
+    // sole operator, a caller that presented nothing never is.
+    let provenance = crate::identity_propagation::CallerProvenance::classify(
+        client.as_ref().map(|client| client.principal.as_str()),
+    );
     // Inbound headers, captured before the body is consumed, so the passthrough
     // path (ADR-008 rung 2, MIK-6746) can read the caller's own backend
     // credential from the operator-named header.
@@ -697,7 +705,7 @@ async fn backend_handler_inner(
             &backend,
             &name,
             &inbound_headers,
-            verified_identity.as_ref(),
+            crate::identity_propagation::CallerProof::new(verified_identity.as_ref(), provenance),
         )
         .await;
         return match backend
@@ -814,6 +822,9 @@ async fn backend_handler_inner(
         let passthrough_cfg = idp_cfg.clone().filter(|c| {
             c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
         });
+        let passthrough = passthrough_cfg.is_some();
+        let caller =
+            crate::identity_propagation::CallerProof::new(verified_identity.as_ref(), provenance);
         let resolved = if let Some(cfg) = passthrough_cfg {
             match resolve_passthrough_headers(
                 &cfg,
@@ -834,7 +845,7 @@ async fn backend_handler_inner(
         } else {
             match state
                 .meta_mcp
-                .resolve_propagation_credential_held(&name, verified_identity.as_ref())
+                .resolve_propagation_credential_held(&name, caller)
                 .await
             {
                 Ok((headers, binding, held)) => {
@@ -846,7 +857,13 @@ async fn backend_handler_inner(
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
             }
         };
-        let subject = audit_subject(verified_identity.as_ref());
+        // The principal the credential was resolved for, as the resolver
+        // records it; passthrough resolves none, so it keeps the identity.
+        let subject = if passthrough {
+            audit_subject(verified_identity.as_ref())
+        } else {
+            state.meta_mcp.audit_subject_for(&name, caller)
+        };
         let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
         match resolved {
             Ok(headers) => {

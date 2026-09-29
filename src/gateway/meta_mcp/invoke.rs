@@ -2974,17 +2974,21 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
-        self.resolve_propagation_credential_held(server, verified_identity)
+        // Identity-only: these callers never serve the sole operator yet (#2231).
+        let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
+        self.resolve_propagation_credential_held(server, caller)
             .await
             .map(|(headers, cache_binding, _)| (headers, cache_binding))
     }
 
-    /// [`Self::resolve_propagation_credential`], keeping the managed lease for
-    /// the direct route's post-dispatch 401 site (A11-e′).
+    /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
+    /// keeping the managed lease for the direct route's post-dispatch 401 site
+    /// (A11-e′). The direct route passes its classified proof, so the sole
+    /// operator is served there as on `gateway_invoke` (#2190).
     pub(crate) async fn resolve_propagation_credential_held(
         &self,
         server: &str,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Result<HeldCredential> {
         let Some(idp_cfg) = self
             .backends
@@ -2995,7 +2999,7 @@ impl MetaMcp {
             return Ok((Vec::new(), None, None));
         };
         let cred = self
-            .resolve_caller_credential(server, &idp_cfg, verified_identity)
+            .resolve_caller_credential_as(server, &idp_cfg, caller)
             .await?;
         Ok((cred.headers, cred.cache_binding, cred.managed))
     }
@@ -3048,6 +3052,20 @@ impl MetaMcp {
             .await
     }
 
+    /// Who a credential for `descriptor_id`'s backend is resolved for: the
+    /// managed vault's own sole-operator predicate when the backend is bound to
+    /// a managed account (as REST, #1961), otherwise the verified identity only.
+    pub(super) fn caller_principal<'a>(
+        &self,
+        descriptor_id: Option<&str>,
+        caller: CallerProof<'a>,
+    ) -> Option<Principal<'a>> {
+        match self.account_strategies.managed_vault(descriptor_id) {
+            Some(vault) => vault.principal(caller),
+            None => caller.verified().map(Principal::Verified),
+        }
+    }
+
     /// With the caller's provenance, so the sole operator can be served (#1961).
     async fn resolve_caller_credential_as(
         &self,
@@ -3070,10 +3088,7 @@ impl MetaMcp {
         let managed_vault = self
             .account_strategies
             .managed_vault(descriptor_id.as_deref());
-        let principal = match &managed_vault {
-            Some(vault) => vault.principal(caller),
-            None => caller.verified().map(Principal::Verified),
-        };
+        let principal = self.caller_principal(descriptor_id.as_deref(), caller);
         let subject_id = principal.map_or_else(|| audit_subject(None), Principal::stable_actor_id);
         let audience = idp_cfg.audience.as_str();
 
