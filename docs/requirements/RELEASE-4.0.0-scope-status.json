@@ -1085,6 +1085,72 @@
       "blocked_on": "none",
       "evidence": [],
       "note": "Pending. Umbrella issue #1625 tracks the backlog of unread automated review findings; the builder brief now blocks merge on unread bot comments. Decision row 25 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.1",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/router/tests/meta_firewall_verdict.rs:297",
+        "src/gateway/router/dispatch_parity_tests.rs:313",
+        "src/gateway/router/direct_guards.rs:101",
+        "src/gateway/router/response_pass.rs:34"
+      ],
+      "note": "Graded 2026-09-29 against MIK-7407's own AC. Meta HTTP tools/call: the router pass (response_pass.rs:34) replaces a Block or refused verdict with the -32600 refusal carrying the caller's id and no payload, read off the wire by meta_tools_call_refuses_delivery_when_response_firewall_blocks. Direct HTTP tools/call: direct_guards.rs response_blocked refuses on !allowed; t12_response_firewall_block_refuses_on_both_routes drives both routes. Merged before #2361; #2361 adds no change to this path."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.2",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:134",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:180",
+        "src/gateway/meta_mcp/response_delivery_tests.rs:306",
+        "src/gateway/router/tests/descriptor_withholding/redaction.rs:80"
+      ],
+      "note": "Closed by #2361 (c0b3f0312): direct tools/list goes through the router's refusing pass; gateway_list_tools, gateway_search_tools and Code Mode gateway_search inspect their raw value before serialisation and refuse on Block (a Block was redacted and served). Warn and redaction controls: the pinned-tool cell under a tools/list Warn rule serves the redacted list; inspect_discovery_value_redacts_credentials_when_not_blocking pins the non-Block arm. Mutants DIRECT and DISCBLOCK caught (run 36590084235). Discovery responses are inspected twice (canonical and served form), tracked as #2358 under RESPONSE.3."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.3",
+      "status": "pending",
+      "stage": "built",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/server/mod.rs:2972"
+      ],
+      "note": "Built, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.4",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:138",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:521",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:562",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:458",
+        "src/gateway/meta_mcp/signing_delivery_tests.rs:179",
+        "src/gateway/meta_mcp/response_security.rs:81",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:211",
+        "src/gateway/task_service/execution/worker.rs:476"
+      ],
+      "note": "Finalization runs the firewall, then signing, then the delivery record (response_security.rs finalize_response_after_inspection); a successful external gateway_invoke is signed over its final fields (signing_delivery_external_success_covers_all_supplied_final_fields) after the firewall's redaction (signing_delivery_one_firewall_redaction_precedes_final_mac); a firewall Block is never signed (signing_delivery_firewall_block_skips_invalid_context_and_signing_failure), nor is an error (signing_delivery_existing_error_bypasses_invalid_context_and_failure_counter) or an internal/absent origin (signing_delivery_internal_and_absent_origin_remain_unsigned). Detached tasks: #2361 inspects every retained result at settlement under the synchronous call's targets (worker.rs inspect_settled; recover_task_result for upstream-followed and owner-read recovery), independent of the admission acknowledgement; a blocked result is what the task settles on. Mutants SETTLE and TASKBLOCK caught (run 36610137167). Residual: an upstream-recovered refusal settles as -32603 rather than -32600 (#2357, 4.0.1); the payload is withheld either way."
+    },
+    {
+      "id": "MIK-7407.RESPONSE.5",
+      "status": "pending",
+      "stage": "built",
+      "blocked_on": "none",
+      "evidence": [
+        "src/gateway/meta_mcp/response_security.rs:175",
+        "src/gateway/router/tests/meta_firewall_verdict.rs:564",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149"
+      ],
+      "note": "Built on HTTP: counted per-instance inspection fixtures for meta tools/call, tools/list and the discovery tools, with policy-target rules; the delivery-attempt event (record_response_delivery_attempt) hashes the final response after filtering and signing. Open: no counted stdio fixture (see RESPONSE.3), so 'every route' is not yet proven."
     }
   ],
   "decisions": [
