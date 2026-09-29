@@ -161,6 +161,7 @@ impl Backend {
             request_count: std::sync::atomic::AtomicU64::new(0),
             replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
             lifecycle: tokio::sync::RwLock::new(()),
+            descriptor_gate: super::descriptor_gate::DescriptorGate::default(),
             stop_once: tokio::sync::Mutex::new(()),
             stopped: std::sync::atomic::AtomicBool::new(false),
             budgets: super::ShutdownBudgets::default(),
@@ -178,8 +179,7 @@ impl Backend {
         Ok(())
     }
 
-    /// Ensure the pooled entry for `key` is started, returning a clone of the
-    /// live transport.
+    /// Start the pooled entry for `key` if needed; return its live transport.
     ///
     /// Double-checked under the entry's own start lock so concurrent callers for
     /// the same slot never spawn duplicate connections, while different slots

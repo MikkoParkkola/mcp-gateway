@@ -7,7 +7,8 @@
 //! granting access after the token behind it is revoked or expires.
 
 use super::{
-    AuthState, AuthenticatedClient, anonymous_client, dashboard_client, session_cookie_value,
+    AuthState, AuthenticatedClient, Now, SessionCheck, Touch, anonymous_client, dashboard_client,
+    session_cookie_value, session_limits,
 };
 
 /// What a request authenticated with, kept for re-validation: a dashboard
@@ -48,8 +49,15 @@ pub(crate) async fn current_client(
         return Some(anonymous_client());
     }
     let credential = credential?;
+    // A delivery is not operator activity: checked, never extended, or server
+    // push alone would keep an unattended session alive (E5).
     if let Some(handle) = &credential.session
-        && state.dashboard_bootstrap.session_is_valid(handle)
+        && state.dashboard_bootstrap.check_session(
+            handle,
+            Now::read(),
+            &session_limits(state),
+            Touch::No,
+        ) == SessionCheck::Valid
     {
         return Some(dashboard_client());
     }
