@@ -80,6 +80,17 @@ impl MetaMcp {
         )
     }
 
+    /// Whether `backend` has no view at all for `caller`: it is `required`
+    /// and the resolver would find no principal, so
+    /// [`Self::catalogue_credential_for`] omits it. Known here without a mint,
+    /// for a reader that only counts (#2346).
+    pub(super) fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required)
+            && self.principal_for_server(&backend.name, caller).is_none()
+    }
+
     /// Who the resolver would resolve `server`'s credential for, if anyone.
     ///
     /// THE ONE LOOKUP both the resolver and every short-circuit ahead of it
