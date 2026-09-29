@@ -502,11 +502,20 @@ fn wt15f_refused_exclusive_file_cannot_be_joined_before_its_delete() {
             "WT-ASSERT W-T15f: another opener joined the refused file before its delete"
         );
     }
+    /// Clears the hook even when an assertion inside it panics, so it never
+    /// leaks into the next test on this thread.
+    struct Installed;
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            crate::win_acl::BEFORE_DELETE.with(|hook| hook.set(None));
+        }
+    }
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("refused.key");
     crate::win_acl::BEFORE_DELETE.with(|hook| hook.set(Some(join)));
+    let installed = Installed;
     let err = refuse_create(&path, Share::Exclusive, |_| {});
-    crate::win_acl::BEFORE_DELETE.with(|hook| hook.set(None));
+    drop(installed);
     assert!(
         !err.to_string().contains("could not be removed"),
         "WT-ASSERT W-T15f: {err}"
