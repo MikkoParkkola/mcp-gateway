@@ -169,21 +169,70 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
 }
 
-/// Say once, per process, that secret files inherit directory ACLs here.
+/// Create `path`, refusing a name already in use, with access limited to this
+/// account from the first instant: mode `0600` on unix, an owner-only DACL on
+/// Windows. Setting either after creation would leave a window in which a
+/// secret written to the file is readable by others.
 ///
-/// Once rather than per write: an admin UI that saves config repeatedly would
-/// otherwise bury the message it exists to deliver.
-#[cfg(not(unix))]
-pub(crate) fn warn_once_about_inherited_acls(what: &str, path: &Path) {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        tracing::warn!(
-            path = %path.display(),
-            "This platform has no owner-only file mode: the {what} inherits the \
-             directory's permissions and may be readable by other users. Store \
-             it in a directory only this account can read."
-        );
-    });
+/// # Errors
+///
+/// Returns the I/O error of the create, `AlreadyExists` for a taken name.
+pub(crate) fn create_new_private(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        crate::private_fs::create_file_private(path, crate::private_fs::Share::Exclusive)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(path)
+    }
+}
+
+/// Create `path` private (see [`create_new_private`]), replacing a file of
+/// that name left by an earlier writer.
+///
+/// For a scratch file with a fixed name, so a crash-orphaned one is reused by
+/// the next write. The caller holds the lock that keeps other writers out. The
+/// old file is removed on Windows because truncating it would keep its old
+/// DACL; on unix it is truncated and forced to `0600`, which `mode` alone
+/// would not do for an existing file.
+///
+/// # Errors
+///
+/// Returns the I/O error of the remove or the create.
+pub(crate) fn create_private_replacing(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        create_new_private(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = opts.open(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(file)
+    }
 }
 
 /// Claim a scratch file next to `path` that no other writer holds.
@@ -199,26 +248,11 @@ pub(crate) fn warn_once_about_inherited_acls(what: &str, path: &Path) {
 fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
     for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
         let candidate = scratch_candidate(path, seed);
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        // Set the mode AT CREATION, not on the finished file. A config can hold
-        // a bearer token, and the scratch file sits next to it for the whole
-        // write; creating it at the umask and tightening afterwards leaves the
-        // window open. `rename` preserves the mode, so the config inherits it.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        // Windows has no equivalent in `std`: the file inherits the directory's
-        // ACL, so a config holding a bearer token is as readable as wherever it
-        // was put. Restricting the DACL needs a Win32 call, and this crate
-        // denies `unsafe`, so the honest move is to tell the operator rather
-        // than write a permission we did not set. Documented in SECURITY.md
-        // under "Windows file permissions"; warned once so it is not silent.
-        #[cfg(not(unix))]
-        warn_once_about_inherited_acls("config", path);
-        match opts.open(&candidate) {
+        // Private AT CREATION, not on the finished file. A config can hold a
+        // bearer token, and the scratch file sits next to it for the whole
+        // write; creating it wide and tightening afterwards leaves the window
+        // open. `rename` preserves the descriptor, so the config inherits it.
+        match create_new_private(&candidate) {
             Ok(file) => return Ok((file, candidate)),
             // Someone else's scratch file. Not ours to write to, and not ours
             // to delete either.

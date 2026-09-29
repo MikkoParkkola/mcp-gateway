@@ -319,12 +319,52 @@ fn writable_journal(journal: &Path) -> String {
     )
 }
 
+/// Windows: create the journal owner-only, or open the existing one and judge
+/// it exactly as the reader judges it (Integrity: others may read, never
+/// change) before anything is appended. The open does not follow a link, so a
+/// planted link or directory is refused by [`file_refusals_for`] instead of
+/// being written through.
+#[cfg(windows)]
+fn open_journal_windows(journal: &Path) -> std::io::Result<std::fs::File> {
+    use crate::config::Protects;
+    use crate::private_fs::{Share, create_file_private, file_refusals_for};
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    // Shared like the custody sidecars, so a concurrent guarded read is not a
+    // sharing violation; appends are serialised by the grant lock.
+    match create_file_private(journal, Share::LockSidecar) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        created => return created,
+    }
+    let file = std::fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | GENERIC_WRITE | READ_CONTROL)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(journal)?;
+    let found = file_refusals_for(&file, Protects::Integrity);
+    if found.is_empty() {
+        return Ok(file);
+    }
+    Err(std::io::Error::other(format!(
+        "grant journal {} is not trustworthy ({found:?}); refusing to append to it \
+         (check its entries against the grant file or restore a trusted copy, \
+         then remove the other accounts' write access or replace the file)",
+        journal.display()
+    )))
+}
+
 /// Append one line, owner-only, and flush it to disk. A journal whose last
 /// byte is not a newline (a torn earlier append) gets one first, so the new
 /// entry starts on its own line.
 fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
     use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+    #[cfg(not(windows))]
     let mut opts = std::fs::OpenOptions::new();
+    #[cfg(not(windows))]
     opts.create(true).append(true).read(true);
     #[cfg(unix)]
     {
@@ -334,13 +374,10 @@ fn append_line(journal: &Path, line: &[u8]) -> std::io::Result<()> {
         opts.mode(0o600)
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        // FILE_FLAG_OPEN_REPARSE_POINT: never follow a link.
-        opts.custom_flags(0x0020_0000);
-    }
     let created = !journal.exists();
+    #[cfg(windows)]
+    let mut file = open_journal_windows(journal)?;
+    #[cfg(not(windows))]
     let mut file = opts.open(journal)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("grant journal is not a regular file"));
