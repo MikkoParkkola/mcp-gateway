@@ -200,6 +200,12 @@ impl Task {
         self.wire.status
     }
 
+    /// The keys of an open input round still awaiting an answer.
+    #[must_use]
+    pub(crate) const fn input_requests(&self) -> Option<&Map<String, Value>> {
+        self.wire.input_requests.as_ref()
+    }
+
     /// The completed result; absence never invents an answer.
     #[must_use]
     pub const fn result(&self) -> Option<&Value> {

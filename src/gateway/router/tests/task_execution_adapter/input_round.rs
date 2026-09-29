@@ -123,15 +123,31 @@ async fn an_input_round_parks_the_task_and_an_update_resumes_the_same_call() {
         "no continuation state is ever on the wire task: {waiting}"
     );
 
-    let acked = post(&state, "key-a", update(2, &id, json!({ "confirm": answer() }))).await;
-    std::assert!(acked.get("error").is_none(), "a complete answer set is accepted: {acked}");
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(
+        acked.get("error").is_none(),
+        "a complete answer set is accepted: {acked}"
+    );
 
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     assert_carries_the_backend_result(&settled);
     let seen = mock.seen();
     std::assert_eq!(seen.len(), 2, "one first dispatch and one resume: {seen:?}");
-    std::assert_eq!(seen[1]["name"], seen[0]["name"], "the resume calls the same tool");
-    std::assert_eq!(seen[1]["arguments"], seen[0]["arguments"], "with the same arguments");
+    std::assert_eq!(
+        seen[1]["name"],
+        seen[0]["name"],
+        "the resume calls the same tool"
+    );
+    std::assert_eq!(
+        seen[1]["arguments"],
+        seen[0]["arguments"],
+        "with the same arguments"
+    );
     std::assert_eq!(
         seen[1]["requestState"],
         json!(STATE_1),
@@ -151,12 +167,20 @@ async fn an_answer_to_a_key_that_is_not_outstanding_is_refused_and_writes_nothin
     let (state, _store) = state_with(&mock).await;
     let id = parked(&state, "round-unmatched").await;
 
-    let refused = post(&state, "key-a", update(2, &id, json!({ "other": answer() }))).await;
+    let refused = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "other": answer() })),
+    )
+    .await;
     std::assert_eq!(error_code(&refused), Some(-32602), "{refused}");
     settle_quiet().await;
     let after = get_task(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&after), "input_required", "{after}");
-    std::assert!(after.pointer("/result/inputRequests/confirm").is_some(), "{after}");
+    std::assert!(
+        after.pointer("/result/inputRequests/confirm").is_some(),
+        "{after}"
+    );
     std::assert_eq!(mock.calls(), 1, "nothing was dispatched");
 }
 
@@ -196,12 +220,21 @@ async fn partial_answers_wait_and_the_resume_carries_every_accepted_answer() {
     let id = parked(&state, "round-partial").await;
 
     let first = post(&state, "key-a", update(2, &id, json!({ "a": { "v": 1 } }))).await;
-    std::assert!(first.get("error").is_none(), "a valid subset is accepted: {first}");
+    std::assert!(
+        first.get("error").is_none(),
+        "a valid subset is accepted: {first}"
+    );
     settle_quiet().await;
     let between = get_task(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&between), "input_required", "{between}");
-    std::assert!(between.pointer("/result/inputRequests/a").is_none(), "{between}");
-    std::assert!(between.pointer("/result/inputRequests/b").is_some(), "{between}");
+    std::assert!(
+        between.pointer("/result/inputRequests/a").is_none(),
+        "{between}"
+    );
+    std::assert!(
+        between.pointer("/result/inputRequests/b").is_some(),
+        "{between}"
+    );
     std::assert_eq!(mock.calls(), 1, "a partial answer dispatches nothing");
 
     let second = post(&state, "key-a", update(3, &id, json!({ "b": { "v": 2 } }))).await;
@@ -237,7 +270,12 @@ async fn cancel_during_input_settles_cancelled_and_a_later_update_is_refused() {
     let after = get_task(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&after), "cancelled", "{after}");
 
-    let late = post(&state, "key-a", update(3, &id, json!({ "confirm": answer() }))).await;
+    let late = post(
+        &state,
+        "key-a",
+        update(3, &id, json!({ "confirm": answer() })),
+    )
+    .await;
     std::assert_eq!(error_code(&late), Some(-32602), "{late}");
     settle_quiet().await;
     std::assert_eq!(mock.calls(), 1, "a cancelled round never resumes");
@@ -255,7 +293,11 @@ async fn a_rejected_round_shape_keeps_the_abandoned_result() {
     let id = task_id(&post(&state, "key-a", create(1, "round-rejected")).await);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
-    std::assert_eq!(reason_of(&settled), Some("input_round_unavailable"), "{settled}");
+    std::assert_eq!(
+        reason_of(&settled),
+        Some("input_round_unavailable"),
+        "{settled}"
+    );
 }
 
 /// Mutant: the model error from `require_input` swallowed (a reused key must
@@ -268,7 +310,12 @@ async fn a_round_reusing_an_answered_key_settles_failed() {
     ]));
     let (state, _store) = state_with(&mock).await;
     let id = parked(&state, "round-malformed").await;
-    let acked = post(&state, "key-a", update(2, &id, json!({ "confirm": answer() }))).await;
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
     std::assert!(acked.get("error").is_none(), "{acked}");
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "failed", "{settled}");
@@ -284,7 +331,11 @@ async fn state_only_rounds_resume_without_the_client_up_to_the_ceiling() {
     let id = task_id(&post(&state, "key-a", create(1, "round-state-loop")).await);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
-    std::assert_eq!(reason_of(&settled), Some("input_round_unavailable"), "{settled}");
+    std::assert_eq!(
+        reason_of(&settled),
+        Some("input_round_unavailable"),
+        "{settled}"
+    );
     settle_quiet().await;
     std::assert_eq!(mock.calls(), 5, "one dispatch plus four state-only resumes");
 }
@@ -324,5 +375,9 @@ async fn the_resume_runs_as_the_caller_of_the_update() {
     std::assert!(acked.get("error").is_none(), "{acked}");
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "failed", "{settled}");
-    std::assert_eq!(settled.pointer("/result/error/code"), Some(&json!(-32021)), "{settled}");
+    std::assert_eq!(
+        settled.pointer("/result/error/code"),
+        Some(&json!(-32021)),
+        "{settled}"
+    );
 }

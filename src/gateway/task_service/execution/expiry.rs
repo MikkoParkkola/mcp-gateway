@@ -132,7 +132,24 @@ fn finish(failure: Option<ServiceError>) -> Result<(), ServiceError> {
 /// report success over a directory it could not delete from.
 async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     let service = Arc::clone(&executor.service);
+    // The deletion snapshot is taken FIRST, so a round cancelled below is
+    // deleted by a later pass, never in the same one.
     let candidates = service.store.expired_candidates(Utc::now());
+    // An open input round past its TTL is cancelled here, continuation and
+    // all; a later pass deletes it like any terminal row after retention.
+    for (id, revision, owner_digest) in service.store.expired_input_rounds(Utc::now()) {
+        let cancelled = executor
+            .commit(super::TaskWrite::Recover {
+                owner_digest: &owner_digest,
+                id: &id,
+                revision,
+                event: crate::protocol::tasks::TaskTransition::Cancel,
+            })
+            .await;
+        if cancelled.is_err() {
+            tracing::debug!(task_id = %id, "expired input round moved before its cancel");
+        }
+    }
     let mut outcome = Ok(());
     for (id, revision) in candidates {
         match service

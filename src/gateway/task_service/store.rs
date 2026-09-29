@@ -27,11 +27,11 @@ use super::record::{
 use crate::fs_lock::{DirPin, ExclusiveFileLock};
 #[cfg(unix)]
 use std::fs::rename;
+#[path = "store_input.rs"]
+pub(crate) mod input;
 #[cfg(windows)]
 #[path = "store_windows.rs"]
 mod platform;
-#[path = "store_input.rs"]
-pub(crate) mod input;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 #[cfg(windows)]
 use platform::{
@@ -445,7 +445,7 @@ impl Shared {
         // Unreachable in practice; a record that can hold no further revision is
         // out of room rather than broken.
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
-        record.model = task.snapshot();
+        record.set_model(&task);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);

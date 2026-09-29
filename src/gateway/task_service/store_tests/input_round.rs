@@ -60,7 +60,14 @@ async fn parked(store: &TaskStore, task: &Task, keys: &[&str]) -> u64 {
         request_state: None,
     };
     store
-        .require_input(OWNER, task.id(), created.revision, requested, round("sealed"), at(1))
+        .require_input(
+            OWNER,
+            task.id(),
+            created.revision,
+            requested,
+            round("sealed"),
+            at(1),
+        )
         .await
         .expect("a small round fits")
         .revision
@@ -116,7 +123,11 @@ async fn answers_over_the_byte_cap_are_refused_and_nothing_is_written() {
             at(2),
         )
         .await;
-    assert!(matches!(refused, Err(StoreError::Capacity)), "{:?}", refused.err());
+    assert!(
+        matches!(refused, Err(StoreError::Capacity)),
+        "{:?}",
+        refused.err()
+    );
     let after = store.get(OWNER, task.id()).unwrap();
     assert_eq!(after.task.status(), TaskStatus::InputRequired);
     assert_eq!(after.revision, revision);
@@ -157,7 +168,13 @@ async fn a_partial_answer_is_durable_and_the_completing_one_returns_them_all() {
     let task = task();
     parked(&store, &task, &["a", "b"]).await;
     let partial = store
-        .provide_input(OWNER, task.id(), answers(json!({ "a": { "v": 1 } })), || None, at(2))
+        .provide_input(
+            OWNER,
+            task.id(),
+            answers(json!({ "a": { "v": 1 } })),
+            || None,
+            at(2),
+        )
         .await
         .unwrap();
     assert!(matches!(partial, ProvideOutcome::Partial(_)));
@@ -178,7 +195,10 @@ async fn a_partial_answer_is_durable_and_the_completing_one_returns_them_all() {
         )
         .await
         .unwrap();
-    let ProvideOutcome::Resumed { task: now, round, .. } = done else {
+    let ProvideOutcome::Resumed {
+        task: now, round, ..
+    } = done
+    else {
         panic!("the completing answer resumes");
     };
     assert_eq!(now.task.status(), TaskStatus::Working);
@@ -187,7 +207,11 @@ async fn a_partial_answer_is_durable_and_the_completing_one_returns_them_all() {
         json!({ "a": { "v": 1 }, "b": { "v": 2 } })
     );
     assert_eq!(round.request_state.as_deref(), Some("sealed"));
-    assert_eq!(workers.available_permits(), 0, "the permit travels with the resume");
+    assert_eq!(
+        workers.available_permits(),
+        0,
+        "the permit travels with the resume"
+    );
 }
 
 /// Mutant: CAS before permit acquisition.
@@ -199,7 +223,13 @@ async fn a_completing_answer_with_no_free_worker_writes_nothing() {
     let task = task();
     let revision = parked(&store, &task, &["confirm"]).await;
     let outcome = store
-        .provide_input(OWNER, task.id(), answers(json!({ "confirm": {} })), || None, at(2))
+        .provide_input(
+            OWNER,
+            task.id(),
+            answers(json!({ "confirm": {} })),
+            || None,
+            at(2),
+        )
         .await
         .unwrap();
     assert!(matches!(outcome, ProvideOutcome::PoolFull));
@@ -243,6 +273,12 @@ async fn expired_input_rounds_selects_open_rounds_past_their_ttl_only() {
         .into_iter()
         .map(|(id, _, owner)| (id, owner))
         .collect();
-    assert_eq!(selected, vec![(open_round.id().to_owned(), OWNER.to_owned())]);
-    assert!(store.expired_input_rounds(at(5)).is_empty(), "not before the TTL");
+    assert_eq!(
+        selected,
+        vec![(open_round.id().to_owned(), OWNER.to_owned())]
+    );
+    assert!(
+        store.expired_input_rounds(at(5)).is_empty(),
+        "not before the TTL"
+    );
 }
