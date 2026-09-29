@@ -387,7 +387,7 @@ fn audit_actions(path: &str) -> Vec<String> {
 /// identified caller does the same, one is.
 ///
 /// THIS GUARDS A COST, NOT A CORRECTNESS PROPERTY, AND THAT IS WHY IT EXISTS.
-/// `caller_credential_for` returns empty *without calling the resolver* when
+/// `caller_credential_for_identity` returns empty *without calling the resolver* when
 /// the caller has no verified identity. Dropping that short-circuit would still
 /// be correct — the resolver refuses and the guard omits the backend either way
 /// — so nothing else in this suite would go red. What it would do is mint once
