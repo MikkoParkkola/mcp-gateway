@@ -83,6 +83,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 88
 - Item 94
 - Item 95
+- Item 96
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
 deployment.**
@@ -213,6 +214,7 @@ without it.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2545,6 +2547,26 @@ backend that is down at startup opens its breaker before traffic arrives.
 
 **Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
 caches warm (`meta_mcp.warm_start`).
+
+## 96. A new audit log begins with an open record
+
+In 3.x, the first record in a new audit log was the first caller event, at counter 1.
+
+In 4.0 a new log (one with no records yet) begins with an `audit_segment_opened` record:
+`segment_seq` 0, counter 1, `prev_entry_hash` `genesis`. The first caller record is counter 2.
+A log that already holds records is not changed.
+
+The record lets `audit verify` tell a log that stopped before its first high-water mark from a
+log whose tail was cut.
+
+The record is signed and chained like any other, so every consumer that follows the chain gets
+it: SIEM export and the NDJSON file sink forward it, the export metrics count it, and
+`audit verify` counts it in `entries_checked`. Readers that select records by session or kind
+(`audit show`, the dashboard's governance view) never show it.
+
+**Action:** where a SIEM rule, export consumer or script matches caller events, skip records
+whose `event` is `audit_segment_opened`. Chain and counter checks need no change: the sequence
+starts at 1 with no gap.
 
 ## Upgrading from 3.5.x: a walkthrough
 
