@@ -26,6 +26,7 @@ use mcp_gateway::{
 use serde_json::{Value, json};
 
 mod health;
+mod provenance;
 mod remedy;
 mod shadow;
 mod ws_reach;
@@ -216,6 +217,8 @@ pub async fn run_doctor_command(
 
     // ── 7. Passive ShadowRadar handoff ─────────────────────────────────────
     results.extend(check_shadow_radar(&config, config_path).await);
+    // ── 8. Remote backend provenance (#1943) ──────────────────────────────
+    results.extend(provenance::check_remote_provenance(&config));
 
     // ── Print and summarize ────────────────────────────────────────────────
     print_results(&results, format);
