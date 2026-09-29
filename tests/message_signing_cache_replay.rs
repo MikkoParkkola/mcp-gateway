@@ -147,6 +147,10 @@ async fn an_idempotent_replay_is_signed_for_its_own_nonce() {
     // An idempotency key needs a verified caller to scope it to, so auth is on.
     let mut config = fixture_config(&backend.url);
     config["auth"] = json!({"enabled": true, "bearer_token": BEARER});
+    // Auth on requires the audit log (UPGRADING item 43).
+    let audit = tempfile::tempdir().expect("audit dir");
+    config["security"]["transparency_log"] =
+        json!({"enabled": true, "path": audit.path().join("audit").join("log.jsonl")});
     let mut gateway = HttpGateway::start(config).await;
     gateway.client = bearer_client();
     let session = gateway.initialize().await;
