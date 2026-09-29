@@ -366,9 +366,8 @@ fn f13_t5c_a_cancelled_fill_does_not_stamp() {
 }
 
 /// F13-T5d, GUARD row (green on base): a discovery fill (`DrainBudget`) whose
-/// list takes `timeout` + 5 s still stores, and it drains even with the
-/// slot's breaker open. Proven by mutants M4b (apply the call timeout to
-/// every fill) and M11d (admit `DrainBudget` fills too).
+/// list takes `timeout` + 5 s still stores. Proven by mutant M4b (apply the
+/// call timeout to every fill). The breaker now gates it: see T1 (#1300).
 #[tokio::test(start_paused = true)]
 async fn f13_t5d_a_discovery_fill_is_not_bounded_by_the_call_timeout() {
     let lister = Lister::new(Mode::Serve);
@@ -378,7 +377,6 @@ async fn f13_t5d_a_discovery_fill_is_not_bounded_by_the_call_timeout() {
         &hair_trigger(Duration::from_secs(3600)),
         &lister,
     );
-    backend.trip_circuit_breaker_for_test();
     let tools = backend
         .get_tools_shared()
         .await
@@ -501,9 +499,7 @@ async fn voided_check(
         match voider {
             Voider::Invalidate => backend.invalidate_tools_cache(),
             Voider::Replace => {
-                backend
-                    .remember_listed_tools(None, false, &[edit_tool()])
-                    .await;
+                backend.remember_listed_tools(None, false, &[edit_tool()]);
             }
             Voider::Nothing => {}
         }
@@ -799,3 +795,6 @@ async fn f13_t12i_a_cooldown_hit_spends_no_token() {
 
 #[path = "f13_a3_tests.rs"]
 mod a3;
+
+#[path = "fill_failsafe_tests.rs"]
+mod fill_failsafe;

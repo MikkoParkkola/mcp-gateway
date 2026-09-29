@@ -31,6 +31,8 @@ struct Slot {
     list_headers: Mutex<Vec<Vec<(String, String)>>>,
     /// Refuse every request as a connect failure (the backend is down).
     down: bool,
+    /// Runs inside `tools/list`, to land an event while the check is pending.
+    on_list: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[async_trait::async_trait]
@@ -54,6 +56,9 @@ impl crate::transport::Transport for Slot {
         }
         let result = if method == "tools/list" {
             self.lists.fetch_add(1, Ordering::SeqCst);
+            if let Some(hook) = &self.on_list {
+                hook();
+            }
             self.list_headers.lock().push(extra_headers.to_vec());
             json!({"tools": [{"name": "edit", "inputSchema":
                 {"type": "object", "properties": {"edits": {"type": "array"}}}}]})
@@ -146,6 +151,7 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         scope: InvokeScope::allow_all(CallerStanding::Standard),
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
+        reservation: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     match outcome {
@@ -214,6 +220,7 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         scope: InvokeScope::allow_all(CallerStanding::Standard),
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
+        reservation: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(
@@ -224,5 +231,115 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         down.calls.load(Ordering::SeqCst),
         0,
         "a tools/call went out"
+    );
+}
+
+/// #1989: an operator kill between round one and a later bridged round
+/// refuses that round before it reaches the backend. `NotAdmitted`, so the
+/// idempotency key is not burned by work that never ran.
+#[tokio::test]
+async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
+    let backend = Arc::new(Backend::new(
+        "edits",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let slot = Arc::new(Slot::default());
+    backend.set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(backend));
+    let meta = MetaMcp::new(registry);
+    meta.kill_switch().kill("edits");
+    let arguments = json!({"edits": []});
+    let round = BridgeDispatcher {
+        meta: &meta,
+        server: "edits",
+        tool: "edit",
+        arguments: &arguments,
+        prompt_cache_key: None,
+        inbound_meta: None,
+        want_full: false,
+        session_id: None,
+        caller_identity: None,
+        caller_proof: CallerProof::Anonymous,
+        headers: &[],
+        cache_binding: None,
+        account_credential: None,
+        api_key_name: None,
+        trace_id: "mik-1989-bridged",
+        policy_epoch: 0,
+        protocol_revision: None,
+        routing_profile: "default",
+        scope: InvokeScope::allow_all(CallerStanding::Standard),
+        managed: None,
+        account_refusal: &parking_lot::Mutex::new(None),
+        reservation: &parking_lot::Mutex::new(None),
+    };
+    let outcome = round.invoke(json!({})).await;
+    assert!(
+        matches!(outcome, Err(BridgeError::NotAdmitted { ref message }) if message.contains("kill switch")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        slot.calls.load(Ordering::SeqCst),
+        0,
+        "a killed server's round reached the transport"
+    );
+}
+
+/// #1989 (review): a kill that lands while the round's `tools/list` check is
+/// pending must still stop the round before `tools/call`.
+#[tokio::test]
+async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
+    let backend = Arc::new(Backend::new(
+        "edits",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::clone(&backend)));
+    let meta = MetaMcp::new(registry);
+    let switch = meta.kill_switch();
+    let slot = Arc::new(Slot {
+        on_list: Some(Box::new(move || switch.kill("edits"))),
+        ..Slot::default()
+    });
+    backend.set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);
+    let arguments = json!({"edits": []});
+    let round = BridgeDispatcher {
+        meta: &meta,
+        server: "edits",
+        tool: "edit",
+        arguments: &arguments,
+        prompt_cache_key: None,
+        inbound_meta: None,
+        want_full: false,
+        session_id: None,
+        caller_identity: None,
+        caller_proof: CallerProof::Anonymous,
+        headers: &[],
+        cache_binding: None,
+        account_credential: None,
+        api_key_name: None,
+        trace_id: "mik-1989-during-check",
+        policy_epoch: 0,
+        protocol_revision: None,
+        routing_profile: "default",
+        scope: InvokeScope::allow_all(CallerStanding::Standard),
+        managed: None,
+        account_refusal: &parking_lot::Mutex::new(None),
+        reservation: &parking_lot::Mutex::new(None),
+    };
+    let outcome = round.invoke(json!({})).await;
+    assert!(
+        matches!(outcome, Err(BridgeError::NotAdmitted { ref message }) if message.contains("kill switch")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        slot.calls.load(Ordering::SeqCst),
+        0,
+        "a tools/call went out after the kill"
     );
 }

@@ -734,8 +734,7 @@ mod http {
                 .expect("api key fixture"),
             ],
             public_paths: Vec::new(),
-            client_circuit_breaker: None,
-            single_user: false,
+            ..mcp_gateway::config::AuthConfig::default()
         };
         let (state, _store_dir) = state_with(true, auth).await;
         let (status, _session, body) = post_mcp_authed(
@@ -852,8 +851,7 @@ mod http {
                 .expect("api key fixture"),
             ],
             public_paths: Vec::new(),
-            client_circuit_breaker: None,
-            single_user: false,
+            ..mcp_gateway::config::AuthConfig::default()
         };
         // The allow-list names one unrelated meta-tool, so it is non-empty — an
         // empty list exposes everything — and `gateway_kill_server` is absent.
@@ -988,7 +986,7 @@ mod http {
                 success_threshold: 1,
                 reset_timeout: std::time::Duration::from_secs(60),
             }),
-            single_user: false,
+            ..mcp_gateway::config::AuthConfig::default()
         };
         let (state, _store_dir) = state_with(true, auth).await;
         let accounting = Arc::clone(&state.auth_config);

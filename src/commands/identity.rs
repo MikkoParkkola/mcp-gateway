@@ -298,7 +298,7 @@ fn parse_subject_spec(
     })?;
     Ok(GrantSubject::new(
         non_empty(authority, field_name)?,
-        non_empty(subject, field_name)?,
+        verbatim_id(subject, field_name)?,
         label.and_then(|label| {
             let trimmed = label.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -307,7 +307,11 @@ fn parse_subject_spec(
 }
 
 fn parse_agent_binding(agent: Option<String>, any_agent: bool) -> Result<GrantAgent, String> {
-    match (trim_optional(agent), any_agent) {
+    // Only the leading source prefix may be padded; the id keeps its bytes.
+    let agent = agent
+        .map(|agent| agent.trim_start().to_string())
+        .filter(|agent| !agent.is_empty());
+    match (agent, any_agent) {
         (Some(_), true) => Err("--agent and --any-agent are mutually exclusive".to_string()),
         (Some(agent), false) => parse_agent_key(&agent).map(GrantAgent::Exact),
         (None, true) => Ok(GrantAgent::Any),
@@ -334,8 +338,7 @@ fn parse_agent_key(agent: &str) -> Result<GrantAgentKey, String> {
             ));
         }
     };
-    let id = id.trim();
-    if id.is_empty() {
+    if id.trim().is_empty() {
         return Err(format!("--agent {agent}: the id after the source is empty"));
     }
     // The selected mTLS id is the first SAN URI, else the bare CN; a DN
@@ -426,6 +429,16 @@ fn agent_summary(agent: &GrantAgent) -> String {
 fn non_empty(value: &str, field_name: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
+        Err(format!("{field_name} cannot be empty"))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+/// A proven id is keyed verbatim at runtime (#2243), so it is stored as given:
+/// trimming `" admin "` would grant the distinct principal `admin` (#2284).
+fn verbatim_id(value: &str, field_name: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
         Err(format!("{field_name} cannot be empty"))
     } else {
         Ok(value.to_string())
@@ -620,6 +633,64 @@ mod tests {
     }
 
     /// C33: the accepted spellings, one per source.
+    /// Runtime keys a proven id verbatim (#2243), so the CLI writes it as
+    /// given; trimming would mint a grant for a different principal. Empty and
+    /// blank ids are still refused (#2284).
+    #[test]
+    fn padded_ids_are_written_verbatim() {
+        let subject = parse_subject_spec("mtls: admin ", None, "subject").unwrap();
+        assert_eq!(subject.subject, " admin ");
+
+        let agent = parse_agent_binding(Some("jwt: runner ".to_string()), false).unwrap();
+        let expected = GrantAgentKey {
+            source: ProofSource::VerifiedJwtSubject,
+            id: " runner ".to_string(),
+        };
+        assert_eq!(agent, GrantAgent::Exact(expected));
+
+        let owner = parse_subject_spec("jwt: runner", None, "owner").unwrap();
+        assert_eq!(owner.subject, " runner");
+
+        let padded_source = parse_agent_binding(Some("  jwt: runner ".to_string()), false);
+        let GrantAgent::Exact(key) = padded_source.unwrap() else {
+            panic!("an exact agent key");
+        };
+        assert_eq!(key.id, " runner ");
+
+        assert!(parse_subject_spec("mtls:  ", None, "subject").is_err());
+        assert!(parse_agent_binding(Some("jwt:  ".to_string()), false).is_err());
+    }
+
+    /// A grant the CLI writes for `" admin "` survives the file and matches
+    /// that proven id, not the bare `admin` (#2284).
+    #[tokio::test]
+    async fn a_padded_grant_round_trips_to_its_own_principal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grants.yaml");
+        let mut input = grant_input(path.clone());
+        input.subject = "mtls: admin ".to_string();
+        upsert_local_grant(input).await.unwrap();
+        let store = mcp_gateway::identity_grants::load_identity_grants_file(&path)
+            .await
+            .unwrap();
+
+        let allowed = |id: &str| {
+            let request = IdentityGrantRequest {
+                identity: Some(GrantSubject::new("mtls", id, None)),
+                agent_id: None,
+                capability: "calendar_read_day".to_string(),
+                tool: Some("calendar_read_day".to_string()),
+                scope: GrantScope::Read,
+                exposure: CapabilityExposure::Personal,
+                owner: Some(GrantSubject::new("mtls", id, None)),
+                now: Utc::now(),
+            };
+            store.evaluate(&request).allowed
+        };
+        assert!(allowed(" admin "));
+        assert!(!allowed("admin"));
+    }
+
     #[test]
     fn a_qualified_agent_flag_keys_the_grant_by_source_and_id() {
         for (value, source) in [

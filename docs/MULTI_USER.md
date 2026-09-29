@@ -47,8 +47,8 @@ who simply omits their credential reaches the gateway anyway. Cut it to
 `["/health"]`.
 
 `single_user: true` is a hint that turns off the per-user OAuth isolation guard.
-More than one API key, or any OIDC issuer, overrides the hint — but do not rely
-on that. Remove the line.
+More than one credential (API keys and the bearer token), or any OIDC issuer,
+overrides the hint — but do not rely on that. Remove the line.
 
 One more parallel path to close: `auth.bearer_token` and `auth.api_keys` are
 static credentials checked at the transport gate. They do **not** carry an
@@ -432,6 +432,9 @@ only raise it.
   verified user, `(issuer, sub)`, and records refused and failed calls too. On
   Kubernetes give the log a PersistentVolumeClaim (`audit.existingClaim`) or
   export it, because the chart's default `emptyDir` dies with the pod.
+- The dashboard: sessions end after 30 minutes idle or 8 hours total
+  (`auth.dashboard_session`), and live in each replica's memory. Serve the dashboard
+  from one replica or behind sticky sessions (UPGRADING-4.0 section 71).
 
 ## Related
 

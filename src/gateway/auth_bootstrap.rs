@@ -8,7 +8,10 @@ use axum::http::Request;
 use axum::response::Response;
 use tracing::warn;
 
-use super::{AuthState, SESSION_COOKIE, bearer_unauthorized_response};
+use super::{
+    AuthState, Now, Redemption, bearer_unauthorized_response, cookie_secure, session_cookie,
+    session_limits,
+};
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
 ///
@@ -77,7 +80,7 @@ pub(super) fn try_dashboard_bootstrap(
             );
             return Some(bearer_unauthorized_response(if spent {
                 "The dashboard link works only from the machine running the gateway, and this \
-                 attempt has used it up. Restart the gateway for a fresh link."
+                 attempt has used it up. Run `mcp-gateway dashboard-link` for a fresh one."
             } else {
                 "The dashboard link works only from the machine running the gateway."
             }));
@@ -104,32 +107,54 @@ pub(super) fn try_dashboard_bootstrap(
                  a fresh link.",
             ));
         }
-        if !state.dashboard_bootstrap.consume(&candidate) {
+        // Checked BEFORE the value is spent, like the admin-credential check:
+        // an HTTPS `public_url` added by reload makes the session cookie
+        // `Secure`, and a browser on this plain-HTTP listener would drop it,
+        // wasting the only link. The same refusal the link endpoint gives.
+        // One reading, used for both this refusal and the cookie below, so a
+        // reload in between cannot split them. Only a caller holding the right
+        // value learns about the deployment; any other gets the plain 401.
+        let secure = cookie_secure(state);
+        let holds_value = state.dashboard_bootstrap.peek().as_deref() == Some(candidate.as_str());
+        if secure && !state.tls_enabled && holds_value {
+            warn!("Dashboard bootstrap refused: HTTPS public_url on a plain-HTTP listener");
+            return Some(axum::response::IntoResponse::into_response((
+                axum::http::StatusCode::CONFLICT,
+                "server.public_url is HTTPS but this listener is plain HTTP, so the session \
+                 cookie would be discarded, even through an HTTPS proxy in front of it. \
+                 Enable mtls or remove public_url.",
+            )));
+        }
+        let Some(Redemption { not_after }) = state.dashboard_bootstrap.consume_capped(&candidate)
+        else {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
-                "Bootstrap link is invalid or already used. Restart the gateway \
-                 for a fresh link.",
+                "Bootstrap link is invalid or already used. Run `mcp-gateway \
+                 dashboard-link` for a fresh one.",
             ));
-        }
+        };
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
-        let handle = state.dashboard_bootstrap.issue_session();
-        // `Secure` whenever this listener speaks TLS. Without it a downgrade
-        // puts the cookie on the wire; with a plain-HTTP loopback listener the
-        // attribute would stop the cookie being sent at all, so it is
-        // conditional rather than unconditional.
-        let secure = if state.tls_enabled { " Secure;" } else { "" };
+        let limits = session_limits(state);
+        let now = Now::read();
+        let handle = state
+            .dashboard_bootstrap
+            .issue_session_until(now, &limits, not_after);
+        // The cookie lives exactly as long as the server will honour it, so a
+        // browser never keeps presenting a handle the server already dropped:
+        // the absolute limit, or less when the minting credential expires first.
+        let max_age = not_after
+            .map(|cap| cap.duration_since(now.wall).unwrap_or_default())
+            .map_or(limits.absolute, |left| left.min(limits.absolute))
+            .as_secs();
         Some(axum::response::IntoResponse::into_response((
             axum::http::StatusCode::SEE_OTHER,
             [
                 (axum::http::header::LOCATION, "/dashboard".to_string()),
                 (
                     axum::http::header::SET_COOKIE,
-                    format!(
-                        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; \
-                         Path=/; Max-Age=86400"
-                    ),
+                    session_cookie(&handle, max_age, secure),
                 ),
             ],
         )))
@@ -137,7 +162,7 @@ pub(super) fn try_dashboard_bootstrap(
 }
 
 /// The `bootstrap` query parameter, if present.
-fn bootstrap_param(query: &str) -> Option<String> {
+pub(super) fn bootstrap_param(query: &str) -> Option<String> {
     query
         .split('&')
         .filter_map(|p| p.split_once('='))

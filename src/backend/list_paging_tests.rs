@@ -357,6 +357,30 @@ async fn keyless_first_page_keeps_later_pages() {
     assert_eq!(names(&backend), ["t1"]);
 }
 
+/// A continuation page that omits the `tools` key but carries a cursor is
+/// readable (the drain goes on), yet says nothing about entries an earlier
+/// page served: the fill must not commit as a complete listing, or a withheld
+/// name on a page the drain never saw reads as removed (#1441, mirrors
+/// `direct_list.rs`'s `unreadable` handling for the direct route).
+#[tokio::test]
+async fn keyless_continuation_page_marks_truncated() {
+    let pager = Pager::tools(vec![
+        (vec!["t0"], Some("c1")),
+        (vec![], Some("c2")),
+        (vec!["t2"], None),
+    ]);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    backend.get_tools_shared().await.expect("fill");
+    assert_eq!(pager.request_count(), 3);
+    assert_eq!(names(&backend), ["t0", "t2"]);
+    assert!(
+        truncated(&backend),
+        "an unreadable continuation page was folded in as a complete listing"
+    );
+}
+
 /// Review fold: a later page with no `tools` key and no cursor is malformed,
 /// not an empty last page: the fill fails and keeps no partial list, so the
 /// check never judges a present tool absent. Mutant M40 (accept any result

@@ -146,7 +146,14 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
+pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 mod r2_check;
+// #1962: settlement of a bridged round's key, kept out of this file's size baseline.
+mod bridge_settle;
+pub(super) use bridge_settle::arm_for_dispatch;
+pub(super) use bridge_settle::classify_bridged_dispatch_error;
+use bridge_settle::{arm, refuse_if_killed};
+mod withheld_evidence;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
 mod account_mint;
@@ -910,6 +917,9 @@ struct BridgeDispatcher<'a> {
     /// the bridge sees today's `BackendFailed`, and the call site answers with
     /// this instead of the generic bridged-exchange refusal.
     account_refusal: &'a parking_lot::Mutex<Option<Error>>,
+    /// #1962: the call's idempotency reservation, held here for the exchange
+    /// so each round can arm it around its dispatch.
+    reservation: &'a parking_lot::Mutex<Option<IdempotencyReservation>>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -947,6 +957,9 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         &self,
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // The kill switch is read once at the top of the call, so re-read it per round.
+        refuse_if_killed(&self.meta.kill_switch, self.server)?;
+
         // Admitted here as well as at the first dispatch, because the spend
         // check is per backend call and `invoke_tool` ran it once, before the
         // backend asked anything. A bridged exchange adds a call per round, so
@@ -960,7 +973,13 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // retry of work that never ran.
         #[cfg(feature = "cost-governance")]
         self.meta
-            .admit_spend(self.tool, self.api_key_name)
+            .admit_spend_for(&dispatch_guards::BackendCall {
+                server: self.server,
+                tool: self.tool,
+                session_id: None,
+                api_key_name: self.api_key_name,
+                trace_id: "",
+            })
             .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: e.to_string(),
             })?;
@@ -999,6 +1018,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                     .to_owned(),
             });
         }
+        // The check above may have awaited a cold `tools/list`: re-read the kill.
+        refuse_if_killed(&self.meta.kill_switch, self.server)?;
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")
@@ -1006,6 +1027,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 .map(str::to_owned),
             input_responses: retry_params.get("inputResponses").cloned(),
         };
+        // #1962: armed for the dispatch, so a dropped exchange settles the key.
+        arm(self.reservation, true);
         let dispatched = self
             .meta
             .accounted_dispatch(
@@ -1031,11 +1054,23 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             )
             .await;
         let error = match dispatched {
-            Ok(value) => return Ok(value),
+            Ok(value) => {
+                // Asked again: the backend has not acted on this round.
+                if crate::protocol::mrtr::InputRequired::claims_input_required(&value) {
+                    arm(self.reservation, false);
+                }
+                return Ok(value);
+            }
             Err(error) => error,
         };
         // A11-c: a 401 on a managed credential forces at most one refresh.
         let classified = classify_bridged_dispatch_error(&error);
+        if matches!(
+            classified,
+            crate::gateway::input_bridge::BridgeError::NotAdmitted { .. }
+        ) {
+            arm(self.reservation, false);
+        }
         // Every error that reached the 401 site is parked, marked or not, so
         // the call site answers it as the first dispatch would.
         if let Some(managed) = self.managed
@@ -1044,30 +1079,6 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
         }
         Err(classified)
-    }
-}
-
-/// Decides whether a failed bridged dispatch releases the idempotency key.
-///
-/// The error type already carries a tight, deliberate allowlist of failures that
-/// provably happened above the backend. A bridged round that hit one of those ran
-/// nothing, so it releases the key on the same terms as a pre-dispatch refusal;
-/// everything else stays dispatched and settles, because a round the backend may
-/// have executed must not readmit a retry of a side effect (ADR-012 consequence 1).
-pub(super) fn classify_bridged_dispatch_error(
-    error: &crate::Error,
-) -> crate::gateway::input_bridge::BridgeError {
-    let message = error.to_string();
-    if error.is_pre_dispatch() {
-        crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
-    } else {
-        // Always `MayHaveActed`: `is_pre_dispatch()` already diverted every
-        // provably-unexecuted case to `NotAdmitted` above, so anything
-        // reaching here may have run.
-        crate::gateway::input_bridge::BridgeError::BackendFailed {
-            message,
-            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
-        }
     }
 }
 
@@ -1142,9 +1153,15 @@ impl MetaMcp {
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
         )?;
-        self.active_profile(session_id)
-            .check(server, tool)
-            .map_err(Error::Protocol)
+        // S1 (kill switch, capability disable, session profile) is shared with
+        // the per-backend route; every admission path reaches it through here.
+        self.admit_target(&dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name: None,
+            trace_id: "",
+        })
     }
 
     pub(super) fn authorize_invocation(
@@ -1690,30 +1707,6 @@ impl MetaMcp {
 
         tracing::Span::current().record("trace_id", trace_id);
 
-        if self.kill_switch.is_killed(server) {
-            return Err(Error::json_rpc(
-                -32000,
-                format!("Server '{server}' is currently disabled by operator kill switch"),
-            ));
-        }
-
-        {
-            let cap_cfg = self.capability_budget_config.read();
-            if self
-                .kill_switch
-                .is_capability_disabled_with_cooldown(server, tool, cap_cfg.cooldown)
-            {
-                return Err(Error::json_rpc(
-                    -32000,
-                    format!(
-                        "Capability '{tool}' on server '{server}' is temporarily disabled due to \
-                         a high error rate. It will auto-recover after the cooldown period. \
-                         Use gateway_list_disabled_capabilities to see all disabled capabilities."
-                    ),
-                ));
-            }
-        }
-
         let profile = self.active_profile(session_id);
 
         let tool_key = format!("{server}:{tool}");
@@ -1876,11 +1869,9 @@ impl MetaMcp {
                     // as a client failure — a retry could then open the circuit
                     // breaker on a client whose only fault was retrying a call
                     // the gateway itself refused.
-                    if error
-                        .get(crate::idempotency::FIREWALL_REFUSAL_MARKER)
-                        .and_then(Value::as_bool)
-                        == Some(true)
-                    {
+                    if crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal(
+                        &error,
+                    ) {
                         debug!(
                             server,
                             tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
@@ -2079,7 +2070,13 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let cost_warnings: Vec<String> = self.admit_spend(tool, api_key_name)?;
+        let cost_warnings = self.admit_spend_for(&dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name,
+            trace_id,
+        })?;
 
         // Derive a prompt_cache_key for OpenAI-compatible backends.
         // Priority: explicit _meta.prompt_cache_key from caller > session hash.
@@ -2129,6 +2126,8 @@ impl MetaMcp {
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.
+        // #1962: a drop during the dispatch settles the key as uncertain.
+        arm_for_dispatch(idem_reservation.as_mut());
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,
@@ -2228,8 +2227,9 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // The idempotency reservation is left for the commit below
-                // unless the refusal was pre-dispatch.
+                // The error budget already counted this failure (the shared
+                // accounting stage).  The idempotency reservation is left
+                // for the commit below unless the refusal was pre-dispatch.
                 dispatch_error_result(&e, tool, server)
             }
         };
@@ -2267,8 +2267,12 @@ impl MetaMcp {
         // state. Those are unusable, not finished, and settling one would write
         // "side effect executed" over a backend that stopped to ask. Keying on
         // the classification would exempt exactly the shapes it rejects.
-        if !stopped_to_ask && let Some(reservation) = idem_reservation.as_mut() {
-            reservation.commit(&withheld_side_effect());
+        if let Some(reservation) = idem_reservation.as_mut() {
+            if stopped_to_ask {
+                reservation.disarm();
+            } else {
+                reservation.commit(&withheld_side_effect());
+            }
         }
 
         // MRTR.9: a question the client never said it could answer is refused
@@ -2323,6 +2327,7 @@ impl MetaMcp {
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
             let account_refusal = parking_lot::Mutex::new(None);
+            let held = parking_lot::Mutex::new(idem_reservation.take());
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
                     meta: self,
@@ -2346,6 +2351,7 @@ impl MetaMcp {
                     scope: caller.scope(),
                     managed: caller_credential.managed.as_ref(),
                     account_refusal: &account_refusal,
+                    reservation: &held,
                 },
                 caller.channel,
                 session,
@@ -2357,6 +2363,7 @@ impl MetaMcp {
             // Taken once, here: a guard held into a match arm would be held
             // across that arm's awaits and make this future non-Send.
             let mut parked = account_refusal.into_inner();
+            idem_reservation = held.into_inner();
             match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
@@ -2422,14 +2429,7 @@ impl MetaMcp {
                 // taken effect (ADR-012 consequence 1), so the key settles.
                 Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused { dispatched }) => {
                     if dispatched && let Some(reservation) = idem_reservation.as_mut() {
-                        // Built from the variant rather than spelled out, so the
-                        // replayed refusal cannot drift from the live one.
-                        let mut body = json!({
-                            "code": Error::ResponseFirewallRefused.to_rpc_code(),
-                            "message": Error::ResponseFirewallRefused.to_string(),
-                        });
-                        body[crate::idempotency::FIREWALL_REFUSAL_MARKER] = json!(true);
-                        reservation.fail(&body);
+                        reservation.fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
                     }
                     warn!(
                         server,
@@ -2545,7 +2545,14 @@ impl MetaMcp {
             result["requestState"] = json!(envelope);
         }
 
-        result = self.apply_response_gates(server, tool, api_key_name, trace_id, result)?;
+        let call = dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name,
+            trace_id,
+        };
+        result = self.gate_payload(&call, result)?;
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -2926,7 +2933,7 @@ impl MetaMcp {
             "schema_version": &evaluation.schema_version,
             "content_sha256": &evaluation.content_sha256,
             "provenance": &evaluation.provenance,
-            "classification": &evaluation.classification,
+            "classification": withheld_evidence::delivered(evaluation),
             "policy": &evaluation.policy,
             "audit": &evaluation.audit,
         });
@@ -2972,17 +2979,21 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
-        self.resolve_propagation_credential_held(server, verified_identity)
+        // Identity-only: these callers never serve the sole operator yet (#2231).
+        let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
+        self.resolve_propagation_credential_held(server, caller)
             .await
             .map(|(headers, cache_binding, _)| (headers, cache_binding))
     }
 
-    /// [`Self::resolve_propagation_credential`], keeping the managed lease for
-    /// the direct route's post-dispatch 401 site (A11-e′).
+    /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
+    /// keeping the managed lease for the direct route's post-dispatch 401 site
+    /// (A11-e′). The direct route passes its classified proof, so the sole
+    /// operator is served there as on `gateway_invoke` (#2190).
     pub(crate) async fn resolve_propagation_credential_held(
         &self,
         server: &str,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Result<HeldCredential> {
         let Some(idp_cfg) = self
             .backends
@@ -2993,7 +3004,7 @@ impl MetaMcp {
             return Ok((Vec::new(), None, None));
         };
         let cred = self
-            .resolve_caller_credential(server, &idp_cfg, verified_identity)
+            .resolve_caller_credential_as(server, &idp_cfg, caller)
             .await?;
         Ok((cred.headers, cred.cache_binding, cred.managed))
     }
@@ -3035,6 +3046,8 @@ impl MetaMcp {
     /// propagation strategy wired, the strategy refuses, or a minted header does
     /// not parse. For a non-required backend, a mint failure degrades to the
     /// empty credential (no headers, no binding → shared cache key, best-effort).
+    /// Identity-only; production callers pass their proof to the `_as` form.
+    #[cfg(test)]
     async fn resolve_caller_credential(
         &self,
         server: &str,
@@ -3044,6 +3057,20 @@ impl MetaMcp {
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
         self.resolve_caller_credential_as(server, idp_cfg, caller)
             .await
+    }
+
+    /// Who a credential for `descriptor_id`'s backend is resolved for: the
+    /// managed vault's own sole-operator predicate when the backend is bound to
+    /// a managed account (as REST, #1961), otherwise the verified identity only.
+    pub(super) fn caller_principal<'a>(
+        &self,
+        descriptor_id: Option<&str>,
+        caller: CallerProof<'a>,
+    ) -> Option<Principal<'a>> {
+        match self.account_strategies.managed_vault(descriptor_id) {
+            Some(vault) => vault.principal(caller),
+            None => caller.verified().map(Principal::Verified),
+        }
     }
 
     /// With the caller's provenance, so the sole operator can be served (#1961).
@@ -3068,10 +3095,7 @@ impl MetaMcp {
         let managed_vault = self
             .account_strategies
             .managed_vault(descriptor_id.as_deref());
-        let principal = match &managed_vault {
-            Some(vault) => vault.principal(caller),
-            None => caller.verified().map(Principal::Verified),
-        };
+        let principal = self.caller_principal(descriptor_id.as_deref(), caller);
         let subject_id = principal.map_or_else(|| audit_subject(None), Principal::stable_actor_id);
         let audience = idp_cfg.audience.as_str();
 
@@ -3414,33 +3438,16 @@ impl MetaMcp {
             }
         }
 
-        self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result));
-
-        // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
-        if dispatch_result.is_ok()
-            && let Some(sid) = session_id
-        {
-            self.cost_tracker.record(
-                sid,
-                api_key_name,
+        self.account_dispatch(
+            &dispatch_guards::BackendCall {
                 server,
                 tool,
-                0, // token_count: 0 for backend tool calls (no model inference)
-                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
-            );
-        }
-
-        // === POST-INVOKE: BudgetEnforcer cost recording ===
-        //
-        // Record actual spend for per-tool and global daily accumulators.
-        // Only on success — the call actually incurred the cost.
-        #[cfg(feature = "cost-governance")]
-        if dispatch_result.is_ok()
-            && let Some(ref enforcer) = self.budget_enforcer
-        {
-            let cost = enforcer.registry.cost_for(tool);
-            enforcer.record_spend(tool, api_key_name, cost);
-        }
+                session_id,
+                api_key_name,
+                trace_id,
+            },
+            dispatch_guards::DirectOutcome::of(&dispatch_result),
+        );
 
         dispatch_result
     }
@@ -3495,16 +3502,13 @@ impl MetaMcp {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
 
+        // The grant was decided at the authorization chokepoint, above the
+        // caches. The definition is resolved again here only for the response
+        // transform below, in one lookup so a reload cannot split it (#2236).
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
-            && cap.has_capability(tool)
+            && let Some(cap_def) = cap.get(tool)
         {
-            // The grant was decided at the authorization chokepoint, above the
-            // caches. The definition is resolved again here only for the
-            // response transform below.
-            let cap_def = cap
-                .get(tool)
-                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
             let result = call_capability_tool_with_identity(
                 &cap,
                 tool,
@@ -4169,35 +4173,42 @@ impl BudgetOutcome {
     /// for every backend that reports its 429 the protocol's own way.
     pub(super) fn of(result: &Result<Value>) -> Self {
         match result {
-            Ok(response) => {
-                let is_error = response
-                    .get("isError")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                // Scanning the whole envelope is safe only because `isError`
-                // gates it: on a successful result the same text is ordinary
-                // payload and must not exempt anything.
-                if is_error && crate::gateway::recovery::is_rate_limited(&response.to_string()) {
-                    Self::IgnoredRateLimit
-                } else {
-                    // A non-rate-limit `isError: true` is a tool refusing a
-                    // request, not a backend in poor health: a bad argument or
-                    // a missing file would otherwise open a circuit on a
-                    // backend that answered correctly every time. It is
-                    // sampled as a success on purpose.
-                    Self::Success
-                }
-            }
-            // The gateway's own limiter refused: the backend was never asked.
-            // Matched on the variant, not on its message (F23).
-            Err(Error::RateLimited(_)) => Self::IgnoredRateLimit,
-            Err(error) => {
-                if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
-                    Self::IgnoredRateLimit
-                } else {
-                    Self::Failure
-                }
-            }
+            Ok(response) => Self::of_value(response),
+            Err(error) => Self::of_error(error),
+        }
+    }
+
+    /// [`Self::of`] for a result the backend answered.
+    pub(super) fn of_value(response: &Value) -> Self {
+        let is_error = response
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        // Scanning the whole envelope is safe only because `isError`
+        // gates it: on a successful result the same text is ordinary
+        // payload and must not exempt anything.
+        if is_error && crate::gateway::recovery::is_rate_limited(&response.to_string()) {
+            Self::IgnoredRateLimit
+        } else {
+            // A non-rate-limit `isError: true` is a tool refusing a
+            // request, not a backend in poor health: a bad argument or
+            // a missing file would otherwise open a circuit on a
+            // backend that answered correctly every time. It is
+            // sampled as a success on purpose.
+            Self::Success
+        }
+    }
+
+    /// [`Self::of`] for a dispatch that failed.
+    pub(super) fn of_error(error: &Error) -> Self {
+        // The gateway's own limiter refused: the backend was never asked.
+        // Matched on the variant, not on its message (F23).
+        if matches!(error, Error::RateLimited(_))
+            || crate::gateway::recovery::is_rate_limited(&error.to_string())
+        {
+            Self::IgnoredRateLimit
+        } else {
+            Self::Failure
         }
     }
 }
@@ -6047,6 +6058,9 @@ mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod f13_bridge_tests;
+
+#[cfg(test)]
+mod cancel_settles_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;

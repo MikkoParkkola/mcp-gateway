@@ -57,6 +57,8 @@ pub fn is_loopback_bind(host: &str) -> bool {
     well_known::is_loopback_host(host)
 }
 mod well_known;
+// Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
+mod direct_guards;
 
 #[cfg(test)]
 mod audit_degraded_tests;
@@ -67,9 +69,22 @@ mod callback_admin_denial_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
+mod direct_guards_fixture;
+#[cfg(test)]
+mod direct_guards_tests;
+#[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_notification_refusal_tests;
+#[cfg(test)]
+mod direct_sole_operator_tests;
+#[cfg(test)]
 mod direct_tasks_owner_tests;
+#[cfg(test)]
+mod dispatch_parity_tests;
+/// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
+#[cfg(all(test, feature = "webui"))]
+mod e5_dashboard_session_tests;
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
@@ -291,17 +306,9 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
-        tls_enabled: {
-            let c = state.live_config.get();
-            // Also when a proxy terminates TLS in front: the browser speaks
-            // HTTPS even though this listener does not, and without `Secure` a
-            // downgrade puts the operator's session on the wire.
-            c.mtls.enabled
-                || c.server
-                    .public_url
-                    .as_deref()
-                    .is_some_and(|u| u.starts_with("https://"))
-        },
+        // The listener's own TLS (restart-only). An HTTPS `public_url` in front
+        // is read live per response (`auth::cookie_secure`).
+        tls_enabled: state.live_config.running().mtls.enabled,
     }
 }
 
@@ -346,6 +353,20 @@ fn metrics_route(config: &crate::config::Config) -> Router {
     Router::new()
         .route("/metrics", get(handlers::metrics_handler))
         .with_state(token)
+}
+
+/// Routes on the app state that run outside authentication and the E1-f audit
+/// layer, merged after both are applied: dashboard logout (E5), which an
+/// expired session and an audit outage must never block.
+fn unauthenticated_routes() -> Router<Arc<AppState>> {
+    #[cfg(feature = "webui")]
+    {
+        super::ui::session::logout_router()
+    }
+    #[cfg(not(feature = "webui"))]
+    {
+        Router::new()
+    }
 }
 
 /// [`create_router_with`] plus the managed-account handles, which only a
@@ -458,6 +479,7 @@ pub(crate) fn create_router_with_accounts(
     .map(|router| router.with_state(Arc::clone(&state)));
 
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
+        .merge(unauthenticated_routes())
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         // Method and route only (#1529). Routes merged below are outside it.

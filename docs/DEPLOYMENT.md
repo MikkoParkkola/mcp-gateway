@@ -412,6 +412,12 @@ mtls:
   require_client_cert: true
 ```
 
+A client certificate's identity, for grants and for the firewall's per-caller limits, is its first
+SAN URI, else its CN. Issue each workload a SAN URI (for example a SPIFFE ID) where you can: without
+one, two certificates with the same CN count as one caller, so identity relies on your CA issuing
+unique CNs. A certificate with neither is not an identity for the per-caller limits
+(UPGRADING-4.0 item 94).
+
 ### Strict validation and existing certificate generations
 
 Newly generated 4.0 CA certificates include certificate-signing and CRL-signing
@@ -1180,6 +1186,57 @@ in a cookie is long-lived and recoverable from the wire without TLS, while a
 handle means nothing outside the running process and dies with it. It is
 `HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
 cross-site, and it is marked `Secure` when the listener speaks TLS.
+
+#### Session limits, logout and signing in again
+
+A session ends after 30 minutes without activity or 8 hours after sign-in,
+whichever comes first; the cookie's `Max-Age` matches the 8 hours. The
+dashboard's own 5-second refresh is checked but is not activity, so an unattended
+tab signs out at the idle limit. Change the limits under `auth.dashboard_session`
+(`idle_timeout_secs`, `absolute_timeout_secs`); a reload applies them to open
+sessions. A browser keeps the `Max-Age` its cookie was issued with, so a longer
+absolute limit reaches sessions opened after the reload.
+
+**Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
+on the server as well as in the browser and redirects to `/ui`. It answers `303`
+whether or not the session was still live, and it works while the audit log is
+unavailable. A logout that ends a session writes one `admin_action` audit record.
+
+To sign in again without a restart:
+
+```bash
+read -rs MCP_GATEWAY_TOKEN && export MCP_GATEWAY_TOKEN   # paste the bearer or an admin API key
+mcp-gateway dashboard-link
+```
+
+It calls `POST /ui/api/dashboard-link`, which replaces any unused link and
+returns a new one. The credential is read from the environment, never from an
+argument, so it does not appear in the command line other users can list; read
+it as above rather than typing it into the command, which would put it in shell
+history. Without `--url`, the gateway address comes from the config, and a config
+that fails to load is an error rather than a guess.
+
+On an mTLS listener, pass a client certificate the listener trusts (from
+`mcp-gateway tls issue-client`); `--client-cert` and `--client-key` go together
+and also read `MCP_GATEWAY_CLIENT_CERT` and `MCP_GATEWAY_CLIENT_KEY`:
+
+```bash
+mcp-gateway dashboard-link --client-cert client.crt --client-key client.key
+```
+
+Without `--url` or `--ca-cert`, the server certificate must chain to
+`mtls.ca_cert`, the only root trusted. With `--url`, no config is read: name the server's CA with
+`--ca-cert` (or `MCP_GATEWAY_CA_CERT`), which likewise replaces the built-in
+roots, or leave it out for a server certificate from a public CA. A config that
+requires a client certificate refuses to run without one.
+
+Only the static bearer or an admin API key may mint a link: a dashboard session or an SSO login gets `403`. The new link
+keeps every rule above: single use, from this machine only. A gateway bound to a
+network address (not loopback, not a wildcard) answers `409` and re-arms nothing,
+because a link for that address could never open.
+
+Sessions live in each replica's memory. Serve the dashboard from one replica, or
+put it behind sticky sessions.
 
 ### Admin requires a credential
 

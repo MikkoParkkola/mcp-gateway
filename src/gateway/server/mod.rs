@@ -487,6 +487,29 @@ fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json:
 }
 
 impl Gateway {
+    /// A firewall with its own transition tracker. Both transports build theirs
+    /// here, so each leaves the continuations `meta_mcp` minted unredacted
+    /// (#2210).
+    #[cfg(feature = "firewall")]
+    fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
+        let fw_cfg = self.config.security.firewall.clone();
+        let fw_enabled = fw_cfg.enabled;
+        let tt = if fw_cfg.anomaly_detection {
+            Some(Arc::new(TransitionTracker::new()))
+        } else {
+            None
+        };
+        let fw = Arc::new(
+            Firewall::from_config(fw_cfg, tt)
+                .with_env(Arc::clone(&self.env))
+                .with_continuations(meta_mcp.continuation()),
+        );
+        if fw_enabled {
+            info!("Security firewall enabled (RFC-0071)");
+        }
+        fw
+    }
+
     /// Create a new gateway
     ///
     /// # Errors
@@ -1175,17 +1198,7 @@ impl Gateway {
         // (see `AppState`); each keeps its own `TransitionTracker`.
         #[cfg(feature = "firewall")]
         {
-            let fw_cfg = self.config.security.firewall.clone();
-            let fw_enabled = fw_cfg.enabled;
-            let fw_tt = if fw_cfg.anomaly_detection {
-                Some(Arc::new(TransitionTracker::new()))
-            } else {
-                None
-            };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt).with_env(Arc::clone(&self.env)));
-            if fw_enabled {
-                info!("Security firewall enabled (RFC-0071)");
-            }
+            let fw = self.response_firewall(&meta_mcp);
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")
                 .set_firewall(Some(fw));
@@ -1695,7 +1708,7 @@ impl Gateway {
         // isolated. Detection is fail-closed — any enabled auth is treated as
         // multi-user (a single shared API key or bearer can be handed to a whole
         // team; count alone cannot prove otherwise) unless the operator sets
-        // `auth.single_user = true`. More than one API key or any OIDC issuer is
+        // `auth.single_user = true`. More than one credential or any OIDC issuer is
         // a hard multi-user signal. See `AuthConfig::implies_multi_user`.
         let multi_user = self
             .config
@@ -1717,7 +1730,8 @@ impl Gateway {
         // another; if the gateway is ever reached by more than one identity the
         // isolation the guard would have provided is silently gone. We warn
         // rather than refuse because a genuinely single-user deployment is valid.
-        if self.config.auth.single_user {
+        // Only while the assertion actually holds the guard off (#2241).
+        if self.config.auth.single_user && !multi_user {
             let leaky_backends = leaky_single_user_backends(&self.config);
             if !leaky_backends.is_empty() {
                 warn!(
@@ -1736,17 +1750,7 @@ impl Gateway {
         // a fresh tracker so the firewall has its own dedicated state.
         #[cfg(feature = "firewall")]
         let firewall_arc: Option<Arc<Firewall>> = {
-            let fw_cfg = self.config.security.firewall.clone();
-            let fw_enabled = fw_cfg.enabled;
-            let tt = if fw_cfg.anomaly_detection {
-                Some(Arc::new(TransitionTracker::new()))
-            } else {
-                None
-            };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
-            if fw_enabled {
-                info!("Security firewall enabled (RFC-0071)");
-            }
+            let fw = self.response_firewall(&meta_mcp);
             Some(fw)
         };
 
@@ -2023,6 +2027,11 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
+        // `server.port: 0` asks the OS for a port; a minted dashboard link
+        // must name the one actually bound, not the configured 0.
+        if let Ok(bound) = listener.local_addr() {
+            dashboard_bootstrap.set_bound_port(bound.port());
+        }
 
         log_startup_banner(
             &self.config,

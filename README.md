@@ -126,6 +126,21 @@ curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mc
 curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mcp-gateway-linux-x86_64 -o mcp-gateway && chmod +x mcp-gateway
 ```
 
+Every release binary ships with an SPDX SBOM (`<binary>.spdx.json`) and a keyless
+[cosign](https://docs.sigstore.dev/cosign/) signature bundle (`<binary>.sigstore.json`),
+signed by the release workflow at the release tag. Verify a download before running it
+(replace `v4.0.0` with the release you downloaded). Use cosign 2.6.5 or later; earlier
+versions accept signatures they should refuse (GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m):
+
+```bash
+curl -LO https://github.com/MikkoParkkola/mcp-gateway/releases/download/v4.0.0/mcp-gateway-linux-x86_64.sigstore.json
+cosign verify-blob \
+  --bundle mcp-gateway-linux-x86_64.sigstore.json \
+  --certificate-identity "https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/release.yml@refs/tags/v4.0.0" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  mcp-gateway
+```
+
 ```powershell
 # Windows x64 (PowerShell)
 Invoke-WebRequest -Uri https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mcp-gateway-windows-x86_64.exe -OutFile mcp-gateway.exe

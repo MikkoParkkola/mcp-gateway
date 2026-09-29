@@ -328,7 +328,7 @@ fn env_root_keys_and_shipped_examples_load() {
                 "TAVILY_API_KEY=example-tavily-key\nCONTEXT7_TOKEN=example-context7-token\n",
             )
             .expect("write env file");
-            format!("env_files: [\"{}\"]\n{body}", env.display())
+            format!("env_files: ['{}']\n{body}", env.display())
         } else {
             body
         };
@@ -369,7 +369,7 @@ fn env_root_keys_and_shipped_examples_load() {
              MCP_GATEWAY_LOG_LEVEL=info\nMCP_GATEWAY_LOG_FORMAT=json\n",
         )
         .expect("write env file");
-        let yaml = format!("env_files: [\"{}\"]\n{body}", env.display());
+        let yaml = format!("env_files: ['{}']\n{body}", env.display());
         let (_dir, _path, result) = load(&yaml);
         if let Err(error) = result {
             failures.push(format!("{label}: {error}"));

@@ -57,7 +57,7 @@ fn sections(doc: &str) -> BTreeSet<u32> {
 /// The highest item number published so far. Item numbers are public
 /// identifiers and never renumbered, so deleting the last item (row and
 /// section together) must fail too, not just shrink the range.
-const PUBLISHED_MAX: u32 = 70;
+const PUBLISHED_MAX: u32 = 100;
 
 /// The Change cell of every summary row, by item number.
 fn summary_cells(doc: &str) -> BTreeMap<u32, String> {
@@ -452,6 +452,8 @@ const SUPERSEDED: &[(u32, u32)] = &[
     (33, 44),
     (40, 41),
     (43, 49),
+    (35, 96),
+    (54, 96),
 ];
 
 #[test]
@@ -536,4 +538,23 @@ fn walkthrough_commands_and_checks_are_real() {
         }
     }
     assert!(cited >= 10, "found only {cited} rehearsal checks cited");
+}
+
+/// #2266: the owner rule has its own item, and it says who is accepted and the fix.
+#[test]
+fn owner_rule_item_has_a_row_a_section_and_the_fix() {
+    assert!(
+        summary_rows(DOC).contains(&96),
+        "item 96 has no summary row"
+    );
+    let body = section_body(DOC, 96);
+    for want in [
+        "chown 1001",
+        "chmod 600",
+        "root",
+        "Kubernetes",
+        "Docker Compose",
+    ] {
+        assert!(body.contains(want), "item 96 must mention `{want}`");
+    }
 }

@@ -200,7 +200,7 @@ fn an_unset_variable_in_an_imported_value_is_refused_at_load() {
     )
     .unwrap();
     let written = std::fs::read_to_string(&out).unwrap();
-    let env_line = format!("env_files: [\"{}\"]", env_file.display());
+    let env_line = format!("env_files: ['{}']", env_file.display());
     let with_env = if written.contains("env_files: []") {
         written.replacen("env_files: []", &env_line, 1)
     } else {
