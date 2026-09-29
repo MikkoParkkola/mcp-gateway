@@ -199,6 +199,22 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
     Config::load_evaluated(Some(&urn_fixture.config))
         .expect("an absolute URN resource must be accepted");
 
+    // ANCHOR (#2263): an absolute `file:` client secret reference loads. It is
+    // read at token time, so this case creates no file. Without it the two
+    // `file:` reject rows are satisfied by refusing every `file:`.
+    let mut file_ref = valid.clone();
+    file_ref["client_secret_ref"] = json!(format!(
+        "file:{}",
+        root.path().join("client-secret").display()
+    ));
+    let file_fixture = fixture(
+        &root.path().join("file-ref"),
+        true,
+        Some(&json!({ "gmail-personal": file_ref })),
+    );
+    Config::load_evaluated(Some(&file_fixture.config))
+        .expect("an absolute file: client_secret_ref must be accepted");
+
     let cases: &[RejectCase] = &[
         ("unknown mode spelling", |d| {
             d["mode"] = json!("personal-managed");
