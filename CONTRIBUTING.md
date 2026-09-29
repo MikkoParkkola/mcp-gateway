@@ -294,6 +294,14 @@ We want your PR to merge fast. Here is what helps.
 - Security review beyond the threat-model note. We do the deep dive.
 - Windows CI flakes and other known-environmental failures. We label the PR `flaky-ci` and treat Linux as the source of truth.
 
+### Windows test coverage
+
+The Windows job runs every test target (`cargo test --all-features --tests`). The task and personal-account stores run on Windows (UPGRADING-4.0 item 68), so no store test is skipped there. What stays gated with `cfg(unix)` (class (c) of #1142: the harness needs a Unix mechanism, not a product limit):
+
+- Whole targets: `task_upstream_recovery`, `task_upstream_recovery_sdk`, `task_expiry_http_lifecycle`, `task_crash_boundaries` (also not macOS), `accounts_init_store`, `discovery_fidelity`, `discovered_config_reload`, `structured_stdout`, `f18_init_ca_umask`, `zed_config_round_trip`, `control_plane_file_modes`, `cost_persistence_http` (with `cost-governance`).
+- `gh462_config_preservation`: the CLI cases whose child reads the seeded home. Windows `dirs::home_dir()` ignores `HOME` and `USERPROFILE`. Tracked in #2368 (4.0.1).
+- Unit-test modules under `src/` carry their own `cfg(unix)` or `cfg(not(windows))` gates for mode-bit and symlink rows. Grep for them before assuming a row ran on Windows.
+
 ### If you get stuck
 
 - Open a draft PR early. We would rather help you finish than review a polished PR that missed the target.
