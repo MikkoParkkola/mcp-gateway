@@ -753,6 +753,9 @@ mod bounded_tests;
 #[path = "transparency_log_errors_tests.rs"]
 mod errors_tests;
 #[cfg(test)]
+#[path = "transparency_log_hwm_missing_tests.rs"]
+mod hwm_missing_tests;
+#[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
 #[cfg(test)]

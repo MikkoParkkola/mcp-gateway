@@ -1,0 +1,248 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! #2294: a restart that finds `.hwm` missing on a log that went through
+//! segment handling chains an `audit_segment_hwm_missing` record before it
+//! writes a fresh mark, so the restart cannot launder a cut tail. Live verify
+//! fails on it, Archive warns, and the finding outlives the segment it was
+//! written in.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use super::recovery_tests::expired_last_sealed_then_tail_cut;
+use super::rotation::WriteFault;
+use super::rotation_tests::{
+    append, cfg, event, lines, log_path, rewrite_line, rotate_n, strip_genesis_open, verify,
+};
+use super::segments::{list_segments, sibling};
+use super::*;
+use crate::security::audit::AuditFailurePolicy;
+
+const MARK: &str = "audit_segment_hwm_missing";
+
+/// A config that never rotates.
+fn never_rotates(path: &Path) -> Arc<TransparencyLogConfig> {
+    let mut c = (*cfg(path, 12, false)).clone();
+    c.rotation.max_segment_bytes = u64::MAX;
+    Arc::new(c)
+}
+
+/// Counters of every marker record, sealed segments first.
+fn marks(path: &Path) -> Vec<u64> {
+    let mut files: Vec<_> = list_segments(path)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.path)
+        .collect();
+    files.push(path.to_path_buf());
+    files
+        .iter()
+        .flat_map(|f| lines(f))
+        .filter(|v| event(v) == Some(MARK))
+        .map(|v| v["counter"].as_u64().unwrap())
+        .collect()
+}
+
+fn delete_hwm(path: &Path) {
+    std::fs::remove_file(sibling(path, "hwm")).unwrap();
+}
+
+fn cut_tail(path: &Path, n: usize) {
+    let mut all = lines(path);
+    all.truncate(all.len() - n);
+    let body = all
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(path, body).unwrap();
+}
+
+/// A never-rotated new-format log with five appends, `.hwm` deleted and the
+/// tail cut by two records.
+fn never_rotated_then_tail_cut(path: &Path) {
+    let l = TransparencyLogger::open(never_rotates(path)).unwrap();
+    (0..5).for_each(|i| append(&l, i));
+    drop(l);
+    assert!(verify(path, false).ok, "positive control");
+    delete_hwm(path);
+    cut_tail(path, 2);
+}
+
+fn assert_live_fails_on_mark(path: &Path) {
+    let r = verify(path, false);
+    assert!(!r.ok, "a restart laundered the missing .hwm");
+    let msg = r.error_message.unwrap();
+    assert!(msg.contains(MARK), "{msg}");
+}
+
+#[test]
+fn a_restart_marks_a_missing_hwm_on_a_never_rotated_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    never_rotated_then_tail_cut(&path);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    assert_eq!(marks(&path).len(), 1, "one marker, written at open");
+    assert_live_fails_on_mark(&path);
+    append(&l, 9);
+    drop(l);
+    assert_live_fails_on_mark(&path);
+}
+
+#[test]
+fn a_restart_marks_a_missing_hwm_after_the_last_sealed_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    expired_last_sealed_then_tail_cut(&path);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 9);
+    drop(l);
+    assert_eq!(marks(&path).len(), 1);
+    assert_live_fails_on_mark(&path);
+}
+
+#[test]
+fn a_restart_marks_a_missing_hwm_with_a_sealed_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    append(&l, 0);
+    drop(l);
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 9);
+    drop(l);
+    assert_eq!(marks(&path).len(), 1);
+    assert_live_fails_on_mark(&path);
+}
+
+#[test]
+fn archive_mode_warns_on_the_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    never_rotated_then_tail_cut(&path);
+    drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
+    let r = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Archive).unwrap();
+    assert!(r.ok, "{:?}", r.error_message);
+    assert!(
+        r.warnings.iter().any(|w| w.contains(MARK)),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
+fn archive_mode_still_fails_a_broken_chain_beside_the_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    never_rotated_then_tail_cut(&path);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    append(&l, 9);
+    drop(l);
+    rewrite_line(&path, 1, |v| v["tool"] = "forged".into());
+    let r = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Archive).unwrap();
+    assert!(!r.ok, "a broken chain passed in archive mode");
+}
+
+/// A crash between the marker and the fresh `.hwm` leaves the marker as the
+/// last record: the next open re-mints the mark without stacking another.
+#[test]
+fn a_crash_before_the_fresh_hwm_does_not_stack_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    never_rotated_then_tail_cut(&path);
+    drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
+    let first = marks(&path);
+    assert_eq!(first.len(), 1);
+    delete_hwm(&path);
+    drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
+    assert_eq!(marks(&path), first, "a second marker was stacked");
+    assert_live_fails_on_mark(&path);
+}
+
+/// Retention deletes the segment holding the marker, then the segment holding
+/// the expiry record that carried it: Live verify still fails.
+#[test]
+fn the_mark_outlives_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    assert_eq!(marks(&path).len(), 1);
+    // Counted by the newest sealed number: with `retain_segments: 1` the
+    // number of sealed files stops growing. Five rotations expire the
+    // marker's segment and then the segment holding the carrying record.
+    let newest = |p: &Path| list_segments(p).unwrap().last().map_or(0, |s| s.seq + 1);
+    let target = newest(&path) + 5;
+    let mut i = 0;
+    while newest(&path) < target {
+        append(&l, i);
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+    drop(l);
+    assert!(marks(&path).is_empty(), "the marker's segment expired");
+    assert_live_fails_on_mark(&path);
+}
+
+/// Disk-full expiry of the segment holding the marker carries the finding.
+#[test]
+fn the_mark_outlives_disk_full_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    never_rotated_then_tail_cut(&path);
+    let l = TransparencyLogger::open(cfg(&path, 12, false))
+        .unwrap()
+        .with_failure_policy(AuditFailurePolicy::FailClosed);
+    rotate_n(&l, &path, 1);
+    l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+    append(&l, 1);
+    l.arm_write_fault(None);
+    append(&l, 2);
+    drop(l);
+    assert!(
+        list_segments(&path).unwrap().is_empty(),
+        "segment 0 expired"
+    );
+    assert!(marks(&path).is_empty(), "the marker's segment expired");
+    assert_live_fails_on_mark(&path);
+}
+
+/// A pre-D6 log (no open record) keeps its re-minted mark and verifies clean.
+#[test]
+fn a_pre_d6_log_is_not_marked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    (0..3).for_each(|i| append(&l, i));
+    drop(l);
+    strip_genesis_open(&path);
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    append(&l, 9);
+    drop(l);
+    assert!(marks(&path).is_empty());
+    let r = verify(&path, false);
+    assert!(r.ok, "{:?}", r.error_message);
+}
+
+/// A crash before the first `.hwm` leaves only the genesis open record: a
+/// clean log, not a marked one (#2275).
+#[test]
+fn a_genesis_only_log_is_not_marked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    let hwm = sibling(&path, "hwm");
+    if hwm.exists() {
+        delete_hwm(&path);
+    }
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 9);
+    drop(l);
+    assert!(marks(&path).is_empty());
+    let r = verify(&path, false);
+    assert!(r.ok, "{:?}", r.error_message);
+}
