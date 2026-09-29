@@ -460,10 +460,13 @@ impl TokenStorage {
     fn write_secret_tmp(tmp: (fs::File, PathBuf), content: &str) -> Result<PathBuf> {
         use std::io::Write as _;
         let (mut file, tmp_path) = tmp;
-        match file
+        let written = file
             .write_all(content.as_bytes())
-            .and_then(|()| file.sync_all())
-        {
+            .and_then(|()| file.sync_all());
+        // Close before cleanup: Windows cannot delete a file held open
+        // without delete sharing.
+        drop(file);
+        match written {
             Ok(()) => Ok(tmp_path),
             Err(e) => {
                 let _ = fs::remove_file(&tmp_path);
@@ -577,6 +580,7 @@ mod tests {
         store.save(backend, resource, &token).unwrap();
         store.save_client_id(backend, resource, "cid").unwrap();
 
+        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
         assert_owner_only("1718-W2 token", &store.token_path(backend, resource), false);
         assert_owner_only(
             "1718-W2 client",
