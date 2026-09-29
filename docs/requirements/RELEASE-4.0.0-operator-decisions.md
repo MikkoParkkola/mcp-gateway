@@ -72,10 +72,12 @@ Decided by the maintainer under authority the owner delegated, each after two in
 
 ## Operator rulings given in chat
 
-Given by the operator in the session chat on 2026-09-29, not through the question
-tool, so `extract-operator-decisions.py` does not see them. Quoted verbatim as
-relayed to the triage lane by the release coordinator. They are recorded here as
-rulings, not as approvals of any specific change.
+Rulings relayed to the triage lane by the release coordinator, recorded here as
+rulings, not as approvals of any specific change. C1 and C2 were given in the
+session chat on 2026-09-29, not through the question tool, and are quoted
+verbatim. C3, C4 and C5 were answered through the question tool on 2026-09-30 in
+the coordinator's session; `extract-operator-decisions.py` has not yet been run
+over that transcript, so they are paraphrased here until it is.
 
 | # | Date | Ruling (verbatim) | Effect recorded by the coordinator |
 |---|---|---|---|

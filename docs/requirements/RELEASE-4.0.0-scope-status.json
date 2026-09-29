@@ -1260,11 +1260,15 @@
     },
     {
       "id": "MIK-7217.CLAIMS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. tests/nfr_perf_4_meta_tool_band.rs:33 pins the count to 9..=17 but does not read public_claims.json. To reconcile: the ticket's 2026-09-26 comment cites canonical_meta_tool_counts_match_live_runtime and the Public claims job as passing evidence; if that test reads the claims file, this row is met on it."
+      "evidence": [
+        "tests/public_claims_validation.rs",
+        "benchmarks/public_claims.json",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Met 2026-09-30 on existing evidence, found in review of #2428. canonical_meta_tool_counts_match_live_runtime (tests/public_claims_validation.rs:336-347) loads benchmarks/public_claims.json and asserts the live Meta-MCP tool count matrix equals it; the CI Public claims job runs that target (.github/workflows/ci.yml:934-935), green in CI run 36643861248. tests/nfr_perf_4_meta_tool_band.rs:33 separately pins the count to 9..=17.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. tests/nfr_perf_4_meta_tool_band.rs:33 pins the count to 9..=17 but does not read public_claims.json. To reconcile: the ticket's 2026-09-26 comment cites canonical_meta_tool_counts_match_live_runtime and the Public claims job as passing evidence; if that test reads the claims file, this row is met on it."
     },
     {
       "id": "MIK-7217.STDIO.1",
