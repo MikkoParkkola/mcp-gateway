@@ -382,7 +382,7 @@ fn class_refusal_applies_the_owner_rule_to_each_class() {
 #[test]
 fn foreign_owner_message_names_file_owner_and_chown_fix() {
     let path = Path::new("/etc/mcp-gateway/tls/server.key");
-    let secret = super::refusal_message(
+    let key_message = super::refusal_message(
         super::SecretFile::TlsKey,
         path,
         Refusal::ForeignOwner,
@@ -397,7 +397,7 @@ fn foreign_owner_message_names_file_owner_and_chown_fix() {
         "chmod 600 /etc/mcp-gateway/tls/server.key",
         "UPGRADING-4.0 \u{a7}96",
     ] {
-        assert!(secret.contains(want), "{want}: {secret}");
+        assert!(key_message.contains(want), "{want}: {key_message}");
     }
     let integrity = super::refusal_message(
         super::SecretFile::TlsCert,
@@ -417,7 +417,7 @@ fn foreign_owner_message_names_file_owner_and_chown_fix() {
 
 #[test]
 fn foreign_owner_message_prints_the_exact_fix_with_real_uid_and_path() {
-    let secret = super::refusal_message(
+    let key_message = super::refusal_message(
         super::SecretFile::TlsKey,
         Path::new("/srv/k.pem"),
         Refusal::ForeignOwner,
@@ -425,10 +425,10 @@ fn foreign_owner_message_prints_the_exact_fix_with_real_uid_and_path() {
         OWNER,
     );
     assert!(
-        secret.ends_with(
+        key_message.ends_with(
             "Fix: chown 1001 /srv/k.pem && chmod 600 /srv/k.pem (see UPGRADING-4.0 \u{a7}96)."
         ),
-        "{secret}"
+        "{key_message}"
     );
     let integrity = super::refusal_message(
         super::SecretFile::TlsCert,
