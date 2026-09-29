@@ -23,7 +23,7 @@ fn call(meta: &MetaMcp, retry: &RetryFields, args: &Value, id: i64) -> Result<Sy
         "backend",
         "tool",
         args,
-        &json!({"wire":"modern"}),
+        || json!({"wire":"modern"}),
         &RequestId::Number(id),
     )
 }
@@ -91,4 +91,24 @@ fn continuation_partition_cannot_alias_a_caller_supplied_key() {
     // Even a caller encoding a tuple cannot enter the internal hash domain.
     let tuple = crate::hashing::canonical_json(&json!(["key", round.key_discriminator()]));
     let _tuple = owned(call(&meta, &retry(&tuple, None), &json!({}), 3));
+}
+
+/// #613: an unkeyed call never reads its representation, so building it is
+/// waste. The thunk panics if it is ever evaluated on that path.
+#[test]
+fn unkeyed_admission_never_builds_its_representation() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let unkeyed = RetryFields::default();
+    let result = meta.admit_sync(
+        false,
+        None,
+        Some("owner"),
+        &unkeyed,
+        "backend",
+        "tool",
+        &json!({}),
+        || panic!("the representation was built for an unkeyed call (#613)"),
+        &RequestId::Number(1),
+    );
+    assert!(matches!(result, Ok(SyncAdmission::Unprotected)));
 }

@@ -231,6 +231,12 @@ echo "requested limit 9999, candidates -> $GREEDY_AVAILABLE, matches returned ->
 record "S4.SEARCH_CANDIDATES_EXCEED_THE_CEILING" "true" \
   "$([ "$GREEDY_AVAILABLE" -gt "$MAX_SEARCH_LIMIT" ] 2>/dev/null && echo true || echo false)"
 record "S4.SEARCH_LIMIT_IS_CLAMPED" "$MAX_SEARCH_LIMIT" "$GREEDY_COUNT"
+# Control for truncation BEFORE ranking: the rank-1 tool of the targeted query
+# must stay rank 1 when the same query is clamped from limit 9999. An
+# implementation that cut the unsorted pool to 25 and ranked only that subset
+# keeps total_available and the count above but loses the true best match.
+CLAMPED_TOP="$(rpc "tools/call" '{"name":"gateway_search_tools","arguments":{"query":"send an email through gmail","limit":9999}}' | meta_payload | jfield matches.0.tool)"
+record "S4.CLAMPED_SEARCH_KEEPS_THE_RANK_1_TOOL" "$TOP_TOOL" "$CLAMPED_TOP"
 
 echo
 echo "-- a restricted caller runs the identical query --"

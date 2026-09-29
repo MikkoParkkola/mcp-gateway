@@ -123,7 +123,7 @@ fn refusal_fix_depends_on_ownership() {
     let path = Path::new("/etc/mcp-gateway/gateway.yaml");
     let own = super::refusal_fix(path, true, super::SecretFile::Config);
     assert!(
-        own.contains("chmod 600 /etc/mcp-gateway/gateway.yaml"),
+        own.contains("chmod 600 -- /etc/mcp-gateway/gateway.yaml"),
         "{own}"
     );
     assert!(
@@ -393,8 +393,8 @@ fn foreign_owner_message_names_file_owner_and_chown_fix() {
         "TLS private key /etc/mcp-gateway/tls/server.key",
         "owned by uid 2002",
         "uid 1001",
-        "chown 1001 /etc/mcp-gateway/tls/server.key",
-        "chmod 600 /etc/mcp-gateway/tls/server.key",
+        "chown 1001 -- /etc/mcp-gateway/tls/server.key",
+        "chmod 600 -- /etc/mcp-gateway/tls/server.key",
         "UPGRADING-4.0 \u{a7}96",
     ] {
         assert!(key_message.contains(want), "{want}: {key_message}");
@@ -408,11 +408,14 @@ fn foreign_owner_message_names_file_owner_and_chown_fix() {
     );
     assert!(integrity.contains("certificate"), "{integrity}");
     assert!(integrity.contains("owned by uid 2002"), "{integrity}");
+    // `chown` keeps a group- or world-write bit, which the trust rule still
+    // refuses once this process owns the file, so the fix clears it too.
     assert!(
-        integrity.contains("chown 1001 /etc/mcp-gateway/tls/ca.pem"),
+        integrity.contains(
+            "chown 1001 -- /etc/mcp-gateway/tls/ca.pem && chmod go-w -- /etc/mcp-gateway/tls/ca.pem"
+        ),
         "{integrity}"
     );
-    assert!(!integrity.contains("chmod"), "{integrity}");
 }
 
 #[test]
@@ -426,7 +429,7 @@ fn foreign_owner_message_prints_the_exact_fix_with_real_uid_and_path() {
     );
     assert!(
         key_message.ends_with(
-            "Fix: chown 1001 /srv/k.pem && chmod 600 /srv/k.pem (see UPGRADING-4.0 \u{a7}96)."
+            "Fix: chown 1001 -- /srv/k.pem && chmod 600 -- /srv/k.pem (see UPGRADING-4.0 \u{a7}96)."
         ),
         "{key_message}"
     );
@@ -438,9 +441,46 @@ fn foreign_owner_message_prints_the_exact_fix_with_real_uid_and_path() {
         OWNER,
     );
     assert!(
-        integrity.ends_with("Fix: chown 1001 /srv/c.pem (see UPGRADING-4.0 \u{a7}96)."),
+        integrity.ends_with(
+            "Fix: chown 1001 -- /srv/c.pem && chmod go-w -- /srv/c.pem (see UPGRADING-4.0 \u{a7}96)."
+        ),
         "{integrity}"
     );
+}
+
+/// A path with a space, a leading `-` or shell metacharacters must reach the
+/// operator's shell as one literal operand, never as options or commands.
+#[test]
+fn fix_command_quotes_the_path_and_ends_options() {
+    let text = super::refusal_message(
+        super::SecretFile::TlsKey,
+        Path::new("/tmp/gateway key.pem; touch pwned"),
+        Refusal::ForeignOwner,
+        (0o600, FOREIGN, 1002),
+        OWNER,
+    );
+    let quoted = "'/tmp/gateway key.pem; touch pwned'";
+    assert!(
+        text.contains(&format!("chown 1001 -- {quoted} && chmod 600 -- {quoted}")),
+        "{text}"
+    );
+    let owned = super::refusal_message(
+        super::SecretFile::Config,
+        Path::new("-rf x"),
+        Refusal::World,
+        (0o644, OWNER, 1002),
+        OWNER,
+    );
+    assert!(owned.contains("Fix: chmod 600 -- '-rf x' "), "{owned}");
+    // A dash-led path that quoting leaves bare is still an operand, not an option.
+    let bare = super::refusal_message(
+        super::SecretFile::TlsCert,
+        Path::new("-rf"),
+        Refusal::GroupWrite,
+        (0o664, OWNER, 1002),
+        OWNER,
+    );
+    assert!(bare.contains("Fix: chmod go-w -- -rf "), "{bare}");
 }
 
 #[test]
@@ -455,6 +495,6 @@ fn mode_refusal_message_is_unchanged() {
     assert_eq!(
         got,
         "Refusing to load config file /etc/x.yaml: mode 0644 lets other users read it, \
-         and it can hold credentials. Fix: chmod 600 /etc/x.yaml (see UPGRADING-4.0 \u{a7}35)."
+         and it can hold credentials. Fix: chmod 600 -- /etc/x.yaml (see UPGRADING-4.0 \u{a7}35)."
     );
 }
