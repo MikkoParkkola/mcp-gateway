@@ -110,6 +110,8 @@ impl From<GuardedRead> for std::io::Error {
 /// Why a file's mode is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
+    /// The owner is neither this process nor root, so it can chmod the file at will.
+    ForeignOwner,
     /// A world bit is set.
     World,
     /// The group may write it.
@@ -117,6 +119,14 @@ pub(crate) enum Refusal {
     /// The group may read a file this process owns, so the group bit is not
     /// how this process reads it.
     GroupReadOwned,
+}
+
+/// Whether `file_uid` is an account that is neither this process (`euid`) nor
+/// root, so it can change a file it owns whatever the mode says.
+#[cfg(unix)]
+#[must_use]
+const fn foreign_owner(_file_uid: u32, _euid: u32) -> bool {
+    false // stub: the owner rule lands with the implementation commit
 }
 
 #[cfg(unix)]
@@ -127,6 +137,9 @@ pub(crate) enum Refusal {
 /// projection under `fsGroup`.
 #[must_use]
 pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
+    if foreign_owner(file_uid, euid) {
+        return Some(Refusal::ForeignOwner);
+    }
     let m = mode & 0o777;
     if m & 0o007 != 0 {
         return Some(Refusal::World);
@@ -145,7 +158,10 @@ pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option
 /// owns the file, a group or world write bit lets someone else change whom the
 /// gateway trusts.
 #[must_use]
-pub(crate) fn integrity_file_refusal(mode: u32) -> Option<Refusal> {
+pub(crate) fn integrity_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
+    if foreign_owner(file_uid, euid) {
+        return Some(Refusal::ForeignOwner);
+    }
     let m = mode & 0o777;
     if m & 0o002 != 0 {
         return Some(Refusal::World);
@@ -275,23 +291,45 @@ fn check_mode(
         )));
     }
     let euid = rustix::process::geteuid().as_raw();
-    let owned = meta.uid() == euid;
-    let (refusal, why) = match what.protects() {
-        Protects::Secrecy => (
-            secret_file_refusal(meta.mode(), meta.uid(), euid),
-            "it can hold credentials",
-        ),
-        Protects::Integrity => (
-            integrity_file_refusal(meta.mode()),
-            "it decides whom the gateway trusts",
-        ),
+    match class_refusal(what.protects(), meta.mode(), meta.uid(), euid) {
+        None => Ok(()),
+        Some(refusal) => Err(GuardedRead::Refused(refusal_message(
+            what,
+            path,
+            refusal,
+            (meta.mode() & 0o777, meta.uid(), meta.gid()),
+            euid,
+        ))),
+    }
+}
+
+/// The one verdict for a file of class `protects`: the same owner and mode
+/// facts feed both rules, so neither class can be wired with the wrong uid.
+#[cfg(unix)]
+#[must_use]
+fn class_refusal(protects: Protects, mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
+    match protects {
+        Protects::Secrecy => secret_file_refusal(mode, file_uid, euid),
+        Protects::Integrity => integrity_file_refusal(mode, file_uid, euid),
+    }
+}
+
+/// The refusal text: names the file, what is wrong and the fix, never content.
+/// `facts` is the file's `(mode & 0o777, owner uid, group gid)`.
+#[cfg(unix)]
+fn refusal_message(
+    what: SecretFile,
+    path: &Path,
+    refusal: Refusal,
+    (mode, file_uid, gid): (u32, u32, u32),
+    euid: u32,
+) -> String {
+    let why = match what.protects() {
+        Protects::Secrecy => "it can hold credentials",
+        Protects::Integrity => "it decides whom the gateway trusts",
     };
-    let Some(refusal) = refusal else {
-        return Ok(());
-    };
-    let mode = meta.mode() & 0o777;
-    let gid = meta.gid();
     let lets = match refusal {
+        Refusal::ForeignOwner => String::new(),
         Refusal::World if what.protects() == Protects::Secrecy && mode & 0o004 != 0 => {
             "lets other users read it".to_string()
         }
@@ -299,12 +337,12 @@ fn check_mode(
         Refusal::GroupWrite => format!("lets group {gid} change it"),
         Refusal::GroupReadOwned => format!("lets group {gid} read it"),
     };
-    Err(GuardedRead::Refused(format!(
+    format!(
         "Refusing to load {} {}: mode {mode:04o} {lets}, and {why}. {}",
         what.noun(),
         path.display(),
-        refusal_fix(path, owned, what)
-    )))
+        refusal_fix(path, file_uid == euid, what)
+    )
 }
 
 /// A secret-bearing or trust file read outside `config` (F18). Each maps to
