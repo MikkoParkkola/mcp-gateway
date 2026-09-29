@@ -641,8 +641,6 @@ async fn expired_session_refusal_is_counted() {
     let (state, _dir) = fixture().await;
     let expired = issue(&state);
     age(&state, &expired, IDLE + MIN);
-    let also_expired = issue(&state);
-    age(&state, &also_expired, IDLE + MIN);
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     telemetry_metrics::with_local_recorder(&recorder, || {
@@ -650,6 +648,10 @@ async fn expired_session_refusal_is_counted() {
             tokio::runtime::Handle::current().block_on(async {
                 let out = send(&state, get("/dashboard", Some(&expired))).await;
                 assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+                // Issued only now: issuing sweeps expired entries, and the
+                // first handle must still be stored when its request arrives.
+                let also_expired = issue(&state);
+                age(&state, &also_expired, IDLE + MIN);
                 let _ = send(
                     &state,
                     request("GET", STATUS, Some(&also_expired), Some(BEARER), false),
