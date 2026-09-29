@@ -123,7 +123,7 @@ fn refusal_fix_depends_on_ownership() {
     let path = Path::new("/etc/mcp-gateway/gateway.yaml");
     let own = super::refusal_fix(path, true, super::SecretFile::Config);
     assert!(
-        own.contains("chmod 600 /etc/mcp-gateway/gateway.yaml"),
+        own.contains("chmod 600 -- /etc/mcp-gateway/gateway.yaml"),
         "{own}"
     );
     assert!(
@@ -472,6 +472,15 @@ fn fix_command_quotes_the_path_and_ends_options() {
         OWNER,
     );
     assert!(owned.contains("Fix: chmod 600 -- '-rf x' "), "{owned}");
+    // A dash-led path that quoting leaves bare is still an operand, not an option.
+    let bare = super::refusal_message(
+        super::SecretFile::TlsCert,
+        Path::new("-rf"),
+        Refusal::GroupWrite,
+        (0o664, OWNER, 1002),
+        OWNER,
+    );
+    assert!(bare.contains("Fix: chmod go-w -- -rf "), "{bare}");
 }
 
 #[test]
@@ -486,6 +495,6 @@ fn mode_refusal_message_is_unchanged() {
     assert_eq!(
         got,
         "Refusing to load config file /etc/x.yaml: mode 0644 lets other users read it, \
-         and it can hold credentials. Fix: chmod 600 /etc/x.yaml (see UPGRADING-4.0 \u{a7}35)."
+         and it can hold credentials. Fix: chmod 600 -- /etc/x.yaml (see UPGRADING-4.0 \u{a7}35)."
     );
 }

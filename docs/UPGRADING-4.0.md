@@ -2704,8 +2704,8 @@ or control-plane file unless its owner is the gateway's effective user or root (
 the mode. The check runs before the mode rules, on the same handle as the read.
 
 - **The error names the file, the owner uid and the fix.** For a secret file the fix is
-  `chown <gateway uid> <file> && chmod 600 <file>`; the `chmod` is needed because a group-read
-  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> <file> && chmod go-w <file>`: `chown` keeps a group- or world-write bit, which the trust rule still refuses. The printed command quotes the path and ends options with `--`.
+  `chown <gateway uid> -- <file> && chmod 600 -- <file>`; the `chmod` is needed because a group-read
+  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> -- <file> && chmod go-w -- <file>`: `chown` keeps a group- or world-write bit, which the trust rule still refuses. The printed command quotes the path and ends options with `--`.
 - **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
   and still loads.
 - **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
