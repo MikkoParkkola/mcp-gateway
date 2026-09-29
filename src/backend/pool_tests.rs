@@ -241,7 +241,7 @@ async fn notify_with_headers_routes_to_the_callers_own_pool_slot() {
     backend.set_pooled_transport_for_test(&per_user_key("userB"), mock_b.clone());
 
     backend
-        .notify_with_headers("notifications/cancelled", None, Some("userA"))
+        .notify_with_headers("notifications/cancelled", None, &[], Some("userA"))
         .await
         .expect("userA's notification must succeed");
 

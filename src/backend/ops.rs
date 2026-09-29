@@ -497,7 +497,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers(method, params, None).await
+        self.notify_with_headers(method, params, &[], None).await
     }
 
     /// Send a notification carrying the caller's identity key so it is routed
@@ -524,7 +524,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     #[tracing::instrument(
-        skip(self, params),
+        skip(self, params, extra_headers),
         fields(
             backend = %self.name,
             method = %method,
@@ -535,6 +535,7 @@ impl Backend {
         &self,
         method: &str,
         params: Option<Value>,
+        extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
@@ -567,7 +568,7 @@ impl Backend {
         let transport = self.start_recorded(&key, &entry, start_time).await?;
 
         let result = transport
-            .notify_with_headers(method, params, identity_key)
+            .notify_with_headers(method, params, extra_headers, identity_key)
             .await;
         let latency = start_time.elapsed();
 
