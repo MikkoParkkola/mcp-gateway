@@ -209,6 +209,7 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
     restarted.wait_until_ready(&client).await;
 
     refused_like_a_never_minted_id(&restarted, &client, &peer, "tasks/get", &task_id).await;
+    refused_like_a_never_minted_id(&restarted, &client, &peer, "tasks/cancel", &task_id).await;
 
     let read = restarted
         .post_as(&client, &tasks_get(10, &task_id), Some(KEY_A))
