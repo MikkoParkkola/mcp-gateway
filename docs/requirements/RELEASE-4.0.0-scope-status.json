@@ -935,11 +935,18 @@
     },
     {
       "id": "MIK-7570.SESSION.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/auth_dashboard.rs",
+        "src/gateway/auth_dashboard_tests.rs",
+        "src/gateway/router/e5_dashboard_session_tests.rs",
+        "src/gateway/router/e5_dashboard_session_tests/link.rs",
+        "src/gateway/ui/session.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-28 (E5, #1618). Dashboard sessions end after 30 minutes idle or 8 hours absolute (auth.dashboard_session, defaults 1800/28800), judged on both the monotonic and the wall clock; the dashboard's own refresh (?poll=1 or X-Mcp-Gateway-Poll) and delivery re-checks never extend a session; POST /dashboard/logout revokes server-side, outside auth and the audit layer. Clause 'expire after 30 minutes idle': idle_session_expires, poll_only_tab_expires_at_idle_not_cap (src/gateway/auth_dashboard_tests.rs), poll_marked_requests_do_not_extend, delivery_check_does_not_touch (src/gateway/router/e5_dashboard_session_tests.rs). Clause '8 hours absolute': active_session_hits_absolute_limit, suspended_host_hits_absolute_by_wall_clock, cookie_max_age_equals_absolute_timeout. Clause 'logout ends them': logout_revokes_server_side, logout_works_while_audit_degraded_or_expired. CI: RED run 36335855843 (29 new tests failed on stubs); GREEN run 36363438307 at a32fc837d (Tests job 108745015635; code head d7d6da529, docs-only merge on top), Docker run 36353901884 success at deddef48b (same code). Mutants, one per rule, each reddened its named test: idle 36354017534, absolute 36366299749, no-touch 36354027913, touch-on-poll 36354032505, touch-on-delivery 36354037506, mono-only 36354043335, logout-in-api-router 36354049123, max-age-literal 36354054217, expired-falls-through 36354059007, bootstrap-blocked 36354063173, rearm-keeps-old 36354068926, session-mints 36354073488, no-validate 36354077610, no-revoke 36354081668. Open 4.0-gating follow-up: #1832 (dashboard-link with a required client certificate)."
     },
     {
       "id": "MIK-7570.RECONNECT.1",

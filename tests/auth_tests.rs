@@ -36,6 +36,7 @@ fn test_auth_config_resolution() {
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -58,6 +59,7 @@ fn test_bearer_token_auth() {
         public_paths: vec![],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -110,6 +112,7 @@ fn test_api_key_auth_with_restrictions() {
         public_paths: vec![],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -151,6 +154,7 @@ fn test_rate_limiting() {
         public_paths: vec![],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -175,6 +179,7 @@ fn test_resolved_client_rate_limit_creates_identity_bucket() {
         public_paths: vec![],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -210,6 +215,7 @@ fn test_public_paths() {
         ],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -238,6 +244,7 @@ fn test_auto_generated_token() {
         public_paths: vec![],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -313,6 +320,7 @@ fn test_disabled_auth() {
         public_paths: vec![],
         client_circuit_breaker: None,
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -360,6 +368,7 @@ fn test_client_circuit_breaker_is_per_client() {
             reset_timeout: Duration::from_secs(60),
         }),
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -406,6 +415,7 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
             reset_timeout: Duration::from_millis(1),
         }),
         single_user: false,
+        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);

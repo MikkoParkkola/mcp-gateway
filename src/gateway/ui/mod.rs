@@ -16,6 +16,7 @@ pub mod capabilities;
 pub mod control_plane;
 mod errors;
 pub mod import;
+pub(crate) mod session;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -61,6 +62,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/ui/api/tools", get(tools))
         .route("/ui/api/config", get(config))
         .route("/ui/api/reload", post(reload))
+        .route("/ui/api/dashboard-link", post(session::dashboard_link))
         .route("/dashboard", get(dashboard_handler))
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
@@ -363,7 +365,7 @@ impl DashboardRenderer {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="5">
+<meta http-equiv="refresh" content="5;url=/dashboard?poll=1">
 <title>MCP Gateway — Operator Dashboard</title>
 <style>
 :root{{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--fg2:#8b949e;
@@ -397,7 +399,7 @@ tr:hover td{{background:var(--bg3);}}
 </head>
 <body>
 <h1>MCP Gateway — Operator Dashboard</h1>
-<div class="sub">v{version} &nbsp;|&nbsp; uptime: {uptime} &nbsp;|&nbsp; auto-refresh every 5 s</div>
+<div class="sub">v{version} &nbsp;|&nbsp; uptime: {uptime} &nbsp;|&nbsp; auto-refresh every 5 s &nbsp;|&nbsp; <form method="post" action="/dashboard/logout" style="display:inline"><button type="submit">Log out</button></form></div>
 
 <div class="cards">
   <div class="card"><div class="lbl">Backends</div><div class="val">{backend_count}</div></div>

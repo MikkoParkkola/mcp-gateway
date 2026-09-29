@@ -440,8 +440,7 @@ mod http {
             bearer_token: None,
             api_keys: vec![key("key-a", "principal-a"), key("key-b", "principal-b")],
             public_paths: Vec::new(),
-            client_circuit_breaker: None,
-            single_user: false,
+            ..AuthConfig::default()
         }
     }
 
