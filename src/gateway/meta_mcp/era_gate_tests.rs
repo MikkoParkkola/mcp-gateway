@@ -211,7 +211,8 @@ impl Transport for ModernCatalogue {
     }
 }
 
-/// MIK-7217.DISCOVER.6 — a backend whose era came from its own `server/discover`
+/// Linear MIK-7217 AC DISCOVER.6 (ledger row `MIK-7217.OUTBOUND.2`; the ledger's own
+/// `DISCOVER.6` is the warm-start retry schedule, a different requirement) — a backend whose era came from its own `server/discover`
 /// answer is searchable through `gateway_search`, and finding it leaves its
 /// breaker closed. The breaker half is pinned in `crate::backend::tests`; this
 /// is the search half, asked of a peer whose era is resolved, not assumed.

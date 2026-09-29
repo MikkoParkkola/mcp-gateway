@@ -236,7 +236,8 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
     );
 }
 
-/// MIK-7217.DISCOVER.8 — the floor and the README benchmark the public claims
+/// Linear MIK-7217 AC DISCOVER.8 (ledger row `NFR.PERF.4`; the ledger has no
+/// DISCOVER.8) — the floor and the README benchmark the public claims
 /// file publishes cannot move apart from this band. `public_claims_validation.rs`
 /// ties the claims to the served surface; this ties the published minimum to
 /// `BAND`'s floor and the published benchmark to `BAND`'s interior. The claims
