@@ -20,7 +20,7 @@ use super::slot_eviction_tests::{per_user_backend, slot};
 /// claiming the slot, and that entry then evicted by the idle reaper
 /// WHEN the request resumes and its start fails on the fresh entry
 /// THEN the failure is on the fresh entry's breaker, not the evicted one's.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn a_start_failure_after_the_eviction_race_lands_on_the_live_slot() {
     const BINDING: &str = "idp:alpha@ledger";
     let backend = per_user_backend("race");
@@ -28,7 +28,8 @@ async fn a_start_failure_after_the_eviction_race_lands_on_the_live_slot() {
     let stale = backend.pooled_entry(&key).unwrap();
     stale.last_used.store(0, Ordering::Relaxed);
 
-    let permits = backend.semaphore.acquire_many(100).await.expect("permits");
+    let all = u32::try_from(backend.semaphore.available_permits()).expect("permit count");
+    let permits = backend.semaphore.acquire_many(all).await.expect("permits");
     let request = {
         let backend = Arc::clone(&backend);
         tokio::spawn(async move {
