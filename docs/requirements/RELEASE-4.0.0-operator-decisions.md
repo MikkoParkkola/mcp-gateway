@@ -69,3 +69,15 @@ Decided by the maintainer under authority the owner delegated, each after two in
 | 23 | 2026-09-27 | OWASP ASI04 gaps are fixed in 4.0.0, not only documented: every release binary is signed and ships an SBOM (GH1941.SIGN.1), and remote backend provenance becomes visible at startup and in `doctor` with no default change (GH1943.PROV.1). Decided 2026-09-27; two independent decision reviews on 2026-09-28, review runs 20260928T060442Z-13762 and 20260928T060442Z-13763; their fixes are in the criterion text. | Maintainer decision under delegated authority |
 | 24 | 2026-09-27 | OWASP hardening built for 4.0.0: the hardened switch (GH1942.HARDEN.1), multi-gateway signature chaining (GH1944.CHAIN.1), and verbatim cross-principal relay detection (GH1945.COLLUDE.1); each criterion follows its reviewed design. Same reviews, review runs 20260928T060442Z-13762 and 20260928T060442Z-13763. | Maintainer decision under delegated authority |
 | 25 | 2026-09-27 | Every automated reviewer finding on pull requests merged to the release line is resolved by a fix or an individual disposition verified at source, and the #1625 backlog is closed (GH1625.BOTREVIEW.1). Same reviews, review runs 20260928T060442Z-13762 and 20260928T060442Z-13763. | Maintainer decision under delegated authority |
+
+## Operator rulings given in chat
+
+Given by the operator in the session chat on 2026-09-29, not through the question
+tool, so `extract-operator-decisions.py` does not see them. Quoted verbatim as
+relayed to the triage lane by the release coordinator. They are recorded here as
+rulings, not as approvals of any specific change.
+
+| # | Date | Ruling (verbatim) | Effect recorded by the coordinator |
+|---|---|---|---|
+| C1 | 2026-09-29 | "linear tickets tagged for 4.0 are in the scope" | A criterion or open ticket that maps to a Linear ticket tagged for 4.0 ships in 4.0.0; it is met or built, not deferred. |
+| C2 | 2026-09-29 | "why are you trying to de-scope what I have clearly specified?" | No pending 4.0.0 criterion, 4.0-tagged Linear ticket or 4.0 GitHub issue is deferred to 4.1. This supersedes the 2026-09-28 "new features are 4.1" moves of #1942, #1943, #1944 and #1945. |
