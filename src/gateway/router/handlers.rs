@@ -2121,6 +2121,10 @@ mod health_predicate_tests;
 mod session_tests;
 
 #[cfg(test)]
+#[path = "handlers_session_subject_tests.rs"]
+mod session_subject_tests;
+
+#[cfg(test)]
 mod cacheable_field_tests {
     use super::{CACHEABLE_METHODS, build_modern_response};
     use crate::protocol::{JsonRpcResponse, RequestId};
