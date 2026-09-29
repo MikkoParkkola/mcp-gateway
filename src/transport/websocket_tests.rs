@@ -403,6 +403,21 @@ async fn request_times_out_when_the_outbound_queue_is_full() {
     );
 }
 
+#[tokio::test]
+async fn close_fails_in_flight_requests_at_once() {
+    let t = test_transport("ws://localhost:9999");
+    let (tx, rx) = oneshot::channel();
+    t.inner.pending.insert("1".to_string(), tx);
+
+    t.close().await.unwrap();
+
+    // An aborted I/O task never reaches its own cleanup, so close() must do it.
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), rx)
+        .await
+        .expect("a pending request must fail promptly after close()");
+    assert!(outcome.is_err(), "no response can arrive after close()");
+}
+
 fn test_transport(url: &str) -> Arc<WebSocketTransport> {
     WebSocketTransport::new(
         url,
