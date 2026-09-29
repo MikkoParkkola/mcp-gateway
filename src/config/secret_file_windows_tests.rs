@@ -6,7 +6,9 @@
 //! `win_acl`, so planting and judging are not the same code.
 
 use super::{GuardedRead, SecretFile, read_guarded_file};
-use crate::private_fs::test_support::{fixture_fail, plant_file_with, plant_sddl, user_sid};
+use crate::private_fs::test_support::{
+    fixture_fail, plant_file_with, plant_sddl, read_sddl, user_sid,
+};
 use std::path::PathBuf;
 
 const EVERYONE_READ: &str = "(A;;FR;;;WD)";
@@ -14,8 +16,12 @@ const EVERYONE_WRITE: &str = "(A;;FW;;;WD)";
 const EVERYONE_FULL: &str = "(A;;FA;;;WD)";
 
 /// A file holding `text`, planted with the user's full control plus `extra`.
+/// Under the working directory, not TEMP: the runner's TEMP is an 8.3 path
+/// (`RUNNER~1`), and `~` is outside the set that gets a runnable repair.
 fn planted(row: &str, extra: &str) -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| fixture_fail(row, &e.to_string()));
+    let dir = std::env::current_dir()
+        .and_then(tempfile::tempdir_in)
+        .unwrap_or_else(|e| fixture_fail(row, &e.to_string()));
     let path = dir.path().join("secret.txt");
     std::fs::write(&path, "value")
         .unwrap_or_else(|e| fixture_fail(row, &format!("writing the fixture failed: {e}")));
@@ -83,7 +89,10 @@ fn every_broken_rule_is_named_not_just_the_first() {
     for wanted in ["ForeignSid", "NotProtected"] {
         assert!(
             text.contains(wanted),
-            "WT-ASSERT {row}: {wanted:?} missing: {text}"
+            "WT-ASSERT {row}: {wanted:?} missing: {text}\nread back by path: {}\n\
+             by handle: {:?}",
+            read_sddl(row, &path),
+            std::fs::File::open(&path).and_then(|f| crate::win_acl::inspect(&f)),
         );
     }
 }
