@@ -1,0 +1,23 @@
+Prepare a direct Linear file upload for an existing issue.
+
+Workflow:
+1. Call this tool with issue, filename, contentType, and size.
+2. Upload raw bytes with PUT to uploadRequest.url outside MCP.
+3. All headers in uploadRequest.headers are part of the signed request, so send them verbatim.
+4. After PUT succeeds, call create_attachment_from_upload with assetUrl to link it to the issue.
+
+Do not base64-encode or transform the file. Use curl --data-binary @path or fetch(url, { method: 'PUT', body: blob }).
+Omitting or modifying any signed header, including casing, will return HTTP 403.
+The signed URL must be used within 60 seconds or it will expire.
+
+Upload sequencing:
+Prepare, PUT, and finalize one file before calling this tool for another file.
+Do not batch multiple prepare_attachment_upload calls before starting the PUTs because earlier signed URLs can expire while later files are prepared.
+
+Example:
+curl -X PUT --data-binary @file.png \
+  -H "content-type: image/png" \
+  -H "x-goog-content-length-range: N,N" \
+  -H "cache-control: public, max-age=31536000" \
+  -H 'Content-Disposition: attachment; filename="file.png"' \
+  "<uploadRequest.url>"
