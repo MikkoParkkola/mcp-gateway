@@ -6,13 +6,15 @@
 //! A child of `caller_key`, so it reuses that file's callers and requests; it
 //! lives apart only to keep both files under the size limit.
 
-use super::Outcome::{BudgetSpent, Delivered};
+use super::Outcome::{BudgetSpent, Delivered, TenantReach};
 use super::{
-    Caller, api_key, call, direct_call, firewall, keys, send, state_with_firewalls_and_auth,
+    Caller, api_key, call, call_with, direct_call, firewall, keys, send,
+    state_with_firewalls_and_auth, tenant_firewall,
 };
 use crate::gateway::router::create_router;
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::transition::TransitionTracker;
+use serde_json::json;
 use std::sync::Arc;
 
 /// Anomaly detection learning into `tracker`, which the row keeps to read what
@@ -104,5 +106,68 @@ async fn h22_legacy_sessions_of_one_credential_share_one_budget() {
     assert_eq!(
         other, Delivered,
         "another credential has its own budget: {body}"
+    );
+}
+
+// ── MIK-7116.TENANT.1: a legacy session does not reset tenant breadth ────────
+
+#[tokio::test]
+async fn h23_legacy_sessions_of_one_credential_share_one_tenant_bucket() {
+    // The tenant guard allows one tenant per caller. Keyed on the session, a
+    // new legacy session would start an empty bucket and reach a second tenant.
+    let fw = tenant_firewall();
+    let auth = keys(vec![api_key("key-one", "one"), api_key("key-two", "two")]);
+    let (state, _store) = state_with_firewalls_and_auth(Arc::clone(&fw), fw, &auth).await;
+    let router = create_router(state);
+    let holder = |bearer| Caller {
+        bearer: Some(bearer),
+        ..Caller::default()
+    };
+    let tenant = |name| json!({ "tenant": name });
+    let (first, opened, body) = send(
+        &router,
+        call_with(&holder("key-one"), false, None, 0, &tenant("acme")),
+    )
+    .await;
+    assert_eq!(
+        first, Delivered,
+        "the first tenant is within the limit: {body}"
+    );
+    let opened = opened.expect("a legacy call is given a session");
+    // No session header: the gateway mints a second session for this call.
+    let (second, minted, body) = send(
+        &router,
+        call_with(&holder("key-one"), false, None, 1, &tenant("globex")),
+    )
+    .await;
+    assert_ne!(
+        minted.as_deref(),
+        Some(opened.as_str()),
+        "the second call resumed the first session"
+    );
+    assert_eq!(
+        second, TenantReach,
+        "a new session reset the credential's tenant bucket: {body}"
+    );
+    // Guard: the refusal is the tenant limit, not the session. The first
+    // tenant is still allowed from yet another session.
+    let (again, _, body) = send(
+        &router,
+        call_with(&holder("key-one"), false, None, 2, &tenant("acme")),
+    )
+    .await;
+    assert_eq!(
+        again, Delivered,
+        "the caller's own tenant was refused: {body}"
+    );
+    // Guard: the bucket is per credential, not global.
+    let (other, _, body) = send(
+        &router,
+        call_with(&holder("key-two"), false, None, 3, &tenant("globex")),
+    )
+    .await;
+    assert_eq!(
+        other, Delivered,
+        "another credential has its own tenant bucket: {body}"
     );
 }
