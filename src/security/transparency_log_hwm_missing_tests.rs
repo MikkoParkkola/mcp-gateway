@@ -220,6 +220,64 @@ fn an_escaped_marker_still_outlives_retention() {
     assert_live_fails_on_mark(&path);
 }
 
+/// Mark a retain-1 log, append past the marker, apply `edit` to the active
+/// file's text, restart, then rotate until the marker's segment is gone.
+fn tamper_then_expire(edit: impl FnOnce(String) -> String) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    append(&l, 0);
+    drop(l);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let edited = edit(raw.clone());
+    assert_ne!(raw, edited, "the edit changed the file");
+    std::fs::write(&path, edited).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let newest = |p: &Path| list_segments(p).unwrap().last().map_or(0, |s| s.seq + 1);
+    let target = newest(&path) + 5;
+    let mut i = 0;
+    while newest(&path) < target {
+        append(&l, i);
+        i += 1;
+        assert!(i < 5_000, "no rotation happened");
+    }
+    drop(l);
+    assert!(marks(&path).is_empty(), "the marker's segment expired");
+    assert_live_fails_on_mark(&path);
+}
+
+/// Whitespace past the scan's line bound keeps the marker's hash valid; a
+/// line recovery cannot read counts as a finding, not as none.
+#[test]
+fn a_padded_marker_is_not_forgotten_at_restart() {
+    tamper_then_expire(|raw| {
+        let at = raw.find(&format!("\"{MARK}\"")).expect("marker present");
+        let mut padded = raw.clone();
+        padded.insert_str(at, &" ".repeat(super::rotation::MAX_RECORD_BYTES + 1));
+        padded
+    });
+}
+
+/// An edited marker fails its hash; recovery counts it as a finding.
+#[test]
+fn an_edited_marker_is_not_forgotten_at_restart() {
+    tamper_then_expire(|raw| raw.replace(MARK, "audit_segment_hwm_mizzing"));
+}
+
+/// A deleted marker line breaks the link; recovery counts it as a finding.
+#[test]
+fn a_deleted_marker_is_not_forgotten_at_restart() {
+    tamper_then_expire(|raw| {
+        raw.lines()
+            .filter(|l| !l.contains(MARK))
+            .fold(String::new(), |acc, l| acc + l + "\n")
+    });
+}
+
 /// Disk-full expiry of the segment holding the marker carries the finding.
 #[test]
 fn the_mark_outlives_disk_full_expiry() {

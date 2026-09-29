@@ -225,25 +225,25 @@ pub(super) fn recover(
                 std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
-                let carry = newest_finding(&sealed)?;
+                let carry = newest_finding(&sealed, config)?;
                 open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
             } else {
                 resume_active(path, counter, hash, &sealed, hw.as_ref(), now)?
             }
         }
         Ok(None) => {
-            let carry = newest_finding(&sealed)?;
+            let carry = newest_finding(&sealed, config)?;
             open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let carry = newest_finding(&sealed)?;
+            let carry = newest_finding(&sealed, config)?;
             open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
         }
         Err(e) => return Err(e),
     };
     finish_pending_expiry(path)?;
     // The active file holds the finding from its open record or a marker.
-    state.seg.hwm_missing_at = hwm_missing_in(path)?;
+    state.seg.hwm_missing_at = hwm_missing_in(path, config)?;
     // The reserve only serves an expiry, which needs a sealed segment, so a
     // log that never rotated holds none (and leaves no 1 MiB file behind).
     if config.rotation.on_disk_full == OnDiskFull::ExpireOldest
@@ -527,18 +527,31 @@ fn repair_torn_tail(
 }
 
 /// The earliest missing-mark counter `file` records: an [`EV_HWM_MISSING`]
-/// record, or an open record carrying [`HWM_MISSING_AT`] (#2294). Every
-/// line is parsed: a raw-text pre-filter is defeated by a JSON escape, which
-/// leaves hash and signature valid. A line over [`MAX_RECORD_BYTES`] or not
-/// a record is skipped. A missing file holds no finding.
-pub(super) fn hwm_missing_in(file: &Path) -> io::Result<Option<u64>> {
+/// record, or an open record carrying [`HWM_MISSING_AT`] (#2294).
+///
+/// Absence is accepted only from a file that checks out: every line is
+/// parsed (a raw-text match is defeated by a JSON escape), its hash
+/// recomputed, a signature it carries checked when a secret is set (a log
+/// signed only from some point on stays readable), and each record
+/// linked to the one before. A line that fails any of these, or is over
+/// [`MAX_RECORD_BYTES`], counts as a finding at that point: an edit that
+/// hides the marker must not also erase it. A blank line is skipped, as
+/// verify skips it. A missing file holds no finding.
+pub(super) fn hwm_missing_in(
+    file: &Path,
+    config: &TransparencyLogConfig,
+) -> io::Result<Option<u64>> {
     use std::io::{BufRead, Read};
     let mut reader = match File::open(file) {
         Ok(f) => io::BufReader::new(f),
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(segments::ctx("open", file)(e)),
     };
+    let secret = config.shared_secret.as_bytes();
     let mut earliest: Option<u64> = None;
+    let mut note = |at: u64| earliest = Some(earliest.map_or(at, |e: u64| e.min(at)));
+    // Counter and hash of the previous record; the first has no link here.
+    let mut prev: Option<(u64, String)> = None;
     let mut buf = Vec::new();
     loop {
         buf.clear();
@@ -548,32 +561,57 @@ pub(super) fn hwm_missing_in(file: &Path) -> io::Result<Option<u64>> {
         if n == 0 {
             break;
         }
+        let next = prev.as_ref().map_or(0, |p| p.0 + 1);
         if buf.last() != Some(&b'\n') && buf.len() > MAX_RECORD_BYTES {
             reader.skip_until(b'\n')?;
+            note(next);
             continue;
         }
         let Ok(line) = std::str::from_utf8(&buf) else {
+            note(next);
             continue;
         };
-        let Ok((counter, _, event, v)) = record_head(line.trim_end()) else {
+        let line = line.trim();
+        if line.is_empty() {
             continue;
-        };
-        let at = match event.as_deref() {
-            Some(EV_HWM_MISSING) => Some(counter),
-            Some(EV_OPENED) => v.get(HWM_MISSING_AT).and_then(Value::as_u64),
-            _ => None,
-        };
-        if let Some(at) = at {
-            earliest = Some(earliest.map_or(at, |e| e.min(at)));
         }
+        let Some(v) = serde_json::from_str::<Value>(line).ok() else {
+            note(next);
+            continue;
+        };
+        let counter = v.get("counter").and_then(Value::as_u64).unwrap_or(next);
+        let stored = v.get("entry_hash").and_then(Value::as_str).unwrap_or("");
+        let linked = prev.as_ref().is_none_or(|(c, h)| {
+            counter == c + 1 && v.get("prev_entry_hash").and_then(Value::as_str) == Some(h)
+        });
+        let intact = linked
+            && recompute_entry_hash(&v).is_ok_and(|h| h == stored)
+            && (secret.is_empty()
+                || v.get("sig").is_none()
+                || verify_entry_sig(&v, stored, secret).is_ok());
+        if !intact {
+            note(counter);
+        }
+        match v.get("event").and_then(Value::as_str) {
+            Some(EV_HWM_MISSING) => note(counter),
+            Some(EV_OPENED) => {
+                if let Some(at) = v.get(HWM_MISSING_AT).and_then(Value::as_u64) {
+                    note(at);
+                }
+            }
+            _ => {}
+        }
+        prev = Some((counter, stored.to_string()));
     }
     Ok(earliest)
 }
 
 /// The finding the newest sealed segment holds, for the open record that
 /// follows it.
-fn newest_finding(sealed: &[Segment]) -> io::Result<Option<u64>> {
-    sealed.last().map_or(Ok(None), |s| hwm_missing_in(&s.path))
+fn newest_finding(sealed: &[Segment], config: &TransparencyLogConfig) -> io::Result<Option<u64>> {
+    sealed
+        .last()
+        .map_or(Ok(None), |s| hwm_missing_in(&s.path, config))
 }
 
 /// Whether `line` is a durable record following `(counter, hash)`.
