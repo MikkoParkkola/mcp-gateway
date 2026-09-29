@@ -265,6 +265,15 @@ impl AccountStrategyRegistry {
         self.installed.read().get(descriptor_id).map(Arc::clone)
     }
 
+    /// The managed vault a descriptor was installed with, if any: the MCP
+    /// route mints through it and asks it who the caller is (#1961).
+    pub(crate) fn managed_vault(
+        &self,
+        descriptor_id: Option<&str>,
+    ) -> Option<Arc<crate::personal_accounts::VaultStrategy>> {
+        self.installed(descriptor_id?)?.managed.clone()
+    }
+
     /// Attach the durable audit sink. Called by `MetaMcp::enable_transparency_log`
     /// because this registry is reached through the capability executor rather
     /// than through `MetaMcp`.

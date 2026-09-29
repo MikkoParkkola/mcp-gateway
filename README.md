@@ -10,7 +10,6 @@
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25%20%7C%202026--07--28-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
-[![MITRE F3](https://img.shields.io/badge/MITRE_F3-tool--call_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
@@ -102,6 +101,9 @@ Your agent will install the binary, run the setup wizard, import your existing M
 | **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
 | **Docker, `npx`/`uvx` backends** | Same, with `:latest-full` — the default image carries no Node or `uv`, so a stdio backend that shells out to either cannot spawn. See [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment). |
 
+Release images are signed with keyless cosign. To check one, use cosign 2.6.5 or later on the 2.x
+line, or 3.1.3 or later on 3.x; earlier versions accept signatures they should refuse (GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m).
+The command is in [RELEASING.md](RELEASING.md).
 
 On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
 instead of changing ownership on your working config: `install -m 600
@@ -122,6 +124,21 @@ curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mc
 
 # Linux x86_64
 curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mcp-gateway-linux-x86_64 -o mcp-gateway && chmod +x mcp-gateway
+```
+
+Every release binary ships with an SPDX SBOM (`<binary>.spdx.json`) and a keyless
+[cosign](https://docs.sigstore.dev/cosign/) signature bundle (`<binary>.sigstore.json`),
+signed by the release workflow at the release tag. Verify a download before running it
+(replace `v4.0.0` with the release you downloaded). Use cosign 2.6.5 or later; earlier
+versions accept signatures they should refuse (GHSA-fx35-mq7g-6g98, GHSA-whqx-f9j3-ch6m):
+
+```bash
+curl -LO https://github.com/MikkoParkkola/mcp-gateway/releases/download/v4.0.0/mcp-gateway-linux-x86_64.sigstore.json
+cosign verify-blob \
+  --bundle mcp-gateway-linux-x86_64.sigstore.json \
+  --certificate-identity "https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/release.yml@refs/tags/v4.0.0" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  mcp-gateway
 ```
 
 ```powershell
@@ -307,7 +324,6 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
 - **OWASP Agentic AI Top 10 (self-assessed).** Controls are mapped across all 10 ASI risks at the gateway boundary in-tree. That is not a certification. Hardening follow-ups are tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
-- **MITRE Fight Fraud Framework (F3).** A technique-by-technique mapping of F3 v1.1 at the tool-call boundary, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Physical, card-scheme, payment-rail and victim-device techniques are out of scope for a tool gateway and marked N/A; techniques that target the gateway's own authentication, audit and capability surface are rated PARTIAL or GAP. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
 
 ### Recent additions
 
@@ -353,7 +369,6 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **Security firewall** | Credential redaction, prompt-injection detection, and shell/SQL/path-traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **mTLS** | Certificate-based auth for tool execution | [CHANGELOG](CHANGELOG.md#240---2026-02-25) |
-| **MITRE F3 mapping** | Fight Fraud Framework v1.1 at the tool-call boundary. Card-scheme, payment-rail and cash-out techniques are out of scope (N/A); gaps on the gateway's own surface are named | [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md) |
 
 ### Integration and discovery
 
@@ -405,7 +420,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Primary job | MCP and REST capability router with a compact meta-surface | Docker-managed catalog, profiles, containerized MCP servers, and gateway | Self-hosted gateway that runs many MCP servers behind one endpoint | Protocol bridges: MCP to OpenAPI for mcpo; stdio to SSE/WS for Supergateway |
 | Install | Standalone Rust binary via cargo, Homebrew, VS Code, Cursor, and local build | Docker Desktop / Docker CLI plugin flow | Self-hosted gateway install and server registration | Python/uvx/Docker for mcpo; npm/CLI bridge for Supergateway |
 | Configuration | Wizard, local starter profile, service templates, client export, doctor JSON, backup and rollback | Docker profiles and catalog selection | Centralized server and client configuration | Per-bridge command/config for each exposed server or transport |
-| Security | OWASP Agentic AI matrix, MITRE F3 tool-call-boundary mapping (gaps stated), firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
+| Security | OWASP Agentic AI matrix, firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
 | Identity and grants | Local identity-grant contract and CLI; multi-user OAuth isolation is credential-agnostic by default (ADR-008), and a backend configured `required` fails closed rather than serve a shared credential; per-user identity propagation to backends via signed assertion, caller-token passthrough, or RFC 8693 token exchange; the OIDC key server is disabled by default, delegated-bearer acceptance is a separate opt-in, and control-plane role mappings are issuer-scoped | Docker/team controls depend on Docker organization setup | Authenticated clients and server access control | Not a grant engine; delegates identity policy to the surrounding deployment |
 | Runtime isolation | RuntimeProvider policy planning plus Docker/Podman/Kubernetes deployment paths | Container-first isolation is the core runtime model | Runs and manages MCP servers behind the gateway | Bridges existing server processes/transports rather than isolating arbitrary tools |
 | Trust metadata | TrustCard/CBOM generation, validation, TrustLab evidence, provenance stubs | Catalog packages carry image provenance and security update flow | Gateway inventory and observability focus | Protocol metadata bridge; trust metadata is not the primary product surface |
@@ -510,7 +525,6 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
-| [MITRE F3 mapping](docs/compliance/MITRE-F3-MAPPING.md) | Fight Fraud Framework technique map (PARTIAL/GAP/N/A, not a coverage claim) |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
 | [Enterprise agent governance comparison](docs/competitive/willow-enterprise-agent-governance.md) | Willow/Webrix feature bar and mcp-gateway's current gaps |
 | [vs Anthropic MCP tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose |

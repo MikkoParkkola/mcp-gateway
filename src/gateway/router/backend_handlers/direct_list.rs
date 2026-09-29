@@ -32,7 +32,8 @@ pub(super) const DIRECT_LIST_MAX_PAGES: usize = crate::backend::LIST_MAX_PAGES;
 
 /// Drain the upstream catalogue into one `{tools}` result.
 ///
-/// An upstream error on any page is returned as it came; the cap overflow is
+/// An upstream error on any page is returned as an error only, any `result`
+/// beside it dropped; the cap overflow is
 /// JSON-RPC `-32005` (unused elsewhere in `src`, so a client can tell it from
 /// `-32603`), answered with HTTP 200 like the route's other application errors.
 pub(super) async fn drain(
@@ -44,6 +45,12 @@ pub(super) async fn drain(
     backend_name: &str,
 ) -> crate::Result<JsonRpcResponse> {
     let mut tools = Vec::new();
+    // An unreadable list (see `readable_page`), or a page without a tools
+    // array, says nothing about which tools exist: it is answered, judged as a
+    // truncated listing (it clears no block on a name it did not show, #1441)
+    // and never cached, since as a complete empty list it would refuse every
+    // `tools/call` as absent.
+    let mut unreadable = false;
     let mut cursor: Option<Value> = None;
     for _ in 0..DIRECT_LIST_MAX_PAGES {
         let mut page_params = params
@@ -56,7 +63,7 @@ pub(super) async fn drain(
                 map.insert("cursor".to_string(), cursor);
             }
         }
-        let page = dispatch_in_scope(
+        let mut page = dispatch_in_scope(
             backend,
             "tools/list",
             id,
@@ -66,20 +73,36 @@ pub(super) async fn drain(
         )
         .await?;
         if page.error.is_some() {
+            // An error frame is forwarded as an error only: a `result` beside
+            // it was never judged, so it must not reach the client (#1441).
+            page.result = None;
             return Ok(page);
         }
+        let readable = readable_page(page.result.as_ref());
         let result = page.result.unwrap_or(Value::Null);
-        if let Some(items) = result.get("tools").and_then(Value::as_array) {
-            tools.extend(items.iter().cloned());
-        }
+        let items = result.get("tools").and_then(Value::as_array);
+        unreadable |= !readable || items.is_none();
+        tools.extend(items.into_iter().flatten().cloned());
         match result.get("nextCursor") {
             Some(next) if !next.is_null() => cursor = Some(next.clone()),
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
                 let credential = !propagated_headers.is_empty();
-                backend
-                    .remember_listed_tools(identity_key, credential, &tools)
-                    .await;
+                let listing = if unreadable {
+                    crate::backend::Listing::Truncated
+                } else {
+                    crate::backend::Listing::Complete
+                };
+                let withheld =
+                    backend.remember_listed_tools_as(identity_key, credential, &tools, listing);
+                // Dropped here, from the raw list this drain judged, not by a
+                // later read of the backend's blocked set, which a concurrent
+                // listing may change before the response is sent (#1441).
+                tools.retain(|tool| {
+                    tool.get("name")
+                        .and_then(Value::as_str)
+                        .is_none_or(|name| !withheld.contains(name))
+                });
                 return Ok(JsonRpcResponse::success(
                     id.clone(),
                     json!({ "tools": tools }),
@@ -98,6 +121,20 @@ pub(super) async fn drain(
         "tool catalogue exceeds the direct-route page cap",
         json!({ "reason": "direct_list_page_cap", "max_pages": DIRECT_LIST_MAX_PAGES }),
     ))
+}
+
+/// A page the metadata fill could read: a string `nextCursor` or none, and
+/// `tools` an array, or absent on a page with a cursor. So the last page
+/// carries the array.
+fn readable_page(result: Option<&Value>) -> bool {
+    result.is_some_and(|r| {
+        let cursor = r.get("nextCursor").filter(|c| !c.is_null());
+        cursor.is_none_or(Value::is_string)
+            && match r.get("tools") {
+                Some(tools) => tools.is_array(),
+                None => r.is_object() && cursor.is_some(),
+            }
+    })
 }
 
 /// Keep only the tools the direct `tools/call` predicate would admit for this
@@ -132,4 +169,36 @@ pub(super) fn retain_invocable(
             .emit(crate::gateway::authz::Emit::Silent)
             .is_ok()
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable_page;
+    use serde_json::json;
+
+    /// Review fold: each page shape the direct list may cache from. Mutants
+    /// M38 (accept a non-array `tools`), M39 (accept a page with neither list
+    /// nor cursor) and M44 (accept a mistyped cursor) redden it.
+    #[test]
+    fn only_a_result_object_with_an_array_or_no_tools_is_readable() {
+        let rows = [
+            (Some(json!({"tools": []})), true),
+            (Some(json!({"tools": [{"name": "edit"}]})), true),
+            (Some(json!({"nextCursor": "2"})), true),
+            (Some(json!({})), false),
+            (Some(json!({"nextCursor": null})), false),
+            (Some(json!({"nextCursor": 2})), false),
+            (Some(json!({"tools": [], "nextCursor": 2})), false),
+            (Some(json!({"tools": [], "nextCursor": null})), true),
+            (Some(json!({"tools": null, "nextCursor": "2"})), false),
+            (Some(json!({"tools": null})), false),
+            (Some(json!({"tools": "edit"})), false),
+            (Some(json!("tools")), false),
+            (Some(serde_json::Value::Null), false),
+            (None, false),
+        ];
+        for (result, readable) in rows {
+            assert_eq!(readable_page(result.as_ref()), readable, "{result:?}");
+        }
+    }
 }

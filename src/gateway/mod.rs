@@ -121,12 +121,28 @@ pub mod test_helpers {
         path: impl AsRef<std::path::Path>,
         contents: impl AsRef<[u8]>,
     ) -> std::io::Result<()> {
-        std::fs::write(&path, contents)?;
-        #[cfg(unix)]
+        #[cfg(windows)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            use std::io::Write as _;
+            match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
+            let mut file = crate::private_fs::create_file_private(
+                path.as_ref(),
+                crate::private_fs::Share::Exclusive,
+            )?;
+            file.write_all(contents.as_ref())
         }
-        Ok(())
+        #[cfg(not(windows))]
+        {
+            std::fs::write(&path, contents)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(())
+        }
     }
 }

@@ -10,6 +10,8 @@ use crate::config::Config;
 
 const OWNER: u32 = 1001;
 const OTHER: u32 = 0;
+/// An account that is neither `OWNER` (this process) nor root.
+const FOREIGN: u32 = 2002;
 
 fn write_mode(path: &Path, body: &str, mode: u32) {
     std::fs::write(path, body).expect("write fixture");
@@ -215,7 +217,7 @@ fn refusal_fix_for_a_reference_names_the_secret_mount() {
 #[test]
 fn integrity_file_refusal_table() {
     for mode in 0o000..=0o777_u32 {
-        let got = super::integrity_file_refusal(mode);
+        let got = super::integrity_file_refusal(mode, OWNER, OWNER);
         let want = if mode & 0o002 != 0 {
             Some(Refusal::World)
         } else if mode & 0o020 != 0 {
@@ -291,4 +293,168 @@ fn size_cap_applies_to_references_only() {
     }
     write_mode(&path, &"a".repeat(64 * 1024 + 1), 0o600);
     assert!(super::read_secret_file(&path, super::SecretFile::Reference).is_err());
+}
+
+// ── #2266: the owner must be this process or root ─────────────────────────────
+
+const ALL_MODES: std::ops::RangeInclusive<u32> = 0o000..=0o777;
+
+#[test]
+fn secrecy_foreign_owner_refused_at_every_mode() {
+    for mode in ALL_MODES {
+        assert_eq!(
+            secret_file_refusal(mode, FOREIGN, OWNER),
+            Some(Refusal::ForeignOwner),
+            "mode {mode:04o} owned by uid {FOREIGN}"
+        );
+    }
+}
+
+#[test]
+fn integrity_foreign_owner_refused_at_every_mode() {
+    for mode in ALL_MODES {
+        assert_eq!(
+            super::integrity_file_refusal(mode, FOREIGN, OWNER),
+            Some(Refusal::ForeignOwner),
+            "mode {mode:04o} owned by uid {FOREIGN}"
+        );
+    }
+}
+
+#[test]
+fn secrecy_root_owned_kubernetes_projection_accepted() {
+    for mode in [0o600, 0o400, 0o440, 0o640] {
+        assert_eq!(secret_file_refusal(mode, 0, OWNER), None, "mode {mode:04o}");
+    }
+}
+
+#[test]
+fn integrity_root_owned_projection_accepted() {
+    for mode in [0o600, 0o644, 0o444, 0o640] {
+        assert_eq!(
+            super::integrity_file_refusal(mode, 0, OWNER),
+            None,
+            "mode {mode:04o}"
+        );
+    }
+}
+
+#[test]
+fn euid_owned_file_passes_the_owner_rule_in_both_classes() {
+    assert_eq!(secret_file_refusal(0o600, OWNER, OWNER), None);
+    assert_eq!(super::integrity_file_refusal(0o644, OWNER, OWNER), None);
+}
+
+#[test]
+fn root_gateway_refuses_a_file_owned_by_another_account() {
+    assert_eq!(
+        secret_file_refusal(0o600, FOREIGN, 0),
+        Some(Refusal::ForeignOwner)
+    );
+    assert_eq!(
+        super::integrity_file_refusal(0o644, FOREIGN, 0),
+        Some(Refusal::ForeignOwner)
+    );
+    assert_eq!(secret_file_refusal(0o600, 0, 0), None);
+}
+
+#[test]
+fn class_refusal_applies_the_owner_rule_to_each_class() {
+    for protects in [super::Protects::Secrecy, super::Protects::Integrity] {
+        assert_eq!(
+            super::class_refusal(protects, 0o600, FOREIGN, OWNER),
+            Some(Refusal::ForeignOwner),
+            "{protects:?} foreign"
+        );
+        assert_eq!(
+            super::class_refusal(protects, 0o600, 0, OWNER),
+            None,
+            "{protects:?} root"
+        );
+        assert_eq!(
+            super::class_refusal(protects, 0o600, OWNER, OWNER),
+            None,
+            "{protects:?} euid"
+        );
+    }
+}
+
+#[test]
+fn foreign_owner_message_names_file_owner_and_chown_fix() {
+    let path = Path::new("/etc/mcp-gateway/tls/server.key");
+    let key_message = super::refusal_message(
+        super::SecretFile::TlsKey,
+        path,
+        Refusal::ForeignOwner,
+        (0o600, FOREIGN, 1002),
+        OWNER,
+    );
+    for want in [
+        "TLS private key /etc/mcp-gateway/tls/server.key",
+        "owned by uid 2002",
+        "uid 1001",
+        "chown 1001 /etc/mcp-gateway/tls/server.key",
+        "chmod 600 /etc/mcp-gateway/tls/server.key",
+        "UPGRADING-4.0 \u{a7}96",
+    ] {
+        assert!(key_message.contains(want), "{want}: {key_message}");
+    }
+    let integrity = super::refusal_message(
+        super::SecretFile::TlsCert,
+        Path::new("/etc/mcp-gateway/tls/ca.pem"),
+        Refusal::ForeignOwner,
+        (0o644, FOREIGN, 1002),
+        OWNER,
+    );
+    assert!(integrity.contains("certificate"), "{integrity}");
+    assert!(integrity.contains("owned by uid 2002"), "{integrity}");
+    assert!(
+        integrity.contains("chown 1001 /etc/mcp-gateway/tls/ca.pem"),
+        "{integrity}"
+    );
+    assert!(!integrity.contains("chmod"), "{integrity}");
+}
+
+#[test]
+fn foreign_owner_message_prints_the_exact_fix_with_real_uid_and_path() {
+    let key_message = super::refusal_message(
+        super::SecretFile::TlsKey,
+        Path::new("/srv/k.pem"),
+        Refusal::ForeignOwner,
+        (0o600, FOREIGN, 1002),
+        OWNER,
+    );
+    assert!(
+        key_message.ends_with(
+            "Fix: chown 1001 /srv/k.pem && chmod 600 /srv/k.pem (see UPGRADING-4.0 \u{a7}96)."
+        ),
+        "{key_message}"
+    );
+    let integrity = super::refusal_message(
+        super::SecretFile::TlsCert,
+        Path::new("/srv/c.pem"),
+        Refusal::ForeignOwner,
+        (0o644, FOREIGN, 1002),
+        OWNER,
+    );
+    assert!(
+        integrity.ends_with("Fix: chown 1001 /srv/c.pem (see UPGRADING-4.0 \u{a7}96)."),
+        "{integrity}"
+    );
+}
+
+#[test]
+fn mode_refusal_message_is_unchanged() {
+    let got = super::refusal_message(
+        super::SecretFile::Config,
+        Path::new("/etc/x.yaml"),
+        Refusal::World,
+        (0o644, OWNER, 1002),
+        OWNER,
+    );
+    assert_eq!(
+        got,
+        "Refusing to load config file /etc/x.yaml: mode 0644 lets other users read it, \
+         and it can hold credentials. Fix: chmod 600 /etc/x.yaml (see UPGRADING-4.0 \u{a7}35)."
+    );
 }

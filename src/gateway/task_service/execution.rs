@@ -5,6 +5,8 @@
 mod context;
 mod expiry;
 mod observe;
+#[cfg(debug_assertions)]
+pub(crate) mod pause_hook;
 mod recovery;
 mod settlement;
 mod upstream;
@@ -180,7 +182,7 @@ impl TaskExecutor {
         self.recovery.set(adapter).is_ok()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn observe_commits(&self, observer: Arc<dyn CommitObserver>) {
         *self.observer.lock() = Some(observer);
     }

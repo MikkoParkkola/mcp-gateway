@@ -99,6 +99,10 @@ one per configured backend, so the set is bounded and there is nothing to reclai
 would make the next direct call score as a first call, which is the signal the detector exists to
 notice.
 
+*Amended by #2155:* the direct route now keys a caller with a `CallerKey` on that key, so it
+tracks that key like the meta route does. Only its `direct:{backend_name}` fallback (a caller
+with no key) stays untracked, for the reason above.
+
 **D5 — reap is unconditional; the constraint moves onto what a handler may reclaim.** Streaming
 guards with `receiver_count() == 0` (`:135`); an identity key has concurrent in-flight requests,
 so no analogue exists. A handler registered here MUST be safe to fire while a request for the same

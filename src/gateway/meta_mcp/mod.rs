@@ -80,6 +80,8 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+#[cfg(test)]
+mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
 mod interim_promotion;
@@ -273,7 +275,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
-            agent_declared: None,
+            agent_declared: self.agent_declared,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
@@ -1253,25 +1255,6 @@ impl MetaMcp {
     pub(crate) fn meta_route_isolation_refused(&self, backend: &crate::backend::Backend) -> bool {
         self.enforce_oauth_isolation_for(backend, &backend.name, false)
             .is_err()
-    }
-
-    /// The caller's per-user credential for `server`: headers and cache binding.
-    ///
-    /// ONE resolution per request per backend, returning BOTH halves, because
-    /// the isolation verdict and the slot selection must not disagree about who
-    /// the caller is (design §4.3's residual) — and because resolving twice
-    /// would mint twice.
-    ///
-    /// Context-taking convenience over
-    /// [`Self::caller_credential_for_identity`], which holds the contract and
-    /// serves the routes that are dispatched without a caller context.
-    pub(crate) async fn caller_credential_for(
-        &self,
-        server: &str,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> (Vec<(String, String)>, Option<String>) {
-        self.caller_credential_for_identity(server, caller.verified_identity)
-            .await
     }
 
     /// The credential-aware sibling of [`Self::meta_route_isolation_refused`],
@@ -2338,7 +2321,7 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers(caller.scope(), session_id).await,
+            "gateway_list_servers" => self.list_servers(caller, session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
@@ -2602,7 +2585,7 @@ impl MetaMcp {
 // ============================================================================
 
 #[cfg(test)]
-mod account_resolver_fixture;
+pub(crate) mod account_resolver_fixture;
 #[cfg(test)]
 mod account_resolver_gate;
 #[cfg(test)]

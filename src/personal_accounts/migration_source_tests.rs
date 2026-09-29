@@ -233,9 +233,10 @@ fn truncated_json_refuses_as_unparseable_not_as_missing() {
 fn wt10i_foreign_owner_repair_order() {
     use crate::private_fs::PrivacyRefusal as P;
     let me = crate::private_fs::user_sid_string().expect("the runner's SID");
-    let text = super::windows_remediation(
+    let text = crate::private_fs::windows_remediation(
         r"C:\oauth\0123456789abcdef_tokens.json",
         &[P::ForeignOwner("S-1-5-32-544".to_owned())],
+        crate::config::Protects::Secrecy,
     );
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let at = |needle: &str| lines.iter().position(|l| l.contains(needle));
@@ -246,5 +247,30 @@ fn wt10i_foreign_owner_repair_order() {
         matches!((take, dacl, give), (Some(t), Some(d), Some(g)) if t < d && d < g),
         "WT-ASSERT W-T10i: repair order must be takeown, DACL write, setowner \
          (found at {take:?}, {dacl:?}, {give:?}): {text}"
+    );
+}
+
+/// #2250: a 0600 file owned by ANOTHER user is not the operator's credential.
+/// A migration run as root (or with `CAP_DAC_READ_SEARCH`) can read it, so the
+/// read succeeding proves nothing about who wrote it.
+#[cfg(unix)]
+#[test]
+fn a_private_file_owned_by_another_user_is_refused() {
+    const ME: u32 = 1000;
+    assert!(
+        super::private_to(0o100_600, ME, ME),
+        "positive control: my own 0600 file is private"
+    );
+    assert!(
+        !super::private_to(0o100_600, ME + 1, ME),
+        "another user's 0600 file must be refused"
+    );
+    assert!(
+        !super::private_to(0o100_600, 0, ME),
+        "a root-owned 0600 file read by a non-root migration must be refused"
+    );
+    assert!(
+        super::private_to(0o100_600, 0, 0),
+        "an operator running as root owns its own root-owned file"
     );
 }

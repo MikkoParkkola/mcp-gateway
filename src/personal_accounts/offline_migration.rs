@@ -40,20 +40,19 @@ pub struct MigratedCredential {
 /// gateway always serves its local operator; an HTTP gateway only when this
 /// configuration asserts one user. Both answers come from the predicate the
 /// gateway itself installs under, never from a second copy of its terms.
-/// Both name the limit: the MCP-backend mint still requires a verified
-/// identity, so the sole operator reaches the grant only through a REST
-/// capability bound to the account.
+/// Both name the limit: the direct `/mcp/{name}` route still requires a
+/// verified identity; REST capabilities and `gateway_invoke` on an MCP
+/// backend bound to the account serve the sole operator (#1961).
 fn reachability(config: &crate::config::Config) -> &'static str {
     use crate::gateway::{ServeMode, sole_operator_asserted};
     debug_assert!(sole_operator_asserted(config, ServeMode::Stdio));
     if sole_operator_asserted(config, ServeMode::Http) {
         "reachable over stdio, and over HTTP by callers this gateway authenticates, \
-         through a REST capability bound to this account; an MCP backend bound to it \
-         still needs a verified end-user identity"
+         through a REST capability or an MCP backend bound to this account; the direct \
+         /mcp/{name} route still needs a verified end-user identity"
     } else {
         "reachable over stdio only; this configuration does not expose it over HTTP. \
-         That covers a REST capability bound to this account; an MCP backend bound to it \
-         still needs a verified end-user identity"
+         That covers a REST capability or an MCP backend bound to this account"
     }
 }
 
@@ -179,6 +178,29 @@ fn resolve_legacy_backend_name(
     }
 }
 
+/// The resource 3.x hashed this backend's token file over (#2262).
+///
+/// 3.x built its OAuth client with the backend's `http_url` as the resource, so
+/// the file is keyed on that URL, not on the descriptor resource. The backend
+/// is looked up by the name the file was written under; a backend renamed since
+/// 3.x is no longer configured under that name, so the one backend bound to
+/// the descriptor stands in for it. `None` when neither is an HTTP backend,
+/// and the caller falls back to the descriptor resource.
+fn legacy_resource(
+    gateway_config: &crate::config::Config,
+    backend_name: &str,
+    descriptor_id: &str,
+) -> Option<String> {
+    let http_url = |name: &str| match &gateway_config.backends.get(name)?.transport {
+        crate::config::TransportConfig::Http { http_url, .. } => Some(http_url.clone()),
+        _ => None,
+    };
+    http_url(backend_name).or_else(|| {
+        let bound = resolve_legacy_backend_name(gateway_config, descriptor_id, None).ok()?;
+        http_url(&bound)
+    })
+}
+
 fn migrate_from(
     gateway_config: &crate::config::Config,
     overlay: &crate::config::EnvOverlay,
@@ -225,7 +247,9 @@ fn migrate_from(
 
     let backend_name =
         resolve_legacy_backend_name(gateway_config, descriptor_id, legacy_backend_name)?;
-    let registered = legacy.load_client_id(&backend_name, &key_descriptor.resource);
+    let hashed_over = legacy_resource(gateway_config, &backend_name, descriptor_id)
+        .unwrap_or_else(|| key_descriptor.resource.clone());
+    let registered = legacy.load_client_id(&backend_name, &hashed_over);
     let request = storage::migration_entry::MigrationRequest {
         key_descriptor: &key_descriptor,
         descriptor: &descriptor,
@@ -233,11 +257,12 @@ fn migrate_from(
         // entry point cannot derive a second and different one.
         bound_backend: &backend_name,
         legacy_backend_name: None,
+        legacy_resource: &hashed_over,
         legacy_issuer,
         registered_client_id: registered.as_deref(),
     };
     let source = legacy
-        .token_path(&backend_name, &key_descriptor.resource)
+        .token_path(&backend_name, &hashed_over)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default()

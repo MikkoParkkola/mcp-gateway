@@ -17,6 +17,7 @@ use std::time::Duration;
 fn item(key: &str, name: &str, extra: &Value) -> Value {
     let mut v = match key {
         "resourceTemplates" => json!({ "uriTemplate": format!("x://{name}/{{id}}"), "name": name }),
+        "resources" => json!({ "uri": format!("x://{name}"), "name": name }),
         _ => json!({ "name": name, "inputSchema": { "type": "object" } }),
     };
     if let (Some(m), Some(e)) = (v.as_object_mut(), extra.as_object()) {
@@ -40,6 +41,8 @@ struct Script {
     bare_from: Option<usize>,
     /// Page index whose answer omits the list key (keeps `nextCursor`).
     keyless_page: Option<usize>,
+    /// Page index whose `nextCursor` is a number, not a string.
+    numeric_cursor_page: Option<usize>,
     sleep_per_page: Duration,
 }
 
@@ -90,6 +93,7 @@ fn finite(pages: Vec<(Vec<&'static str>, Option<&'static str>)>) -> Script {
         error_from: None,
         bare_from: None,
         keyless_page: None,
+        numeric_cursor_page: None,
         sleep_per_page: Duration::ZERO,
     }
 }
@@ -101,6 +105,7 @@ fn endless(error_from: Option<usize>, sleep_per_page: Duration) -> Script {
         error_from,
         bare_from: None,
         keyless_page: None,
+        numeric_cursor_page: None,
         sleep_per_page,
     }
 }
@@ -148,6 +153,9 @@ impl crate::transport::Transport for Pager {
         }
         if let Some(next) = next {
             result["nextCursor"] = json!(next);
+        }
+        if script.numeric_cursor_page == Some(page) {
+            result["nextCursor"] = json!(1);
         }
         Ok(JsonRpcResponse::success(id, result))
     }
@@ -349,6 +357,64 @@ async fn keyless_first_page_keeps_later_pages() {
     assert_eq!(names(&backend), ["t1"]);
 }
 
+/// A continuation page that omits the `tools` key but carries a cursor is
+/// readable (the drain goes on), yet says nothing about entries an earlier
+/// page served: the fill must not commit as a complete listing, or a withheld
+/// name on a page the drain never saw reads as removed (#1441, mirrors
+/// `direct_list.rs`'s `unreadable` handling for the direct route).
+#[tokio::test]
+async fn keyless_continuation_page_marks_truncated() {
+    let pager = Pager::tools(vec![
+        (vec!["t0"], Some("c1")),
+        (vec![], Some("c2")),
+        (vec!["t2"], None),
+    ]);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    backend.get_tools_shared().await.expect("fill");
+    assert_eq!(pager.request_count(), 3);
+    assert_eq!(names(&backend), ["t0", "t2"]);
+    assert!(
+        truncated(&backend),
+        "an unreadable continuation page was folded in as a complete listing"
+    );
+}
+
+/// Review fold: a later page with no `tools` key and no cursor is malformed,
+/// not an empty last page: the fill fails and keeps no partial list, so the
+/// check never judges a present tool absent. Mutant M40 (accept any result
+/// object) reddens it.
+#[tokio::test]
+async fn keyless_last_page_is_unreadable() {
+    let pager = Pager::tools(vec![(vec!["t0"], Some("c1")), (vec![], None)]);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    assert!(
+        backend.get_tools_shared().await.is_err(),
+        "page 2 is malformed"
+    );
+    assert_eq!(pager.request_count(), 2);
+    assert!(names(&backend).is_empty(), "a partial list was cached");
+}
+
+/// Review fold: a page whose `nextCursor` is not a string is malformed, not
+/// the last page: the fill fails and keeps no list that a later page would
+/// have extended. Mutant M45 (accept any cursor type) reddens it.
+#[tokio::test]
+async fn a_numeric_cursor_is_unreadable() {
+    let pager = Pager::tools(vec![(vec!["t0"], None)]);
+    pager.script.lock().numeric_cursor_page = Some(0);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    assert!(
+        backend.get_tools_shared().await.is_err(),
+        "the cursor is malformed"
+    );
+    assert!(names(&backend).is_empty(), "a partial list was cached");
+}
+
 /// #8
 #[tokio::test]
 async fn single_page_backend_request_is_unchanged() {
@@ -388,6 +454,51 @@ async fn resource_templates_cache_follows_next_cursor() {
 
     let templates = backend.get_resource_templates_shared().await.expect("fill");
     assert_eq!(templates.len(), 2, "{templates:?}");
+}
+
+/// A two-page `method` list whose last page omits `key`, served to a fresh
+/// backend; `fill` reads it. The fill must fail: a keyless last page is
+/// malformed, not an empty end of the list.
+async fn keyless_last_page_fails<T, F>(method: &'static str, key: &'static str, fill: F)
+where
+    F: AsyncFnOnce(&Backend) -> crate::Result<T>,
+{
+    let script = finite(vec![(vec!["a"], Some("c1")), (vec![], None)]);
+    let pager = Pager::with(method, key, script);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+    assert!(
+        fill(&backend).await.is_err(),
+        "{method}: page 2 is malformed"
+    );
+    assert_eq!(pager.request_count(), 2, "{method}");
+}
+
+/// Review fold, per list family: mutants M46-M48 (accept any page for that
+/// family) redden the matching cell.
+#[tokio::test]
+async fn resources_keyless_last_page_is_unreadable() {
+    keyless_last_page_fails("resources/list", "resources", async |b| {
+        b.get_resources_shared().await
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn prompts_keyless_last_page_is_unreadable() {
+    keyless_last_page_fails("prompts/list", "prompts", async |b| {
+        b.get_prompts_shared().await
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn resource_templates_keyless_last_page_is_unreadable() {
+    let method = "resources/templates/list";
+    keyless_last_page_fails(method, "resourceTemplates", async |b| {
+        b.get_resource_templates_shared().await
+    })
+    .await;
 }
 
 /// #11 (F3-T11): a slow backend stops at the 120 s drain budget.

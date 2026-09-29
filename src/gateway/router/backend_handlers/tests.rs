@@ -186,7 +186,9 @@ mod identity_propagation_audit {
             .expect("log file readable")
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("valid JSON line"))
+            // Skip the log's genesis housekeeping record (#2275).
+            .filter(|e| e.get("action").is_some())
             .collect()
     }
 
@@ -484,6 +486,17 @@ mod identity_propagation_audit {
         let exe = std::env::current_exe().expect("current test binary path");
         let file = NamedTempFile::new().expect("tempfile");
         let path = file.path().to_string_lossy().to_string();
+        // A new log's open() writes its genesis record (#2275); open it here,
+        // outside the size limit, so the child's open() only reads.
+        drop(
+            TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+                enabled: true,
+                path: path.clone(),
+                key_id: "test".to_string(),
+                ..TransparencyLogConfig::default()
+            }))
+            .expect("parent creates the log"),
+        );
         let script =
             format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
         let output = std::process::Command::new("sh")
@@ -692,7 +705,7 @@ fn normalize_tools_list_response_fills_direct_backend_proxy_annotations() {
         }),
     );
 
-    normalize_tools_list_response("beeper", &mut response);
+    normalize_tools_list_response(&beeper(), &mut response);
 
     let result = response.result.expect("success result");
     // Flipped by A3: the result is rebuilt as `{tools}` alone. An upstream
@@ -750,7 +763,7 @@ fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling(
     );
 
     // WHEN the direct passthrough response is normalized
-    normalize_tools_list_response("beeper", &mut response);
+    normalize_tools_list_response(&beeper(), &mut response);
 
     // THEN the malformed sibling no longer shields the violator: `bad` is
     // gone, `search` survives, and (A3) the unreadable entry is dropped too,
@@ -762,4 +775,15 @@ fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling(
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert_eq!(names, vec!["search"]);
     assert_eq!(tools.len(), 1);
+}
+
+/// A backend named `beeper` with the default configuration, for the
+/// normaliser cells.
+fn beeper() -> crate::backend::Backend {
+    crate::backend::Backend::new(
+        "beeper",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
 }

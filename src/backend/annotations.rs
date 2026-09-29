@@ -140,7 +140,8 @@ fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
     });
 }
 
-/// Prepares one backend's `tools/list` for a client: drops tools whose
+/// Prepares one backend's `tools/list` for a client: withholds tools whose
+/// description fails the tool-poisoning check (#1441), drops tools whose
 /// `x-mcp-header` declarations breach a constraint, then fills the annotation
 /// hints the backend omitted.
 ///
@@ -159,7 +160,20 @@ fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
 /// declared one, and the distinction ADR-012 amendment A1 rests on — only an
 /// explicit `true` grants permission, absent and false both deny — no longer
 /// exists to be read.
-pub(crate) fn prepare_tool_metadata(server: &str, tools: &mut Vec<Tool>) -> HashSet<String> {
+pub(crate) fn prepare_tool_metadata(
+    server: &str,
+    pins: &std::collections::BTreeMap<String, String>,
+    judging: super::descriptor_gate::Judging,
+    tools: &mut Vec<Tool>,
+) -> PreparedTools {
+    // First, so a poisoned tool that also breaks a header rule is still
+    // recorded as withheld and refused by name (#1441).
+    let verdicts = match judging {
+        super::descriptor_gate::Judging::Judge => super::descriptor_gate::judge(tools, pins),
+        super::descriptor_gate::Judging::AlreadyJudged => {
+            super::descriptor_gate::Verdicts::default()
+        }
+    };
     exclude_invalid_header_tools(server, tools);
     let resend_permitted = tools
         .iter()
@@ -172,5 +186,15 @@ pub(crate) fn prepare_tool_metadata(server: &str, tools: &mut Vec<Tool>) -> Hash
         .map(|tool| tool.name.clone())
         .collect();
     normalize_tool_annotations(server, tools);
-    resend_permitted
+    PreparedTools {
+        resend_permitted,
+        verdicts,
+    }
+}
+
+/// [`prepare_tool_metadata`]'s result: the explicitly resend-safe tools, and
+/// the tool-poisoning verdicts to commit once the listing's store is accepted.
+pub(crate) struct PreparedTools {
+    pub(crate) resend_permitted: HashSet<String>,
+    pub(crate) verdicts: super::descriptor_gate::Verdicts,
 }

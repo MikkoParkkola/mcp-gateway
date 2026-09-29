@@ -38,7 +38,8 @@ pub(crate) enum PrivacyRefusal {
     NoReadWrite,
     /// P4: owned by someone else.
     ForeignOwner(String),
-    /// P5: the DACL inherits.
+    /// P5: the stored DACL lacks `SE_DACL_PROTECTED` (an old-style DACL
+    /// included) or holds an inherited entry.
     NotProtected,
     /// Symlink, junction or other reparse point.
     ReparsePoint,
@@ -163,6 +164,62 @@ pub(crate) fn refusals(inspection: &Inspection, user: &Sid) -> Vec<PrivacyRefusa
     found
 }
 
+/// Every rule the descriptor breaks for a file of class `what`.
+pub(crate) fn refusals_for(
+    inspection: &Inspection,
+    user: &Sid,
+    what: crate::config::Protects,
+) -> Vec<PrivacyRefusal> {
+    use crate::config::Protects;
+    if what == Protects::Secrecy {
+        return refusals(inspection, user);
+    }
+    // Integrity: others may read, never change; SYSTEM and Administrators are
+    // trusted as unix trusts root (#1718 design, owner ruling 2026-09-29).
+    let trusted = |sid: &Sid| sid == user || is_system_or_admins(sid);
+    let mut found = Vec::new();
+    match inspection.dacl.as_ref() {
+        None => found.push(PrivacyRefusal::NullDacl),
+        Some(aces) => {
+            for ace in aces {
+                match ace {
+                    Ace::Allowed { flags, mask, sid } => {
+                        if !trusted(sid) && flags & INHERIT_ONLY == 0 && mask & WRITE_BITS != 0 {
+                            found.push(PrivacyRefusal::ForeignSid(sid.to_sddl()));
+                        }
+                    }
+                    Ace::Denied { .. } => {}
+                    Ace::Other { ace_type } => {
+                        found.push(PrivacyRefusal::OtherAceType(*ace_type));
+                    }
+                }
+            }
+        }
+    }
+    match inspection.owner.as_ref() {
+        Some(owner) if trusted(owner) => {}
+        Some(owner) => found.push(PrivacyRefusal::ForeignOwner(owner.to_sddl())),
+        None => found.push(PrivacyRefusal::Unreadable),
+    }
+    found
+}
+
+/// Every right that lets a foreign ACE change an Integrity file.
+const WRITE_BITS: u32 = windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA
+    | windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA
+    | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA
+    | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES
+    | windows_sys::Win32::Storage::FileSystem::DELETE
+    | windows_sys::Win32::Storage::FileSystem::WRITE_DAC
+    | windows_sys::Win32::Storage::FileSystem::WRITE_OWNER
+    | GENERIC_WRITE
+    | GENERIC_ALL;
+
+/// `S-1-5-18` (SYSTEM) or `S-1-5-32-544` (Administrators).
+fn is_system_or_admins(sid: &Sid) -> bool {
+    matches!(sid.to_sddl().as_str(), "S-1-5-18" | "S-1-5-32-544")
+}
+
 /// Every rule the open object breaks; empty when it is private.
 pub(crate) fn privacy_refusals(file: &File) -> Vec<PrivacyRefusal> {
     match (user(), crate::win_acl::inspect(file)) {
@@ -177,6 +234,11 @@ fn first(found: Vec<PrivacyRefusal>) -> Result<(), PrivacyRefusal> {
 
 fn attributes(file: &File) -> Result<u32, PrivacyRefusal> {
     use std::os::windows::fs::MetadataExt as _;
+    // A pipe or device has no attributes worth judging: only a disk object is
+    // a regular file or directory (UPGRADING-4.0 item 99).
+    if !crate::win_acl::is_disk_object(file) {
+        return Err(PrivacyRefusal::NotRegular);
+    }
     file.metadata()
         .map(|meta| meta.file_attributes())
         .map_err(|_| PrivacyRefusal::Unreadable)
@@ -234,6 +296,125 @@ pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefu
     }
     same_place(dir, configured)?;
     first(privacy_refusals(dir))
+}
+
+/// Every rule an open file breaks for class `what`: a link or a non-regular
+/// file is refused alone (there is no DACL worth judging on it), otherwise
+/// [`refusals_for`] on the handle's own descriptor.
+pub(crate) fn file_refusals_for(file: &File, what: crate::config::Protects) -> Vec<PrivacyRefusal> {
+    let attrs = match attributes(file) {
+        Ok(attrs) => attrs,
+        Err(refusal) => return vec![refusal],
+    };
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return vec![PrivacyRefusal::ReparsePoint];
+    }
+    if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return vec![PrivacyRefusal::NotRegular];
+    }
+    match (user(), crate::win_acl::inspect(file)) {
+        (Ok(user), Ok(inspection)) => refusals_for(&inspection, user, what),
+        _ => vec![PrivacyRefusal::Unreadable],
+    }
+}
+
+/// Which rules failed, and the PowerShell lines that repair them, one per
+/// line. Paths are PowerShell single-quoted literals (no expansion), with every
+/// single-quote character PowerShell recognises doubled, so no path can end
+/// the literal. The gateway account is named by its SID, which stays right in
+/// an elevated prompt run as another account. The DACL is replaced in ONE
+/// write with a protected DACL holding only the gateway account's grant, so no
+/// intermediate state exposes the file. With a foreign owner the lines need an
+/// administrator prompt: take ownership, write the DACL as owner, then give
+/// ownership to the gateway account. The SDDL depends on the file's class:
+/// a secret is owner-only, a trust file also grants SYSTEM and Administrators
+/// full control and Everyone read (a superset of any prior reader, so the
+/// repair cuts off no legitimate reader and removes every foreign write).
+pub(crate) fn windows_remediation(
+    path: &str,
+    found: &[PrivacyRefusal],
+    what: crate::config::Protects,
+) -> String {
+    use PrivacyRefusal as P;
+    use std::fmt::Write as _;
+    let Some(me) = user_sid_string() else {
+        return format!(" ({found:?})");
+    };
+    let literal: String = path
+        .chars()
+        .flat_map(|c| {
+            let quote = matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}');
+            std::iter::once(c).chain(quote.then_some(c))
+        })
+        .collect();
+    let foreign_owner = found.iter().any(|r| matches!(r, P::ForeignOwner(_)));
+    // Allowlist first: a line an administrator runs elevated is printed only
+    // for a path made of characters that can never end or escape a literal.
+    // The quote doubling above is the second layer, not the gate.
+    if !runnable_path(path) {
+        let mut out = format!(
+            " ({found:?}). The path holds characters outside letters, digits, space and \
+             \\ : . _ - ( ), so no command is printed for it. To repair it"
+        );
+        if foreign_owner {
+            let _ = write!(
+                out,
+                ", as an administrator, make the account with SID {me} its owner, then"
+            );
+        }
+        let _ = match what {
+            crate::config::Protects::Secrecy => write!(
+                out,
+                " open its Security settings, disable inheritance and remove every entry, \
+                 and grant Full control to the account with SID {me} alone."
+            ),
+            crate::config::Protects::Integrity => write!(
+                out,
+                " open its Security settings, disable inheritance, remove write, delete, \
+                 change-permissions and take-ownership rights from every account except \
+                 SYSTEM, Administrators and the account with SID {me}, keep read access for \
+                 the others, and grant Full control to the account with SID {me}."
+            ),
+        };
+        // Ends in a line break, as the runnable branch does: a caller appends.
+        out.push('\n');
+        return out;
+    }
+    let sddl = match what {
+        crate::config::Protects::Secrecy => format!("D:P(A;;FA;;;{me})"),
+        crate::config::Protects::Integrity => {
+            format!("D:P(A;;FA;;;{me})(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)")
+        }
+    };
+    let mut out = format!(" ({found:?}). To repair it, run these lines in Windows PowerShell");
+    if foreign_owner {
+        out.push_str(" as an administrator, because the file has another owner");
+    }
+    out.push_str(":\n");
+    // With a foreign owner, the elevated account first takes ownership itself
+    // (an owner may always write the DACL), writes the DACL, and only then
+    // hands ownership to the gateway account. Handing it over first could
+    // leave the elevated account with no right to write the DACL.
+    if foreign_owner {
+        let _ = writeln!(out, "takeown /F '{literal}'");
+    }
+    let _ = writeln!(
+        out,
+        "$acl = New-Object System.Security.AccessControl.FileSecurity; \
+         $acl.SetSecurityDescriptorSddlForm('{sddl}', 'Access'); \
+         (Get-Item -LiteralPath '{literal}').SetAccessControl($acl)"
+    );
+    if foreign_owner {
+        let _ = writeln!(out, "icacls '{literal}' /setowner '*{me}'");
+    }
+    out
+}
+
+/// The characters a printed, runnable repair line may carry in its path.
+fn runnable_path(path: &str) -> bool {
+    path.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, ' ' | '\\' | ':' | '.' | '_' | '-' | '(' | ')')
+    })
 }
 
 /// Judge an open file handle against reparse, regular-file and P1-P5.
@@ -399,3 +580,7 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "private_fs_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "private_fs_class_tests.rs"]
+mod class_tests;

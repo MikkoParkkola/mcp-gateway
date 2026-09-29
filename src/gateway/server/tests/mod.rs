@@ -14,6 +14,8 @@
 mod alloc_meter;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
+mod visibility_allocations;
+mod visibility_reload_race;
 
 mod signing_stdio_routing;
 
@@ -29,6 +31,8 @@ mod stdio_listing_scope;
 mod stdio_initialize_order;
 
 mod stdio_sole_operator;
+
+mod stdio_catalogue_sole_operator;
 
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;

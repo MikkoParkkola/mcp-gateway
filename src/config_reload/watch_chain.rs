@@ -86,8 +86,17 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
         let real_dir = std::fs::canonicalize(&dir)?;
         let file = real_dir.join(&name);
         dirs.insert(real_dir);
-        match std::fs::read_link(&file) {
-            Ok(target) => {
+        // Ask for the file type first: `read_link` on a plain file is
+        // `InvalidInput` on unix but os error 4390 (not a reparse point) on
+        // Windows, so its error kind cannot tell "not a link" from a fault.
+        match std::fs::symlink_metadata(&file).and_then(|meta| {
+            if meta.file_type().is_symlink() {
+                std::fs::read_link(&file).map(Some)
+            } else {
+                Ok(None)
+            }
+        }) {
+            Ok(Some(target)) => {
                 expand()?;
                 hop = if target.is_absolute() {
                     target
@@ -96,7 +105,7 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
                 };
             }
             // Not a link: the chain ends at this file.
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Ok((dirs, file)),
+            Ok(None) => return Ok((dirs, file)),
             Err(e) => {
                 return Err(std::io::Error::new(
                     e.kind(),
@@ -208,7 +217,7 @@ impl ChainWatch {
         self.ledger.lock().clone()
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn watched(&self) -> BTreeSet<PathBuf> {
         self.watched_now()
     }
@@ -312,3 +321,21 @@ pub(super) fn spawn_rewatch_task(
 #[cfg(all(test, unix))]
 #[path = "watch_chain_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod plain_file_tests {
+    /// A regular file ends the chain on every platform (#1142: on Windows the
+    /// chain failed on os error 4390 and hot-reload never followed the file).
+    #[test]
+    fn a_regular_file_ends_the_chain() {
+        let root = tempfile::tempdir().expect("root");
+        let cfg = root.path().join("gateway.yaml");
+        std::fs::write(&cfg, "a: 1\n").expect("config");
+
+        let (dirs, end) = super::chain_dirs(&cfg).expect("a plain file resolves");
+        let real = std::fs::canonicalize(&cfg).expect("canonical");
+        assert_eq!(end, real);
+        assert_eq!(dirs.len(), 1);
+        assert!(dirs.contains(real.parent().expect("parent")));
+    }
+}

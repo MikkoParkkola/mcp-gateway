@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::{cached_error_response, settle_direct_failure};
+use super::{cached_error_response, dispatch_armed, settle_direct_failure};
 use crate::Error;
 use crate::idempotency::{GuardOutcome, IdempotencyCache, enforce};
 use crate::protocol::JsonRpcResponse;
@@ -68,6 +68,28 @@ fn a_rate_limit_refusal_frees_the_key_for_a_retry() {
     );
 }
 
+/// #2300: a full slot table refuses before dispatch, so it frees the key.
+#[test]
+fn a_slot_refusal_frees_the_key_for_a_retry() {
+    let cache = Arc::new(IdempotencyCache::new());
+    let mut reservation = reserve(&cache);
+    let error = Error::IdentitySlotsExhausted {
+        backend: "backend".into(),
+        limit: "principal",
+    };
+    let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+    settle_direct_failure(Some(&mut reservation), &error, &response);
+
+    assert!(
+        matches!(
+            enforce(&cache, "key", "fingerprint"),
+            Ok(GuardOutcome::Proceed(_))
+        ),
+        "a slot refusal never reached the backend and must not consume the key"
+    );
+}
+
 #[test]
 fn dispatched_failure_is_cached_as_terminal() {
     // GIVEN a reserved key whose call reached the backend and failed.
@@ -116,4 +138,28 @@ fn replayed_error_without_data_stays_data_free() {
     // THEN no `data` key is invented.
     let error = response.error.expect("a stored error replays as an error");
     assert_eq!(error.data, None);
+}
+
+/// #1962: a direct-route call dropped while its dispatch is in flight leaves
+/// the key settled with the uncertain-outcome notice, not free for a retry.
+#[tokio::test]
+async fn a_dropped_dispatch_keeps_the_key_settled() {
+    let cache = Arc::new(IdempotencyCache::new());
+    let mut reservation = reserve(&cache);
+    {
+        let dispatch = dispatch_armed(Some(&mut reservation), std::future::pending::<()>());
+        tokio::select! {
+            biased;
+            () = dispatch => unreachable!("the backend never answers"),
+            () = tokio::task::yield_now() => {}
+        }
+    }
+    drop(reservation);
+    match enforce(&cache, "key", "fingerprint") {
+        Ok(GuardOutcome::CachedResult(stored)) => assert!(
+            stored.to_string().contains("outcome is unknown"),
+            "{stored}"
+        ),
+        other => panic!("the dropped dispatch freed its key: {other:?}"),
+    }
 }

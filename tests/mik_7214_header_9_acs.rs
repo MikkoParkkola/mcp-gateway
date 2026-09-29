@@ -262,7 +262,7 @@ impl Run {
                 .request_with_headers(method, params, &extra, None)
                 .await
                 .map(|_| ()),
-            Path::Notify => backend.notify_with_headers(method, params, None).await,
+            Path::Notify => backend.notify_with_headers(method, params, &[], None).await,
         };
         Self {
             peer,

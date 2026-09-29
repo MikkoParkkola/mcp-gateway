@@ -102,6 +102,36 @@ async fn run() -> ExitCode {
             );
             commands::run_stats_command(&effective_url).await
         }
+        #[cfg(feature = "webui")]
+        Some(Command::DashboardLink(args)) => {
+            let (url, tls) = (args.url, args.tls);
+            let flags = commands::LinkTlsFlags {
+                client_cert: tls.client_cert,
+                client_key: tls.client_key,
+                ca_cert: tls.ca_cert,
+            };
+            let target = commands::dashboard_link_base(
+                url,
+                flags,
+                || Config::load(config_path.as_deref()).map_err(|e| e.to_string()),
+                port_override,
+                host_override.as_deref(),
+            );
+            match target {
+                Ok((base, tls)) => commands::run_dashboard_link_command(&base, &tls).await,
+                Err(message) => {
+                    eprintln!("dashboard-link: {message}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        // The endpoint it calls exists only with the web UI; say so rather
+        // than let the command fail with a bare 404.
+        #[cfg(not(feature = "webui"))]
+        Some(Command::DashboardLink(_)) => {
+            eprintln!("dashboard-link: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
         Some(Command::Validate {
             paths,
             format,
@@ -627,10 +657,11 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     }
 
     let config_path = serve_config_path(&cli);
+    let (discovered, load_path) = discovered_config::resolve(config_path.as_deref());
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match Config::load_evaluated(config_path.as_deref()) {
+    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
@@ -658,7 +689,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // the environment afterwards would validate against an empty one and would
     // reach serving with no custody at all.
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
-        Ok(g) => g,
+        Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
             eprintln!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
@@ -689,7 +720,8 @@ async fn run_server(cli: Cli) -> ExitCode {
     // meta_mcp.enabled=true would be a network-facing fail-open). Only the
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
-    let (config, env) = match Config::load_evaluated(cli.config.as_deref()) {
+    let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
+    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
@@ -723,7 +755,7 @@ async fn run_server(cli: Cli) -> ExitCode {
     // See `run_stdio_server`: the constructor owns validation-against-overlay
     // and the custody bring-up, and both must complete before `run` serves.
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
-        Ok(g) => g,
+        Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
             error!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
@@ -761,6 +793,8 @@ pub fn write_discovered_to_config(
     Ok(path)
 }
 
+#[path = "main_discovered_config.rs"]
+mod discovered_config;
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;

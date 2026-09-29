@@ -110,6 +110,8 @@ pub(super) struct TaskIntentRequest<'a> {
     pub api_key_name: Option<&'a str>,
     /// Agent identifier the caller presented, if any.
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
+    /// The caller's declared agent label, audited on the task's calls (#2259).
+    pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     /// Grant subject the worker re-authorizes against.
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     /// Whether the caller holds admin rights on this gateway.
@@ -169,6 +171,7 @@ pub(super) fn task_intent_for_call(
             OwnedRouterAuthorizer::capture(req.client, req.oauth_agent_identity, req.cert_identity),
             req.api_key_name.map(str::to_owned),
             req.agent_id.map(crate::security::OwnedProvenAgentId::from),
+            req.agent_declared.map(|label| label.as_str().to_owned()),
             req.grant_subject,
             // No identity is invented for the auth-disabled caller: the owner
             // is a routing decision, and a fake VerifiedIdentity here would

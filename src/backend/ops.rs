@@ -109,6 +109,9 @@ impl Backend {
     /// the shared one holds a catalogue this caller was never shown once a
     /// `stateless` backend lists per caller. Read non-blocking — a cold cache
     /// mirrors nothing rather than a `tools/list` under this request's permit.
+    /// Since F13 a `tools/call` rarely finds it cold: R2's check lists a cold
+    /// slot before dispatch, holding no backend permit, so the first call is
+    /// mirrored too.
     fn param_header_set(
         &self,
         method: &str,
@@ -263,6 +266,13 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
+        // Every `tools/call` funnels through here, public library callers
+        // included, so a withheld tool is refused at this one chokepoint as
+        // well as by the routes' own earlier checks (#1441).
+        if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
+            return Err(crate::Error::Protocol(refusal));
+        }
+
         // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
         // progress token. This sits here for the same reason the param mirror
         // below does -- meta-MCP invoke and the router's direct backend route
@@ -290,7 +300,7 @@ impl Backend {
         // identified request gets its own transport/session/failsafe so users
         // never collide (IDP.7).
         let key = self.pool_key_for(identity_key);
-        let entry = self.pooled_entry(&key);
+        let entry = self.pooled_entry(&key)?;
 
         // Check THIS slot's failsafe, not the backend's.
         entry.failsafe.admit(&self.name).inspect_err(|e| {
@@ -307,7 +317,11 @@ impl Backend {
 
         // Mark CLIENT activity for the idle clock, and hold this slot safe from
         // being stopped for the whole request. Released when the guard drops.
-        let _activity = self.begin_activity(&key);
+        let activity = self.begin_activity(&key)?;
+        // The entry just claimed, which the idle reaper cannot take while this
+        // request holds it. The one captured above may already be evicted, and
+        // the start and dispatch outcomes belong to the slot actually used (#2261).
+        let entry = std::sync::Arc::clone(activity.entry());
 
         // Ensure this slot's transport is live.
         let transport = self.start_recorded(&key, &entry, start_time).await?;
@@ -402,9 +416,8 @@ impl Backend {
         error: &Error,
         exchange: &'static str,
     ) {
-        let rate_limited = entry
-            .failsafe
-            .record_dispatch_failure(&error.to_string(), latency);
+        let rate_limited =
+            super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {
             tracing::warn!(
                 error = %error,
@@ -466,7 +479,7 @@ impl Backend {
                     tracing::warn!(latency_ms = latency.as_millis(), "Request rate limited");
                     entry.failsafe.record_rate_limited("rate limited", latency);
                 } else {
-                    entry.failsafe.record_success(latency);
+                    super::fill_check::record_request_success(entry, latency);
                 }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
@@ -488,7 +501,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers(method, params, None).await
+        self.notify_with_headers(method, params, &[], None).await
     }
 
     /// Send a notification carrying the caller's identity key so it is routed
@@ -515,7 +528,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     #[tracing::instrument(
-        skip(self, params),
+        skip(self, params, extra_headers),
         fields(
             backend = %self.name,
             method = %method,
@@ -526,14 +539,21 @@ impl Backend {
         &self,
         method: &str,
         params: Option<Value>,
+        extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
 
+        // A tool call sent as a notification is refused as a request is: the
+        // backend never receives a withheld tool (#1441).
+        if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
+            return Err(crate::Error::Protocol(refusal));
+        }
+
         // Derive the same slot `request_with_headers` would use for this
         // identity, and gate/record against ITS failsafe (mirrors fix 1).
         let key = self.pool_key_for(identity_key);
-        let entry = self.pooled_entry(&key);
+        let entry = self.pooled_entry(&key)?;
 
         entry.failsafe.admit(&self.name).inspect_err(|e| {
             tracing::warn!(backend = %self.name, ?key, "Notification rejected: {e}");
@@ -547,12 +567,14 @@ impl Backend {
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
         // See `request_with_headers`: client activity marking + stop protection.
-        let _activity = self.begin_activity(&key);
+        let activity = self.begin_activity(&key)?;
+        // As in `request_attempted`: record on the claimed entry (#2261).
+        let entry = std::sync::Arc::clone(activity.entry());
 
         let transport = self.start_recorded(&key, &entry, start_time).await?;
 
         let result = transport
-            .notify_with_headers(method, params, identity_key)
+            .notify_with_headers(method, params, extra_headers, identity_key)
             .await;
         let latency = start_time.elapsed();
 
@@ -575,6 +597,23 @@ impl Backend {
         self.record_dispatch_latency(latency);
 
         result
+    }
+
+    /// The refusal for a `tools/call` naming a withheld tool, shared by the
+    /// request and notification paths so neither can skip it (#1441).
+    fn blocked_call_refusal(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        identity_key: Option<&str>,
+    ) -> Option<String> {
+        if method != "tools/call" {
+            return None;
+        }
+        params
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
     }
 
     /// Return `true` if this backend is configured for pass-through mode.

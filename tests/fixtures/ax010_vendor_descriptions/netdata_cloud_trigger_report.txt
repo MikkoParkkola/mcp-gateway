@@ -1,0 +1,13 @@
+Trigger an asynchronous infrastructure investigation report.
+
+IMPORTANT:
+- This tool consumes 1 AI credit per use.
+- Reports are generated in the background and CANNOT be modified once triggered.
+- Before calling this tool, gather ALL necessary context from the user: time range,
+  specific servers/nodes, areas of interest, and any symptoms or issues to analyze.
+- The user will be notified via email when the report is complete, and can view it
+  in the Netdata Cloud UI at: https://app.netdata.cloud/spaces/<space-slug>/rooms/<room-slug>/insights/reports/<report_id>
+
+Use the get_profile tool first to obtain the space_id and room_id.
+Note: Requires a business plan.
+

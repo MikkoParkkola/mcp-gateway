@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The twenty-five 4.0.0 changes, in the order they are printed.
+/// The thirty 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -72,13 +72,13 @@ refused with `isError: true`; relax it with `input_schema_enforcement: standard`
     "`/metrics` now requires `server.metrics_token` (HTTP 401 until set; the admin bearer is \
 refused). A missing `env:` variable does not stop startup. Scrape with a dedicated job or the \
 chart's ServiceMonitor, never a generic annotation-driven one.",
-    "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` now \
-FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
+    "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` is \
+ignored with a warning and no listener opens. Clients connect via stdio or HTTP (`POST /mcp`).",
     "More than one replica is refused while state lives in one process: `server.replicas` \
 (default 1) above 1 FAILS STARTUP with the modern protocol on, or with the key server or accounts \
 enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules. \
 Without the chart, set `server.replicas` to the processes you run: 1 is a declaration, not a detection.",
-    "`server.request_timeout`, never enforced, is removed and now FAILS the config load; bound \
+    "`server.request_timeout`, never enforced, is removed and ignored with a warning; bound \
 calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
 body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks now accept up to it.",
     "With auth on, `security.transparency_log.enabled: true` is REQUIRED (the load FAILS without \
@@ -107,4 +107,21 @@ an empty one counts as absent, and logs carry an 8-hex fingerprint instead of th
 off, holding a session id is what makes a session yours.",
     "A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is \
 refused with -32602 instead of being forwarded to the backend as a fresh call.",
+    "A tool call to a tool the gateway has not yet listed for that caller now lists the backend \
+first, as the caller, instead of being forwarded unchecked. Under `closed`, a list the backend \
+answers but the gateway cannot read refuses the call (an unreachable backend fails as a call to it \
+would), and so does a tool the backend's complete list lacks; set \
+`input_schema_enforcement: standard` to forward. A cold call spends a rate-limit token on the list.",
+    "A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not \
+serve is now refused with HTTP 400 and -32022; 3.x ignored the header. A request without it, or \
+with a served revision, is unchanged.",
+    "With agent identity on, only a PROVEN principal (the mTLS subject or a validated agent token) \
+satisfies `require_id` and `known_agents`. A self-declared `X-Agent-ID` header or `agent_id` \
+query label no longer does; `allow_unverified_agent_identity: true` restores that label. An \
+unsigned JWT claim is not read at all.",
+    "Six meta-tools leave the default `tools/list` (17 to 11 over HTTP) until the feature behind \
+each is configured; every name still answers when called. `meta_mcp.expose_stats_tool: true` \
+lists `gateway_get_stats`.",
+    "The key server now REFUSES (403) a token request whose scopes miss the matching policy rule. \
+3.x issued a token for every backend and tool in that case.",
 ];

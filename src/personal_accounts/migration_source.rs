@@ -132,7 +132,11 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     {
         let found = crate::private_fs::privacy_refusals(&file);
         if !found.is_empty() {
-            let detail = windows_remediation(&shown, &found);
+            let detail = crate::private_fs::windows_remediation(
+                &shown,
+                &found,
+                crate::config::Protects::Secrecy,
+            );
             return Err(not_private(shown, &detail));
         }
     }
@@ -147,23 +151,28 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     })
 }
 
-/// Mode exactly 0600, which within §10.5's threat model also establishes
-/// ownership.
+/// Mode exactly 0600 AND owned by the effective uid of this process (#2250).
 ///
-/// The mode check alone is enough, and that is worth stating rather than
-/// reaching for a uid: a file at 0600 is readable ONLY by its owner, so a
-/// successful read of one means the reading process owns it. A 0600 file owned
-/// by someone else fails the read and refuses as `NotPrivate` — which is the
-/// same answer, reached one step later. §10.5 defends against a party who can
-/// WRITE into the source directory, and no `getuid` changes that answer.
+/// The mode alone does not establish ownership. A migration run as root, or
+/// with `CAP_DAC_READ_SEARCH`, reads any 0600 file, so another local user could
+/// plant one in the source directory and have it imported as the operator's
+/// credential. The owner is checked on the same metadata as the mode, and
+/// exactly: unlike `config::secret_file`, root is not accepted as a proxy owner.
 ///
 /// Exactly 0600, not "no group or other write": any group or other access at
 /// all on a credential file means it is not the file `TokenStorage::save`
 /// wrote (`oauth/storage.rs:237-244`), whatever else is true of it.
 #[cfg(unix)]
 fn privately_owned(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    meta.permissions().mode() & 0o777 == 0o600
+    use std::os::unix::fs::MetadataExt as _;
+    private_to(meta.mode(), meta.uid(), rustix::process::geteuid().as_raw())
+}
+
+/// The verdict on a file's mode and owner, apart from the filesystem so a
+/// test can name an owner other than itself.
+#[cfg(unix)]
+fn private_to(mode: u32, file_uid: u32, euid: u32) -> bool {
+    mode & 0o777 == 0o600 && file_uid == euid
 }
 
 /// No mode on Windows: the DACL of the opened handle is judged in
@@ -186,83 +195,6 @@ fn not_private(path: String, detail: &str) -> SourceRefusal {
         let _ = detail;
         SourceRefusal::NotPrivate { path }
     }
-}
-
-/// Which rules failed, and the PowerShell lines that repair them, one per
-/// line. Paths are PowerShell single-quoted literals (no expansion), with every
-/// single-quote character PowerShell recognises doubled, so no path can end
-/// the literal. The gateway account is named by its SID, which stays right in
-/// an elevated prompt run as another account. The DACL is replaced in ONE
-/// write with a protected DACL holding only the gateway account's grant, so no
-/// intermediate state exposes the file. With a foreign owner the lines need an
-/// administrator prompt: take ownership, write the DACL as owner, then give
-/// ownership to the gateway account.
-#[cfg(windows)]
-fn windows_remediation(path: &str, found: &[crate::private_fs::PrivacyRefusal]) -> String {
-    use crate::private_fs::PrivacyRefusal as P;
-    use std::fmt::Write as _;
-    let Some(me) = crate::private_fs::user_sid_string() else {
-        return format!(" ({found:?})");
-    };
-    let literal: String = path
-        .chars()
-        .flat_map(|c| {
-            let quote = matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}');
-            std::iter::once(c).chain(quote.then_some(c))
-        })
-        .collect();
-    let foreign_owner = found.iter().any(|r| matches!(r, P::ForeignOwner(_)));
-    // Allowlist first: a line an administrator runs elevated is printed only
-    // for a path made of characters that can never end or escape a literal.
-    // The quote doubling above is the second layer, not the gate.
-    if !runnable_path(path) {
-        let mut out = format!(
-            " ({found:?}). The path holds characters outside letters, digits, space and \
-             \\ : . _ - ( ), so no command is printed for it. To repair it"
-        );
-        if foreign_owner {
-            let _ = write!(
-                out,
-                ", as an administrator, make the account with SID {me} its owner, then"
-            );
-        }
-        let _ = write!(
-            out,
-            " open its Security settings, disable inheritance and remove every entry, \
-             and grant Full control to the account with SID {me} alone."
-        );
-        return out;
-    }
-    let mut out = format!(" ({found:?}). To repair it, run these lines in Windows PowerShell");
-    if foreign_owner {
-        out.push_str(" as an administrator, because the file has another owner");
-    }
-    out.push_str(":\n");
-    // With a foreign owner, the elevated account first takes ownership itself
-    // (an owner may always write the DACL), writes the DACL, and only then
-    // hands ownership to the gateway account. Handing it over first could
-    // leave the elevated account with no right to write the DACL.
-    if foreign_owner {
-        let _ = writeln!(out, "takeown /F '{literal}'");
-    }
-    let _ = writeln!(
-        out,
-        "$acl = New-Object System.Security.AccessControl.FileSecurity; \
-         $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;{me})', 'Access'); \
-         (Get-Item -LiteralPath '{literal}').SetAccessControl($acl)"
-    );
-    if foreign_owner {
-        let _ = writeln!(out, "icacls '{literal}' /setowner '*{me}'");
-    }
-    out
-}
-
-/// The characters a printed, runnable repair line may carry in its path.
-#[cfg(windows)]
-fn runnable_path(path: &str) -> bool {
-    path.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, ' ' | '\\' | ':' | '.' | '_' | '-' | '(' | ')')
-    })
 }
 
 #[cfg(test)]
