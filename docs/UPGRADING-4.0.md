@@ -212,6 +212,7 @@ without it.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
