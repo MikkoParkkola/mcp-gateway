@@ -591,3 +591,7 @@ async fn failed_audit_503_keeps_the_request_id_on_an_unrecognised_backend() {
     // Unscoped, so the backend lookup is reached, not the scope refusal.
     failed_audit_503_echoes_the_request_id("nope", None, Caller::Anonymous).await;
 }
+
+#[cfg(feature = "metrics")]
+#[path = "security_metrics_tests.rs"]
+mod security_metrics;

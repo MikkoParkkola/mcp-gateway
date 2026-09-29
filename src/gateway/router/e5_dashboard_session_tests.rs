@@ -632,3 +632,36 @@ async fn reload_changes_limits() {
 
 #[path = "e5_dashboard_session_tests/link.rs"]
 mod link;
+
+/// D4 (MIK-7570.METRICS.2): an expired session answered with its own 401 is
+/// counted as `session_expired`; a bearer beside the dead cookie is not.
+#[cfg(feature = "metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_session_refusal_is_counted() {
+    let (state, _dir) = fixture().await;
+    let expired = issue(&state);
+    age(&state, &expired, IDLE + MIN);
+    let also_expired = issue(&state);
+    age(&state, &also_expired, IDLE + MIN);
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    telemetry_metrics::with_local_recorder(&recorder, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let out = send(&state, get("/dashboard", Some(&expired))).await;
+                assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+                let _ = send(
+                    &state,
+                    request("GET", STATUS, Some(&also_expired), Some(BEARER), false),
+                )
+                .await;
+            });
+        });
+    });
+    let text = handle.render();
+    assert!(
+        text.lines()
+            .any(|l| l == r#"mcp_auth_failures_total{kind="session_expired"} 1"#),
+        "{text}"
+    );
+}
