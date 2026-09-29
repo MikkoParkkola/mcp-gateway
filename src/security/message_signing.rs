@@ -16,7 +16,8 @@
 //! - **Opt-in**: the whole subsystem is gated by `SecurityConfig::message_signing.enabled`.
 //!   When disabled, zero extra allocations occur on the hot path.
 //! - **Key rotation**: only `shared_secret` signs. `previous_secret` is checked
-//!   when the config loads but never signs or verifies. Rotation is
+//!   when the config loads but is never used for signing or for signature
+//!   verification (the gateway verifies no signatures). Rotation is
 //!   sender-side (see docs/DEPLOYMENT.md).
 //!
 //! # OWASP Reference

@@ -480,17 +480,25 @@ What is signed:
   added at delivery, after the response firewall, so it covers the result the
   client receives. Every delivery is signed again, including cache hits and
   idempotent replays, with that request's own `nonce` and timestamp.
-- The MAC input is the RFC 8785 (JCS) canonical form of `domain`
-  (`mcp-gateway-response-v2`), `body` (the result without `_signature`),
-  `request_id` (`{kind: "string"|"number", value}` from the JSON-RPC id), `alg`,
-  `version` (`2`), `nonce`, `ts` and `key_id`. The block carries `alg`, `sig`
-  (hex), `nonce`, `ts`, `key_id` and `version`.
+- The MAC is HMAC-SHA256, keyed with `shared_secret`, over the RFC 8785 (JCS)
+  serialization of this single object:
+
+  ```json
+  {"domain": "mcp-gateway-response-v2", "body": <result without _signature>,
+   "request_id": {"kind": "string"|"number", "value": "<id as a string>"} | null,
+   "alg": "hmac-sha256", "version": 2, "nonce": "<nonce>" | null,
+   "ts": <unix seconds>, "key_id": "<key_id>"}
+  ```
+
+  `request_id` is `null` when the request id was `null`. Notifications get no
+  response, so nothing is signed for them. The `_signature` block carries `alg`,
+  `sig` (lowercase hex), `nonce`, `ts`, `key_id` and `version`.
 - A result holding an integer beyond ±2^53-1 is refused rather than signed.
 
 What is not signed: named backend tools called through the meta surface, Code
 Mode, playbook steps, and every JSON-RPC error. `tools/call` on
-`POST /mcp/{name}` is refused with -32001 while signing is on; use
-`gateway_invoke`.
+`POST /mcp/{name}` is refused with `-32001` ("message signing is enabled; use
+gateway_invoke") while signing is on.
 
 Key rotation is sender-side only. The gateway signs with `shared_secret` alone.
 `previous_secret` is only checked (at least 32 bytes, not all zero) when the config
