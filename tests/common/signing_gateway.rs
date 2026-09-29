@@ -143,6 +143,8 @@ pub fn child_command(directory: &Path, config_path: &Path) -> Command {
         .env("HOME", directory)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
+        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
         .current_dir(directory)
         .arg("--config")
         .arg(config_path)

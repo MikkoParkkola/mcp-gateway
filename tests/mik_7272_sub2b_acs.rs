@@ -278,7 +278,7 @@ fn write_config(home: &Path, backend_url: &str) {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
-            "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
+            "tasks:\n  store_dir: tasks\nbackends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
         ),
     )
     .expect("write gateway.yaml");
@@ -803,7 +803,7 @@ fn write_http_config(home: &Path, backend_url: &str, port: u16) {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
-            "server:\n  host: \"127.0.0.1\"\n  port: {port}\n\
+            "tasks:\n  store_dir: tasks\nserver:\n  host: \"127.0.0.1\"\n  port: {port}\n\
              security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n\
              backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
         ),
