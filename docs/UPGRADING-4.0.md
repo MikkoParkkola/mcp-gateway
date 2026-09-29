@@ -65,6 +65,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 66
 - Item 67
 - Item 68
+- Item 69
 - Item 70
 - Item 72
 - Item 73
@@ -182,7 +183,7 @@ without it.**
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 | 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
-| 69 | Reserved: lands with a pending change | None yet |
+| 69 | `POST /mcp/{name}` `tools/call` runs the dispatch controls `gateway_invoke` runs (kill switch, capability auto-disable, session profile, cost and error budgets, response gates, response-firewall Block); with message signing on it is refused with -32001 | Move direct callers under message signing to `gateway_invoke`; expect direct calls refused, accounted and gated as `gateway_invoke` calls are |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Reserved: lands with a pending change | None yet |
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
@@ -1952,6 +1953,32 @@ Unix behaviour is unchanged.
 **Action (Windows only):** keep the store directories on a local NTFS or ReFS path, not a
 mapped drive or a junction. If a 3.x token migration is refused, run the printed `icacls` lines
 in PowerShell (as an administrator when it says the file has another owner) and retry.
+
+## 69. Per-backend routes run the same dispatch controls as `gateway_invoke`
+
+`POST /mcp/{name}` `tools/call` skipped controls that `gateway_invoke` enforces: the kill
+switch, capability auto-disable, the session's routing profile, cost budgets, the error budget,
+response gates, and a response-firewall Block. A caller could reach a killed backend, spend past
+its budget, or receive a result `gateway_invoke` would have refused.
+
+In 4.0, both routes run one implementation of each control:
+
+- A killed backend, a disabled capability, a tool outside the session's profile, or a key over
+  its cost budget is refused on `POST /mcp/{name}` with the JSON-RPC error `gateway_invoke`
+  returns (HTTP 200). Nothing reaches the backend.
+- Direct calls record spend and count toward the error budget, so they can auto-kill a backend.
+- Response contract, inspection and context-integrity settings apply to direct results.
+- A result the response firewall blocks is refused with -32600 "Response blocked by security
+  firewall", as on `gateway_invoke`; a retry with the same idempotency key replays that refusal.
+- With message signing on, `tools/call` on `POST /mcp/{name}` is refused with -32001
+  "message signing is enabled; use gateway_invoke".
+- The kill switch and capability auto-disable are now checked at admission: task creation,
+  admission plans and signing preparation refuse a killed backend or disabled capability up
+  front (-32000) instead of at dispatch.
+
+**Action:** a client that called backends directly under message signing must move to
+`gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
+`gateway_invoke` calls are.
 
 ## 70. Secrets stay out of the request URI and its trace
 
