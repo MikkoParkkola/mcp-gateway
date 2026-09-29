@@ -397,10 +397,11 @@ async fn a_task_worker_keeps_the_declared_agent_label() {
     let authorizer = owned.authorizer().borrow(&state);
     let caller = owned.dispatch_context(&state, &authorizer);
 
-    assert_eq!(
-        caller
-            .agent_declared
-            .map(crate::security::DeclaredAgentLabel::as_str),
-        Some("planner-7")
+    let declared = caller
+        .agent_declared
+        .map(crate::security::DeclaredAgentLabel::as_str);
+    assert!(
+        declared == Some("planner-7"),
+        "the task's calls must audit the declared label: {declared:?}"
     );
 }
