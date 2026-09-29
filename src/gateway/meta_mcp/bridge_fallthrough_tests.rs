@@ -73,6 +73,9 @@ fn meta_that_always_asks(
             streamable_http: true,
             protocol_version: None,
         },
+        // The fake answers every request with an interim, tools/list included;
+        // the F13 key check would otherwise refuse the call before the bridge.
+        input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
         ..BackendConfig::default()
     };
     let backend = Arc::new(crate::backend::Backend::new(
