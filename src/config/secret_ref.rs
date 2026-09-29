@@ -219,19 +219,18 @@ pub(crate) fn expand_field(
                     vars.push(name.to_owned());
                 }
             }
-            match vars.as_slice() {
-                [var] => format!(
+            if let [var] = vars.as_slice() {
+                format!(
                     "{field} references ${{{var}}}, which is not set (or is empty) and has no default. \
                      Set it, or write ${{{var}:-}} to allow empty."
-                ),
-                _ => {
-                    let names = vars.iter().map(|v| format!("${{{v}}}")).collect::<Vec<_>>();
-                    format!(
-                        "{field} references {}, which are not set (or are empty) and have no default. \
-                         Set them, or write ${{NAME:-}} to allow empty.",
-                        names.join(", ")
-                    )
-                }
+                )
+            } else {
+                let names = vars.iter().map(|v| format!("${{{v}}}")).collect::<Vec<_>>();
+                format!(
+                    "{field} references {}, which are not set (or are empty) and have no default. \
+                     Set them, or write ${{NAME:-}} to allow empty.",
+                    names.join(", ")
+                )
             }
         }
         Unresolved::Malformed(Some(name)) => format!(
