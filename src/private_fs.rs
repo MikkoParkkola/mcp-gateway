@@ -370,6 +370,8 @@ pub(crate) fn windows_remediation(
                  the others, and grant Full control to the account with SID {me}."
             ),
         };
+        // Ends in a line break, as the runnable branch does: a caller appends.
+        out.push('\n');
         return out;
     }
     let sddl = match what {
