@@ -16,13 +16,13 @@ use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_INSUFFICIENT_BUFFER, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION, AddAccessAllowedAceEx,
-    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce, GetLengthSid,
-    GetSecurityDescriptorControl, GetSecurityDescriptorLength, GetTokenInformation, InitializeAcl,
+    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce, GetKernelObjectSecurity,
+    GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+    GetSecurityDescriptorLength, GetSecurityDescriptorOwner, GetTokenInformation, InitializeAcl,
     InitializeSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
     SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
@@ -409,53 +409,79 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
     Ok(file)
 }
 
-/// Frees a `GetSecurityInfo` descriptor exactly once (contract 1).
-struct LocalSd(PSECURITY_DESCRIPTOR);
-
-impl Drop for LocalSd {
-    fn drop(&mut self) {
-        // SAFETY: contract 1 — allocated by GetSecurityInfo, freed once here.
-        unsafe { LocalFree(self.0 as HLOCAL) };
-    }
-}
-
 /// Owner, DACL and protection of an OPEN handle, which must carry
 /// `READ_CONTROL`.
+///
+/// Everything comes from ONE read: the descriptor as stored on the handle
+/// (`GetKernelObjectSecurity`). `GetSecurityInfo` can report a DACL as
+/// protected when the stored control bits do not carry `SE_DACL_PROTECTED`
+/// (seen on a DACL written without the auto-inherit flag). This is a secrecy
+/// guard, so where the two readings can disagree the conservative one is the
+/// one read: the stored bit decides, and a DACL without it is refused as not
+/// protected.
 pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
-    let mut owner: PSID = std::ptr::null_mut();
-    let mut dacl: *mut ACL = std::ptr::null_mut();
-    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    // SAFETY: contract 1/6 — out-pointers on this frame; the result is a
-    // WIN32_ERROR (0 = success), never a BOOL.
-    let status = unsafe {
-        GetSecurityInfo(
-            file.as_raw_handle(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &raw mut owner,
-            std::ptr::null_mut(),
-            &raw mut dacl,
-            std::ptr::null_mut(),
-            &raw mut sd,
-        )
-    };
-    if status != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(
-            i32::try_from(status).unwrap_or(i32::MAX),
-        ));
+    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    // u64 words keep the self-relative descriptor aligned for its SIDs/ACL.
+    let mut buf: Vec<u64> = Vec::new();
+    loop {
+        let bytes = u32::try_from(buf.len() * 8)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "descriptor length"))?;
+        let mut needed = 0_u32;
+        // SAFETY: contract 1/6 — `buf` is writable for `bytes` bytes (null when
+        // empty, with length 0); `needed` is an out-pointer on this frame.
+        let ok = unsafe {
+            GetKernelObjectSecurity(
+                file.as_raw_handle(),
+                info,
+                if buf.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    buf.as_mut_ptr().cast()
+                },
+                bytes,
+                &raw mut needed,
+            )
+        };
+        if ok != 0 {
+            break;
+        }
+        let err = last();
+        if err.raw_os_error() != i32::try_from(ERROR_INSUFFICIENT_BUFFER).ok() || needed <= bytes {
+            return Err(err);
+        }
+        buf = aligned(needed as usize);
     }
-    let guard = LocalSd(sd);
+    let sd: PSECURITY_DESCRIPTOR = buf.as_mut_ptr().cast();
     let mut control = 0_u16;
     let mut revision = 0_u32;
-    // SAFETY: contract 4/6 — `guard` keeps the descriptor alive; BOOL checked.
-    if unsafe { GetSecurityDescriptorControl(guard.0, &raw mut control, &raw mut revision) } == 0 {
+    // SAFETY: contract 4/6 — `buf` holds the descriptor for this call; BOOL
+    // checked.
+    if unsafe { GetSecurityDescriptorControl(sd, &raw mut control, &raw mut revision) } == 0 {
         return Err(last());
+    }
+    let mut owner: PSID = std::ptr::null_mut();
+    let mut defaulted = 0;
+    // SAFETY: contract 4/6 — as above; `owner` points into `buf` or is null.
+    if unsafe { GetSecurityDescriptorOwner(sd, &raw mut owner, &raw mut defaulted) } == 0 {
+        return Err(last());
+    }
+    let mut present = 0;
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: contract 4/6 — as above; `dacl` points into `buf` or is null.
+    if unsafe { GetSecurityDescriptorDacl(sd, &raw mut present, &raw mut dacl, &raw mut defaulted) }
+        == 0
+    {
+        return Err(last());
+    }
+    if present == 0 {
+        // No DACL at all grants everyone, like a NULL DACL.
+        dacl = std::ptr::null_mut();
     }
     // Owner and DACL lie inside the self-relative descriptor, so every read
     // is bounded by where the descriptor ends.
-    // SAFETY: contract 4 — `guard` keeps a valid descriptor alive.
-    let sd_len = unsafe { GetSecurityDescriptorLength(guard.0) } as usize;
-    let sd_start = guard.0 as usize;
+    // SAFETY: contract 4 — `buf` holds a valid descriptor for this call.
+    let sd_len = (unsafe { GetSecurityDescriptorLength(sd) } as usize).min(buf.len() * 8);
+    let sd_start = buf.as_ptr() as usize;
     let sd_end = sd_start
         .checked_add(sd_len)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "descriptor length"))?;
@@ -481,7 +507,6 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
         // descriptor.
         Some(unsafe { read_aces(dacl, avail) }?)
     };
-    drop(guard);
     Ok(Inspection {
         owner,
         dacl: aces,

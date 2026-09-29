@@ -5,7 +5,7 @@
 //!
 //! Unix judges the mode bits on the open handle. Windows has none, so it
 //! judges the handle's DACL and owner by the same two classes (UPGRADING-4.0
-//! item 97).
+//! item 99).
 
 use std::path::Path;
 

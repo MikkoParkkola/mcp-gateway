@@ -45,7 +45,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79, 96 and 97 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79, 96 and 99 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
 that names it. The items below print no notice: read them here before upgrading.
@@ -111,7 +111,7 @@ deployment.**
 - Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
 - Item 79, only with auth on, identity grants on and a governance store that cannot open
 - Item 96, only for a config, env, key or trust file that a third account owns
-- Item 97, only on Windows, for a secret file another account can read or change, or a trust file it can change
+- Item 99, only on Windows, for a secret file another account can read or change, or a trust file it can change
 
 **Item 7 permanently fails the backend it names, with one warning, and the gateway starts
 without it.**
@@ -216,7 +216,9 @@ without it.**
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 | 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
-| 97 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
+| 97 | Reserved: lands with #2286 | None yet |
+| 98 | Reserved: lands with #2293 | None yet |
+| 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -963,7 +965,7 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
-- **Windows checks ACLs instead of mode bits** (item 97).
+- **Windows checks ACLs instead of mode bits** (item 99).
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.
 
@@ -2580,12 +2582,12 @@ the mode. The check runs before the mode rules, on the same handle as the read.
   refused now.
 - **A shared service group** that gives several accounts a file no longer works: give the gateway's
   user the file, or mount it root-owned.
-- **Windows** is covered by item 97.
+- **Windows** is covered by item 99.
 
 **Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
 An owner that is neither the gateway's uid nor `0` needs the `chown`.
 
-## 97. Windows checks secret and trust files, and creates them owner-only
+## 99. Windows checks secret and trust files, and creates them owner-only
 
 In 3.x and early 4.0 a Windows gateway created these files with the directory's inherited ACL and
 read them unchecked (item 35 covers unix only). In 4.0 it does both, in two classes that match
@@ -2594,7 +2596,9 @@ the unix mode rules:
 - **Secret files** (config, env files, `file:` secrets, TLS private keys, OAuth token and client
   files, credential files) are created owner-only: one grant to the gateway's account, nothing
   inherited. A read is refused when another account is granted access, the owner is someone
-  else, or the DACL inherits or is NULL.
+  else, or the DACL inherits or is NULL. A DACL that is not marked protected is refused as
+  inheriting even when it holds no inherited entry: an old-style ACL, which some tools show as
+  protected, is refused too. The repair below marks it protected.
 - **Trust files** (TLS certificates and CRLs, the identity-grants file and its journal, the
   control-plane `grants.json` and `policies.json`) may be read by others but never changed by
   them. A read, and an append to the journal, is refused when another account can write, or the

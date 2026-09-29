@@ -38,7 +38,8 @@ pub(crate) enum PrivacyRefusal {
     NoReadWrite,
     /// P4: owned by someone else.
     ForeignOwner(String),
-    /// P5: the DACL inherits.
+    /// P5: the stored DACL lacks `SE_DACL_PROTECTED` (an old-style DACL
+    /// included) or holds an inherited entry.
     NotProtected,
     /// Symlink, junction or other reparse point.
     ReparsePoint,
