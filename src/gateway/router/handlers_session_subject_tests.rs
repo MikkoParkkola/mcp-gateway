@@ -261,3 +261,35 @@ async fn a_real_agent_token_owns_its_session_on_every_route() {
     let (status, _) = send(&state, bearer(&own, "DELETE", Some(&a))).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "the owner's DELETE");
 }
+
+#[tokio::test]
+async fn same_subject_other_presented_token_new_session() {
+    // A delegated OIDC bearer's validated principal is its stable actor, not
+    // the token, so the principal cannot tell one subject's two tokens apart.
+    // Here nothing validates the bearer at all (auth off): only the presented
+    // token differs, and it alone must split the session.
+    let (state, _store) = test_router_app_state().await;
+    let a = mint(&state, caller(Some("agent-a"), Some("token-one"))).await;
+    for method in ["POST", "GET"] {
+        assert!(
+            !resumes(
+                &state,
+                caller(Some("agent-a"), Some("token-two")),
+                method,
+                &a
+            )
+            .await,
+            "the same subject under another presented token resumed the session on {method}"
+        );
+    }
+    assert!(
+        resumes(
+            &state,
+            caller(Some("agent-a"), Some("token-one")),
+            "GET",
+            &a
+        )
+        .await,
+        "the subject lost its own session"
+    );
+}
