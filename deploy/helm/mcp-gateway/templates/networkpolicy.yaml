@@ -1,4 +1,4 @@
-{{- /* Rendered when the operator enables it, or when credential mode serves the
+{{- /* Rendered when the operator enables it, or when a non-mesh mode serves a
        bearer token in cleartext under cluster_internal (C3), which makes the
        cluster network the trust boundary. The forced policy restricts INGRESS
        only: backends listen on any port, and an egress allow-list the operator

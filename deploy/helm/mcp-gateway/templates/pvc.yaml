@@ -1,0 +1,22 @@
+{{- /* CHART.2: the `state` volume on a claim, unless the operator names one. */}}
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mcp-gateway.stateClaim" . }}
+  # Uninstalling the release keeps the claim, and the task and control-plane
+  # stores on it; delete it by hand when the data is no longer wanted.
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}
