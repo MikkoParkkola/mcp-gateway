@@ -125,7 +125,7 @@ backend" and "fails a capability file" first.**
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 | 99 | Windows: the config, OAuth token and client files, and generated mTLS certificates and keys are created owner-only; those and the secret files it only reads (env files, `file:` targets, TLS keys and credential files) are refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
-| 101 | Reserved: lands with #2294 | None yet |
+| 101 | A restart that finds the audit log's `.hwm` missing, on a log that went through segment handling, writes an `audit_segment_hwm_missing` record; `audit verify` then fails the log for as long as it is kept | Investigate how the mark went missing; archive the log and start a new one to clear the failure |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 
 
@@ -1512,8 +1512,8 @@ deletes a segment before it was exported, the exporter re-anchors, reports `rean
 counts the skipped segments in `mcp_audit_export_segments_skipped_total`.
 
 The log now carries housekeeping records that SIEM tailers and `control_plane.export`
-consumers see: `audit_segment_sealed`, `audit_segment_opened`, `audit_segment_expired`, and a
-rare `audit_segment_torn_tail_dropped`. A parser that rejects an `event` value it does not know
+consumers see: `audit_segment_sealed`, `audit_segment_opened`, `audit_segment_expired`, and the
+rare `audit_segment_torn_tail_dropped` and `audit_segment_hwm_missing` (item 101). A parser that rejects an `event` value it does not know
 must accept these.
 
 Deleting or truncating the active `transparency.jsonl` is now detected. A
@@ -2838,6 +2838,34 @@ id; reissue the credential without the padding. A certificate whose first SAN UR
 keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
 firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
 API-key owner, not on these subjects.
+
+## 101. A restart records a missing high-water mark
+
+**Startup:** no notice
+
+In early 4.0, a restart that found `<path>.hwm` missing wrote a fresh mark from whatever the
+active file held. Deleting `.hwm`, cutting the tail and restarting therefore made
+`audit verify` pass again (item 98 and the expiry case of item 49 caught the cut only until
+that restart).
+
+In 4.0, when `.hwm` is missing at startup and the log went through segment handling (a sealed
+segment exists, or the active file opens with an open record and holds more than it), the
+gateway first chains an `audit_segment_hwm_missing` record, logs a warning and increments
+`mcp_audit_hwm_missing_total`, then writes the fresh mark. The log keeps running. `audit verify`
+fails on the record in live mode and warns in `--archive` mode. When retention or disk-full
+expiry deletes the segment holding it, the finding survives: every later `audit_segment_opened`
+record carries its counter as `hwm_missing_at`, so the failure lasts as long as the log.
+
+A pre-D6 log (no open record) and a log holding only its genesis open record (a crash before
+the first mark) still get a fresh mark without the record. A crash between the first caller
+record and its first mark is indistinguishable from a cut and is recorded. A changed
+`shared_secret` makes the old mark unreadable and is recorded too. So is a torn final line the
+mark already counted (a committed record, not a crash mid-write), and a record recovery cannot
+verify (edited, unlinked or oversized).
+
+**Action:** treat the record as possible tail loss and investigate. To clear the live failure,
+archive the log's files together and let the gateway start a new log. Like the other
+`audit_segment_*` records (item 49), SIEM rules that match caller events can skip it.
 
 ## 102. Per-caller backend slots are capped
 
