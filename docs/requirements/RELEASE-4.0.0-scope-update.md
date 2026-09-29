@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 93
+Approved supplemental criteria: 113
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -131,6 +131,26 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7116.MIN.1 | Tool responses carry a tenant attribution alongside the existing ContextDataClass, and the attribution is recorded in the audit trail whether or not it triggers a block (MIK-7116). | SECURITY |
 | MIK-7116.MIN.2 | A caller that has read sensitive data attributed to tenant A is flagged (observe mode) or, when blocking is switched on, blocked from reading sensitive data attributed to tenant B; a test proves the verdict and the audit entries for both the read and the verdict (MIK-7116). | SECURITY |
 | MIK-7116.MIN.4 | The tenant guard's false-positive rate is measured against a fixture corpus before blocking is enabled by default, and the guard ships observe-only first (MIK-7116). | SECURITY |
+| MIK-7211.PARENT.1 | The RFC-0060 spike sub-issues U1, U2 and U5 are closed with a recorded answer, not a plan to get one (MIK-7211 AC.1). | VALIDATION |
+| MIK-7211.PARENT.5 | The compatibility window is recorded as a decision in RFC-0060 with U1's measured data cited, replacing the unmeasured assumption (MIK-7211 AC.5). | VALIDATION |
+| MIK-7211.PARENT.6 | No surface emits cacheScope public on a response computed from session-scoped state, enforced by a type or a lint that is named in the closing record (MIK-7211 AC.6). | SAFETY |
+| MIK-7211.PARENT.7 | Every session-keyed behaviour in the gateway has a named stateless replacement in one inventory before any session code is removed (MIK-7211 AC.7). | VALIDATION |
+| MIK-7217.SEARCH.1 | A test proves a backend speaking 2026-07-28 becomes visible to gateway_search and does not trip the circuit breaker (MIK-7217 AC DISCOVER.6). | VALIDATION |
+| MIK-7217.CLAIMS.1 | The Meta-MCP tool count is asserted unchanged against benchmarks/public_claims.json, not only against a fixed band (MIK-7217 AC DISCOVER.8). | VALIDATION |
+| MIK-7217.STDIO.1 | The stdio server/discover answer advertises 2026-07-28 when the modern protocol is on, asserted by an exact-version test (MIK-7217 AC DISCOVER.1 caveat). | VALIDATION |
+| MIK-7272.OWNER.1 | On modern stdio, keyed writes execute once and replay without another effect; a keyless write executes (no refusal); legacy unkeyed repeats execute twice; all six management branches are tested (MIK-7272 SUB4.STDIO.OWNER.1, amended by operator ruling 2026-09-30). | SAFETY |
+| MIK-7272.OWNER.2 | The same protected task store reopens or relocates and its typed local operator retrieves the task; another store and a same-store HTTP owner cannot retrieve or alias it; exercised through store integration and the independent functional gate, with no global lookup and no new instance UUID (MIK-7272 SUB4.STDIO.OWNER.2). | SAFETY |
+| MIK-7272.OWNER.3 | An injected principal tag or HTTP credential string equal to the stdio serialized spelling cannot select or alias the stdio local operator; only the transport creates the typed tag; same-key owner-specific outputs stay separate and the real stdio owner works (MIK-7272 SUB4.STDIO.OWNER.3). | SAFETY |
+| MIK-7272.OWNER.4 | A ToolPolicy denial refuses a local-operator mutation before retained-output delivery with zero dispatch to the denied target, while a permitted neighbouring target works (MIK-7272 SUB4.STDIO.OWNER.4). | SAFETY |
+| MIK-7272.OWNER.5 | The real stdio-created context carries its execution principal but no verified identity, personal account or delegated grant; account-dependent calls are refused and an ordinary local mutation works (MIK-7272 SUB4.STDIO.OWNER.5). | SAFETY |
+| MIK-7272.LIFE.1 | A held legacy RPC can be cancelled and joined: cancelling it releases the held exchange and its waiter gets a terminal answer, with nothing left pending (MIK-7272 SUB4.BRIDGE.LIFE.1). | BRIDGE |
+| MIK-7324.COV.3 | Every coverage or mutation floor miss on the final revision is closed with tests or accepted as a written waiver naming the module and the reason (MIK-7324 COV.3). | VALIDATION |
+| MIK-7216.IDEM.1 | Every exposed capability and tool is classified read-only or side-effecting as data, not only backend tools that declare annotations (MIK-7216 IDEM.1). | SAFETY |
+| MIK-7216.IDEM.5 | One test kills the response stream mid-flight on a side-effecting call, re-issues it per the specification and asserts the backend effect happened exactly once (MIK-7216 IDEM.5). | SAFETY |
+| MIK-7216.IDEM.6 | The same stream-kill test asserts a read-only call is unaffected by the idempotency path and is simply re-sent (MIK-7216 IDEM.6). | SAFETY |
+| MIK-7217.ERA.1 | When a backend's transport is replaced by force_restart while a re-probe is in flight, the in-flight probe's answer is refused and the recorded era is unchanged (MIK-7217 ERA.1). | VALIDATION |
+| MIK-7217.ERA.2 | In that sequence the refusal writes an era_probe_discarded record naming the reason (MIK-7217 ERA.2, the OBS.3 record). | VALIDATION |
+| MIK-7217.ERA.3 | Without a restart a re-probe answer is committed as today, with no regression in a_contradiction_reprobes_and_the_whole_read_moves_with_it (MIK-7217 ERA.3). | VALIDATION |
 
 ## Boundaries
 
@@ -172,9 +192,12 @@ test files and ignored tests are not completed feature evidence.
 
 Ruling C1 is recorded in `docs/requirements/RELEASE-4.0.0-operator-decisions.md`, section "Operator rulings given in chat" (added by #2385).
 
-- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows, all MET.
-- MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A.
-- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows, all MET; the other repositories are outside this ledger.
+- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: trvl, hebb, nab, metacognition, throttla) is not a row here; whether it leaves this ledger awaits an operator ruling.
+- MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A, plus MIK-7272.OWNER.1-5 and LIFE.1 above (the SUB4.STDIO.OWNER and SUB4.BRIDGE.LIFE ACs; ids shortened to the ledger's TICKET.COMPONENT.N form).
+- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows (MET) plus MIK-7211.PARENT.1, 5, 6 and 7 above. Gateway halves of AC.2-4: AC.2 -> MIK-7217.DISCOVER.1a/1b, AC.3 -> MIK-7272.RESULT.1, AC.4 -> NFR.COMPAT.1, all MET. The other-repository halves of AC.2-4 are not rows here; whether they leave this ledger awaits an operator ruling.
+- MIK-7324 (coverage and mutation): NFR.BUILD.1 C5/C6 plus MIK-7324.COV.3 above.
+- MIK-7216 (idempotency, sub-issue of MIK-7211): IDEM.2 -> MIK-7212.MRTR.10b, IDEM.3 -> MIK-7212.MRTR.10a, IDEM.4 -> MIK-7272.SUB.4 (keyless stdio calls admitted per operator ruling C4 unless server.idempotency_key is required; no HTTP exemption), IDEM.7 -> MIK-7212.MRTR.10a and NFR.COMPAT.1, all MET; IDEM.1, 5 and 6 are rows above.
+- MIK-7219 (U2 hebb de-fork spike): required by MIK-7211.PARENT.1; its other-repository work awaits the same operator ruling.
 - MIK-7407 (response firewall): the MIK-7407.RESPONSE.* rows added by #2387.
 - MIK-7481 (container never started in CI): NFR.PKG.1 (MET), whose row names MIK-7481 as owner; the smoke runs on the scan image (.github/workflows/docker.yml:293-294, scripts/ci/smoke-image.sh), carried from #568 (c8803f066).
 - MIK-7116 (data minimisation): MIK-7116.TENANT.1 (baseline) plus MIK-7116.MIN.1, MIN.2 and MIN.4 above. MIN.3, MIN.5 and MIN.6 are not 4.0.0 criteria: decision `mik_7116_min_kill_gate` in RELEASE-4.0.0-scope-status.json (operator ruling 2026-09-30); they are tracked in Linear MIK-7627, gated on the post-release MIN.KILL week.
