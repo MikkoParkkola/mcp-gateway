@@ -47,8 +47,8 @@ who simply omits their credential reaches the gateway anyway. Cut it to
 `["/health"]`.
 
 `single_user: true` is a hint that turns off the per-user OAuth isolation guard.
-More than one API key, or any OIDC issuer, overrides the hint — but do not rely
-on that. Remove the line.
+More than one credential (API keys and the bearer token), or any OIDC issuer,
+overrides the hint — but do not rely on that. Remove the line.
 
 One more parallel path to close: `auth.bearer_token` and `auth.api_keys` are
 static credentials checked at the transport gate. They do **not** carry an

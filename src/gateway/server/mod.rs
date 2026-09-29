@@ -1695,7 +1695,7 @@ impl Gateway {
         // isolated. Detection is fail-closed — any enabled auth is treated as
         // multi-user (a single shared API key or bearer can be handed to a whole
         // team; count alone cannot prove otherwise) unless the operator sets
-        // `auth.single_user = true`. More than one API key or any OIDC issuer is
+        // `auth.single_user = true`. More than one credential or any OIDC issuer is
         // a hard multi-user signal. See `AuthConfig::implies_multi_user`.
         let multi_user = self
             .config

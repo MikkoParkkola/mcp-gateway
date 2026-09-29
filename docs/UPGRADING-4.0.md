@@ -212,6 +212,7 @@ without it.**
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
 | 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2197,7 +2198,7 @@ example downloaded and imported from a file.
 ## 78. A stdio gateway serves its local operator's personal accounts
 
 A `personal_managed` account served a stdio gateway's caller only when HTTP auth was on with
-`auth.single_user: true`, at most one API key, no OIDC issuer and no identity adapter. A stdio gateway
+`auth.single_user: true`, at most one credential (item 96), no OIDC issuer and no identity adapter. A stdio gateway
 with the default `auth.enabled: false` refused every account-bound call with "the request
 carries no verified end-user identity".
 
@@ -2493,6 +2494,20 @@ backend that is down at startup opens its breaker before traffic arrives.
 
 **Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
 caches warm (`meta_mcp.warm_start`).
+
+## 96. A bearer token and an API key are two users, even with `single_user`
+
+With `auth.single_user: true`, a gateway with an `auth.bearer_token` and one API key counted as
+single-user. Both credentials were served the sole operator's personal accounts, and the
+per-user OAuth isolation guard (ADR-008) stayed off.
+
+In 4.0 the bearer token counts as a credential beside the API keys. Two credentials are two
+users whatever `single_user` says: the sole-operator account is not served to either, and the
+isolation guard is on. The gateway still starts. A bearer-only or one-key-only gateway is
+unchanged, and so is any `auth.bearer_token` spelling (`auto`, `env:`).
+
+**Action:** a personal gateway that added a client key beside its bearer token keeps exactly one
+of the two: remove `auth.bearer_token` or the extra API key.
 
 ## Upgrading from 3.5.x: a walkthrough
 
