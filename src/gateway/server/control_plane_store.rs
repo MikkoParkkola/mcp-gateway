@@ -101,6 +101,17 @@ pub(super) fn build_control_plane_store(
         (Err(OpenFailure::Other(error)), ControlPlaneBaseSource::Explicit) => Err(Error::Config(
             format!("control_plane.store_dir '{path}' could not be opened: {error}"),
         )),
+        // Grant changes are recorded only in this log (MIK-7570.AUDIT.4):
+        // serving grants without it would leave them unaudited.
+        (Err(OpenFailure::Other(error)), ControlPlaneBaseSource::Default)
+            if config.security.identity_grants.enabled =>
+        {
+            Err(Error::Config(format!(
+                "identity grants need the governance audit log when auth is on: the \
+                 control-plane store at '{path}' could not be opened: {error}. Set \
+                 control_plane.store_dir to a writable directory"
+            )))
+        }
         (Err(OpenFailure::Other(error)), ControlPlaneBaseSource::Default) => {
             warn!(
                 %path, ?source, %error,

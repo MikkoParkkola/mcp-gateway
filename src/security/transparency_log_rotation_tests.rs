@@ -496,3 +496,37 @@ fn corrupt_tail_on_resync_still_degrades() {
     assert!(r.is_err());
     assert!(l.is_degraded());
 }
+
+/// #1528: identity comes from the open handle. A path and a handle on the same
+/// file agree, and two distinct files never do, whatever their timestamps.
+#[test]
+fn mik_1528_two_distinct_files_have_distinct_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let fa = std::fs::File::create(&a).unwrap();
+    let fb = std::fs::File::create(&b).unwrap();
+    // Windows: the same creation time on both, as NTFS tunnelling produces.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTimesExt;
+        let t = std::fs::FileTimes::new().set_created(std::time::SystemTime::UNIX_EPOCH);
+        fa.set_times(t).unwrap();
+        fb.set_times(t).unwrap();
+        assert_eq!(
+            fa.metadata().unwrap().created().unwrap(),
+            fb.metadata().unwrap().created().unwrap()
+        );
+    }
+    assert_ne!(
+        rotation::file_id(&fa).unwrap(),
+        rotation::file_id(&fb).unwrap()
+    );
+    assert_eq!(
+        rotation::file_id(&fa).unwrap(),
+        rotation::path_id(&a).unwrap()
+    );
+    assert_ne!(
+        rotation::path_id(&a).unwrap(),
+        rotation::path_id(&b).unwrap()
+    );
+}

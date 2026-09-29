@@ -104,6 +104,26 @@ pub(crate) struct PooledEntry {
     /// fill budget). Cleared by the next fill that drains to completion.
     /// Tools only — the other three families keep their pages either way.
     pub(crate) tools_truncated: AtomicBool,
+    /// When this slot's last tools fill ended without storing (F13): a drain,
+    /// parse or start error, a `CallTimeout` expiry, or a voided store. Fills
+    /// within `LIST_FILL_COOLDOWN` of it fail fast. Tokio's `Instant`, so a
+    /// paused test clock advances it with the timeouts. Tools only. The flag
+    /// is the transport failure to replay (A3), `None` for an unreadable
+    /// list, so a fast-failed call answers as the failure it stands in for.
+    pub(crate) tools_fill_failed_at:
+        parking_lot::Mutex<Option<(tokio::time::Instant, Option<super::fill_check::Replay>)>>,
+    /// When a stale hit's refresh last failed (A4). Inside
+    /// `LIST_FILL_COOLDOWN` of it a stale hit is judged from the held schema
+    /// without listing, whatever the failure's class. Stale hits only.
+    pub(crate) tools_refresh_failed_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    /// A non-throttle request or request-triggered fill failure, or a health
+    /// probe trip (#2219), was recorded
+    /// since the breaker last ended a success Closed (#1300). While set, a
+    /// warm-up success may not reset an Open breaker: it did not trip it alone.
+    /// A mutex, held across each record and its flag change, so a warm-up's
+    /// check-then-reset cannot interleave with a request failure.
+    pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
+
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
@@ -190,6 +210,10 @@ impl PooledEntry {
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
+            tools_fill_failed_at: parking_lot::Mutex::new(None),
+            tools_refresh_failed_at: parking_lot::Mutex::new(None),
+            request_failed_since_close: parking_lot::Mutex::new(false),
+
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
@@ -444,6 +468,15 @@ impl Backend {
     /// reports empty. `pooled_transport_for_test` does not create, but answers
     /// `None` for both "slot absent" and "slot present, transport unstarted".
     /// This is the one probe that distinguishes them.
+    /// Test-only: empty every slot's tool catalogue, so the next R2 check
+    /// on any slot is cold (F13 cells for a slot emptied between rounds).
+    #[cfg(test)]
+    pub(crate) fn empty_tool_catalogues_for_test(&self) {
+        for entry in &self.pool {
+            entry.value().tools_cache.invalidate_if(|_| true);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn pool_has_slot_for_test(&self, key: &PoolKey) -> bool {
         self.pool.get(key).is_some()

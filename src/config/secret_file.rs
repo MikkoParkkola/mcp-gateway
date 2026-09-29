@@ -13,6 +13,9 @@ use crate::{Error, Result};
 /// The UPGRADING-4.0 item that documents this rule. One place to renumber.
 #[cfg(unix)]
 const UPGRADE_ITEM: u32 = 35;
+/// The item that adds the owner rule.
+#[cfg(unix)]
+const OWNER_UPGRADE_ITEM: u32 = 96;
 
 /// Which kind of file is read. It sets the wording, the rule and the size cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +113,8 @@ impl From<GuardedRead> for std::io::Error {
 /// Why a file's mode is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
+    /// The owner is neither this process nor root, so it can chmod the file at will.
+    ForeignOwner,
     /// A world bit is set.
     World,
     /// The group may write it.
@@ -119,14 +124,26 @@ pub(crate) enum Refusal {
     GroupReadOwned,
 }
 
+/// Whether `file_uid` is an account that is neither this process (`euid`) nor
+/// root, so it can change a file it owns whatever the mode says.
 #[cfg(unix)]
-/// The rule on `mode & 0o777`, given who owns the file and who we are.
+#[must_use]
+const fn foreign_owner(file_uid: u32, euid: u32) -> bool {
+    file_uid != euid && file_uid != 0
+}
+
+#[cfg(unix)]
+/// The rule given who owns the file and who we are: the owner is this process
+/// or root, then the mode (`mode & 0o777`) rule below.
 ///
 /// Group read is allowed only on a file this process does not own: there the
 /// group bit is how it reads the file, as with a root-owned Kubernetes
 /// projection under `fsGroup`.
 #[must_use]
 pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
+    if foreign_owner(file_uid, euid) {
+        return Some(Refusal::ForeignOwner);
+    }
     let m = mode & 0o777;
     if m & 0o007 != 0 {
         return Some(Refusal::World);
@@ -141,11 +158,14 @@ pub(crate) fn secret_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option
 }
 
 #[cfg(unix)]
-/// The integrity rule on `mode & 0o777`: others may read, not write. Whoever
-/// owns the file, a group or world write bit lets someone else change whom the
-/// gateway trusts.
+/// The integrity rule: the owner is this process or root, and on `mode & 0o777`
+/// others may read, not write. A group or world write bit lets someone else
+/// change whom the gateway trusts, and so does a foreign owner, who can chmod.
 #[must_use]
-pub(crate) fn integrity_file_refusal(mode: u32) -> Option<Refusal> {
+pub(crate) fn integrity_file_refusal(mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
+    if foreign_owner(file_uid, euid) {
+        return Some(Refusal::ForeignOwner);
+    }
     let m = mode & 0o777;
     if m & 0o002 != 0 {
         return Some(Refusal::World);
@@ -172,6 +192,20 @@ pub(crate) fn read_guarded_file(
     path: &Path,
     what: SecretFile,
 ) -> std::result::Result<String, GuardedRead> {
+    let bytes = read_guarded_bytes(path, what)?;
+    String::from_utf8(bytes).map_err(|_| {
+        GuardedRead::Refused(format!(
+            "Cannot read {} {}: it is not UTF-8.",
+            what.noun(),
+            path.display()
+        ))
+    })
+}
+
+/// [`read_guarded_file`] without the UTF-8 check, for a file whose lines are
+/// judged one by one (the grant-change journal: one torn append must not make
+/// every later line unreadable).
+fn read_guarded_bytes(path: &Path, what: SecretFile) -> std::result::Result<Vec<u8>, GuardedRead> {
     use std::io::Read as _;
 
     let noun = what.noun();
@@ -199,12 +233,7 @@ pub(crate) fn read_guarded_file(
             file.read_to_end(&mut bytes).map_err(GuardedRead::Io)?;
         }
     }
-    String::from_utf8(bytes).map_err(|_| {
-        GuardedRead::Refused(format!(
-            "Cannot read {noun} {}: it is not UTF-8.",
-            path.display()
-        ))
-    })
+    Ok(bytes)
 }
 
 /// Opens `path` for reading without waiting on it (F18 A2). A plain open of a
@@ -266,23 +295,48 @@ fn check_mode(
         )));
     }
     let euid = rustix::process::geteuid().as_raw();
-    let owned = meta.uid() == euid;
-    let (refusal, why) = match what.protects() {
-        Protects::Secrecy => (
-            secret_file_refusal(meta.mode(), meta.uid(), euid),
-            "it can hold credentials",
-        ),
-        Protects::Integrity => (
-            integrity_file_refusal(meta.mode()),
-            "it decides whom the gateway trusts",
-        ),
+    match class_refusal(what.protects(), meta.mode(), meta.uid(), euid) {
+        None => Ok(()),
+        Some(refusal) => Err(GuardedRead::Refused(refusal_message(
+            what,
+            path,
+            refusal,
+            (meta.mode() & 0o777, meta.uid(), meta.gid()),
+            euid,
+        ))),
+    }
+}
+
+/// The one verdict for a file of class `protects`: the same owner and mode
+/// facts feed both rules, so neither class can be wired with the wrong uid.
+#[cfg(unix)]
+#[must_use]
+fn class_refusal(protects: Protects, mode: u32, file_uid: u32, euid: u32) -> Option<Refusal> {
+    match protects {
+        Protects::Secrecy => secret_file_refusal(mode, file_uid, euid),
+        Protects::Integrity => integrity_file_refusal(mode, file_uid, euid),
+    }
+}
+
+/// The refusal text: names the file, what is wrong and the fix, never content.
+/// `facts` is the file's `(mode & 0o777, owner uid, group gid)`.
+#[cfg(unix)]
+fn refusal_message(
+    what: SecretFile,
+    path: &Path,
+    refusal: Refusal,
+    (mode, file_uid, gid): (u32, u32, u32),
+    euid: u32,
+) -> String {
+    let why = match what.protects() {
+        Protects::Secrecy => "it can hold credentials",
+        Protects::Integrity => "it decides whom the gateway trusts",
     };
-    let Some(refusal) = refusal else {
-        return Ok(());
-    };
-    let mode = meta.mode() & 0o777;
-    let gid = meta.gid();
+    if refusal == Refusal::ForeignOwner {
+        return foreign_owner_message(what, path, (file_uid, euid), why);
+    }
     let lets = match refusal {
+        Refusal::ForeignOwner => String::new(), // answered above
         Refusal::World if what.protects() == Protects::Secrecy && mode & 0o004 != 0 => {
             "lets other users read it".to_string()
         }
@@ -290,12 +344,35 @@ fn check_mode(
         Refusal::GroupWrite => format!("lets group {gid} change it"),
         Refusal::GroupReadOwned => format!("lets group {gid} read it"),
     };
-    Err(GuardedRead::Refused(format!(
+    format!(
         "Refusing to load {} {}: mode {mode:04o} {lets}, and {why}. {}",
         what.noun(),
         path.display(),
-        refusal_fix(path, owned, what)
-    )))
+        refusal_fix(path, file_uid == euid, what)
+    )
+}
+
+/// The owner refusal: another account owns the file, so it can chmod it at will.
+/// A secret file also needs `chmod 600`: a group-read mode stays refused once
+/// this process owns the file.
+#[cfg(unix)]
+fn foreign_owner_message(
+    what: SecretFile,
+    path: &Path,
+    (file_uid, euid): (u32, u32),
+    why: &str,
+) -> String {
+    let chmod = match what.protects() {
+        Protects::Secrecy => format!(" && chmod 600 {}", path.display()),
+        Protects::Integrity => String::new(),
+    };
+    format!(
+        "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither this \
+         process (uid {euid}) nor root, so that account can change it at will, and {why}. \
+         Fix: chown {euid} {path}{chmod} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
+        noun = what.noun(),
+        path = path.display(),
+    )
 }
 
 /// A secret-bearing or trust file read outside `config` (F18). Each maps to
@@ -326,7 +403,19 @@ pub(crate) enum CheckedFile {
 /// An `io::Error` whose message names the file and the reason. A refused mode,
 /// size or encoding is `PermissionDenied`; a missing file keeps `NotFound`.
 pub(crate) fn read_checked_file(path: &Path, what: CheckedFile) -> std::io::Result<String> {
-    let class = match what {
+    let bytes = read_checked_bytes(path, what)?;
+    String::from_utf8(bytes).map_err(|_| {
+        GuardedRead::Refused(format!(
+            "Cannot read {} {}: it is not UTF-8.",
+            checked_class(what).noun(),
+            path.display()
+        ))
+        .into()
+    })
+}
+
+fn checked_class(what: CheckedFile) -> SecretFile {
+    match what {
         CheckedFile::TlsKey => SecretFile::TlsKey,
         CheckedFile::TlsCert => SecretFile::TlsCert,
         CheckedFile::TlsCrl => SecretFile::TlsCrl,
@@ -334,8 +423,18 @@ pub(crate) fn read_checked_file(path: &Path, what: CheckedFile) -> std::io::Resu
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,
-    };
-    read_guarded_file(path, class).map_err(|e| match e {
+    }
+}
+
+/// [`read_checked_file`] without the UTF-8 check, for a file whose lines are
+/// judged one by one.
+///
+/// # Errors
+///
+/// As [`read_checked_file`], less the encoding refusal.
+pub(crate) fn read_checked_bytes(path: &Path, what: CheckedFile) -> std::io::Result<Vec<u8>> {
+    let class = checked_class(what);
+    read_guarded_bytes(path, class).map_err(|e| match e {
         GuardedRead::Io(e) => std::io::Error::new(
             e.kind(),
             format!("Cannot read {} {}: {e}", class.noun(), path.display()),

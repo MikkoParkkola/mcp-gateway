@@ -287,6 +287,9 @@ pub async fn presented_resume(
     now: u64,
 ) -> Result<Option<ChainResumePlan>> {
     let Some(token) = retry.request_state.as_deref() else {
+        // Answers with no envelope are not a retry of anything this gateway
+        // asked: refuse them rather than run the chain fresh and drop them.
+        retry.solicited_input_responses()?;
         return Ok(None);
     };
     let fingerprint = crate::protocol::mrtr::principal_fingerprint(identity).ok_or_else(|| {

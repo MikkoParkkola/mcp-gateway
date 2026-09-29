@@ -196,7 +196,16 @@ fn run_controller_command(
             ) {
                 Ok(report) => {
                     let blocked = report.status == KubernetesPlanStatus::Blocked;
-                    print_controller_report(&report, format);
+                    // A watch never ends, so its JSON is a stream: one compact
+                    // document per line (NDJSON), one line per cycle (#1909).
+                    if matches!(format, OutputFormat::Json) {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
+                        );
+                    } else {
+                        print_controller_report(&report, format);
+                    }
                     if blocked {
                         return ExitCode::FAILURE;
                     }

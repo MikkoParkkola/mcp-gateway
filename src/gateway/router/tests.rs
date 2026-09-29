@@ -34,6 +34,7 @@ use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targe
 
 /// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
 mod attestation_routes;
+mod descriptor_withholding;
 mod f24_resource_subscribe;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
@@ -687,8 +688,7 @@ pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
             admin,
         }],
         public_paths: vec!["/health".to_string()],
-        client_circuit_breaker: None,
-        single_user: false,
+        ..AuthConfig::default()
     }
 }
 
@@ -1663,7 +1663,7 @@ async fn backend_handler_direct_route_stamps_bypass_provenance() {
 
     let backend = Arc::new(Backend::new(
         "demo",
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));

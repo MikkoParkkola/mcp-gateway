@@ -10,12 +10,12 @@
 
 use super::NOTICE_4_0_0_ITEMS;
 
-/// GH475.MIG.4 — the notice carries all twenty-five items, each named by the
+/// GH475.MIG.4 — the notice carries all thirty items, each named by the
 /// action or removal it announces. Pinned so a later edit cannot quietly
 /// drop one: an operator reads this once.
 #[test]
-fn notice_4_0_0_carries_all_twenty_five_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 25);
+fn notice_4_0_0_carries_all_thirty_items() {
+    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 30);
     let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
@@ -44,6 +44,10 @@ fn notice_4_0_0_carries_all_twenty_five_items() {
         "audit_segment_expired",
         "minted by the gateway",
         "without the `requeststate`",
+        "-32022",
+        "proven principal",
+        "expose_stats_tool",
+        "refuses (403)",
     ] {
         assert!(
             all.contains(expected),
@@ -146,31 +150,44 @@ const NOTICE_ITEM_SECTIONS: &[(u32, &str)] = &[
     (49, "audit_segment_expired"),
     (58, "minted by the gateway"),
     (55, "without the `requeststate`"),
+    (59, "lists the backend"),
+    (90, "-32022"),
+    (91, "proven principal"),
+    (92, "expose_stats_tool"),
+    (93, "refuses (403)"),
 ];
 
-/// The item numbers the guide says the first start prints: the list after
-/// "one-time notice to stderr listing items" up to "below", ranges expanded.
+/// The item numbers the guide says the first start prints: the `- Item N`
+/// bullets after the notice paragraph, one per line, up to the next blank line.
+///
+/// Line endings are normalised first: a Windows checkout reads the guide with
+/// CRLF, and the blank line that ends the lead is then `\r\n\r\n`.
 fn guide_notice_items(doc: &str) -> std::collections::BTreeSet<u32> {
-    let flat = doc.split_whitespace().collect::<Vec<_>>().join(" ");
-    let start = flat
-        .find("one-time notice to stderr listing items ")
+    const LEAD: &str = "`RUST_LOG` filters cannot swallow it.\n\n";
+    let doc = doc.replace("\r\n", "\n");
+    let start = doc
+        .find(LEAD)
         .expect("the guide no longer says which items the notice lists")
-        + "one-time notice to stderr listing items ".len();
-    let list = &flat[start..start + flat[start..].find(" below").expect("list ends in 'below'")];
-    let mut items = std::collections::BTreeSet::new();
-    for part in list.replace(" and ", ", ").split(", ") {
-        let part = part.trim();
-        if let Some((a, b)) = part.split_once('-') {
-            let (a, b): (u32, u32) = (a.parse().unwrap(), b.parse().unwrap());
-            items.extend(a..=b);
-        } else {
-            items.insert(
-                part.parse()
-                    .unwrap_or_else(|_| panic!("not an item: {part:?}")),
-            );
-        }
-    }
-    items
+        + LEAD.len();
+    let list = &doc[start..];
+    let list = &list[..list.find("\n\n").expect("the notice list ends")];
+    list.lines()
+        .map(|line| {
+            line.strip_prefix("- Item ")
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("not a `- Item N` bullet: {line:?}"))
+        })
+        .collect()
+}
+
+/// A CRLF checkout (Windows) reads the same list as an LF one.
+#[test]
+fn guide_notice_items_reads_crlf() {
+    let doc = "`RUST_LOG` filters cannot swallow it.\r\n\r\n- Item 1\r\n- Item 6\r\n\r\nNext.";
+    assert_eq!(
+        guide_notice_items(doc),
+        std::collections::BTreeSet::from([1, 6])
+    );
 }
 
 /// The guide's list of notice items matches the notice. A notice item the list

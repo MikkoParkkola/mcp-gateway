@@ -76,9 +76,21 @@ struct LeakyBackendTransport;
 impl Transport for LeakyBackendTransport {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
+        // F13: a cold `tools/call` lists the backend before R2 judges it, so
+        // the catalogue holds every tool the rows call, with free-map schemas.
+        if method == "tools/list" {
+            let tools: Vec<Value> = ["leaky_echo", "alpha_echo", "zeta_echo"]
+                .iter()
+                .map(|name| json!({"name": name, "inputSchema": {"type": "object"}}))
+                .collect();
+            return Ok(JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({ "tools": tools }),
+            ));
+        }
         Ok(JsonRpcResponse::success_serialized(
             RequestId::Number(1),
             json!({
@@ -171,6 +183,16 @@ async fn state_with_firewalls(
     handler_firewall: Arc<Firewall>,
     meta_firewall: Arc<Firewall>,
 ) -> (Arc<AppState>, tempfile::TempDir) {
+    state_with_firewalls_and_auth(handler_firewall, meta_firewall, &AuthConfig::default()).await
+}
+
+/// [`state_with_firewalls`] under an explicit auth config, for rows that need
+/// API-key callers.
+async fn state_with_firewalls_and_auth(
+    handler_firewall: Arc<Firewall>,
+    meta_firewall: Arc<Firewall>,
+    auth: &AuthConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig::default(),
@@ -199,7 +221,7 @@ async fn state_with_firewalls(
         streaming_config.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(auth));
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
@@ -686,3 +708,6 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
     assert_eq!(handler.response_inspection_counts().inspections, 1);
     assert_eq!(meta.response_inspection_counts().inspections, 0);
 }
+
+#[cfg(feature = "firewall")]
+mod caller_key;

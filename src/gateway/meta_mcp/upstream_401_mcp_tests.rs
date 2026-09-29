@@ -13,7 +13,8 @@ use crate::personal_accounts::refusal::marked;
 
 use super::super::super::account_resolver_fixture::{
     ALICE_WORK_TOKEN, Answer, Bind, Descriptors, ProviderStep, ROTATED_TOKEN, WORK, account_key,
-    custody_with_steps, execute, execute_bridged, external_cfg, gateway, grant, identity, slots,
+    custody_with_steps, execute, execute_bridged, execute_bridged_keyed, external_cfg, gateway,
+    grant, identity, slots,
 };
 
 const FRESH: u64 = u64::MAX;
@@ -46,13 +47,13 @@ async fn mcp_route_401_uses_propagated_lease() {
         "the refusal must pass through with_connect_offer: {error}"
     );
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
-    assert_eq!(dispatches.count(), 1, "the 401 is not retried");
+    assert_eq!(dispatches.calls().len(), 1, "the 401 is not retried");
 
     Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect_err("the fenced account refuses before dispatch");
     assert_eq!(
-        dispatches.count(),
+        dispatches.calls().len(),
         1,
         "a fenced account never reaches the backend"
     );
@@ -87,7 +88,7 @@ async fn non_vault_401_forces_no_refresh() {
     assert_eq!(custody.refreshes(), 0);
     // Retry is pinned by T8 (the HTTP transport) and T16 (the policy): this
     // fixture's pooled transport does not go through `with_retry`.
-    assert_eq!(dispatches.count(), 1);
+    assert_eq!(dispatches.calls().len(), 1);
 }
 
 /// T7-meta-b: on the meta Err arm, a rotation becomes a tool result
@@ -122,7 +123,11 @@ async fn mcp_route_401_with_live_grant_says_retry() {
     );
     assert_eq!(result["recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
-    assert_eq!(dispatches.count(), 1, "the call itself is not retried");
+    assert_eq!(
+        dispatches.calls().len(),
+        1,
+        "the call itself is not retried"
+    );
 }
 
 /// T17: a 401 on an elicitation continuation. The first dispatch asks a
@@ -172,7 +177,7 @@ async fn bridged_continuation_401_forces_the_refresh() {
     );
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
     assert_eq!(
-        dispatches.count(),
+        dispatches.calls().len(),
         2,
         "the first call and the one continuation"
     );
@@ -222,5 +227,125 @@ async fn bridged_continuation_401_with_live_grant_says_retry() {
     );
     assert_eq!(result["recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
-    assert_eq!(dispatches.count(), 2);
+    assert_eq!(dispatches.calls().len(), 2);
+}
+
+/// F13 x A11-c: under the default `closed`, a cold slot's first request is the
+/// R2 `tools/list`, sent as the caller. A 401 there forces the one refresh and
+/// comes back as the reconnect refusal, exactly as a dispatched call's does;
+/// no `tools/call` is sent. Mutant M26 (skip the refresh at the fill site)
+/// reddens it: the custody sees no refresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_slot_list_401_forces_the_refresh() {
+    let custody = custody_with_steps(
+        &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
+        ROTATED_TOKEN,
+        &[ProviderStep::InvalidGrant],
+    );
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+    dispatches.script_lists();
+    dispatches.answer_with(&[401]);
+    let error = Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
+        .await
+        .expect_err("a 401 on the cold-slot list must refuse");
+    assert!(
+        marked(&error).is_none(),
+        "not through with_connect_offer: {error}"
+    );
+    assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
+    assert_eq!(
+        dispatches.calls().len(),
+        0,
+        "no tools/call after a refused list"
+    );
+}
+
+/// F13 x A11-c, bridged round: the slot is emptied between the two rounds, so
+/// the continuation's R2 check lists first, and that list gets the 401. The
+/// round forces the one refresh and answers with the reconnect refusal, it
+/// sends no second `tools/call`, and it releases the idempotency key, so the
+/// same key is readmitted rather than served a stored failure. Mutants M31
+/// (drop the bridged park) and M32 (settle the parked key) redden it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
+    let custody = custody_with_steps(
+        &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
+        ROTATED_TOKEN,
+        &[ProviderStep::InvalidGrant],
+    );
+    let installed = custody.installed();
+    let (mut meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+    let keys = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+    meta.enable_idempotency(
+        std::sync::Arc::clone(&keys),
+        std::time::Duration::from_secs(300),
+    );
+    let backend = meta
+        .backends
+        .get("mail")
+        .expect("the fixture registers mail");
+    dispatches.on_next_call(move || backend.empty_tool_catalogues_for_test());
+    dispatches.script_lists();
+    dispatches.script(&[
+        Answer::Result(serde_json::json!({
+            "tools": [{"name": "read", "inputSchema": {"type": "object"}}]
+        })),
+        Answer::Result(serde_json::json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which folder?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-f13"
+        })),
+        Answer::Status(401),
+    ]);
+    let alice = identity("alice");
+    let first = Box::pin(execute_bridged_keyed(
+        &meta,
+        "mail",
+        Some(&alice),
+        Some("k-f13"),
+    ))
+    .await
+    .expect_err("a revoked grant on the continuation's list must refuse");
+    assert_eq!(
+        first.to_rpc_code(),
+        -32603,
+        "the reconnect refusal: {first}"
+    );
+    assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
+    assert_eq!(
+        dispatches.calls().len(),
+        1,
+        "no call after the refused list"
+    );
+    // Released, not settled: the retry below fails at credential minting
+    // before any key lookup, so the cache itself is the witness (M32).
+    assert_eq!(keys.len(), 0, "the refused round settled its key");
+
+    let again = Box::pin(execute_bridged_keyed(
+        &meta,
+        "mail",
+        Some(&alice),
+        Some("k-f13"),
+    ))
+    .await;
+    assert!(
+        !format!("{again:?}").contains("outcome is unknown"),
+        "the key was settled, so the retry was served a stored failure: {again:?}"
+    );
 }

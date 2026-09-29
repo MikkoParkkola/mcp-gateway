@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Regression tests for the tag/manifest publish gate and its channel predicate."""
 
+import collections.abc
 import contextlib
 import fnmatch
 import importlib.util
@@ -15,6 +16,8 @@ import tempfile
 import textwrap
 import unittest
 from unittest import mock
+
+import yaml
 
 spec = importlib.util.spec_from_file_location(
     "check_tag_manifest", pathlib.Path(__file__).with_name("check_tag_manifest.py")
@@ -747,6 +750,56 @@ def gate_steps(workflow, job):
 # reports `days: 14`. upload-artifact clamps `retention-days` to that value.
 HANDOFF_RETENTION_DAYS = 14
 
+# The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
+# (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
+# GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
+# certain conditions).
+COSIGN_FLOOR = (2, 6, 5)
+# One recogniser for an installer step, shared by the checks that must know a
+# step is the installer (push-guard inventory, rehearsal exemption): YAML
+# allows the key and the action reference bare, single- or double-quoted,
+# GitHub matches the owner and repository in any case, and a check that knows
+# fewer forms than the others lets a step escape it. The parser decides which
+# steps are installers; test_the_text_recogniser_finds_every_parsed_installer
+# holds this recogniser to the same steps.
+COSIGN_INSTALLER = re.compile(r"""^\s*(?:-\s+)?(["']?)uses\1:\s*["']?(?i:sigstore/cosign-installer)@""")
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses what Actions may resolve differently.
+
+    PyYAML keeps the last of two equal keys and flattens `<<` merge keys; a
+    floor that read either could pass a pin the runner never applies.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(None, None, "a `<<` merge key", key_node.start_mark)
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, collections.abc.Hashable):
+                raise yaml.constructor.ConstructorError(None, None, "an unhashable key", key_node.start_mark)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def installer_steps(path):
+    """(job, index, step) for every cosign-installer step of a parsed workflow."""
+    # A workflow the parser refuses fails the check that asked (a failure,
+    # not an error): its installers cannot be read, so none can be trusted.
+    try:
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+    except (yaml.YAMLError, UnicodeDecodeError) as error:
+        raise AssertionError(f"{path.name} does not parse as a workflow: {error}") from None
+    jobs_ = doc.get("jobs") if isinstance(doc, dict) else None
+    for job, body in (jobs_ if isinstance(jobs_, dict) else {}).items():
+        for index, step in enumerate((body.get("steps") if isinstance(body, dict) else None) or []):
+            if isinstance(step, dict) and str(step.get("uses", "")).lower().startswith("sigstore/cosign-installer@"):
+                yield job, index, step
+
 
 def artifact_keys(block, keys):
     """The values of `keys` under a step's `with:`, in order.
@@ -779,11 +832,12 @@ class WorkflowWiring(unittest.TestCase):
     catch the rewiring mistakes that are silent at author time and only visible
     once a release has already gone to the wrong channel.
 
-    Textual, deliberately: the gate runs on stdlib alone in three workflows, so
-    a YAML parser is a dependency it does not get to have. The cost is that
-    equivalence is handled case by case — comments stripped, optional quotes,
-    folded conditions, continuations joined, step blocks scoped — rather than
-    decided by a parser. Every case here is pinned by
+    Mostly textual: equivalence is handled case by case — comments stripped,
+    optional quotes, folded conditions, continuations joined, step blocks
+    scoped. The cosign floor is the exception: it reads a strict YAML parse
+    (PyYAML 6.0.2, which every job running this suite installs first),
+    because a text scan kept missing spellings of one installer step, and the
+    text recogniser is held to the parser's steps. Every case here is pinned by
     `test_workflow_wiring_mutations.py`, which is what keeps the list honest:
     a spelling nobody thought of fails loudly instead of passing silently.
     """
@@ -1842,7 +1896,7 @@ class WorkflowWiring(unittest.TestCase):
             re.compile(r"scripts/release/check_tag_manifest\.py"),
             re.compile(r"\$\{VERSION\}"),
             re.compile(r"\bmcp-publisher\b"),
-            re.compile(r"^\s*uses:\s*sigstore/cosign-installer@"),
+            COSIGN_INSTALLER,
             re.compile(r"^\s*uses:\s*anchore/sbom-action/"),
         )
         found = []
@@ -1891,7 +1945,7 @@ class WorkflowWiring(unittest.TestCase):
             # E2: the cosign installer may add the rehearsal, and only that.
             if condition == f"({' && '.join(TAG_CONJUNCTS)}) || ({REHEARSAL_CONDITION})":
                 self.assertTrue(
-                    any(re.match(r"^\s*(?:- )?uses:\s*sigstore/cosign-installer@", l) for l in block)
+                    any(COSIGN_INSTALLER.match(l) for l in block)
                     and not any(re.match(r"^\s*(?:- )?run:", l) for l in block),
                     f"ci.yml: {label} takes the installer's exemption without being it",
                 )
@@ -2175,7 +2229,17 @@ class WorkflowWiring(unittest.TestCase):
         # request does not pay for a second test run.
         body = jobs("ci.yml").get("package-tests")
         self.assertIsNotNone(body, "ci.yml has no package-tests job")
-        self.assertNotRegex(body, r"(?m)^ {4}(if|continue-on-error):", "package-tests must run and block on every ref")
+        self.assertNotRegex(body, r"(?m)^ {4}continue-on-error:", "package-tests must block")
+        # The one condition allowed is the throwaway skip every other ci.yml job
+        # carries: a same-repo `throwaway/` PR is never merged and runs only
+        # `Tests (throwaway)`. Anything else would let some ref merge unbuilt.
+        conditions = re.findall(r"(?m)^ {4}if:\s*(.*)$", body)
+        throwaway_only = (
+            "${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' "
+            "&& github.event.pull_request.head.repo.full_name == github.repository "
+            "&& startsWith(github.head_ref, 'throwaway/')) }}"
+        )
+        self.assertIn(conditions, ([], [throwaway_only]), "package-tests must run on every ref but throwaway PRs")
         built = [c for b in steps("ci.yml", "package-tests") for c in joined(b)]
         self.assertTrue(any(re.search(r"scripts/ci/packaged-tests\.sh\s+build\b", c) for c in built), built)
         self.assertIn("package-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
@@ -2245,6 +2309,63 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_every_installed_cosign_is_past_the_verification_advisory(self):
+        # Every cosign the workflows install signs or verifies the images and
+        # charts users trust, and a verify step on a vulnerable pin can pass
+        # on what it should refuse (see COSIGN_FLOOR). Read from the parsed
+        # workflow, not its text: YAML spells one step many ways (quoting and
+        # escapes in keys and values, flow style, anchors, continuations), and
+        # a text scan misses whichever spelling it was not written for.
+        found = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            for job, index, step in installer_steps(path):
+                where = f"{path.name}: job {job} step {index + 1}"
+                inputs = step.get("with")
+                pin = inputs.get("cosign-release") if isinstance(inputs, dict) else None
+                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", pin) if isinstance(pin, str) else None
+                self.assertIsNotNone(m, f"{where}: cosign-release must be a vX.Y.Z string under with:, got {pin!r}")
+                found.append((where, tuple(int(x) for x in m.groups())))
+        self.assertTrue(found, "no cosign installer found")
+        # The floor is for the v2 line the workflows use. A v3 pin needs its
+        # own floor added here first, or any v3.0.x would compare above it.
+        self.assertEqual({v[0] for _, v in found}, {COSIGN_FLOOR[0]}, "cosign pin outside the v2 line")
+        below = [f"{w}: cosign v{'.'.join(map(str, v))}" for w, v in found if v < COSIGN_FLOOR]
+        self.assertEqual(below, [], f"cosign pins below the patched floor v{'.'.join(map(str, COSIGN_FLOOR))}")
+
+    def test_every_job_running_the_floor_installs_its_parser_first(self):
+        # The floor imports yaml; a job that runs these suites without the
+        # pinned PyYAML fails at import on a runner that lacks it, or parses
+        # with whatever version the image ships.
+        missing = []
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            for job in jobs(path.name):
+                installed = False
+                for block in steps(path.name, job):
+                    text = "\n".join(block)
+                    if "yaml.__version__ != \"6.0.2\"" in text and "pyyaml==6.0.2" in text:
+                        installed = True
+                    elif not installed and any(
+                        suite in text for suite in ("test_check_tag_manifest.py", "test_workflow_wiring_mutations.py", "scripts/release/test_*.py")
+                    ):
+                        missing.append(f"{path.name}: {job}")
+                        break
+        self.assertEqual(missing, [], "a job runs the release suites before installing PyYAML 6.0.2")
+
+    def test_the_text_recogniser_finds_every_parsed_installer(self):
+        # The push-guard inventory and the rehearsal exemption read step text
+        # through COSIGN_INSTALLER. The parser is the authority on which steps
+        # install cosign, so the two must name the same steps (job and
+        # position), not merely the same number of them.
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+            parsed = {(job, index) for job, index, _ in installer_steps(path)}
+            text = {
+                (job, index)
+                for job in {j for j, _ in parsed} | set(jobs(path.name))
+                for index, block in enumerate(steps(path.name, job))
+                if any(COSIGN_INSTALLER.match(line) for line in block)
+            }
+            self.assertEqual(text, parsed, f"{path.name}: the text recogniser and the parser disagree on the installer steps")
 
     def test_the_release_builds_tests_and_publishes_the_event_commit(self):
         # The release commit is GITHUB_SHA, which a re-run keeps, and it is what
@@ -2325,6 +2446,118 @@ class WorkflowWiring(unittest.TestCase):
             self.assertRegex(text, r'python3 "\$suite" \|\| \{ echo "::error::\$suite failed"; fail=1; \}')
             self.assertRegex(text, r'exit "\$fail"', f"{name}: a failed suite must fail the step")
             self.assertNotRegex(throwaway[name], r"(?m)^\s+continue-on-error:", f"{name}: must not swallow failures")
+
+    def test_release_binaries_are_signed_and_verified_before_they_are_public(self):
+        # OWASP ASI04: every release binary ships with an SBOM and a keyless
+        # signature, verified before and after upload, and the release stays a
+        # draft until what it serves has been verified.
+        build = [c for b in steps("release.yml", "build") for c in joined(b)]
+        self.assertTrue(any(re.search(r"\bcargo auditable build\b", c) for c in build), "W1: build without cargo auditable")
+        self.assertFalse(any(re.search(r"\bcargo build\b", c) for c in build), "W1: a plain cargo build ships no crate list")
+
+        blocks = steps("release.yml", "release")
+        names = [b[0].strip() for b in blocks]
+
+        def index(pattern):
+            found = [i for i, b in enumerate(blocks) if any(re.search(pattern, c) for c in joined(b)) or re.search(pattern, b[0])]
+            self.assertTrue(found, f"release job has no step matching {pattern}")
+            return found[0]
+
+        sign = index(r"scripts/release/sign-release-assets\.sh\b")
+        create = index(r"Create Release")
+        check = index(r"scripts/release/verify-release-assets\.sh\s+published\b")
+        publish = index(r"gh release edit .*--draft=false")
+        guard = index(r"Refuse to upload onto a published release")
+        self.assertLess(guard, create, "an upload onto a published release must be refused first")
+        self.assertTrue(
+            any(re.search(r"(^|\s)scripts/release/refuse-published-release\.sh\b", c) for c in joined(blocks[guard])),
+            "the published-release guard must run the fail-closed script",
+        )
+        self.assertRegex(
+            jobs("release.yml")["release"],
+            r"(?m)^    concurrency:\n      group: release-\$\{\{ needs\.verify\.outputs\.tag \}\}\n      cancel-in-progress: false$",
+            "release jobs for one tag must run one at a time and never be cancelled",
+        )
+        self.assertLess(sign, create, "W2: signing must come before the release exists")
+        self.assertLess(create, check, "W3: the draft must be verified after it is created")
+        self.assertLess(check, publish, "W3: publish only after the draft is verified")
+        self.assertIn("draft: true", "\n".join(blocks[create]), "W3: the release must be created as a draft")
+        for i in (sign, check, publish):
+            text = "\n".join(blocks[i])
+            self.assertNotRegex(text, r"continue-on-error|if:\s*always\(\)", f"W3: {names[i]} must not be skipped past")
+        for i in (sign, check):
+            self.assertIn("set -euo pipefail", "\n".join(blocks[i]), f"W2: {names[i]} must stop on the first failure")
+        # W7: nothing after signing rewrites the signed checksum file.
+        for block in blocks[sign + 1 :]:
+            self.assertNotRegex("\n".join(joined(block)), r"SHA256SUMS\.txt\s*$|>\s*SHA256SUMS", "W7: SHA256SUMS.txt rewritten after signing")
+
+        # W4: identity is the OIDC subject GitHub actually issues.
+        release = jobs("release.yml")["release"]
+        self.assertRegex(release, r"IDENTITY: https://github\.com/\$\{\{ github\.workflow_ref \}\}")
+        # W5: OIDC is granted where it is used and nowhere else. The image
+        # and registry jobs held it before release signing; the two new
+        # holders are the release job and its rehearsal.
+        oidc = sorted(
+            f"{wf}:{job}" for wf in ("release.yml", "ci.yml", "docker.yml")
+            for job, body in jobs(wf).items() if re.search(r"(?m)^\s+id-token:\s*write\b", body)
+        )
+        self.assertEqual(
+            oidc,
+            sorted([
+                "release.yml:release", "release.yml:npm-publish",
+                "ci.yml:binary-signing-rehearsal", "ci.yml:docker-manifest", "ci.yml:publish-mcp-registry",
+            ]),
+            "W5: id-token: write outside its allow-list",
+        )
+        # W6: a dispatch runs at the tag it releases; the `resolve` guard,
+        # which every job waits for, refuses any other ref (tested with it).
+        self.assertIn("resolve", jobs("release.yml"), "W6: a branch dispatch would sign as the branch")
+
+        # The rehearsal: dispatch only, draft only, always cleaned up.
+        self.assertEqual(
+            conjuncts(job_if("ci.yml", "binary-signing-rehearsal"))[0],
+            "github.event_name == 'workflow_dispatch'",
+        )
+        rehearsal = jobs("ci.yml")["binary-signing-rehearsal"]
+        self.assertRegex(rehearsal, r"gh release create .*--draft")
+        self.assertRegex(rehearsal, r"DRAFT: rehearsal-binary-signing-\$\{\{ github\.run_id \}\}")
+        self.assertRegex(rehearsal, r"(?s)if: always\(\)\s+env:.*?gh release delete \"\$DRAFT\"")
+        # Every release target is rehearsed with cargo auditable before a tag:
+        # the rehearsal matrix is the release matrix, and each leg checks that
+        # its SBOM lists crates.
+        def matrix(workflow, job):
+            body = jobs(workflow)[job]
+            m = re.search(r"(?ms)^ +include:\n(.*?)(?=^ {4}\S)", body)
+            self.assertIsNotNone(m, f"{workflow} {job} has no matrix include")
+            return [l.strip() for l in m.group(1).splitlines() if l.strip()]
+        self.assertEqual(
+            matrix("ci.yml", "binary-sbom-rehearsal"), matrix("release.yml", "build"),
+            "the SBOM rehearsal must build exactly the release targets",
+        )
+        legs = "\n".join(c for b in steps("ci.yml", "binary-sbom-rehearsal") for c in joined(b))
+        self.assertRegex(legs, r"\bcargo auditable build --release --target\b")
+        self.assertRegex(legs, r"check_release_assets\.py\b.*--sbom-only")
+        self.assertEqual(
+            conjuncts(job_if("ci.yml", "binary-sbom-rehearsal"))[0],
+            "github.event_name == 'workflow_dispatch'",
+        )
+        # The fail-closed tests block on every ref but a throwaway PR, whose
+        # `Tests (throwaway)` job runs these same scripts/release/test_*.py suites.
+        checks = jobs("ci.yml").get("release-signing-checks")
+        self.assertIsNotNone(checks, "ci.yml has no release-signing-checks job")
+        self.assertNotRegex(checks, r"(?m)^ {4}continue-on-error:")
+        throwaway_only = (
+            "${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' "
+            "&& github.event.pull_request.head.repo.full_name == github.repository "
+            "&& startsWith(github.head_ref, 'throwaway/')) }}"
+        )
+        self.assertIn(
+            re.findall(r"(?m)^ {4}if:\s*(.*)$", checks), ([], [throwaway_only]),
+            "release-signing-checks must run on every ref but throwaway PRs",
+        )
+        for script in ("test_check_release_assets.py", "test_sign_release_assets.py", "test_refuse_published_release.py"):
+            self.assertIn(f"scripts/release/{script}", checks)
+        self.assertIn("release-signing-checks", needs_of(jobs("ci.yml")["docker-build"]) or "")
 
     def test_the_release_restores_no_cache(self):
         # A cache restored into a release job is input nobody reviewed at the

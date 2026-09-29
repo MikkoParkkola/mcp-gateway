@@ -26,6 +26,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 
 /// The request a dispatched failure answers.
+#[derive(Clone)]
 pub(super) struct DirectFailure<'a> {
     pub(super) state: &'a AppState,
     pub(super) name: &'a str,

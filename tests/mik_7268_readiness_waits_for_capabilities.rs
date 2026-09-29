@@ -35,6 +35,8 @@ fn spawn(directory: &Path, port: u16) -> Child {
     let config = json!({
         "server": {"host": "127.0.0.1", "port": port},
         "auth": {"enabled": true, "bearer_token": TOKEN, "public_paths": ["/health"]},
+        // Relative to the child's cwd: HOME cannot isolate the store on Windows.
+        "tasks": {"store_dir": "tasks"},
         // Auth on requires an audit log (UPGRADING-4.0 item 43).
         "security": {"transparency_log": {
             "enabled": true, "path": directory.join("audit").join("log.jsonl")
@@ -53,6 +55,8 @@ fn spawn(directory: &Path, port: u16) -> Child {
         .env("HOME", directory)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
+        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
         .current_dir(directory)
         .arg("--config")
         .arg(&config_path)

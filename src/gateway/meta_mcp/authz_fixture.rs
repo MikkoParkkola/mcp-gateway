@@ -58,7 +58,7 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         name,
-        BackendConfig::default(),
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

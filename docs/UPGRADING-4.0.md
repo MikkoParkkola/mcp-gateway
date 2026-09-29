@@ -1,12 +1,43 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 or 54 refuses it
-(listed in bold below).
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of the
+items listed under the bold heading below refuses it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43, 45, 47, 48, 49, 55 and 58 below, then stamps the new version. The notice is printed rather than logged, so
+the items below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
+
+- Item 1
+- Item 2
+- Item 3
+- Item 4
+- Item 6
+- Item 11
+- Item 23
+- Item 24
+- Item 25
+- Item 26
+- Item 27
+- Item 30
+- Item 31
+- Item 32
+- Item 33
+- Item 34
+- Item 37
+- Item 39
+- Item 43
+- Item 45
+- Item 47
+- Item 48
+- Item 49
+- Item 55
+- Item 58
+- Item 59
+- Item 90
+- Item 91
+- Item 92
+- Item 93
 
 The rest of the list has no startup notice. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
@@ -14,15 +45,77 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected; item 8 refuses the start with an
 error that names the backend. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51 and 54 refuse the start with their own error, which names
+Items 12, 13, 16, 17, 29, 35, 38, 40, 41, 44, 46, 51, 54, 76, 79 and 96 refuse the start with their own error, which names
 the setting or file, so a notice would only repeat it; item 51 also warns once per process for each distinct
 `role: admin` rule. Items 60 and 64 are decided per capability file, and a file they affect is refused at load with an error
-that names it. Items 14, 15, 22, 28, 36, 42, 50, 52, 53, 61, 63, 65, 66, 67, 68, 70, 72, 73, 74, 77, 78, 80, 83, 84 and 85 print no notice: read them here
-before upgrading.
+that names it. The items below print no notice: read them here before upgrading.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46, 51 and 54 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 54 only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set or `server.max_body_size` is `0`; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead). Item 7 permanently fails the backend it names,
-with one warning, and the gateway starts without it.** Read those first if you are
-upgrading a running deployment.
+- Item 14
+- Item 15
+- Item 22
+- Item 28
+- Item 36
+- Item 42
+- Item 50
+- Item 52
+- Item 53
+- Item 61
+- Item 63
+- Item 65
+- Item 66
+- Item 67
+- Item 68
+- Item 69
+- Item 70
+- Item 71
+- Item 72
+- Item 73
+- Item 74
+- Item 75
+- Item 77
+- Item 78
+- Item 80
+- Item 83
+- Item 84
+- Item 85
+- Item 86
+- Item 87
+- Item 88
+- Item 94
+- Item 95
+- Item 97
+- Item 100
+
+**These items refuse the gateway's start. Read them first if you are upgrading a running
+deployment.**
+
+- Item 2
+- Item 8
+- Item 12
+- Item 13
+- Item 16, only while `trust_caller_identity_headers` is still set
+- Item 17, only for a `key_server` rule without a configured issuer or with a blank matcher
+- Item 27, for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on
+- Item 29
+- Item 30, only for a bad `GATEWAY_ATTESTATION_MODE`
+- Item 34
+- Item 35
+- Item 37, only above one declared replica
+- Item 38, only for a credential over plain HTTP on a network bind without mTLS
+- Item 39, only while `server.request_timeout` is set or `server.max_body_size` is `0`
+- Item 40, only for a secret reference that resolves to nothing or to an empty value, other than `server.metrics_token`, which warns instead
+- Item 41, only for an API key configured as plaintext `key`
+- Item 43, only with auth on and no working audit log
+- Item 44, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
+- Item 46, only for `enforce` without a signing key
+- Item 51, only for a `role: admin` rule whose only condition is `domain`
+- Item 54, only with mTLS on and a key other users can read or a cert, CA or CRL they can change, or with `fail_on_error` and an identity-grants file they can change
+- Item 76, only with `anomaly_detection` on and an out-of-range anomaly threshold
+- Item 79, only with auth on, identity grants on and a governance store that cannot open
+- Item 96, only for a config, env, key or trust file that a third account owns
+
+**Item 7 permanently fails the backend it names, with one warning, and the gateway starts
+without it.**
 
 ## What changed
 
@@ -86,7 +179,7 @@ upgrading a running deployment.
 | 56 | Reserved: lands with a pending change | None yet |
 | 57 | Never assigned | None |
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
-| 59 | Reserved: lands with #1364 | None yet |
+| 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 | 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
 | 62 | Reserved: lands with #569 if it merges before 4.0.0 | None yet |
@@ -96,23 +189,38 @@ upgrading a running deployment.
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 | 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
-| 69 | Reserved: lands with a pending change | None yet |
+| 69 | `POST /mcp/{name}` `tools/call` runs the dispatch controls `gateway_invoke` runs (kill switch, capability auto-disable, session profile, cost and error budgets, response gates, response-firewall Block); with message signing on it is refused with -32001 | Move direct callers under message signing to `gateway_invoke`; expect direct calls refused, accounted and gated as `gateway_invoke` calls are |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
-| 71 | Reserved: lands with a pending change | None yet |
+| 71 | Dashboard sessions end after 30 minutes idle or 8 hours total; the dashboard's own refresh is not activity; an ended session gets a 401 that clears the cookie | Log in again with `mcp-gateway dashboard-link`; set `auth.dashboard_session` to change the limits |
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
-| 75 | Reserved: lands with a pending change | None yet |
-| 76 | Reserved: lands with a pending change | None yet |
+| 75 | A backend tool whose description fails the tool-poisoning check is withheld from every tool list and refused by name; `allow_flagged_tools` serves one explicitly; `BackendConfig` gains a field; `security::scope_collision::detect_collisions` is removed | Read the `Tool withheld` warnings; pin a tool you trust; add `allow_flagged_tools` to any `BackendConfig` struct literal; drop calls to `detect_collisions` |
+| 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
-| 79 | Reserved: lands with a pending change | None yet |
+| 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
 | 82 | Reserved: lands with a pending change | None yet |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
+| 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
+| 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
+| 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
+| 89 | Reserved: lands with #2195 | None yet |
+| 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
+| 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
+| 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
+| 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
+| 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
+| 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
+| 96 | A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by a user other than the gateway's or root is refused (Unix) | `chown` the file to the gateway's uid (`chown 1001` in the container) and `chmod 600` a secret; root-owned Kubernetes projections still load |
+| 97 | A bearer token plus an API key count as two users even with `auth.single_user`: no sole-operator account, isolation guard on | Keep one of the two credentials on a personal gateway |
+| 98 | Reserved: lands with #2293 | None yet |
+| 99 | Reserved: lands with #2295 | None yet |
+| 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -149,9 +257,10 @@ the supported set as the gateway's own statement of what it speaks, so an invent
 that list was a false claim. Negotiation itself was never affected: `negotiate_version` matches
 exactly, and no conforming client can request a revision that does not exist.
 
-Nothing is rejected. A client naming `2024-10-07` in `initialize` gets `2025-11-25` back —
+Nothing is rejected at `initialize`. A client naming `2024-10-07` there gets `2025-11-25` back —
 the same fallback any unrecognized version string gets, before and after this release
-(`tests/integration.rs:37`). There is no error and no refused session.
+(`tests/integration.rs:37`). There is no error and no refused session. A request that names
+`2024-10-07` in its `MCP-Protocol-Version` header is refused; see item 90.
 
 `2024-11-05` and every later revision negotiate exactly as before. The startup notice advises
 upgrading a client that speaks only `2024-10-07`; in practice such a client would have been
@@ -741,8 +850,9 @@ backend. Before 4.0 such keys were forwarded to MCP backends unchecked.
 
 - **MCP backends**, on `/mcp` (including `gateway_invoke`, stdio and code mode) and on the direct
   `/mcp/{name}` route, passthrough backends included. The schema is the one the caller's own
-  `tools/list` returned; a tool the gateway has not yet listed for that caller is forwarded
-  unchecked and counted as `input_schema_unknown`.
+  `tools/list` returned. The first time a caller uses a tool the gateway has not yet listed for
+  it, the gateway lists that backend's tools once, as that caller, before judging the call; §59
+  describes what happens when that list cannot be read.
 - **Capabilities** refuse nested undeclared keys too. A top-level `additionalProperties: true` is
   now honoured, which relaxes 3.x behaviour.
 - An object schema that lists `properties` (at least one) or `patternProperties` without stating
@@ -819,19 +929,21 @@ authentication, so no client could reach a tool through it.
 
 ## 35. A config or env file other users can read fails the load
 
+> Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
+
 In 3.x a config file readable by other local accounts drew one WARN in the HTTP startup banner,
 stdio never checked it, and env files were never checked at all. Both can hold credentials.
 On Unix the gateway now checks the config file, and every `env_files` entry, before reading it.
 The check follows symlinks, so a Kubernetes `..data` link is judged by the file it points to.
 
-| Mode bits | File owned by the gateway's user | File owned by another user |
-|---|---|---|
-| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused |
-| group write | refused | refused |
-| group read | refused | allowed |
-| owner only (`0600`, `0400`) | allowed | allowed |
+| Mode bits | File owned by the gateway's user | File owned by root | File owned by any other user |
+|---|---|---|---|
+| any world bit (`o+r`, `o+w`, `o+x`) | refused | refused | refused |
+| group write | refused | refused | refused |
+| group read | refused | allowed | refused (item 96) |
+| owner only (`0600`, `0400`) | allowed | allowed | refused (item 96) |
 
-Group read is allowed only on a file the gateway does not own, because there the group is how it
+Group read is allowed only on a file the gateway does not own, and item 96 narrows that to root, because there the group is how it
 reads the file. That is the case for a root-owned Kubernetes projection with `fsGroup`.
 
 - **A refused config file fails every command that loads it**, `doctor` and `config export`
@@ -847,11 +959,12 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
 - **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
   container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
-  user is. `chmod 640` with group 1001 passes only while the file's owner is not UID 1001, because
-  group read on a file the gateway owns is refused.
+  user is. Keeping host ownership with `chmod 640` and group 1001 no longer works: item 96 refuses
+  a file a host user owns.
 - **The fix the error names depends on ownership.** On a file the gateway owns it is
-  `chmod 600`. On a file another user owns, `chmod 600` would lock the gateway out, so it names
-  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`.
+  `chmod 600`. On a root-owned file, `chmod 600` would lock the gateway out, so it names
+  the group route instead: Helm `podSecurityContext.fsGroup` and `configVolume.defaultMode`. A file
+  any other user owns is refused first, with the `chown` fix of item 96.
 - **The check and the read use one handle.** The mode is taken with `fstat` on the open file the
   gateway then reads, so a file swapped or loosened in between is not loaded.
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
@@ -1519,6 +1632,8 @@ caller.
 
 ## 54. Keys, tokens and credential files others can read, and trust files they can change, are refused
 
+> Superseded in part by item 96: the file's owner must be the gateway's user or root, whatever the mode.
+
 Item 35's rule, unchanged, now covers four more files that hold secrets. A refusal names the file,
 its mode and the fix, and points at item 35.
 
@@ -1552,7 +1667,7 @@ held to item 35.
   (octal `0440`) on the Secret volume, and `podSecurityContext.fsGroup` set to a group the gateway's
   UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
   `root:root 0644` and is refused.
-- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
+- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it (item 96 refuses any other owner).
 - `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
 
@@ -1610,6 +1725,68 @@ the caller has no credential, so the gateway now treats it as a secret.
   `ProxyManager::first_session_id` are removed, `get_or_create_session_for` is
   no longer public, and `get_or_create_session(Some(id))` returns `id` only when
   that session is already live.
+
+## 59. A tool call on a cold catalogue lists the backend first
+
+The first time a caller uses a tool the gateway has not yet listed for it, the gateway lists that
+backend's tools once, as that caller, before judging the call (§31). Before this release such a
+call was forwarded unchecked. A call on a catalogue older than the backend's `cache_ttl` refreshes it the
+same way; if that refresh fails, the call is judged against the last list.
+
+- **If the backend cannot be reached** (connection refused, no answer within its `timeout`, or
+  a transport error), the call gets the same error a failed tool call to that backend gets, and
+  under `closed` it counts toward the error budget as a failed call does. Nothing changes for a
+  dead backend except that the first call now fails at the list rather than at the call.
+- **If the backend answers but its tool list cannot be read** (it returns an error or a list the
+  gateway cannot parse), `closed` refuses the call with "the gateway could not read this tool's
+  input schema for you; list the backend's tools and retry". Such a refusal is not counted as a
+  backend failure. `standard` forwards the call in both cases and counts `input_schema_unknown`,
+  so the call itself then succeeds or fails. `off` never lists.
+- **A tool name the backend's fresh, complete list does not contain is now refused under
+  `closed`**, where it used to be forwarded. A backend that serves tools it does not list can no
+  longer have those tools called under `closed`; set that backend's `input_schema_enforcement:
+  standard` to keep serving them (counted as `input_schema_absent_forward`).
+- **When the gateway cannot read a backend's whole tool list** (the list is longer than the
+  32-page cap, repeats a page cursor, or takes longer than the list time budget), a tool outside
+  the part read cannot be checked: `closed` refuses it; set that backend's
+  `input_schema_enforcement: standard` to forward such calls (counted as
+  `input_schema_truncated_forward`). `mcp_backend_list_truncated_total`'s `reason` label says
+  which stop fired.
+- **Shared catalogues.** On a backend whose catalogue is shared (no per-user propagation), a call
+  that carries the caller's own credential never triggers this list, because the shared list runs
+  under the gateway's login and would judge the caller against a catalogue it was never shown.
+  Such a call stays on the "could not read" refusal under `closed` until discovery,
+  `gateway_search` or a credential-free list warms the catalogue.
+- **Latency.** The list is bounded by the backend's `timeout` and the call itself by another, so
+  the first cold call to a slow backend can take up to about twice `timeout` under `standard`,
+  once per backend slot per cooldown window.
+- **Cooldown.** After a failed or timed-out tool list, or one whose result could not be kept
+  because the cache was invalidated meanwhile, the gateway does not ask that backend again for
+  10 s. Inside that window cold tool calls, discovery and `gateway_search` on that backend fail
+  fast instead of each waiting out a fresh list, and each gets the error the failed list got. A
+  list that failed with an HTTP error status or an I/O or TLS error starts no window, so the next
+  call lists again and gets the backend's own error; the circuit breaker bounds those retries. A
+  caller that disconnects mid-list does not start this window.
+- **Circuit breaker and rate limit.** The list obeys the caller's slot failsafe. An open breaker
+  refuses the call with the same circuit-open error a dispatch gets, and a failed or successful
+  list counts toward the breaker as a dispatch does. A cold call spends a token for its metadata
+  fetch, at most once per slot per `cache_ttl` (and at most once per cooldown window after a
+  failed fetch), so a limit of 1 can refuse a cold call as rate-limited. A refusal from the
+  breaker or the limiter is counted as `input_schema_fill_refused` with `reason="circuit"` or
+  `reason="rate"`.
+- **`Mcp-Param-*` headers.** The first call may now carry them, which earlier 4.0 builds sent only
+  after a list.
+- **New `mcp_input_schema_events_total` kinds.** `input_schema_fetched`,
+  `input_schema_fetch_failed`, `input_schema_fill_cancelled`, `input_schema_fill_cooldown`,
+  `input_schema_fill_refused` (with `reason`), `input_schema_refused_unavailable`,
+  `input_schema_refused_truncated`, `input_schema_refused_absent`,
+  `input_schema_truncated_forward`, `input_schema_absent_forward` and
+  `input_schema_fetch_skipped_a3`, beside the existing `input_schema_unknown`. See
+  [DEPLOYMENT.md](DEPLOYMENT.md#prometheus-metrics).
+- No new config key.
+
+The 32 pages and the 10 s above are the values of `LIST_MAX_PAGES` and `LIST_FILL_COOLDOWN` at
+release; a test fails the build if either constant changes without this text.
 
 ## 60. Capability pins read CRLF line endings as LF
 
@@ -1793,6 +1970,32 @@ Unix behaviour is unchanged.
 mapped drive or a junction. If a 3.x token migration is refused, run the printed `icacls` lines
 in PowerShell (as an administrator when it says the file has another owner) and retry.
 
+## 69. Per-backend routes run the same dispatch controls as `gateway_invoke`
+
+`POST /mcp/{name}` `tools/call` skipped controls that `gateway_invoke` enforces: the kill
+switch, capability auto-disable, the session's routing profile, cost budgets, the error budget,
+response gates, and a response-firewall Block. A caller could reach a killed backend, spend past
+its budget, or receive a result `gateway_invoke` would have refused.
+
+In 4.0, both routes run one implementation of each control:
+
+- A killed backend, a disabled capability, a tool outside the session's profile, or a key over
+  its cost budget is refused on `POST /mcp/{name}` with the JSON-RPC error `gateway_invoke`
+  returns (HTTP 200). Nothing reaches the backend.
+- Direct calls record spend and count toward the error budget, so they can auto-kill a backend.
+- Response contract, inspection and context-integrity settings apply to direct results.
+- A result the response firewall blocks is refused with -32600 "Response blocked by security
+  firewall", as on `gateway_invoke`; a retry with the same idempotency key replays that refusal.
+- With message signing on, `tools/call` on `POST /mcp/{name}` is refused with -32001
+  "message signing is enabled; use gateway_invoke".
+- The kill switch and capability auto-disable are now checked at admission: task creation,
+  admission plans and signing preparation refuse a killed backend or disabled capability up
+  front (-32000) instead of at dispatch.
+
+**Action:** a client that called backends directly under message signing must move to
+`gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
+`gateway_invoke` calls are.
+
 ## 70. Secrets stay out of the request URI and its trace
 
 The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
@@ -1814,6 +2017,55 @@ reached the log.
 **Action:** scripts that call `/api/costs?session=<id>` send `X-Cost-Session-Id: <id>` instead.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
+With an HTTPS `server.public_url` on a plain-HTTP listener (the `tls_terminated_upstream` shape),
+the link is refused with 409 whichever way it is opened, until #2130 lands: enable `mtls` so the
+listener serves HTTPS, or remove `public_url`, to sign in by link.
+
+## 71. Dashboard sessions expire, and logout ends them
+
+A dashboard session opened from the startup link used to last as long as the gateway
+process. Its cookie said `Max-Age=86400`, but the server never enforced that, so a copied
+cookie kept working. There was no logout.
+
+In 4.0:
+
+- A session ends after 30 minutes without activity, or 8 hours after sign-in, whichever
+  comes first. The cookie's `Max-Age` matches the 8-hour limit.
+- The dashboard's own 5-second refresh does not count as activity, so an unattended tab
+  signs out at the idle limit. Clicks and page changes in `/ui` do count.
+- Both limits are measured on the monotonic and the wall clock, so a machine that sleeps
+  overnight wakes to an ended session.
+- The dashboard has a **Log out** button. `POST /dashboard/logout` ends the session on the
+  server, not only in the browser, redirects to `/ui`, and works while the audit log is
+  unavailable.
+- A request with an ended session cookie gets a 401 that says the session ended and clears
+  the cookie, instead of "Missing Authorization header". A bearer token sent with it is
+  still honoured, and on a public path the request proceeds as unauthenticated.
+- `mcp-gateway dashboard-link` asks the running gateway for a fresh single-use link, so
+  signing in again needs no restart. It reads the static bearer token or an admin API key
+  from `MCP_GATEWAY_TOKEN`, never from an argument. The link still opens only from the
+  machine running the gateway, so a gateway bound to a network address answers 409.
+  The endpoint behind it, `POST /ui/api/dashboard-link`, refuses a dashboard session and an
+  SSO login with 403.
+
+Sessions are held in memory by each replica. Run the dashboard against one replica, or use
+sticky sessions.
+
+**Action:** none for most installs. To change the limits:
+
+```yaml
+auth:
+  dashboard_session:
+    idle_timeout_secs: 1800      # 30 minutes
+    absolute_timeout_secs: 28800 # 8 hours
+```
+
+Both must be above zero, and the idle limit may not exceed the absolute one; the gateway
+refuses to start or reload otherwise. A reload applies shorter limits to sessions already
+open; a longer absolute limit reaches sessions opened after it, because a browser keeps the
+cookie lifetime it was given.
+
+Library users: `DashboardBootstrap::issue_session` and `session_is_valid` are removed.
 
 ## 72. Env files are polled, and a failed reload is retried
 
@@ -1892,6 +2144,89 @@ holds whichever saved last.
 **Action:** none for most setups. If several stdio gateways share a data directory and you need
 each to keep its own budget across restarts, give each its own `MCP_GATEWAY_CONFIG_DIR`.
 
+## 75. Tools with a poisoned description are withheld
+
+A backend tool's description goes to the model as instructions. 4.0 checks every tool a backend
+lists against the tool-poisoning rule (AX-010: hidden instructions, secret-file paths,
+exfiltration patterns). A tool that fails it at blocking severity:
+
+- is left out of every tool list the gateway serves: `tools/list` on `/mcp` and `/mcp/{name}`,
+  `gateway_list_tools`, `gateway_search_tools` and surfaced tools;
+- is refused by name, for every caller of that backend, on both routes, once any listing has
+  shown it. The refusal names the tool and the rule, and the backend never receives the call;
+- is logged once per distinct description, as a `Tool withheld` warning naming the backend, the
+  tool, the rule, the findings and a digest of the description.
+
+A warn-level finding (long whitespace runs, control characters, an oversized description) is
+served as before.
+
+A tool name that no listing has ever returned is still forwarded when called by name, because the
+gateway has shown its description to no one. This narrows the original goal ("cannot be invoked by
+name") to "cannot be invoked by name once the gateway has observed its descriptor", by maintainer
+decision. The alternative, refusing every name the caller has not listed first, was rejected
+because it breaks every client that calls a remembered tool name without listing.
+
+The gateway remembers at most 4,096 withheld tool names per backend. A backend that withholds more
+is marked saturated, with one warning naming the cap: from then on every tool of that backend is
+withheld from every list and refused by name, since a name past the cap could not be recorded. The
+mark clears only on restart. A tool entry that cannot be parsed is withheld too, and one such entry
+no longer fails the rest of the list. A backend that lists the same name twice, one copy
+unparseable, has that name withheld in every copy. A name withheld by more than 64 callers stays blocked
+until restart.
+
+To serve a withheld tool you trust, pin its current description:
+
+```yaml
+backends:
+  my-backend:
+    allow_flagged_tools:
+      tool_name: "<64-hex digest from the warning>"
+```
+
+A changed description has a new digest and is withheld again. A pin that is not 64 lower-case hex
+characters is refused at load.
+
+For code that embeds the crate: `BackendConfig` has a new public field, `allow_flagged_tools`, so a
+struct literal that lists every field needs it (`Default::default()` works).
+`security::scope_collision::detect_collisions` and `ScopeCollision` are removed. Nothing in the
+gateway called them, and a tool is always addressed as backend plus name, so two backends sharing a
+name do not collide.
+
+**Action:** after upgrading, look for `Tool withheld` warnings. Pin any tool you have reviewed and
+trust. If you build `BackendConfig` with a full struct literal, add `allow_flagged_tools`.
+
+## 76. Anomaly detection now learns, and its blocks stand
+
+`security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
+against a transition record that nothing wrote to, so every call scored a neutral 0.5 and no
+threshold above 0.5 ever flagged or blocked anything. The detector now learns from the calls the
+firewall admits, on both the meta route and the per-backend `/mcp/{name}` route. Each call is
+scored against its caller's own previous call; what counts as usual is learned from all admitted
+calls together.
+
+- A caller's first call, or a call after a tool with fewer than
+  `security.firewall.anomaly_min_observations` recorded transitions (new, default 20), is
+  *warming up*. It is not scored, never flagged and never blocked.
+- A transition never seen after a warmed-up tool scores 1.0, and a seen one scores
+  `1 - confidence`. The old never-seen score was 0.95, below a rarely seen one.
+- A call refused by the firewall is not learned, so retrying a blocked call cannot teach the
+  detector to accept it.
+- A score at or above `anomaly_block_threshold` is refused, and a firewall rule can no longer
+  downgrade that refusal to allow or warn. The refusal carries JSON-RPC error `-32002` on every
+  route; the per-backend `/mcp/{name}` route used to answer `-32600`.
+- With `anomaly_detection: true`, the gateway refuses to start when `anomaly_threshold` is not
+  above 0.5 and at most 1.0, when `anomaly_block_threshold` is not above `anomaly_threshold` and
+  at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
+- The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
+  are off by default.
+- Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
+  transitions, plus any calls already in flight when it reaches 20) any admitted caller's calls
+  shape what counts as usual after it.
+
+**Action:** if you set `anomaly_detection: true`, expect real scores and, with a block threshold,
+real refusals once each tool has 20 recorded transitions. Check that `anomaly_threshold` is above
+0.5, and drop any firewall rule you relied on to soften anomaly blocks.
+
 ## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
 
 Capability calls, OpenAPI import by URL (`mcp-gateway cap import`), capability discovery
@@ -1935,14 +2270,37 @@ carries no verified end-user identity".
 In 4.0 a stdio gateway serves its managed accounts to its one caller, the local process that
 started it, whatever the `auth` block says. `auth` configures the HTTP listener only. An HTTP
 gateway is unchanged: it serves the sole-operator account only under the single-user settings
-above. This covers a REST capability bound with `auth.account`; an account bound to an MCP
-backend still needs a verified end-user identity on either transport (#1961).
+above. This covers a REST capability bound with `auth.account` and an MCP backend bound to
+the account when it is called through `gateway_invoke`; the direct `/mcp/{name}` route still
+needs a verified end-user identity.
 
 Anyone who can start the gateway as the same OS user already holds its data directory, where the
 account store lives, so this grants no one new access. Several stdio gateways sharing one data
 directory share its accounts.
 
 **Action:** none. To keep an account off a stdio gateway, leave it out of that gateway's config.
+
+## 79. Identity grant changes are recorded in the governance log, and need it
+
+`identity grants` CLI changes, edits made directly to the grant file, and the grants each
+start serves are now governance audit records (actor `unknown`, action `mutate_grant`).
+
+- With auth on and identity grants on, the gateway refuses to start (HTTP and `serve --stdio`)
+  when the governance store cannot open, instead of starting without it: "identity grants need
+  the governance audit log when auth is on". Set `control_plane.store_dir` to a writable
+  directory. With auth off nothing changes.
+- The CLI writes a journal beside the grant file (`<grant file>.journal.jsonl`, mode 0600). Keep
+  it with the grant file; deleting it makes the next start record the history as indeterminate.
+- A grant change that is applied but cannot be recorded stays applied, and the reload outcome
+  says `UNRECORDED`. If the audit plan cannot be written first, the reload is refused and a start
+  serves no grants until it can.
+- The gateway reads the grant file under a lock file beside it. On a read-only filesystem (for
+  example a Kubernetes Secret or ConfigMap mount) it reads without the lock. When it cannot
+  create the lock because the directory is missing or it may not write there, the grant file
+  counts as unreadable: with `fail_on_error` the start is refused, otherwise no grants are
+  served until a reload can read them.
+- `ControlPlaneAuditEvent` gains a `grant_change` field, so a struct literal of it in code that
+  builds against this crate needs `grant_change: None`. Serialised events without it are unchanged.
 
 ## 80. Discovery keeps env, headers and argument boundaries
 
@@ -1982,8 +2340,9 @@ credentials the client config held. Library users replace struct literals with
 ## 83. `MigratedCredential` has a public `reachability` field
 
 `accounts migrate` now says where a migrated grant can be used: over stdio, and over HTTP only
-when the configuration asserts a single user, in each case through a REST capability bound to
-the account; an MCP backend bound to it still needs a verified end-user identity (#1961). For
+when the configuration asserts a single user, in each case through a REST capability or an MCP
+backend bound to the account; over HTTP the direct `/mcp/{name}` route still needs a verified
+end-user identity. For
 library users, the report type
 `MigratedCredential` gains a public `reachability: String` field and is marked
 `#[non_exhaustive]`.
@@ -2036,6 +2395,234 @@ credential or prompt injection placed in an object key reached the client unchan
 
 **Action:** none for most deployments. If a backend uses credential-shaped strings as
 object keys, expect those keys to be renamed; use other key names.
+
+## 86. `kubernetes controller --watch --format json` prints JSON Lines
+
+A watch runs until it is stopped, so its JSON output is a stream. Each reconcile cycle now
+prints its report as one compact JSON document on its own line (JSON Lines, also called NDJSON).
+Earlier releases printed each report as indented JSON over many lines, so no line parsed on its
+own. Without `--watch`, `--format json` still prints one indented document (#1909).
+
+**Action:** a script reading `--watch --format json` parses each line on its own, for example
+with `jq -c .` or a line-by-line JSON reader.
+
+## 87. `cap import-url` refuses names that resolve to internal addresses
+
+`mcp-gateway cap import-url` refused a private or loopback IP address written in the URL,
+but a host name was resolved when the request was sent and never checked. A name that
+resolved to a loopback, private, link-local or cloud metadata address, in the base URL or
+in a redirect, was fetched.
+
+In 4.0 `cap import-url` checks every address a name resolves to on each connection and
+connects only to those checked addresses, as capability calls and `cap import` of a spec
+by URL already do:
+
+- A base URL whose host resolves to a blocked address fails with
+  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to private/reserved address <ip>`.
+- A redirect to such a name is not followed.
+- Public names are unaffected. Environment proxies stay ignored (item 77).
+
+**Action:** to build capabilities from an internal API, download its spec and run
+`mcp-gateway cap import <file>`.
+
+## 88. The HTTP listener gives open requests `server.shutdown_timeout`, then stops
+
+After SIGTERM or Ctrl+C, a plain-HTTP gateway waited for every open request to finish,
+with no limit. One request that never finished, such as a hung upstream call or a long
+stream, kept the process running until the orchestrator killed it. The mTLS listener waited
+a fixed 30 seconds whatever the config said.
+
+In 4.0 both listeners stop the same way (#2147):
+
+- New connections are refused as soon as the signal arrives.
+- Open requests get `server.shutdown_timeout` (default 30 s) to finish. Requests still
+  running at the deadline, including open event streams, are cut.
+- The gateway then saves its state and waits, within the same bound, for any in-flight
+  work the cut released, before it stops its backends.
+
+**Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
+orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) above
+twice `server.shutdown_timeout`, so the gateway can finish its own shutdown.
+
+## 90. A request header naming an unserved protocol version is refused
+
+3.x ignored the `MCP-Protocol-Version` header on `POST /mcp` and answered the request anyway.
+4.0.0 reads it. A header that names a revision the gateway does not serve gets HTTP 400 with
+JSON-RPC error `-32022` ("unsupported protocol version"), and `data.supportedVersions` lists the
+stateless revisions it does serve; the list is empty when `server.modern_protocol` is off.
+`2024-10-07` counts as unserved. A request without the header, or with a served revision, is
+answered as before.
+
+**Action:** a client that sends this header must send a revision the gateway serves, or omit it.
+
+## 91. Agent identity rests on proof, not on a label the caller sends
+
+In 3.x, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id`
+query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so
+any client could name itself onto the allowlist. Only a proven principal satisfies them now: the
+mTLS client-certificate subject (first non-empty SAN URI, else CN) or the `sub` of an agent token the
+gateway validated. The unsigned JWT claim is no longer read; the header and query label are kept
+for telemetry and cost attribution.
+
+A label that differs from the proven principal is refused unless
+`security.agent_identity.principal_labels` lists it for that principal. With mTLS, where subjects
+cannot be compared with short labels, `security.agent_identity.incomparable_proof_sources`
+(for example `[mtls]`) accepts and audits the mismatch for that source only.
+
+**Action:** move callers that relied on a label to mTLS or validated agent tokens. To let a label
+satisfy `require_id` and `known_agents` again, set
+`security.agent_identity.allow_unverified_agent_identity: true`. `known_agents` entries now name
+their source (item 27). Nothing changes with agent identity disabled.
+
+`require_id` with no proof source (no `agent_auth`, no `mtls`, hatch off) used to load and then
+refuse every call; the gateway now refuses to start, naming the fix. Duplicate `principal_labels`
+entries for one principal also fail at load, and the hatch logs a warning on every load.
+
+## 92. Six meta-tools leave the default tool list
+
+`gateway_get_stats`, `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
+`gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list` unconditionally.
+Each is now listed only when it can answer: a cost registry, a non-empty playbook engine, a
+configured routing profile, and for statistics `meta_mcp.expose_stats_tool: true`. The default
+HTTP list drops from 17 tools to 11, stdio from 16 to 10.
+
+Every meta-tool name still dispatches by name, over HTTP and stdio alike. A caller that invokes one
+it was not shown gets the tool's own answer: some succeed, others return that tool's own error, and
+none answers "no such tool".
+
+**Action:** a client that calls only what `tools/list` shows reaches these six once the feature
+behind each is configured; set `meta_mcp.expose_stats_tool: true` to list `gateway_get_stats`.
+
+## 93. The key server refuses a token request that misses the policy
+
+In 3.x, a token request to the key server whose requested backends or tools did not overlap the
+matching policy rule got an empty scope list, and an empty list means "all": the token reached
+every backend and tool. The exchange now answers 403 and issues no token. A request that leaves
+`backends` or `tools` empty is still granted the rule's full scope, as before.
+
+A rule whose own `backends` list is empty is a different case, covered in item 32.
+
+**Action:** a client that requests scopes must request only ones its matching rule allows. A
+requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
+gets 403 `access_denied`, whose message reads as though no policy matched.
+
+## 94. Per-caller firewall limits key on the caller, on every route
+
+The firewall's per-caller controls (the call budget, the tenant guard and anomaly detection) now
+key on who the caller is, on the meta route and the per-backend `/mcp/{name}` route alike:
+
+- A caller with a resolved identity (an OIDC or key-server login, a trusted-proxy or Access
+  identity, an mTLS certificate, or an OAuth agent) is keyed on that identity. Otherwise an
+  authenticated API key is keyed on the key. The identity wins over the key, so one person keeps
+  one budget across keys and token exchanges.
+- An OAuth-agent or mTLS caller on a modern (2026-07-28) `POST /mcp` was refused by these
+  controls as having no identity. It is now counted and scored.
+- On the per-backend `/mcp/{name}` route every caller of one backend shared one budget, one tenant
+  count and one anomaly history. Each caller now has its own, and it is the same one the caller
+  has on `/mcp`.
+- A legacy session no longer gets a fresh budget or tenant count: an authenticated caller is
+  keyed on its identity, not its session. A caller with no identity at all (authentication off)
+  is keyed on its session, or on the backend on `/mcp/{name}`, as before.
+- The three controls share that one key, so anomaly detection also follows the caller rather than
+  the session: a caller with two sessions open at once feeds one sequence history, and each call is
+  scored against the caller's previous call on either session.
+- The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
+  one session at a time, so that is that session's budget and tenant count.
+- An mTLS caller is identified by its certificate's first non-empty SAN URI, else its CN; a renewed
+  certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
+  CA issuing unique CNs. A certificate with neither is not an identity.
+- The default config has no behaviour change: the budget, the tenant guard and anomaly detection
+  are off by default.
+
+What you will observe once, at deploy: every per-caller budget, tenant count and anomaly history
+starts fresh, because the keys they are stored under changed. Limits are counted again from zero,
+and anomaly detection warms up again for each caller.
+
+**Action:** none required. If you issue client certificates without a SAN URI, check that your CA
+issues unique CNs, since two certificates with one CN share their limits.
+
+## 95. List fills count toward the breaker and the rate limiter
+
+In 3.x, a list fill (the `tools/list`, `resources/list`, `resources/templates/list` or
+`prompts/list` a cold cache sends for discovery, `gateway_search`, `gateway_list_tools`,
+resources or prompts) went straight to the backend. It ignored an open circuit breaker,
+spent no `failsafe.rate_limit` token, and its outcome never reached the breaker.
+
+In 4.0 every list fill a request starts, including the background refresh a discovery request
+starts, is gated like a tool call:
+
+- An open breaker refuses it with the circuit-open error, and sends nothing.
+- It spends one `failsafe.rate_limit` token from the same budget as tool calls. A cold-cache
+  burst over N list keys spends N tokens.
+- A list that cannot be reached counts as a failure toward the breaker. A throttled answer counts
+  as neither. An answer that arrives but cannot be used counts as reachable, is logged as a
+  warning and is counted in `mcp_backend_requests_total{status="list_unusable"}`.
+
+Startup warm-up fills are never refused and spend no token, but their outcome is recorded, so a
+backend that is down at startup opens its breaker before traffic arrives.
+
+**Action:** if `failsafe.rate_limit` is tight, allow for list fills in the budget, or keep the list
+caches warm (`meta_mcp.warm_start`).
+
+## 96. A secret or trust file must belong to the gateway's user or to root
+
+In 3.x the mode check of items 35 and 54 ignored who owned the file, except that it allowed group
+read on a file the gateway did not own. An account that owns a file can `chmod` it, so a secret
+file another account owns could be read by that account, and a trust file (TLS certificate, CRL,
+identity grants, control-plane collection) could be changed by it. The mode check passed.
+
+On Unix the gateway now refuses a config, env, key, token, credential, certificate, CRL, grants
+or control-plane file unless its owner is the gateway's effective user or root (uid 0), whatever
+the mode. The check runs before the mode rules, on the same handle as the read.
+
+- **The error names the file, the owner uid and the fix.** For a secret file the fix is
+  `chown <gateway uid> <file> && chmod 600 <file>`; the `chmod` is needed because a group-read
+  mode stays refused once the gateway owns the file. For a trust file it is `chown <gateway uid> <file>`.
+- **Kubernetes:** unchanged. A projected ConfigMap or Secret is root-owned (`root:<fsGroup> 0440`)
+  and still loads.
+- **Docker Compose:** the container runs as UID 1001, so `chown 1001` the bind-mounted file and
+  `chmod 600` it if it holds a secret (leave a certificate or CRL readable). The `chmod 640` and `chgrp 1001` layout that kept host ownership (item 35) is
+  refused now.
+- **A shared service group** that gives several accounts a file no longer works: give the gateway's
+  user the file, or mount it root-owned.
+- **Windows is not checked.** Owner rules there are tracked in #1718.
+
+**Action:** run `stat -c '%u %a' <file>` (`stat -f '%u %Lp'` on macOS) on each secret and trust file.
+An owner that is neither the gateway's uid nor `0` needs the `chown`.
+
+## 97. A bearer token and an API key are two users, even with `single_user`
+
+With `auth.single_user: true`, a gateway with an `auth.bearer_token` and one API key counted as
+single-user. Both credentials were served the sole operator's personal accounts, and the
+per-user OAuth isolation guard (ADR-008) stayed off.
+
+In 4.0 the bearer token counts as a credential beside the API keys. Two credentials are two
+users whatever `single_user` says: the sole-operator account is not served to either, and the
+isolation guard is on. The gateway still starts. A bearer-only or one-key-only gateway is
+unchanged, and so is any `auth.bearer_token` spelling (`auto`, `env:`).
+
+**Action:** a personal gateway that added a client key beside its bearer token keeps exactly one
+of the two: remove `auth.bearer_token` or the extra API key.
+
+## 100. Proven identifiers are compared verbatim
+
+In 3.x, a proven identifier (the `sub` of an agent token the gateway validated, or an mTLS
+client certificate's SAN URI or CN) was trimmed of surrounding whitespace before it keyed
+anything. Grant subjects and per-caller firewall keys were also cut to 512 characters, and
+took only a certificate's first SAN URI. A proven `" admin "` therefore resolved as the
+distinct principal `admin`, and two ids that share a 512-character prefix shared grants and a
+firewall budget.
+
+In 4.0 a proven identifier keys grants, `known_agents`, `principal_labels` and per-caller
+firewall limits exactly as proven: no trimming and no cap. An empty value is skipped. Grants and
+firewall limits pick a certificate's subject by the agent-identity rule: the first non-empty SAN
+URI, else the CN.
+
+**Action:** a grant or allowlist entry that names the bare id no longer matches a padded proven
+id; reissue the credential without the padding. A certificate whose first SAN URI is empty now
+keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
+firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
+API-key owner, not on these subjects.
 
 ## Upgrading from 3.5.x: a walkthrough
 
@@ -2103,8 +2690,9 @@ These need no action and have no startup notice.
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
   drain that stops early keeps what was read, reports its tool count as "at least", and
   increments `mcp_backend_list_truncated_total{backend,reason}`, where `reason` is
-  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
-  `fill_budget` (120 s spent).
+  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`),
+  `fill_budget` (120 s spent) or `unreadable_page` (a page had no `tools` array; the
+  drain reads on, but the catalogue is never treated as complete).
 
 ## Rolling back
 
