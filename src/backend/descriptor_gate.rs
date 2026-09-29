@@ -389,4 +389,21 @@ impl Backend {
     pub(crate) fn flagged_tool_pins(&self) -> &BTreeMap<String, String> {
         &self.config.allow_flagged_tools
     }
+
+    /// Prepare a direct `tools/list` the drain already judged.
+    ///
+    /// Not judged again: this list has been through credential redaction, which
+    /// can remove the text a finding rests on and changes the digest a pin
+    /// matches. The drain judged the raw list and already dropped what it
+    /// withheld; the header exclusion and annotations still apply here, and
+    /// names blocked for the backend are dropped as a backstop (#1441).
+    pub(crate) fn prepare_judged_tools(&self, tools: &mut Vec<Tool>) {
+        let _ = super::prepare_tool_metadata(
+            &self.name,
+            self.flagged_tool_pins(),
+            Judging::AlreadyJudged,
+            tools,
+        );
+        tools.retain(|tool| !self.is_blocked_tool(&tool.name));
+    }
 }

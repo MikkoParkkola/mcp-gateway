@@ -20,7 +20,6 @@ use super::authorization::{
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
@@ -287,18 +286,7 @@ fn normalize_tools_list_response(
         }
     }
 
-    // Not judged again: this list has been through credential redaction, which
-    // can remove the text a finding rests on and changes the digest a pin
-    // matches. The drain judged the raw list and already dropped what it
-    // withheld; the header exclusion and annotations still apply here, and
-    // names blocked for the backend are dropped as a backstop (#1441).
-    let _ = prepare_tool_metadata(
-        backend_name,
-        backend.flagged_tool_pins(),
-        crate::backend::Judging::AlreadyJudged,
-        &mut tools,
-    );
-    tools.retain(|tool| !backend.is_blocked_tool(&tool.name));
+    backend.prepare_judged_tools(&mut tools);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
