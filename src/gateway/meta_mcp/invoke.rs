@@ -3041,6 +3041,8 @@ impl MetaMcp {
     /// propagation strategy wired, the strategy refuses, or a minted header does
     /// not parse. For a non-required backend, a mint failure degrades to the
     /// empty credential (no headers, no binding → shared cache key, best-effort).
+    /// Identity-only; production callers pass their proof to the `_as` form.
+    #[cfg(test)]
     async fn resolve_caller_credential(
         &self,
         server: &str,

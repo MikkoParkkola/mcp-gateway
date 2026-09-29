@@ -364,17 +364,10 @@ fn resolve_passthrough_headers(
     }
 }
 
-/// Stable actor id for an identity-propagation audit entry (MIK-6740). Uses
-/// the same `issuer`+`subject` derivation as the control-plane governance
-/// audit (`stable_actor_id`) so the two audit trails describe the same actor
-/// under the same id. `"unauthenticated"` covers the non-`required` path,
-/// where a mint/refuse decision can be reached with no verified identity.
-fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>) -> String {
-    verified_identity.map_or_else(
-        || "unauthenticated".to_string(),
-        crate::key_server::oidc::VerifiedIdentity::stable_actor_id,
-    )
-}
+// The audit subject is the resolver's (`MetaMcp::audit_subject_for`); the
+// identity-only form stays in reach of this module's tests.
+#[cfg(test)]
+use crate::identity_propagation::audit_subject;
 
 // One writer for identity-propagation audit on both routes (the direct
 // route used to carry a hand copy of it).
@@ -416,8 +409,6 @@ async fn resolve_notification_identity_key(
         .ok()?;
         return binding;
     }
-    // The request's own proof, so a notification selects the bucket the
-    // caller's requests do, the sole operator's included (#2190).
     let (_headers, binding, _lease) = state
         .meta_mcp
         .resolve_propagation_credential_held(name, caller)
@@ -539,11 +530,13 @@ async fn backend_handler_inner(
         .extensions()
         .get::<crate::key_server::oidc::VerifiedIdentity>()
         .cloned();
-    // What the request established about its caller, classified once for every
-    // credential this route resolves (#2190): a validated credential can be the
-    // sole operator, a caller that presented nothing never is.
-    let provenance = crate::identity_propagation::CallerProvenance::classify(
-        client.as_ref().map(|client| client.principal.as_str()),
+    // Classified once for every credential this route resolves, notifications
+    // included (#2190): a validated credential can be the sole operator.
+    let caller = crate::identity_propagation::CallerProof::new(
+        verified_identity.as_ref(),
+        crate::identity_propagation::CallerProvenance::classify(
+            client.as_ref().map(|client| client.principal.as_str()),
+        ),
     );
     // Inbound headers, captured before the body is consumed, so the passthrough
     // path (ADR-008 rung 2, MIK-6746) can read the caller's own backend
@@ -700,14 +693,9 @@ async fn backend_handler_inner(
     // notifications stay exempt from the idp_refuse-403 / OAuth-isolation /
     // tool-policy checks that apply to id-bearing requests.
     if method.starts_with("notifications/") {
-        let notif_identity_key = resolve_notification_identity_key(
-            &state,
-            &backend,
-            &name,
-            &inbound_headers,
-            crate::identity_propagation::CallerProof::new(verified_identity.as_ref(), provenance),
-        )
-        .await;
+        let notif_identity_key =
+            resolve_notification_identity_key(&state, &backend, &name, &inbound_headers, caller)
+                .await;
         return match backend
             .notify_with_headers(&method, params, notif_identity_key.as_deref())
             .await
@@ -822,9 +810,6 @@ async fn backend_handler_inner(
         let passthrough_cfg = idp_cfg.clone().filter(|c| {
             c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
         });
-        let passthrough = passthrough_cfg.is_some();
-        let caller =
-            crate::identity_propagation::CallerProof::new(verified_identity.as_ref(), provenance);
         let resolved = if let Some(cfg) = passthrough_cfg {
             match resolve_passthrough_headers(
                 &cfg,
@@ -857,13 +842,8 @@ async fn backend_handler_inner(
                 Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
             }
         };
-        // The principal the credential was resolved for, as the resolver
-        // records it; passthrough resolves none, so it keeps the identity.
-        let subject = if passthrough {
-            audit_subject(verified_identity.as_ref())
-        } else {
-            state.meta_mcp.audit_subject_for(&name, caller)
-        };
+        // The principal resolved for (passthrough: the verified identity).
+        let subject = state.meta_mcp.audit_subject_for(&name, caller);
         let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
         match resolved {
             Ok(headers) => {
