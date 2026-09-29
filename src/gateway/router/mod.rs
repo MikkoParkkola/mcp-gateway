@@ -57,6 +57,8 @@ pub fn is_loopback_bind(host: &str) -> bool {
     well_known::is_loopback_host(host)
 }
 mod well_known;
+// Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
+mod direct_guards;
 
 #[cfg(test)]
 mod audit_degraded_tests;
@@ -67,12 +69,18 @@ mod callback_admin_denial_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
+mod direct_guards_fixture;
+#[cfg(test)]
+mod direct_guards_tests;
+#[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_tasks_owner_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+#[cfg(test)]
+mod dispatch_parity_tests;
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]

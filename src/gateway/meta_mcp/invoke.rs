@@ -146,12 +146,13 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 // D1: the invocation record, written around `invoke_tool_traced`.
 mod audit;
+pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
-use bridge_settle::arm;
 pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
+use bridge_settle::{arm, refuse_if_killed};
 mod withheld_evidence;
 use r2_check::miss_with_hint;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
@@ -956,6 +957,9 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         &self,
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // The kill switch is read once at the top of the call, so re-read it per round.
+        refuse_if_killed(&self.meta.kill_switch, self.server)?;
+
         // Admitted here as well as at the first dispatch, because the spend
         // check is per backend call and `invoke_tool` ran it once, before the
         // backend asked anything. A bridged exchange adds a call per round, so
@@ -969,7 +973,13 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // retry of work that never ran.
         #[cfg(feature = "cost-governance")]
         self.meta
-            .admit_spend(self.tool, self.api_key_name)
+            .admit_spend_for(&dispatch_guards::BackendCall {
+                server: self.server,
+                tool: self.tool,
+                session_id: None,
+                api_key_name: self.api_key_name,
+                trace_id: "",
+            })
             .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: e.to_string(),
             })?;
@@ -1008,6 +1018,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                     .to_owned(),
             });
         }
+        // The check above may have awaited a cold `tools/list`: re-read the kill.
+        refuse_if_killed(&self.meta.kill_switch, self.server)?;
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")
@@ -1141,9 +1153,15 @@ impl MetaMcp {
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
         )?;
-        self.active_profile(session_id)
-            .check(server, tool)
-            .map_err(Error::Protocol)
+        // S1 (kill switch, capability disable, session profile) is shared with
+        // the per-backend route; every admission path reaches it through here.
+        self.admit_target(&dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name: None,
+            trace_id: "",
+        })
     }
 
     pub(super) fn authorize_invocation(
@@ -1689,30 +1707,6 @@ impl MetaMcp {
 
         tracing::Span::current().record("trace_id", trace_id);
 
-        if self.kill_switch.is_killed(server) {
-            return Err(Error::json_rpc(
-                -32000,
-                format!("Server '{server}' is currently disabled by operator kill switch"),
-            ));
-        }
-
-        {
-            let cap_cfg = self.capability_budget_config.read();
-            if self
-                .kill_switch
-                .is_capability_disabled_with_cooldown(server, tool, cap_cfg.cooldown)
-            {
-                return Err(Error::json_rpc(
-                    -32000,
-                    format!(
-                        "Capability '{tool}' on server '{server}' is temporarily disabled due to \
-                         a high error rate. It will auto-recover after the cooldown period. \
-                         Use gateway_list_disabled_capabilities to see all disabled capabilities."
-                    ),
-                ));
-            }
-        }
-
         let profile = self.active_profile(session_id);
 
         let tool_key = format!("{server}:{tool}");
@@ -1875,11 +1869,9 @@ impl MetaMcp {
                     // as a client failure — a retry could then open the circuit
                     // breaker on a client whose only fault was retrying a call
                     // the gateway itself refused.
-                    if error
-                        .get(crate::idempotency::FIREWALL_REFUSAL_MARKER)
-                        .and_then(Value::as_bool)
-                        == Some(true)
-                    {
+                    if crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal(
+                        &error,
+                    ) {
                         debug!(
                             server,
                             tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
@@ -2078,7 +2070,13 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let cost_warnings: Vec<String> = self.admit_spend(tool, api_key_name)?;
+        let cost_warnings = self.admit_spend_for(&dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name,
+            trace_id,
+        })?;
 
         // Derive a prompt_cache_key for OpenAI-compatible backends.
         // Priority: explicit _meta.prompt_cache_key from caller > session hash.
@@ -2229,8 +2227,9 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // The idempotency reservation is left for the commit below
-                // unless the refusal was pre-dispatch.
+                // The error budget already counted this failure (the shared
+                // accounting stage).  The idempotency reservation is left
+                // for the commit below unless the refusal was pre-dispatch.
                 dispatch_error_result(&e, tool, server)
             }
         };
@@ -2430,14 +2429,7 @@ impl MetaMcp {
                 // taken effect (ADR-012 consequence 1), so the key settles.
                 Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused { dispatched }) => {
                     if dispatched && let Some(reservation) = idem_reservation.as_mut() {
-                        // Built from the variant rather than spelled out, so the
-                        // replayed refusal cannot drift from the live one.
-                        let mut body = json!({
-                            "code": Error::ResponseFirewallRefused.to_rpc_code(),
-                            "message": Error::ResponseFirewallRefused.to_string(),
-                        });
-                        body[crate::idempotency::FIREWALL_REFUSAL_MARKER] = json!(true);
-                        reservation.fail(&body);
+                        reservation.fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
                     }
                     warn!(
                         server,
@@ -2553,7 +2545,14 @@ impl MetaMcp {
             result["requestState"] = json!(envelope);
         }
 
-        result = self.apply_response_gates(server, tool, api_key_name, trace_id, result)?;
+        let call = dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name,
+            trace_id,
+        };
+        result = self.gate_payload(&call, result)?;
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -3422,33 +3421,16 @@ impl MetaMcp {
             }
         }
 
-        self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result));
-
-        // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
-        if dispatch_result.is_ok()
-            && let Some(sid) = session_id
-        {
-            self.cost_tracker.record(
-                sid,
-                api_key_name,
+        self.account_dispatch(
+            &dispatch_guards::BackendCall {
                 server,
                 tool,
-                0, // token_count: 0 for backend tool calls (no model inference)
-                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
-            );
-        }
-
-        // === POST-INVOKE: BudgetEnforcer cost recording ===
-        //
-        // Record actual spend for per-tool and global daily accumulators.
-        // Only on success — the call actually incurred the cost.
-        #[cfg(feature = "cost-governance")]
-        if dispatch_result.is_ok()
-            && let Some(ref enforcer) = self.budget_enforcer
-        {
-            let cost = enforcer.registry.cost_for(tool);
-            enforcer.record_spend(tool, api_key_name, cost);
-        }
+                session_id,
+                api_key_name,
+                trace_id,
+            },
+            dispatch_guards::DirectOutcome::of(&dispatch_result),
+        );
 
         dispatch_result
     }
@@ -4177,35 +4159,42 @@ impl BudgetOutcome {
     /// for every backend that reports its 429 the protocol's own way.
     pub(super) fn of(result: &Result<Value>) -> Self {
         match result {
-            Ok(response) => {
-                let is_error = response
-                    .get("isError")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                // Scanning the whole envelope is safe only because `isError`
-                // gates it: on a successful result the same text is ordinary
-                // payload and must not exempt anything.
-                if is_error && crate::gateway::recovery::is_rate_limited(&response.to_string()) {
-                    Self::IgnoredRateLimit
-                } else {
-                    // A non-rate-limit `isError: true` is a tool refusing a
-                    // request, not a backend in poor health: a bad argument or
-                    // a missing file would otherwise open a circuit on a
-                    // backend that answered correctly every time. It is
-                    // sampled as a success on purpose.
-                    Self::Success
-                }
-            }
-            // The gateway's own limiter refused: the backend was never asked.
-            // Matched on the variant, not on its message (F23).
-            Err(Error::RateLimited(_)) => Self::IgnoredRateLimit,
-            Err(error) => {
-                if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
-                    Self::IgnoredRateLimit
-                } else {
-                    Self::Failure
-                }
-            }
+            Ok(response) => Self::of_value(response),
+            Err(error) => Self::of_error(error),
+        }
+    }
+
+    /// [`Self::of`] for a result the backend answered.
+    pub(super) fn of_value(response: &Value) -> Self {
+        let is_error = response
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        // Scanning the whole envelope is safe only because `isError`
+        // gates it: on a successful result the same text is ordinary
+        // payload and must not exempt anything.
+        if is_error && crate::gateway::recovery::is_rate_limited(&response.to_string()) {
+            Self::IgnoredRateLimit
+        } else {
+            // A non-rate-limit `isError: true` is a tool refusing a
+            // request, not a backend in poor health: a bad argument or
+            // a missing file would otherwise open a circuit on a
+            // backend that answered correctly every time. It is
+            // sampled as a success on purpose.
+            Self::Success
+        }
+    }
+
+    /// [`Self::of`] for a dispatch that failed.
+    pub(super) fn of_error(error: &Error) -> Self {
+        // The gateway's own limiter refused: the backend was never asked.
+        // Matched on the variant, not on its message (F23).
+        if matches!(error, Error::RateLimited(_))
+            || crate::gateway::recovery::is_rate_limited(&error.to_string())
+        {
+            Self::IgnoredRateLimit
+        } else {
+            Self::Failure
         }
     }
 }

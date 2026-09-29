@@ -412,6 +412,12 @@ mtls:
   require_client_cert: true
 ```
 
+A client certificate's identity, for grants and for the firewall's per-caller limits, is its first
+SAN URI, else its CN. Issue each workload a SAN URI (for example a SPIFFE ID) where you can: without
+one, two certificates with the same CN count as one caller, so identity relies on your CA issuing
+unique CNs. A certificate with neither is not an identity for the per-caller limits
+(UPGRADING-4.0 item 94).
+
 ### Strict validation and existing certificate generations
 
 Newly generated 4.0 CA certificates include certificate-signing and CRL-signing

@@ -18,9 +18,11 @@ use super::AppState;
 use super::authorization::{
     ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
 };
+use super::direct_guards::{DirectRouteGuards, refusal};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
 use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::personal_accounts::refusal::refusal_text;
@@ -43,6 +45,31 @@ struct BackendAuthContext<'a> {
     client: Option<&'a AuthenticatedClient>,
     oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     cert_identity: Option<&'a CertIdentity>,
+    /// The caller as a grant subject, resolved for this request: the only
+    /// carrier of an OIDC or trusted-header subject on this route.
+    #[cfg(feature = "firewall")]
+    grant_subject: Option<&'a crate::identity_grants::GrantSubject>,
+}
+
+/// The key the direct route's per-caller firewall controls score on: the
+/// caller's `CallerKey`, as on the meta route, so one caller has one budget on
+/// both. With no key (authentication off) it is the shared per-backend bucket,
+/// never tracked; a keyed caller's reclaim deadline is renewed (CONTROL.4).
+#[cfg(feature = "firewall")]
+fn direct_control_identity(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    per_backend: &str,
+) -> String {
+    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
+    if key.is_empty() {
+        return per_backend.to_string();
+    }
+    if let Some(ref lifecycle) = state.session_lifecycle {
+        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
+        lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
+    }
+    key
 }
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
@@ -108,17 +135,15 @@ async fn apply_backend_tool_call_security(
     if let Some(ref fw) = state.firewall {
         let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
         let session_id = format!("direct:{backend_name}");
-        let verdict =
-            // A direct backend call always has this synthetic per-backend key,
-            // so the per-caller controls have a stable identity to score on.
-            fw.check_request(
-                &session_id,
-                backend_name,
-                tool_name,
-                arguments,
-                caller_name,
-                &session_id,
-            );
+        let control_identity = direct_control_identity(state, auth, &session_id);
+        let verdict = fw.check_request(
+            &session_id,
+            backend_name,
+            tool_name,
+            arguments,
+            caller_name,
+            &control_identity,
+        );
         if verdict.action == FirewallAction::Warn {
             warn!(
                 backend = %backend_name,
@@ -968,6 +993,23 @@ async fn backend_handler_inner(
         identity: verified_identity.as_ref(),
         managed: managed.as_ref(),
     };
+    // MIK-7597: the shared dispatch controls, S1 and G7 before the reservation.
+    let call = BackendCall {
+        server: &name,
+        tool: params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        session_id,
+        api_key_name: client.as_ref().map(|c| c.name.as_str()),
+        trace_id: "",
+    };
+    if method == "tools/call"
+        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call)
+    {
+        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+    }
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1014,6 +1056,8 @@ async fn backend_handler_inner(
                 client: client.as_ref(),
                 oauth_agent_identity: oauth_agent_identity.as_ref(),
                 cert_identity: cert_identity.as_ref(),
+                #[cfg(feature = "firewall")]
+                grant_subject: grant_subject.as_ref(),
             },
             params.as_ref(),
             &id,
@@ -1023,6 +1067,12 @@ async fn backend_handler_inner(
         .await
         {
             Ok(Some(sanitized_params)) => {
+                let warnings = match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
+                    Ok(warnings) => warnings,
+                    Err(e) => {
+                        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+                    }
+                };
                 // Forward the sanitized params to the backend
                 let forward = Box::pin(dispatch_armed(
                     idem_reservation.as_mut(),
@@ -1036,28 +1086,15 @@ async fn backend_handler_inner(
                     ),
                 ))
                 .await;
+                let (params, client) = (params.as_ref(), client.as_ref());
+                let forward = DirectRouteGuards::after_dispatch(
+                    &state, &call, params, client, &warnings, forward,
+                );
                 return match forward {
                     Ok(mut response) => {
-                        record_client_success(&state, client.as_ref());
-                        // The transport uses its own request IDs to correlate
-                        // concurrent upstream calls. Restore the caller's ID at
-                        // the HTTP boundary so the client can correlate this
-                        // response with its original JSON-RPC request.
+                        // Restore the caller's ID over the transport's own.
                         response.id = Some(id.clone());
-                        scan_direct_backend_response(
-                            &state,
-                            &name,
-                            params.as_ref(),
-                            client.as_ref(),
-                            &mut response,
-                        );
-                        stamp_direct_provenance(
-                            &state,
-                            &name,
-                            params.as_ref(),
-                            client.as_ref(),
-                            &mut response,
-                        );
+                        stamp_direct_provenance(&state, &name, params, client, &mut response);
                         settle_direct_idempotency(idem_reservation.as_mut(), &response);
                         build_http_response(&response, StatusCode::OK)
                     }
@@ -1075,10 +1112,22 @@ async fn backend_handler_inner(
     // so it can be filtered per caller and answered without a cursor (A3).
     let forward = if method == "tools/list" {
         let (headers, key) = (&propagated_headers, identity_key.as_deref());
-        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
+        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name)
+            .await
+            .inspect(|_| record_client_success(&state, client.as_ref()))
     } else {
+        let warnings = if method == "tools/call" {
+            match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
+                Ok(warnings) => warnings,
+                Err(e) => {
+                    return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let key = identity_key.as_deref();
-        let call = dispatch_in_scope(
+        let dispatch = dispatch_in_scope(
             &backend,
             &method,
             &id,
@@ -1086,11 +1135,16 @@ async fn backend_handler_inner(
             &propagated_headers,
             key,
         );
-        Box::pin(dispatch_armed(idem_reservation.as_mut(), call)).await
+        let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
+        if method == "tools/call" {
+            let (params, client) = (params.as_ref(), client.as_ref());
+            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward)
+        } else {
+            forward.inspect(|_| record_client_success(&state, client.as_ref()))
+        }
     };
     match forward {
         Ok(mut response) => {
-            record_client_success(&state, client.as_ref());
             // Upstream transport IDs are private gateway correlation state;
             // direct-route clients must receive the ID they supplied.
             response.id = Some(id.clone());
@@ -1106,13 +1160,6 @@ async fn backend_handler_inner(
                 let client = client.as_ref();
                 direct_list::retain_invocable(&state, client, oauth, cert, &name, &mut response);
             } else if method == "tools/call" {
-                scan_direct_backend_response(
-                    &state,
-                    &name,
-                    params.as_ref(),
-                    client.as_ref(),
-                    &mut response,
-                );
                 stamp_direct_provenance(
                     &state,
                     &name,
@@ -1157,6 +1204,11 @@ fn settle_direct_idempotency(
     let Some(reservation) = reservation else {
         return;
     };
+    if response.delivery_refusal {
+        reservation
+            .fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
+        return;
+    }
     if let Some(error) = response.error.as_ref() {
         if let Ok(error) = serde_json::to_value(error) {
             reservation.fail(&error);
@@ -1200,6 +1252,9 @@ fn settle_direct_failure(
 /// strictly poorer error than the first caller received, which defeats the
 /// point of replaying it at all.
 fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcResponse {
+    if crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal(error) {
+        return refusal(id, &crate::Error::ResponseFirewallRefused);
+    }
     let (code, message) = crate::idempotency::cached_error_parts(error);
     match error.get("data") {
         Some(data) => JsonRpcResponse::error_with_data(id, code, message, data.clone()),
@@ -1248,50 +1303,6 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
     if let Some(client) = client {
         state.auth_config.record_client_failure(&client.name);
     }
-}
-
-#[cfg(feature = "firewall")]
-fn scan_direct_backend_response(
-    state: &AppState,
-    backend_name: &str,
-    params: Option<&Value>,
-    client: Option<&AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let Some(ref fw) = state.firewall else {
-        return;
-    };
-    let Some(params) = params else {
-        return;
-    };
-    let Some(tool_name) = params.get("name").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(ref mut result) = response.result else {
-        return;
-    };
-
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        warn!(
-            backend = %backend_name,
-            tool = %tool_name,
-            findings = verdict.findings.len(),
-            "Firewall: direct backend response warning"
-        );
-    }
-}
-
-#[cfg(not(feature = "firewall"))]
-fn scan_direct_backend_response(
-    _state: &AppState,
-    _backend_name: &str,
-    _params: Option<&Value>,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) {
 }
 
 /// Scan a `tools/list` response through the same firewall response scanner used

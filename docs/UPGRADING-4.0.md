@@ -65,6 +65,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 66
 - Item 67
 - Item 68
+- Item 69
 - Item 70
 - Item 71
 - Item 72
@@ -79,6 +80,7 @@ that names it. The items below print no notice: read them here before upgrading.
 - Item 86
 - Item 87
 - Item 88
+- Item 94
 - Item 95
 
 **These items refuse the gateway's start. Read them first if you are upgrading a running
@@ -183,7 +185,7 @@ without it.**
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 | 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
-| 69 | Reserved: lands with a pending change | None yet |
+| 69 | `POST /mcp/{name}` `tools/call` runs the dispatch controls `gateway_invoke` runs (kill switch, capability auto-disable, session profile, cost and error budgets, response gates, response-firewall Block); with message signing on it is refused with -32001 | Move direct callers under message signing to `gateway_invoke`; expect direct calls refused, accounted and gated as `gateway_invoke` calls are |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Dashboard sessions end after 30 minutes idle or 8 hours total; the dashboard's own refresh is not activity; an ended session gets a 401 that clears the cookie | Log in again with `mcp-gateway dashboard-link`; set `auth.dashboard_session` to change the limits |
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
@@ -208,7 +210,7 @@ without it.**
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
 | 92 | Six meta-tools leave the default `tools/list` until the feature behind each is configured | Configure the feature, or `meta_mcp.expose_stats_tool: true` for `gateway_get_stats` |
 | 93 | The key server refuses (403) a token request whose scopes miss the matching policy rule | Request only scopes the rule allows |
-| 94 | Reserved: lands with #2209 | None yet |
+| 94 | Per-caller firewall limits (budget, tenant guard, anomaly) key on the caller's identity, else its API key, on `/mcp` and `/mcp/{name}`; OAuth-agent and mTLS callers are scored; limits start fresh once at deploy | None; with client certificates that lack a SAN URI, make sure your CA issues unique CNs |
 | 95 | List fills (discovery, search, resources, prompts) pass the circuit breaker and spend rate-limit tokens; their outcomes count toward the breaker; startup warm-up is recorded but never refused | If `failsafe.rate_limit` is tight, budget for list fills or keep list caches warm |
 
 
@@ -1954,6 +1956,32 @@ Unix behaviour is unchanged.
 mapped drive or a junction. If a 3.x token migration is refused, run the printed `icacls` lines
 in PowerShell (as an administrator when it says the file has another owner) and retry.
 
+## 69. Per-backend routes run the same dispatch controls as `gateway_invoke`
+
+`POST /mcp/{name}` `tools/call` skipped controls that `gateway_invoke` enforces: the kill
+switch, capability auto-disable, the session's routing profile, cost budgets, the error budget,
+response gates, and a response-firewall Block. A caller could reach a killed backend, spend past
+its budget, or receive a result `gateway_invoke` would have refused.
+
+In 4.0, both routes run one implementation of each control:
+
+- A killed backend, a disabled capability, a tool outside the session's profile, or a key over
+  its cost budget is refused on `POST /mcp/{name}` with the JSON-RPC error `gateway_invoke`
+  returns (HTTP 200). Nothing reaches the backend.
+- Direct calls record spend and count toward the error budget, so they can auto-kill a backend.
+- Response contract, inspection and context-integrity settings apply to direct results.
+- A result the response firewall blocks is refused with -32600 "Response blocked by security
+  firewall", as on `gateway_invoke`; a retry with the same idempotency key replays that refusal.
+- With message signing on, `tools/call` on `POST /mcp/{name}` is refused with -32001
+  "message signing is enabled; use gateway_invoke".
+- The kill switch and capability auto-disable are now checked at admission: task creation,
+  admission plans and signing preparation refuse a killed backend or disabled capability up
+  front (-32000) instead of at dispatch.
+
+**Action:** a client that called backends directly under message signing must move to
+`gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
+`gateway_invoke` calls are.
+
 ## 70. Secrets stay out of the request URI and its trace
 
 The gateway's HTTP trace span recorded the full request URI at DEBUG, query string included. Two
@@ -2407,6 +2435,41 @@ A rule whose own `backends` list is empty is a different case, covered in item 3
 **Action:** a client that requests scopes must request only ones its matching rule allows. A
 requested backend outside the rule gets 403 `no_backends_granted`; a requested tool outside it
 gets 403 `access_denied`, whose message reads as though no policy matched.
+
+## 94. Per-caller firewall limits key on the caller, on every route
+
+The firewall's per-caller controls (the call budget, the tenant guard and anomaly detection) now
+key on who the caller is, on the meta route and the per-backend `/mcp/{name}` route alike:
+
+- A caller with a resolved identity (an OIDC or key-server login, a trusted-proxy or Access
+  identity, an mTLS certificate, or an OAuth agent) is keyed on that identity. Otherwise an
+  authenticated API key is keyed on the key. The identity wins over the key, so one person keeps
+  one budget across keys and token exchanges.
+- An OAuth-agent or mTLS caller on a modern (2026-07-28) `POST /mcp` was refused by these
+  controls as having no identity. It is now counted and scored.
+- On the per-backend `/mcp/{name}` route every caller of one backend shared one budget, one tenant
+  count and one anomaly history. Each caller now has its own, and it is the same one the caller
+  has on `/mcp`.
+- A legacy session no longer gets a fresh budget or tenant count: an authenticated caller is
+  keyed on its identity, not its session. A caller with no identity at all (authentication off)
+  is keyed on its session, or on the backend on `/mcp/{name}`, as before.
+- The three controls share that one key, so anomaly detection also follows the caller rather than
+  the session: a caller with two sessions open at once feeds one sequence history, and each call is
+  scored against the caller's previous call on either session.
+- The dashboard's MCP calls are keyed on the dashboard's own credential. The dashboard link opens
+  one session at a time, so that is that session's budget and tenant count.
+- An mTLS caller is identified by its certificate's first SAN URI, else its CN; a renewed
+  certificate for the same subject keeps its limits. Without a SAN URI, identity relies on your
+  CA issuing unique CNs. A certificate with neither is not an identity.
+- The default config has no behaviour change: the budget, the tenant guard and anomaly detection
+  are off by default.
+
+What you will observe once, at deploy: every per-caller budget, tenant count and anomaly history
+starts fresh, because the keys they are stored under changed. Limits are counted again from zero,
+and anomaly detection warms up again for each caller.
+
+**Action:** none required. If you issue client certificates without a SAN URI, check that your CA
+issues unique CNs, since two certificates with one CN share their limits.
 
 ## 95. List fills count toward the breaker and the rate limiter
 

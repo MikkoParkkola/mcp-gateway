@@ -27,19 +27,6 @@ pub(super) fn miss_with_hint(
     }
 }
 
-impl BudgetOutcome {
-    /// [`Self::of`]'s `Err` arm, for a caller that keeps the error.
-    fn of_error(error: &Error) -> Self {
-        if matches!(error, Error::RateLimited(_))
-            || crate::gateway::recovery::is_rate_limited(&error.to_string())
-        {
-            Self::IgnoredRateLimit
-        } else {
-            Self::Failure
-        }
-    }
-}
-
 impl MetaMcp {
     /// MIK-7570.SCHEMA.1 (R2): the `isError` result refusing a call to an MCP
     /// backend whose arguments carry keys the tool's schema does not declare.
