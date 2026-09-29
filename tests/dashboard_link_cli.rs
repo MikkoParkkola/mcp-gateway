@@ -311,7 +311,8 @@ async fn the_config_path_needs_only_the_identity_flags() {
     let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
     let port = base.rsplit(':').next().expect("port");
     let config = dir.path().join("gateway.yaml");
-    std::fs::write(
+    // Owner-only on every platform: the gateway refuses a config others can read.
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
         format!(
             "server:\n  host: 127.0.0.1\n  port: {port}\nmtls:\n  enabled: true\n  \
