@@ -1,0 +1,1 @@
+- A bridged round dispatched after an operator disabled the server is now refused before it reaches the backend, and the caller's idempotency key stays retryable.

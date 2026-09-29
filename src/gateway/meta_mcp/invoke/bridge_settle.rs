@@ -52,3 +52,18 @@ pub(in crate::gateway::meta_mcp) fn classify_bridged_dispatch_error(
         }
     }
 }
+
+/// #1989: a bridged round is refused before dispatch once the operator has
+/// disabled the server. `NotAdmitted`, so the idempotency key is not burned by
+/// work that never ran.
+pub(super) fn refuse_if_killed(
+    switch: &crate::kill_switch::KillSwitch,
+    server: &str,
+) -> Result<(), crate::gateway::input_bridge::BridgeError> {
+    if switch.is_killed(server) {
+        return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
+            message: format!("Server '{server}' is currently disabled by operator kill switch"),
+        });
+    }
+    Ok(())
+}
