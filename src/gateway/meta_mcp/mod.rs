@@ -1257,25 +1257,6 @@ impl MetaMcp {
             .is_err()
     }
 
-    /// The caller's per-user credential for `server`: headers and cache binding.
-    ///
-    /// ONE resolution per request per backend, returning BOTH halves, because
-    /// the isolation verdict and the slot selection must not disagree about who
-    /// the caller is (design §4.3's residual) — and because resolving twice
-    /// would mint twice.
-    ///
-    /// Context-taking convenience over
-    /// [`Self::caller_credential_for_identity`], which holds the contract and
-    /// serves the routes that are dispatched without a caller context.
-    pub(crate) async fn caller_credential_for(
-        &self,
-        server: &str,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> (Vec<(String, String)>, Option<String>) {
-        self.caller_credential_for_identity(server, caller.verified_identity)
-            .await
-    }
-
     /// The credential-aware sibling of [`Self::meta_route_isolation_refused`],
     /// for the catalogue paths that fetch over the CALLER'S OWN pool slot.
     ///

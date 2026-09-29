@@ -185,10 +185,14 @@ impl TransparencyLogger {
         }
         // The probe takes the same single permit, so a stall parks no second
         // thread; no permit within the probe bound is a 503.
-        let probe = self.append_bounded(TransparencyLogger::probe);
-        match tokio::time::timeout(AUDIT_PROBE_TIMEOUT, probe).await {
-            Ok(Ok(())) => Ok(()),
-            _ => Err(crate::Error::AuditUnavailable),
+        // The bound goes into the append itself, not around it: a timeout that
+        // drops the future would skip mark_stalled and the timeout metric.
+        match self
+            .append_bounded_within(Some(AUDIT_PROBE_TIMEOUT), TransparencyLogger::probe)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(_) => Err(crate::Error::AuditUnavailable),
         }
     }
 }

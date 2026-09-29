@@ -128,9 +128,13 @@ pub(super) const RECONNECT_GENERATION: &str = "0123456789abcdef0123456789abcdef"
 const DISPLAY_EMAIL: &str = "shared-display@display.invalid";
 const DISPLAY_NAME: &str = "Shared Display Name";
 
-/// 64 zeros, matching the descriptor-revision width the store commits.
+/// The live revision of the installed descriptors. Every seeded grant carries
+/// it, so only a test that means to cross the #2249 descriptor fence does. Both
+/// descriptor ids share it: the revision covers the declared fields, never the
+/// map key, and [`descriptor`] differs only in the key.
 pub(super) fn descriptor_revision() -> String {
-    "0".repeat(64)
+    crate::personal_accounts::descriptor_revision(&descriptor(WORK))
+        .expect("the fixture descriptor has a revision")
 }
 
 /// A fixture identity. Supplied to the dispatch entry directly: this is a
@@ -148,7 +152,11 @@ pub(super) fn identity(subject: &str) -> VerifiedIdentity {
 /// A structurally complete `personal_managed` descriptor, with the same field
 /// set the existing config tests use. Values are synthetic `.invalid` hosts and
 /// the client secret stays an unresolved `env:` reference.
-pub(super) fn descriptor(id: &str) -> AccountDescriptor {
+///
+/// Identical for every id: the id is the `accounts.descriptors` map key the
+/// caller inserts it under, so two ids differ in the key alone and share one
+/// descriptor revision.
+pub(super) fn descriptor(_id: &str) -> AccountDescriptor {
     AccountDescriptor {
         mode: DescriptorMode::PersonalManaged,
         provider: "google".to_string(),
@@ -157,7 +165,7 @@ pub(super) fn descriptor(id: &str) -> AccountDescriptor {
         authorization_endpoint: Some(format!("{OAUTH_ISSUER}/o/oauth2/v2/auth")),
         token_endpoint: Some(format!("{OAUTH_ISSUER}/token")),
         revocation_endpoint: None,
-        client_id: Some(format!("synthetic-google-client-{id}")),
+        client_id: Some("synthetic-google-client".to_string()),
         client_secret_ref: Some("env:FIXTURE_ACCOUNT_CLIENT_SECRET".to_string()),
         redirect_uri: Some("https://gateway.example.invalid/oauth/callback".to_string()),
         scopes: Some(vec![
@@ -555,6 +563,11 @@ impl Dispatches {
         self.calls.lock().len()
     }
 
+    /// Every dispatch, whatever its method (#2231's listings).
+    pub(super) fn all(&self) -> Vec<Dispatch> {
+        self.calls.lock().clone()
+    }
+
     /// The `tools/call` dispatches, in order. `count()` still counts every
     /// method, so a refusal proved by `count() == 0` also rules out the
     /// gateway's own cold-slot `tools/list` (F13).
@@ -662,8 +675,8 @@ impl crate::transport::Transport for CapturingTransport {
 #[path = "account_resolver_gateway.rs"]
 mod gateway;
 pub(super) use gateway::{
-    Bind, Descriptors, execute, execute_as, execute_bridged, execute_bridged_keyed, external_cfg,
-    gateway, gateway_in, slots,
+    Bind, Descriptors, caller_as, execute, execute_as, execute_bridged, execute_bridged_keyed,
+    external_cfg, gateway, gateway_in, slots,
 };
 
 // #2190: the direct-route tests live in `router`; this is their one door in.
@@ -673,3 +686,7 @@ pub(crate) mod direct_bridge;
 // #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
 #[path = "account_sole_operator_mcp_tests.rs"]
 mod sole_operator_mcp_tests;
+
+// #2231: the catalogue and forward reads, for the same principals as #1961.
+#[path = "account_catalogue_sole_operator_tests.rs"]
+mod catalogue_sole_operator_tests;

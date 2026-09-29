@@ -121,9 +121,13 @@ impl Backend {
                 Some(now) => now,
                 None => return cached.as_ref().map_or(Ok(None), held),
             },
-            // Raised only by the fill's own failsafe gate: no transport
-            // constructs either variant.
-            Err(e @ (crate::Error::CircuitOpen { .. } | crate::Error::RateLimited(_))) => {
+            // Raised only by the fill's own failsafe gate or slot admission
+            // (#2300): no transport constructs any of these variants.
+            Err(
+                e @ (crate::Error::CircuitOpen { .. }
+                | crate::Error::RateLimited(_)
+                | crate::Error::IdentitySlotsExhausted { .. }),
+            ) => {
                 return Err(e);
             }
             // A3: under `closed`, a backend that could not be reached answers
@@ -265,7 +269,10 @@ impl Backend {
             self.commit_verdicts(source, listing, verdicts);
             return withheld;
         }
-        let lease = self.begin_internal_activity_for(&key);
+        // Evicted since the fetch and refused a new slot: store nothing (#2300).
+        let Ok(lease) = self.begin_internal_activity_for(&key) else {
+            return withheld;
+        };
         let entry = Arc::clone(lease.entry());
         // A store, not a fill: it must not depend on the slot reading as
         // stale, nor queue behind a discovery fill already on the wire.
@@ -382,7 +389,7 @@ mod tests {
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         );
-        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let lease = backend.begin_internal_activity();
         let discovered: crate::protocol::Tool =
             serde_json::from_value(edit_declaring("a")).expect("a tool");
         lease
@@ -429,7 +436,7 @@ mod tests {
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         );
-        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let lease = backend.begin_internal_activity();
         let entry = std::sync::Arc::clone(lease.entry());
         let started = std::sync::Arc::new(tokio::sync::Notify::new());
         let release = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -477,7 +484,7 @@ mod tests {
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         );
-        let entry = backend.pooled_entry(&crate::backend::PoolKey::Shared);
+        let entry = backend.shared_entry();
         *entry.resend_permitted.write() = ["kept", "dropped"].map(String::from).into();
         let tool = |name: &str, read_only: bool| {
             json!({"name": name, "inputSchema": {"type": "object"},

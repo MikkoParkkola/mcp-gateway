@@ -125,6 +125,8 @@ backend" and "fails a capability file" first.**
 | 98 | A new audit log begins with an `audit_segment_opened` record at counter 1; caller records start at counter 2, and SIEM export, the NDJSON sink and `entries_checked` include it | Where a SIEM rule, export consumer or script matches caller events, skip `event: audit_segment_opened`; chain and counter checks need no change |
 | 99 | Windows: config, env, `file:` secret, TLS key, OAuth token and credential files are created owner-only and refused on read when another account can read or change them; trust files (TLS cert and CRL, identity grants and journal, control-plane grants and policies) are refused when another account can change them | Windows only: run the `PowerShell` lines the refusal prints; a trust file others may read keeps its readers |
 | 100 | Proven identifiers (agent JWT `sub`, mTLS SAN URI or CN) key grants, `known_agents`, `principal_labels` and per-caller firewall limits verbatim: no trimming, no 512-character cap. Grants and firewall limits pick a certificate's subject by the agent-identity rule (first non-empty SAN URI, else CN) | A grant or allowlist entry naming the bare id no longer matches a padded proven id; reissue the credential without the padding. A certificate whose first SAN URI is empty now keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the API-key owner, not on these subjects |
+| 101 | Reserved: lands with #2294 | None yet |
+| 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2146,10 +2148,11 @@ FUSE mounts.
 
 In 4.0:
 
-- A gateway serving HTTP from a config named with `--config` or `MCP_GATEWAY_CONFIG`
-  re-reads every listed env file every 2 seconds and reloads when its content differs from
-  what is loaded. A file that appears later is picked up. A stdio gateway, or one that found
-  its config on its own, watches no files, as before.
+- A gateway serving HTTP from a config file, named with `--config` or `MCP_GATEWAY_CONFIG`
+  or found by discovery, re-reads every listed env file every 2 seconds and reloads when its
+  content differs from what is loaded. A file that appears later is picked up. A stdio
+  gateway watches no files, as before; any gateway that loaded a config file offers the
+  `gateway_reload_config` meta-tool.
 - A lookup error on an env file (a link loop, a directory the gateway cannot search) fails
   the load instead of reading as a missing file.
 - After any failed reload, whatever caused it, the reload is retried every 2 seconds until
@@ -2818,6 +2821,25 @@ id; reissue the credential without the padding. A certificate whose first SAN UR
 keys on its next non-empty SAN, not its CN: move grants that named the CN, and expect a fresh
 firewall budget bucket. Durable task ownership is unaffected: it keys on the OIDC actor or the
 API-key owner, not on these subjects.
+
+## 102. Per-caller backend slots are capped
+
+**Startup:** no notice
+
+In 3.x, each caller of a backend with `identity_propagation` got its own upstream connection
+(a pool slot, and on a stdio backend its own child process), with no limit. A passthrough
+caller picks its own slot by the credential it sends, so a caller that changed the credential
+on every request could open any number of them.
+
+In 4.0 a backend admits at most 64 caller slots, and one caller at most 8. With auth off,
+every caller is the same anonymous caller and shares one budget of 8. A request that needs a
+new slot past either limit is refused (JSON-RPC `-32000`) and counted in
+`mcp_backend_identity_slots_refused_total`; it is never served on the shared connection. A
+notification is dropped with HTTP 429. Slots free up as idle ones are reclaimed (5 minutes
+idle).
+
+**Action:** with auth off, expect at most 8 passthrough credentials served at once per backend.
+Turn auth on to give each user their own budget of 8.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -42,10 +42,11 @@ use std::time::Duration;
 use super::account_resolver_fixture::{
     ALICE_PERSONAL_TOKEN, ALICE_WORK_TOKEN, BOB_WORK_TOKEN, Bind, Descriptors, PERSONAL,
     REFRESHED_REVISION, ROTATED_TOKEN, SEEDED_REVISION, STATIC_FALLBACK, WORK, account_key,
-    custody_with, custody_with_rotation, execute, expected_identity_key, external_cfg, gateway,
-    grant, identity, slots,
+    custody_with, custody_with_rotation, descriptor, execute, expected_identity_key, external_cfg,
+    gateway, grant, identity, slots,
 };
 use super::account_resolver_gate::{gated, rendezvous};
+use crate::personal_accounts::GrantRecord;
 
 /// Never-expiring, so no test takes the refresh path by accident.
 const FRESH: u64 = u64::MAX;
@@ -570,5 +571,119 @@ async fn verified_but_unconnected_principal_refuses_actionably_with_zero_backend
         text.contains("connect the account"),
         "the refusal must name the connect step, not merely report the \
          disconnected state: {text}"
+    );
+}
+
+/// The revision a grant carries from the descriptor it was connected under,
+/// before the operator narrowed that descriptor's scopes to what the gateway
+/// now installs (#2249).
+fn revision_before_the_edit() -> String {
+    let mut before = descriptor(WORK);
+    before
+        .scopes
+        .get_or_insert_with(Vec::new)
+        .push("https://www.googleapis.com/auth/drive".to_string());
+    crate::personal_accounts::descriptor_revision(&before).expect("a descriptor has a revision")
+}
+
+/// A seeded grant connected under an earlier version of the descriptor.
+fn grant_from_before_the_edit(access_token: &str, expires_at: u64) -> GrantRecord {
+    let mut record = grant(access_token, expires_at);
+    record.descriptor_revision = revision_before_the_edit();
+    record
+}
+
+/// DESCRIPTOR CHANGE FENCES THE GRANT (#2249). A grant migrated or connected
+/// under one descriptor must not serve once the operator changes that
+/// descriptor's declared fields (scopes, client). The call is refused as
+/// reconnect-required, nothing reaches the backend, and nothing is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_grant_from_a_changed_descriptor_is_fenced_before_dispatch() {
+    let alice = account_key("alice", WORK);
+    let custody = custody_with(&[(
+        alice.clone(),
+        grant_from_before_the_edit(ALICE_WORK_TOKEN, FRESH),
+    )]);
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+
+    let error = Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
+        .await
+        .expect_err("a grant from a changed descriptor must be fenced");
+
+    assert_eq!(
+        dispatches.count(),
+        0,
+        "a fenced grant must never reach the backend"
+    );
+    assert_eq!(
+        custody.releases(),
+        0,
+        "no credential may be released past the fence"
+    );
+    let text = error.to_string();
+    assert!(
+        text.contains("reconnect") && !text.contains(ALICE_WORK_TOKEN),
+        "the refusal must ask for a reconnect and carry no token: {text}"
+    );
+}
+
+/// THE FENCE RUNS BEFORE A REFRESH. An EXPIRED grant from a changed descriptor
+/// must not reach the provider: a refresh would rotate or fence the durable
+/// record under the old descriptor, so reverting the config edit would no
+/// longer restore it. Zero refreshes, zero releases, and the stored grant is
+/// exactly what was seeded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expired_grant_from_a_changed_descriptor_is_fenced_before_refresh() {
+    let alice = account_key("alice", WORK);
+    let custody = custody_with_rotation(
+        &[(
+            alice.clone(),
+            grant_from_before_the_edit(ALICE_WORK_TOKEN, EXPIRED),
+        )],
+        ROTATED_TOKEN,
+    );
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+
+    let error = Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
+        .await
+        .expect_err("an expired grant from a changed descriptor must be fenced");
+
+    assert_eq!(
+        dispatches.count(),
+        0,
+        "a fenced grant must never reach the backend"
+    );
+    assert_eq!(
+        custody.refreshes(),
+        0,
+        "the fence must run before any provider round trip"
+    );
+    assert_eq!(
+        custody.releases(),
+        0,
+        "no credential may be released past the fence"
+    );
+    assert!(error.to_string().contains("reconnect"), "{error}");
+    let stored = custody
+        .handle
+        .resolve(&alice)
+        .await
+        .expect("the fence writes nothing, so the grant is still connected");
+    assert_eq!(stored.descriptor_revision, revision_before_the_edit());
+    assert_eq!(
+        stored.token_revision, SEEDED_REVISION,
+        "no rotation was committed"
     );
 }

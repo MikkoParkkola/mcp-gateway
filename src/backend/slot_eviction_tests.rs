@@ -394,7 +394,7 @@ async fn c3_eviction_does_not_decline_against_a_busy_slot() {
 
     // Hold a live claim, exactly as a catalogue fill does for its whole
     // duration. The guard outlives the eviction call.
-    let claim = backend.begin_activity(&slot(&binding));
+    let claim = backend.begin_activity(&slot(&binding)).unwrap();
     assert!(
         claim.entry().in_flight.load(Ordering::SeqCst) > 0,
         "C3 premise: the slot must be busy when the revocation lands"
@@ -548,7 +548,7 @@ async fn c12_eviction_removes_a_busy_slot_without_closing_its_transport() {
         backend.pool_has_slot_for_test(&slot(&binding)),
         "C12 premise: the slot must exist before the revocation"
     );
-    let claim = backend.begin_activity(&slot(&binding));
+    let claim = backend.begin_activity(&slot(&binding)).unwrap();
     assert!(
         claim.entry().in_flight.load(Ordering::SeqCst) > 0,
         "C12 premise: the slot must be busy when the revocation lands"

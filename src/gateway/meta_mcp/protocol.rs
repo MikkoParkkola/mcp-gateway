@@ -139,9 +139,9 @@ impl MetaMcp {
     /// `"backend_name/original_name"` so `prompts/get` can route them correctly.
     ///
     /// Per caller, on the same terms as `handle_resources_list`
-    /// (MIK-7334.CATALOGUE.1): `verified_identity` selects the pool slot each
-    /// backend's prompt catalogue is fetched from and cached on, and `None`
-    /// selects the shared slot as before.
+    /// (MIK-7334.CATALOGUE.1): the caller `client` and `verified_identity`
+    /// prove selects the pool slot each backend's prompt catalogue is fetched
+    /// from and cached on.
     ///
     /// # Panics
     ///
@@ -160,15 +160,13 @@ impl MetaMcp {
         // Fetch all backends in parallel; skip ones that fail or time out.
         // The credential is resolved per backend BEFORE the fetch, and a
         // backend the caller may not see is dropped here (fail-closed = omit).
+        let caller = Self::handler_proof(client, verified_identity);
         let mut credentialed = Vec::new();
         for backend in self.backends.all() {
             if crate::gateway::authz::authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            if let Some(credential) = self
-                .catalogue_credential_for(&backend, verified_identity)
-                .await
-            {
+            if let Some(credential) = self.catalogue_credential_for(&backend, caller).await {
                 credentialed.push((backend, credential));
             }
         }
@@ -269,7 +267,11 @@ impl MetaMcp {
         }
 
         let credential = match self
-            .prompt_credential(&id, &backend, verified_identity)
+            .prompt_credential(
+                &id,
+                &backend,
+                Self::handler_proof(client, verified_identity),
+            )
             .await
         {
             Ok(credential) => credential,
