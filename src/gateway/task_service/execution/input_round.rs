@@ -118,7 +118,9 @@ impl<'a> Settling<'a> {
     /// returns and the row waits with no owner.
     async fn park(&self, round: InputRequired) {
         let Ok(owner) = self.executor.service.owner(self.principal) else {
-            return;
+            return self
+                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .await;
         };
         let stored = InputRound {
             request_state: round.request_state.clone(),
@@ -164,8 +166,13 @@ impl<'a> Settling<'a> {
             }
             // A cancel already moved the row; its commit is the answer.
             Err(StoreError::RevisionConflict | StoreError::NotFound) => {}
+            // The round could not be written. This worker is the row's only
+            // owner, so returning would leave it `working` with nobody to
+            // finish it: settle the abandoned result instead.
             Err(error) => {
                 tracing::warn!(task_id = %self.id, %error, "input round not committed");
+                self.settle(TaskTransition::Complete(abandoned_input_round()))
+                    .await;
             }
         }
     }
@@ -250,44 +257,67 @@ impl TaskExecutor {
                 Acceptance::Moved => return InputOutcome::NotOutstanding,
                 Acceptance::Busy => return InputOutcome::Busy,
             };
-        let workers = Arc::clone(&self.workers);
-        let provided = store
-            .provide_input(
-                owner.as_digest(),
-                id,
-                answers,
-                move || workers.try_acquire_owned().ok(),
-                Utc::now(),
-            )
-            .await;
-        match provided {
-            Ok(ProvideOutcome::Partial(committed)) => {
-                self.published(&WriteOutcome::Transitioned(committed), id);
-                InputOutcome::Accepted
-            }
-            Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
-            Ok(ProvideOutcome::Resumed { task, round, slot }) => {
-                let revision = task.revision;
-                self.published(&WriteOutcome::Transitioned(task), id);
-                tokio::spawn(resume(
-                    Resume {
-                        handoff,
-                        slot,
-                        owned: caller,
-                        principal: principal.to_owned(),
-                        id: id.to_owned(),
-                        revision,
-                        round,
-                    },
-                    cancel_rx,
-                ));
-                InputOutcome::Accepted
-            }
-            Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
-            Err(StoreError::Capacity) => InputOutcome::TooLarge,
-            Err(StoreError::NotFound) => InputOutcome::NotFound,
-            Err(_) => InputOutcome::Unavailable,
-        }
+        // The write and the spawn run in one task that owns the handoff, the
+        // permit and the cancel receiver, as `commit_and_run` does at create.
+        // A dropped request future cannot then leave a committed `working`
+        // row with no worker: the task finishes the write, and on a resume it
+        // becomes the resume worker itself. The request only waits for the
+        // outcome, which arrives after the write commits.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let executor = Arc::clone(self);
+        let (digest, id, principal) = (
+            owner.as_digest().to_owned(),
+            id.to_owned(),
+            principal.to_owned(),
+        );
+        tokio::spawn(async move {
+            let workers = Arc::clone(&executor.workers);
+            let provided = executor
+                .service
+                .store
+                .provide_input(
+                    &digest,
+                    &id,
+                    answers,
+                    move || workers.try_acquire_owned().ok(),
+                    Utc::now(),
+                )
+                .await;
+            let outcome = match provided {
+                Ok(ProvideOutcome::Partial(committed)) => {
+                    executor.published(&WriteOutcome::Transitioned(committed), &id);
+                    InputOutcome::Accepted
+                }
+                Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
+                Ok(ProvideOutcome::Resumed { task, round, slot }) => {
+                    let revision = task.revision;
+                    executor.published(&WriteOutcome::Transitioned(task), &id);
+                    let _ = tx.send(InputOutcome::Accepted);
+                    resume(
+                        Resume {
+                            handoff,
+                            slot,
+                            owned: caller,
+                            principal,
+                            id,
+                            revision,
+                            round,
+                        },
+                        cancel_rx,
+                    )
+                    .await;
+                    return;
+                }
+                Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
+                Err(StoreError::Capacity) => InputOutcome::TooLarge,
+                Err(StoreError::NotFound) => InputOutcome::NotFound,
+                Err(_) => InputOutcome::Unavailable,
+            };
+            // Not a resume: the handoff and cancel receiver go with this task.
+            drop((handoff, cancel_rx));
+            let _ = tx.send(outcome);
+        });
+        rx.await.unwrap_or(InputOutcome::Unavailable)
     }
 }
 
