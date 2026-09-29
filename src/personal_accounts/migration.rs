@@ -72,7 +72,8 @@ pub(in crate::personal_accounts) enum RecordRefusal {
 
 /// Build the grant a 3.x record migrates into, or refuse this backend.
 ///
-/// `generation` and `descriptor_revision` are supplied by the caller because
+/// `generation`, `descriptor_revision` and `now` (seconds since the epoch;
+/// `u64::MAX` for an unreadable clock) are supplied by the caller because
 /// minting them is not this function's business — see the module note. Every
 /// seed is chosen to satisfy `validate_record` (`storage.rs:127-145`), and the
 /// two rules that are decisions rather than copies are `expires_at` and

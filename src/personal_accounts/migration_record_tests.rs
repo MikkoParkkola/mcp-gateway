@@ -262,3 +262,14 @@ fn an_expired_record_with_no_refresh_token_is_refused() {
         "an expired, unrefreshable credential must not migrate"
     );
 }
+
+/// POSITIVE CONTROL for the case above: the same expired record WITH a refresh
+/// token still migrates, because the refresh token can redeem it.
+#[test]
+fn an_expired_record_with_a_refresh_token_still_migrates() {
+    let mut token = legacy("expired-3x-access-token");
+    token.expires_at = Some(1);
+    token.refresh_token = Some("live-3x-refresh-token".to_owned());
+    let record = build(&token, Some(&declared(&["read"]))).expect("must migrate");
+    assert_eq!(record.expires_at, 1);
+}
