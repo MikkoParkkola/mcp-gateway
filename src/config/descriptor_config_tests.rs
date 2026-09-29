@@ -199,22 +199,6 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
     Config::load_evaluated(Some(&urn_fixture.config))
         .expect("an absolute URN resource must be accepted");
 
-    // ANCHOR (#2263): an absolute `file:` client secret reference loads. It is
-    // read at token time, so this case creates no file. Without it the two
-    // `file:` reject rows are satisfied by refusing every `file:`.
-    let mut file_ref = valid.clone();
-    file_ref["client_secret_ref"] = json!(format!(
-        "file:{}",
-        root.path().join("client-secret").display()
-    ));
-    let file_fixture = fixture(
-        &root.path().join("file-ref"),
-        true,
-        Some(&json!({ "gmail-personal": file_ref })),
-    );
-    Config::load_evaluated(Some(&file_fixture.config))
-        .expect("an absolute file: client_secret_ref must be accepted");
-
     let cases: &[RejectCase] = &[
         ("unknown mode spelling", |d| {
             d["mode"] = json!("personal-managed");
@@ -281,6 +265,38 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
             "descriptor case must be rejected: {label}"
         );
     }
+    // `shared` and `external` acceptance is NOT asserted here: it cannot be
+    // discriminated from a mode-specific rejection without inventing an
+    // external_strategy fixture. Deferred, see NOTES.md.
+}
+
+/// #2263: a `file:` `client_secret_ref` must name an absolute path at load.
+/// The reject table carries the two failing rows; this pins the accepted form
+/// and the refusal text.
+#[test]
+fn a_file_client_secret_ref_must_be_absolute() {
+    let root = tempfile::TempDir::new().unwrap();
+    let valid = google_descriptor(
+        "1000.apps.googleusercontent.com",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    );
+
+    // ANCHOR (#2263): an absolute `file:` client secret reference loads. It is
+    // read at token time, so this case creates no file. Without it the two
+    // `file:` reject rows are satisfied by refusing every `file:`.
+    let mut file_ref = valid.clone();
+    file_ref["client_secret_ref"] = json!(format!(
+        "file:{}",
+        root.path().join("client-secret").display()
+    ));
+    let file_fixture = fixture(
+        &root.path().join("file-ref"),
+        true,
+        Some(&json!({ "gmail-personal": file_ref })),
+    );
+    Config::load_evaluated(Some(&file_fixture.config))
+        .expect("an absolute file: client_secret_ref must be accepted");
+
     // #2263: both `file:` rows fail for the load-time path rule, not for some
     // later check that also makes the load fail.
     for (index, reference) in ["file:", "file:secrets/client"].into_iter().enumerate() {
@@ -299,9 +315,6 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
             "{reference}: {err}"
         );
     }
-    // `shared` and `external` acceptance is NOT asserted here: it cannot be
-    // discriminated from a mode-specific rejection without inventing an
-    // external_strategy fixture. Deferred, see NOTES.md.
 }
 
 #[test]
