@@ -336,6 +336,17 @@ async fn meta_stored_error_replay_after_block_is_refused() {
         "the first answer must be the firewall's JSON-RPC error: {first}"
     );
     assert_eq!(fx.deliveries(), 1, "{first}");
+    // Retained: unblocked, the re-issue is answered with the stored error.
+    let kept = post(&fx, "/mcp", &call(3, "gateway_invoke", &invoke)).await;
+    assert!(
+        kept.contains("firewall") && kept.contains("\"id\":3"),
+        "{kept}"
+    );
+    assert_eq!(
+        fx.deliveries(),
+        1,
+        "the stored error was not retained: {kept}"
+    );
     fx.withhold_t();
     let second = post(&fx, "/mcp", &call(2, "gateway_invoke", &invoke)).await;
     assert!(
