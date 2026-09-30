@@ -26,7 +26,7 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 
 /// The OS config directory. Under the test override it follows
 /// `XDG_CONFIG_HOME` (which Windows `dirs` ignores), else `<home>/.config`.
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(target_os = "macos")))]
 pub(crate) fn config_dir() -> Option<PathBuf> {
     match std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR") {
         Some(home) => Some(
@@ -38,7 +38,7 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
 }
 
 /// The OS config directory.
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "macos")))]
 pub(crate) fn config_dir() -> Option<PathBuf> {
     dirs::config_dir()
 }

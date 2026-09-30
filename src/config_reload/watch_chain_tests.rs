@@ -203,6 +203,7 @@ fn t14_the_named_config_path_keeps_its_directory_link() {
     assert_eq!(super::named_config_path(named.clone()), named);
 }
 
+// Linux-only (W-L9): the real-watcher rows run on inotify (see the module header).
 #[cfg(target_os = "linux")]
 mod real_watcher {
     use std::sync::Arc;
