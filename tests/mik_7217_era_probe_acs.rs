@@ -52,6 +52,23 @@ struct Fixture {
     command: String,
 }
 
+/// Debug builds read this to widen the era probe's 2 s cap (`src/backend/era.rs`).
+/// The peers here are shell scripts that fork per request; on a stalled runner
+/// one answer can take longer than 2 s, and the probe would read that as silence.
+const PROBE_CAP_ENV: &str = "MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS";
+
+/// Widen the probe cap for every peer in this binary that is meant to answer.
+/// A silent peer then waits out the whole cap, so it is set once, high enough to
+/// absorb a stalled runner and low enough to keep that one wait short.
+fn widen_probe_cap() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: runs before any backend in this process starts a probe, and
+        // nothing here reads the environment through a foreign `getenv`.
+        unsafe { std::env::set_var(PROBE_CAP_ENV, "20000") };
+    });
+}
+
 impl Fixture {
     /// `discover` and `tools` are the JSON-RPC payload that follows the echoed `id` — either
     /// `"result":{...}` or `"error":{...}`.
@@ -89,6 +106,7 @@ impl Fixture {
     }
 
     fn backend(&self, name: &str) -> Backend {
+        widen_probe_cap();
         let config = BackendConfig {
             description: format!("era probe fixture: {name}"),
             enabled: true,
@@ -505,6 +523,27 @@ async fn discover_5b_method_not_found_on_an_ordinary_method_does_not_re_probe() 
         Some(Era::Modern),
         "the cached Modern verdict must survive an unimplemented ordinary method; recorded \
          frames were:\n{}",
+        fixture.frames()
+    );
+}
+
+/// A peer that answers `server/discover`, but slowly, is still classified. Under the fixed 2 s
+/// cap the answer arrives after the probe gave up, so the era stays unset; this is what a
+/// stalled CI runner does to a shell-script peer. The debug-only cap override
+/// (`MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`) is what lets the probe wait for it.
+#[tokio::test]
+async fn discover_4_a_slow_but_answering_peer_is_classified() {
+    let arm = format!(r#"sleep 3; printf '{{"jsonrpc":"2.0","id":%s,{LEGACY_DISCOVER}}}\n' "$id""#);
+    let fixture = Fixture::with_discover_arm("2025-11-25", &arm, EMPTY_TOOLS);
+    let backend = fixture.backend("slow-answer");
+
+    backend.ensure_started().await.expect("backend starts");
+
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Legacy),
+        "a peer that answers the probe after 3 s must still be classified; recorded frames \
+         were:\n{}",
         fixture.frames()
     );
 }
