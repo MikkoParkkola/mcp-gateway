@@ -6,9 +6,13 @@
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
+#[path = "signature_chain_hops/fake.rs"]
 mod fake;
+#[path = "signature_chain_hops/oracle.rs"]
 mod oracle;
+#[path = "signature_chain_hops/rows_hops.rs"]
 mod rows_hops;
+#[path = "signature_chain_hops/rows_policy.rs"]
 mod rows_policy;
 
 use std::collections::BTreeMap;
