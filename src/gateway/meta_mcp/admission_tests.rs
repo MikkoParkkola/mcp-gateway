@@ -580,3 +580,44 @@ fn first_warn_fires_once_per_distinct_tool() {
     assert!(first_warn(&mut warned, "s", "b", now));
     assert!(!first_warn(&mut warned, "s", "a", now));
 }
+
+/// #2472: every outcome survives the stored envelope with its hash, and a
+/// result stored without facts (an older envelope, or a bare response) still
+/// decodes, with none.
+#[test]
+fn replay_facts_round_trip_and_older_records_decode() {
+    use crate::security::audit::AuditOutcome;
+    let response = json!({"jsonrpc": "2.0", "id": null, "result": {}});
+    for outcome in [
+        AuditOutcome::Ok,
+        AuditOutcome::ToolError,
+        AuditOutcome::Denied(-32003),
+        AuditOutcome::Invalid(-32600),
+        AuditOutcome::Error(-32010),
+    ] {
+        let stored = StoredDelivery {
+            response: response.clone(),
+            chain: StoredChain::NotEligible,
+            audit: Some(ReplayAudit::new(outcome, Some("sha256:x".to_string()))),
+        };
+        let bytes = serde_json::to_vec(&stored).unwrap();
+        let (_, audit) = stored_response(&bytes).expect("decodes");
+        let audit = audit.expect("facts kept");
+        assert_eq!(audit.outcome(), outcome);
+        assert_eq!(audit.response_hash(), Some("sha256:x"));
+    }
+    let older = serde_json::to_vec(&json!({ "response": response })).unwrap();
+    assert!(
+        stored_response(&older)
+            .expect("older envelope decodes")
+            .1
+            .is_none()
+    );
+    let bare = serde_json::to_vec(&response).unwrap();
+    assert!(
+        stored_response(&bare)
+            .expect("bare response decodes")
+            .1
+            .is_none()
+    );
+}
