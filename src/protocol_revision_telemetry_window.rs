@@ -577,13 +577,16 @@ fn user_agent_family(user_agent: Option<&str>) -> &'static str {
 
 /// This process's HTTP counts since start, as its U1 segment records them.
 ///
-/// `seal` refuses every later HTTP request in the same critical section, so
-/// the returned counts hold every request this process will ever serve.
-pub(crate) fn global_segment_counts(seal: bool) -> SegmentCounts {
-    let mut registry = super::global()
+/// `seal`, the serving gateway's flag, is set in the same critical section
+/// its handlers check it under, so the returned counts hold every request
+/// that gateway will ever serve.
+pub(crate) fn global_segment_counts(seal: Option<&std::sync::atomic::AtomicBool>) -> SegmentCounts {
+    let registry = super::global()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    registry.http_sealed |= seal;
+    if let Some(seal) = seal {
+        seal.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     SegmentCounts {
         snapshot: registry.transport_snapshot(Transport::Http),
         missing_revision_agents: registry.missing_revision_agents(),

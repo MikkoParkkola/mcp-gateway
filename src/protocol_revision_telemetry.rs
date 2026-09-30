@@ -185,9 +185,6 @@ pub struct Registry {
     /// Requests with no revision, by bounded caller key (named client, else
     /// User-Agent family). Diagnoses the unattributed share; gates nothing.
     missing_revision_agents: BTreeMap<String, u64>,
-    /// Set when this process's U1 segment seals: later HTTP requests are
-    /// refused, not counted, so every counted request is in the seal.
-    http_sealed: bool,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -366,22 +363,18 @@ impl Registry {
         client: &str,
         transport: Transport,
     ) {
-        let _ = self.observe_request_from(requested_revision, client, transport, None);
+        self.observe_request_from(requested_revision, client, transport, None);
     }
 
     /// [`Self::observe_request`] with the caller's raw User-Agent, reduced to a
-    /// bounded family before anything is stored. Returns `false`, counting
-    /// nothing, for an HTTP request after this process's segment sealed.
+    /// bounded family before anything is stored.
     pub(crate) fn observe_request_from(
         &mut self,
         requested_revision: Option<&str>,
         client: &str,
         transport: Transport,
         user_agent: Option<&str>,
-    ) -> bool {
-        if transport == Transport::Http && self.http_sealed {
-            return false;
-        }
+    ) {
         let client = client_label(client);
         let revision = revision_label(requested_revision);
         self.total += 1;
@@ -402,7 +395,6 @@ impl Registry {
                 .entry(window::missing_revision_agent(client, user_agent).to_string())
                 .or_insert(0) += 1;
         }
-        true
     }
 
     fn bind_session(&mut self, session_id: &str, attribution: SessionAttribution) {
@@ -917,10 +909,18 @@ pub fn observe_inbound_request(
     );
 }
 
-/// [`observe_inbound_request`] with the raw `User-Agent`, which only ever
-/// becomes a bounded family key. `false` means this process's U1 segment has
-/// sealed: the caller must refuse the request, which is then neither counted
-/// nor served.
+/// An HTTP request's caller facts for [`observe_inbound_request_from`].
+pub(crate) struct HttpCaller<'a> {
+    /// Raw `User-Agent`; only ever becomes a bounded family key.
+    pub user_agent: Option<&'a str>,
+    /// The serving gateway's U1 seal (`MetaMcp::window_seal`).
+    pub sealed: &'a std::sync::atomic::AtomicBool,
+}
+
+/// [`observe_inbound_request`] for an HTTP caller. `false` means the serving
+/// gateway's U1 segment has sealed: the caller must refuse the request, which
+/// is then neither counted nor served. The check runs under the registry lock
+/// the seal is taken under, so a counted request is always in the seal.
 #[must_use]
 pub(crate) fn observe_inbound_request_from(
     request: &Value,
@@ -929,7 +929,7 @@ pub(crate) fn observe_inbound_request_from(
     protocol_header: Option<&str>,
     session_id: Option<&str>,
     transport: Transport,
-    user_agent: Option<&str>,
+    http: Option<HttpCaller<'_>>,
 ) -> bool {
     if method.starts_with("notifications/") {
         return true;
@@ -951,6 +951,13 @@ pub(crate) fn observe_inbound_request_from(
     let mut reg = global()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if http
+        .as_ref()
+        .is_some_and(|caller| caller.sealed.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return false;
+    }
+    let user_agent = http.and_then(|caller| caller.user_agent);
     let previous = (transport == Transport::Stdio)
         .then(|| reg.session_attribution(session_id))
         .flatten();
@@ -976,9 +983,7 @@ pub(crate) fn observe_inbound_request_from(
             },
         );
     }
-    if !reg.observe_request_from(requested_label, client, transport, user_agent) {
-        return false;
-    }
+    reg.observe_request_from(requested_label, client, transport, user_agent);
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
     tracing::debug!(

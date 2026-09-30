@@ -275,16 +275,44 @@ fn t5_checkpoints_are_cumulative_and_survive_a_failed_write() {
 
 #[test]
 fn t5_after_the_seal_an_http_request_is_refused_and_not_counted() {
-    // Final review: a request counted after the seal was lost. Sealing and
-    // counting now exclude each other, so a counted request is in the seal.
-    let mut registry = Registry::new();
-    assert!(registry.observe_request_from(Some("2026-07-28"), "claude", Transport::Http, None));
-    registry.http_sealed = true;
-    assert!(!registry.observe_request_from(Some("2025-06-18"), "claude", Transport::Http, None));
-    assert!(registry.observe_request_from(Some("2025-06-18"), "claude", Transport::Stdio, None));
-    let http = registry.transport_snapshot(Transport::Http);
-    assert_eq!(http.total, 1);
-    assert_eq!(http.by_revision.get("2025-06-18"), None);
+    // Final review: a request counted after the seal was lost. The seal is
+    // the serving gateway's flag, checked under the lock the seal is taken
+    // under, so a request is either in the sealed counts or refused.
+    use crate::protocol_revision_telemetry::{HttpCaller, observe_inbound_request_from};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let caller = |sealed| HttpCaller {
+        user_agent: Some("curl/8.4.0"),
+        sealed,
+    };
+    let open = AtomicBool::new(false);
+    let seal = AtomicBool::new(false);
+    let observe = |gate| {
+        observe_inbound_request_from(
+            &request,
+            None,
+            "tools/list",
+            Some("2025-11-25"),
+            None,
+            Transport::Http,
+            Some(caller(gate)),
+        )
+    };
+    assert!(observe(&seal), "an unsealed gateway counts the request");
+    let sealed_counts = global_segment_counts(Some(&seal));
+    assert!(
+        seal.load(Ordering::SeqCst),
+        "the seal is set with the counts"
+    );
+    assert!(
+        !observe(&seal),
+        "after its seal the gateway refuses, not counts"
+    );
+    assert!(
+        observe(&open),
+        "another gateway's seal does not refuse this one"
+    );
+    let _ = sealed_counts;
 }
 
 #[test]

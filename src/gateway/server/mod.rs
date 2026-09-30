@@ -2123,8 +2123,12 @@ impl Gateway {
                     Some(shutdown_tx.subscribe()),
                 )
             });
-        let window_saver =
-            persistence::spawn_window_saver(data_dir.clone(), addr, shutdown_tx.subscribe());
+        let window_saver = persistence::spawn_window_saver(
+            data_dir.clone(),
+            addr,
+            Arc::clone(&meta_mcp_for_shutdown.window_seal),
+            shutdown_tx.subscribe(),
+        );
 
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
         let std_listener = listener.into_std()?;

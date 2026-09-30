@@ -101,18 +101,23 @@ C. **One durable window per data directory, partitioned by transport, loss-sensi
     (30 s by default), and launchd SIGKILLs the operator's gateway after its default 20 s exit
     timeout. The plist sets no `ExitTimeOut`. An open SSE stream would therefore kill every
     post-drain close.
-  - Why this is exact: the seal and the count exclude each other. On the shutdown broadcast the
-    saver takes the counts and sets `http_sealed` in one critical section under the registry
-    lock (`window::global_segment_counts(true)`). The registry refuses any HTTP observation after
-    that (`Registry::observe_request_from` returns `false`), and both HTTP handlers answer such a
-    request with 503 without serving it (`router/helpers.rs`, `window_sealed_response`). A served
-    request is therefore always in the sealed counts. Only the moment of counting matters: a long
-    tool call, an SSE stream or a task counted before the seal runs to completion and holds
-    nothing open. The seal is immediate, so the operator's always-on callers
-    (`periodic-refresh.sh` every 60 s, agents) cannot keep a restart from sealing clean. The cost:
-    a request that arrives after shutdown begins is refused and retried against the next
-    process. (Final review: a time boundary alone lost post-seal counts, and a pending-request
-    gauge could not see requests not yet admitted.)
+  - Why this is exact: the seal and the count exclude each other. Each gateway instance owns a
+    seal flag (`MetaMcp::window_seal`). On the shutdown broadcast its saver sets that flag and
+    takes the counts in one critical section under the registry lock
+    (`window::global_segment_counts(Some(seal))`). Its HTTP handlers check the same flag under the
+    same lock before counting (`observe_inbound_request_from`, `HttpCaller::sealed`). A request that
+    finds it set is answered 503 without being served (`router/helpers.rs`,
+    `window_sealed_response`). A served request is therefore always in the sealed counts.
+    - Only the moment of counting matters. A long tool call, an SSE stream or a task counted
+      before the seal runs to completion and holds nothing open.
+    - The seal is immediate, so the operator's always-on callers (`periodic-refresh.sh` every
+      60 s, agents) cannot keep a restart from sealing clean.
+    - The flag is per instance, so another gateway in the same process (test binaries) is never
+      refused.
+    - The cost: a request that reaches counting after shutdown begins is refused and retried
+      against the next process.
+    - (Final review: a time boundary alone lost post-seal counts, and a pending-request gauge
+      could not see requests not yet admitted.)
   - Counter dirtiness and lifecycle metadata are tracked separately, so a shutdown with no new
     requests still writes the close.
 - **`Transport::Internal`** is a label that nothing observes in production. A segment's snapshot

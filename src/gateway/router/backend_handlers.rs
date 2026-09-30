@@ -672,9 +672,12 @@ async fn backend_handler_inner(
         protocol_header,
         session_id,
         crate::protocol_revision_telemetry::Transport::Http,
-        inbound_headers
-            .get(axum::http::header::USER_AGENT)
-            .and_then(|value| value.to_str().ok()),
+        Some(crate::protocol_revision_telemetry::HttpCaller {
+            user_agent: inbound_headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            sealed: &state.meta_mcp.window_seal,
+        }),
     ) {
         return super::helpers::window_sealed_response();
     }

@@ -701,9 +701,12 @@ async fn meta_mcp_dispatch(
         protocol_header,
         Some(session_id.as_str()),
         crate::protocol_revision_telemetry::Transport::Http,
-        headers
-            .get(axum::http::header::USER_AGENT)
-            .and_then(|value| value.to_str().ok()),
+        Some(crate::protocol_revision_telemetry::HttpCaller {
+            user_agent: headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            sealed: &state.meta_mcp.window_seal,
+        }),
     ) {
         return super::helpers::window_sealed_response().into_response();
     }

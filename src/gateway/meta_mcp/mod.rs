@@ -504,6 +504,9 @@ pub struct MetaMcp {
     /// `DashMap` allocation is completely absent in production builds.
     #[cfg(feature = "spec-preview")]
     pub(super) session_promoted: Arc<DashMap<String, Vec<String>>>,
+    /// Set when this gateway's U1 window segment seals: from then on its HTTP
+    /// requests are refused, not counted (`protocol_revision_telemetry::window`).
+    pub(crate) window_seal: Arc<std::sync::atomic::AtomicBool>,
 
     /// Per-session FSM workflow state store (issue #113).
     ///
@@ -682,6 +685,7 @@ impl MetaMcp {
             prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
+            window_seal: Arc::default(),
             session_state: SessionStateStore::new(),
             message_signer: None,
             nonce_store: None,

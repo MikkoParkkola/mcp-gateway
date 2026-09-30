@@ -341,7 +341,7 @@ mod tests {
                 process_started_at: 1,
             },
             std::time::Duration::from_secs(3600),
-            stub_counts,
+            Box::new(stub_counts),
             shutdown_tx.subscribe(),
         );
         shutdown_tx.send(()).expect("a subscriber exists");
@@ -366,7 +366,7 @@ const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 /// connections get `server.shutdown_timeout` (30 s by default) and launchd
 /// sends SIGKILL after 20 s, so a post-drain seal would never land while an SSE
 /// stream is open. Sealing takes the counts and refuses every later HTTP
-/// request in one critical section (`global_segment_counts(true)`), so a
+/// request in one critical section (`global_segment_counts(Some(seal))`), so a
 /// request is either in the sealed counts or refused unserved (503). A call
 /// counted before the seal finishes normally, however long it runs.
 /// A sink that fails to open is retried every tick; counts are cumulative
@@ -374,6 +374,7 @@ const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 pub(super) fn spawn_window_saver(
     data_dir: PathBuf,
     listen: std::net::SocketAddr,
+    seal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     use crate::protocol_revision_telemetry::window::{WriterIdentity, unix_seconds_now};
@@ -387,7 +388,11 @@ pub(super) fn spawn_window_saver(
         data_dir,
         identity,
         PROTOCOL_WINDOW_SAVE_INTERVAL,
-        crate::protocol_revision_telemetry::window::global_segment_counts,
+        Box::new(move |close: bool| {
+            crate::protocol_revision_telemetry::window::global_segment_counts(
+                close.then_some(seal.as_ref()),
+            )
+        }),
         shutdown,
     )
 }
@@ -396,7 +401,7 @@ fn spawn_protocol_window_saver(
     data_dir: PathBuf,
     identity: crate::protocol_revision_telemetry::window::WriterIdentity,
     every: std::time::Duration,
-    counts: fn(bool) -> crate::protocol_revision_telemetry::window::SegmentCounts,
+    counts: Box<dyn Fn(bool) -> crate::protocol_revision_telemetry::window::SegmentCounts + Send>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     use crate::protocol_revision_telemetry::window::HttpSegmentSink;
