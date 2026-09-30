@@ -1203,11 +1203,14 @@
     },
     {
       "id": "MIK-7406.VERIFY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7406, \"[4.0] Wire and validate gateway response signing\"). MIK-7377.SIGNING.1 is met, but its own note (2026-09-12 correction) records that signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) checks signature shape only and never verifies the MAC; the validated conjunct rests on the stdio path. This row carries that residual for HTTP. #2369 added signing on cache hits and idempotent replays, which does not verify a MAC either."
+      "evidence": [
+        "tests/message_signing_delivery.rs",
+        "tests/common/signing_verifier.mjs"
+      ],
+      "note": "Met 2026-09-30 (#2500, squash fdc9000c2). signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:63) now reads the delivered HTTP body bytes. It passes them to the independent ECMAScript oracle (tests/common/signing_verifier.mjs), which recomputes the HMAC with the configured key and accepts. The same bytes with one changed body byte are refused (line 121). signing_6_required_nonce_leaves_other_surfaces_unsigned (line 273) covers MIK-7406 SIGNING.6: with require_nonce on, a surfaced tool, a playbook step and a Code Mode execute each succeed without a nonce and arrive unsigned, and a gateway_invoke control without a nonce is refused -32001. Red proof: mutant commit ad4d3bff8 (MAC domain changed, non-invoke calls refused) failed both tests at their assertions in CI run 36762530991. Green: CI run 36764277166 and feature combinations run 36764488232 on head 59001b63e. One review seat (GLM): SHIP.\n\n--- prior note follows ---\nAdded 2026-09-29 under operator chat ruling C1 (Linear MIK-7406, \"[4.0] Wire and validate gateway response signing\"). MIK-7377.SIGNING.1 is met, but its own note (2026-09-12 correction) records that signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) checks signature shape only and never verifies the MAC; the validated conjunct rests on the stdio path. This row carries that residual for HTTP. #2369 added signing on cache hits and idempotent replays, which does not verify a MAC either."
     },
     {
       "id": "MIK-7587.WINDOWS.1",
