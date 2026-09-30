@@ -23,7 +23,6 @@ use super::helpers::build_error_response;
 
 /// A meta-route call about to be refused before dispatch.
 pub(super) struct Refused<'a> {
-    target: ToolTarget<'a>,
     /// The `tools/call` arguments as sent: the object the meta writer hashes
     /// (D1-d.1), so a refused and an admitted call hash alike.
     arguments: &'a Value,
@@ -35,26 +34,25 @@ pub(super) struct Refused<'a> {
 
 impl<'a> Refused<'a> {
     pub(super) fn of(
-        target: ToolTarget<'a>,
         arguments: &'a Value,
         client: Option<&AuthenticatedClient>,
         grant_subject: Option<&GrantSubject>,
         session_id: &'a str,
     ) -> Self {
         Self {
-            target,
             arguments,
             who: AuditWho::from_request(client, grant_subject),
             session_id,
         }
     }
 
-    /// Record the refusal as `denied` with `code`, then answer it; under
+    /// Record the refusal of `target` as `denied` with `code`, then answer it; under
     /// [`AuditFailurePolicy::FailClosed`] a failed write answers 503 instead
     /// (D1-f).
     pub(super) async fn answer(
         self,
         state: &AppState,
+        target: ToolTarget<'_>,
         id: RequestId,
         code: i32,
         message: String,
@@ -80,7 +78,7 @@ impl<'a> Refused<'a> {
             "sha256:{}",
             crate::hashing::canonical_json_sha256(self.arguments)
         );
-        let (server, tool) = (self.target.server.to_string(), self.target.tool.to_string());
+        let (server, tool) = (target.server.to_string(), target.tool.to_string());
         let session = self.session_id.to_string();
         // The meta writer's correlation ladder: caller trace id, then session.
         let written = log

@@ -1338,15 +1338,12 @@ async fn meta_mcp_dispatch(
                 &backend_targets,
             );
             // A refusal below is written to the chain as the meta layer would (#2420).
-            let refused = |t| {
-                Refused::of(
-                    t,
-                    &arguments,
-                    client.as_ref(),
-                    grant_subject.as_ref(),
-                    &session_id,
-                )
-            };
+            let refused = Refused::of(
+                &arguments,
+                client.as_ref(),
+                grant_subject.as_ref(),
+                &session_id,
+            );
             for target in &backend_targets {
                 // A surfaced name this caller could not invoke is answered by
                 // the meta layer exactly as an unknown name is (`-32601`), and
@@ -1387,8 +1384,8 @@ async fn meta_mcp_dispatch(
                         &target.tool,
                         &e.message,
                     );
-                    return refused(target.as_target())
-                        .answer(&state, id, e.code, e.message, e.status)
+                    return refused
+                        .answer(&state, target.as_target(), id, e.code, e.message, e.status)
                         .await;
                 }
 
@@ -1455,8 +1452,8 @@ async fn meta_mcp_dispatch(
                                 });
                             (-32600_i32, format!("Firewall blocked: {desc}"))
                         };
-                        return refused(target)
-                            .answer(&state, id, code, reason, StatusCode::BAD_REQUEST)
+                        return refused
+                            .answer(&state, target, id, code, reason, StatusCode::BAD_REQUEST)
                             .await;
                     }
                 }
