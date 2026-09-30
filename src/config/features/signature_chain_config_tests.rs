@@ -93,9 +93,9 @@ fn chained_gateway(
     use crate::security::remote_provenance::{
         RemoteServerSignatureAlgorithm, TrustedRemoteServerKeyConfig,
     };
-    let mut config = crate::config::Config::default();
-    config.security.signature_chain = Some(config(&seed(32), "gw-d"));
-    config.security.remote_server_signing.trusted_keys.insert(
+    let mut gateway = crate::config::Config::default();
+    gateway.security.signature_chain = Some(config(&seed(32), "gw-d"));
+    gateway.security.remote_server_signing.trusted_keys.insert(
         "gw-u".to_owned(),
         TrustedRemoteServerKeyConfig {
             algorithm: RemoteServerSignatureAlgorithm::Ed25519,
@@ -108,8 +108,8 @@ fn chained_gateway(
         chain_signer: signer.map(str::to_owned),
         ..crate::config::BackendConfig::default()
     };
-    config.backends.insert("upstream".to_owned(), backend);
-    config
+    gateway.backends.insert("upstream".to_owned(), backend);
+    gateway
 }
 
 fn chain_refusal(config: &crate::config::Config) -> Option<String> {

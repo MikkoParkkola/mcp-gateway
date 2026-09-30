@@ -113,10 +113,6 @@ pub(crate) enum ChainPurpose {
     /// A gateway about to append its own link: needs room for one more.
     Forward,
     /// A client verifying what it received: may hold exactly `max_links`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "wired by the inc3 implementation")
-    )]
     Terminal,
 }
 

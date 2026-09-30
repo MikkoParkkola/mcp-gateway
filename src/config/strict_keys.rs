@@ -94,6 +94,9 @@ const KNOWN_BACKEND_KEYS: &[&str] = &[
     "runtime_profile",
     "identity_propagation",
     "account",
+    "signature_chain",
+    "chain_origins",
+    "chain_signer",
     // TransportConfig::Stdio, ::Http and ::WebSocket
     "command",
     "cwd",
@@ -438,6 +441,9 @@ mod tests {
                 runtime_profile: Some("p".into()),
                 identity_propagation: Some(identity.clone()),
                 account: Some("a".into()),
+                signature_chain: crate::config::ChainMode::Require,
+                chain_origins: vec!["o".into()],
+                chain_signer: Some("s".into()),
             };
             let value = serde_yaml::to_value(&backend).expect("backend serializes");
             let fields = value.as_mapping().expect("backend is a mapping");

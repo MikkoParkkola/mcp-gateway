@@ -40,10 +40,6 @@ pub(crate) enum ChainSource {
 /// A backend's signature chain as checked at raw receipt (ASI07 inc3, D3/D4).
 /// Server-owned: never read from or written to the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired by the inc3 implementation")
-)]
 pub(crate) struct UpstreamChain {
     /// The verified upstream links as received; empty when unverified.
     pub(crate) links: Vec<serde_json::Value>,

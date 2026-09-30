@@ -169,6 +169,10 @@ impl SignatureChainConfig {
 /// Startup rules for per-backend chain policy (design D1): `verify`/`require`
 /// need origins, a signer, every key in `remote_server_signing.trusted_keys`,
 /// and this gateway's own `security.signature_chain`. Errors name the field.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "red-first stub; the rules return errors"
+)]
 pub(crate) fn validate_backend_chains(config: &crate::config::Config) -> crate::Result<()> {
     let _ = config;
     Ok(())
