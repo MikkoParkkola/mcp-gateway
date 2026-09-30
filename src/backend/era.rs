@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::Backend;
+use super::PooledEntry;
 use crate::Result;
 use crate::error::Error;
 use crate::protocol::JsonRpcResponse;
@@ -39,6 +40,38 @@ async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcom
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
     }
+}
+
+/// Whether `entry` is serving exactly `transport`, by identity.
+fn holds(entry: &PooledEntry, transport: &Arc<dyn Transport>) -> bool {
+    entry
+        .transport
+        .read()
+        .as_ref()
+        .is_some_and(|held| same(held, transport))
+}
+
+/// Identity, not equality: the address of the transport, ignoring the vtable half of the
+/// fat pointer, which may legitimately differ between codegen units.
+fn same(a: &Arc<dyn Transport>, b: &Arc<dyn Transport>) -> bool {
+    std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b))
+}
+
+/// Run `store` if `entry` still serves `transport`, holding the slot's read guard through
+/// it: a replacement takes the write guard, so it either happened before this check (the
+/// answer is refused) or waits for the write (the answer was about the peer then in service).
+/// Both halves are synchronous, which is what makes check and write one step.
+pub(super) fn install_if_held(
+    entry: &PooledEntry,
+    transport: &Arc<dyn Transport>,
+    store: &mut dyn FnMut(),
+) -> bool {
+    let slot = entry.transport.read();
+    let held = slot.as_ref().is_some_and(|held| same(held, transport));
+    if held {
+        store();
+    }
+    held
 }
 
 /// The JSON-RPC error code in an answer, whichever way the peer carried it.
@@ -185,6 +218,16 @@ impl Backend {
         code: i32,
         transport: &Arc<dyn Transport>,
     ) {
+        // The slot this transport serves, found first: an answer that arrived over a transport
+        // no slot holds any more is evidence about a peer that has been replaced, and must
+        // neither drop the current verdict nor start a probe of it.
+        let Some(entry) = self
+            .pool
+            .iter()
+            .find_map(|slot| holds(slot.value(), transport).then(|| Arc::clone(slot.value())))
+        else {
+            return;
+        };
         // Judging the verdict and dropping it are one locked step, and only the task that
         // dropped it probes. Reading the era and clearing it separately would let two answers
         // arriving at once both find the stale verdict and each fan out a detached probe.
@@ -203,7 +246,11 @@ impl Backend {
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
         tokio::spawn(async move {
-            era.reprobe_with(|| probe(&transport, timeout)).await;
+            era.reprobe_with(
+                || probe(&transport, timeout),
+                |store| install_if_held(&entry, &transport, store),
+            )
+            .await;
         });
     }
 

@@ -14,14 +14,17 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use super::era::install_if_held;
 use super::*;
+use crate::Result;
 use crate::config::TransportConfig;
-use crate::protocol::era::{Era, EraSource, METHOD_NOT_FOUND_CODE};
+use crate::protocol::era::{Era, EraObservation, EraSource, METHOD_NOT_FOUND_CODE};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
-use crate::Result;
 
 const DISCOVER: &str = "server/discover";
+/// A failure bound, never a synchronisation delay: nothing waits this long when the code works.
+const WAIT: Duration = Duration::from_secs(20);
 
 /// What a peer answers `server/discover` with.
 #[derive(Clone, Copy)]
@@ -125,6 +128,13 @@ fn discarded(records: &[Value]) -> Vec<&Value> {
         .collect()
 }
 
+/// The refused record is about the old peer's real answer, not a timeout.
+fn assert_about_the_modern_answer(records: &[Value]) {
+    let fields = &discarded(records)[0]["fields"];
+    assert_eq!(fields["evidence"], "discover_modern", "{fields}");
+    assert_eq!(fields["trigger"], "reprobe", "{fields}");
+}
+
 /// Modern is cached from `peer`, then a `-32601` to `server/discover` contradicts it and a
 /// re-probe of `peer` starts and is held mid-flight. Returns once the probe is on the wire.
 async fn contradicted_and_probing(
@@ -141,8 +151,9 @@ async fn contradicted_and_probing(
     backend
         .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
         .await;
-    (&mut handles.started)
+    tokio::time::timeout(WAIT, &mut handles.started)
         .await
+        .expect("the re-probe reached the peer in time")
         .expect("the re-probe reaches the peer");
     transport
 }
@@ -172,20 +183,27 @@ fn a_restart_mid_reprobe_refuses_the_old_peers_answer() {
             "the restart took the old transport out of its slot"
         );
 
-        let _ = handles.release.send(());
-        let observed = backend.era_observation().await;
-        assert_ne!(
-            observed.source,
-            EraSource::Probed,
-            "the old peer's answer must not be recorded once its transport was replaced: {observed:?}"
+        // Delivered, or the probe cap expired first and the refusal below would be about
+        // silence, not about the old peer's modern answer.
+        handles
+            .release
+            .send(())
+            .expect("the held probe is still waiting");
+        let observed = tokio::time::timeout(WAIT, backend.era_observation())
+            .await
+            .expect("the detached re-probe decided");
+        assert_eq!(
+            observed,
+            EraObservation::never_probed(),
+            "the old peer's answer must not touch the observation once its transport was replaced"
         );
-        assert_eq!(backend.cached_era().await, None);
     });
     assert_eq!(
         discarded(&records).len(),
         1,
         "one era_probe_discarded record naming the reason: {records:?}"
     );
+    assert_about_the_modern_answer(&records);
 }
 
 /// ERA.1 with a successful replacement: the old peer's answer is refused, and the era is then
@@ -201,10 +219,16 @@ fn the_era_after_a_replacement_is_the_new_peers_own_answer() {
         let new: Arc<dyn Transport> = new;
         backend.set_transport_for_test(Arc::clone(&new));
 
-        let _ = handles.release.send(());
+        handles
+            .release
+            .send(())
+            .expect("the held probe is still waiting");
+        let observed = tokio::time::timeout(WAIT, backend.era_observation())
+            .await
+            .expect("the detached re-probe decided");
         assert_eq!(
-            backend.cached_era().await,
-            None,
+            observed,
+            EraObservation::never_probed(),
             "the old peer's modern answer must not survive the replacement"
         );
 
@@ -212,6 +236,7 @@ fn the_era_after_a_replacement_is_the_new_peers_own_answer() {
         assert_eq!(backend.cached_era().await, Some(Era::Legacy));
     });
     assert_eq!(discarded(&records).len(), 1, "{records:?}");
+    assert_about_the_modern_answer(&records);
 }
 
 /// ERA.3: with no replacement the re-probe's answer is committed and nothing is reported.
@@ -222,8 +247,13 @@ fn without_a_restart_the_reprobe_answer_is_committed() {
         let (peer, mut handles) = Peer::new(Answer::Modern);
         contradicted_and_probing(&backend, &peer, &mut handles).await;
 
-        let _ = handles.release.send(());
-        let observed = backend.era_observation().await;
+        handles
+            .release
+            .send(())
+            .expect("the held probe is still waiting");
+        let observed = tokio::time::timeout(WAIT, backend.era_observation())
+            .await
+            .expect("the detached re-probe decided");
         assert_eq!(observed.source, EraSource::Probed, "{observed:?}");
         assert_eq!(observed.era, Era::Modern);
     });
@@ -231,4 +261,38 @@ fn without_a_restart_the_reprobe_answer_is_committed() {
         discarded(&records).is_empty(),
         "nothing was refused: {records:?}"
     );
+}
+
+/// The installer runs `store` with the slot's read guard held, so a replacement cannot land
+/// between its check and the write. A version that dropped the guard first would leave the
+/// slot writable during `store`, and this assertion would fail.
+#[test]
+fn the_installer_holds_the_slot_guard_while_it_stores() {
+    let entry = PooledEntry::new("held", &crate::config::FailsafeConfig::default());
+    let (peer, _handles) = Peer::new(Answer::Modern);
+    let served: Arc<dyn Transport> = peer;
+    *entry.transport.write() = Some(Arc::clone(&served));
+
+    let mut stored = false;
+    let installed = install_if_held(&entry, &served, &mut || {
+        assert!(
+            entry.transport.try_write().is_none(),
+            "the slot must not be writable while the answer is stored"
+        );
+        stored = true;
+    });
+    assert!(installed && stored);
+
+    // Replaced by a successful start: refused, `store` never runs.
+    let (other, _handles) = Peer::new(Answer::MethodNotFound);
+    *entry.transport.write() = Some(other as Arc<dyn Transport>);
+    assert!(!install_if_held(&entry, &served, &mut || panic!(
+        "a replaced transport's answer must not be stored"
+    )));
+
+    // Evicted but still referenced: the taken transport reads as none, and refuses.
+    entry.transport.write().take();
+    assert!(!install_if_held(&entry, &served, &mut || panic!(
+        "an evicted slot's answer must not be stored"
+    )));
 }

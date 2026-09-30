@@ -69,6 +69,8 @@ The operator read is unaffected: a refused answer leaves it exactly as the contr
 | 4b | same as row 2 | replacement by a successful start rather than a failed one: `set_transport_for_test(B)` after A's re-probe began; A's answer is refused, then B's own `resolve_era` fixes the era from B's answer | A's answer is committed |
 | 5 | existing | `a_contradiction_reprobes_and_the_whole_read_moves_with_it`, `a_reprobe_that_gets_no_answer_returns_the_era_to_assumed` | unchanged |
 
+Coverage limit, stated rather than hidden: no test drives a per-user slot through the backend or a real idle eviction of the captured entry. Row 4 proves the installer's guard retention and its refusal of an empty slot; the pool scan that captures the entry is slot-kind agnostic by construction (it walks every `PooledEntry`), and an eviction takes the transport out under the same write guard the installer respects.
+
 Rows 1 and 4 prove the method and the boundary; row 2 proves the capture and the lifecycle path.
 Asserting the whole `EraObservation` (source, evidence, timestamp) in rows 2 and 4, not only the era.
 The `era_probe_discarded` row of the NFR.OBS.3 plan moves from "not executable" to covered.
