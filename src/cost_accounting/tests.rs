@@ -241,6 +241,9 @@ fn an_empty_session_id_opens_no_session_bucket() {
 
     assert!(tracker.session_snapshot("").is_none());
     assert!(tracker.all_sessions().is_empty());
-    assert_eq!(tracker.key_snapshot("alice").unwrap().window_24h.tokens, 200);
+    assert_eq!(
+        tracker.key_snapshot("alice").unwrap().window_24h.tokens,
+        200
+    );
     assert_eq!(tracker.key_snapshot("bob").unwrap().window_24h.tokens, 100);
 }
