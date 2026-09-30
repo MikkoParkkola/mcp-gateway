@@ -11,7 +11,7 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
-use crate::gateway::task_service::{OwnedCallerContext, ServiceError, TaskIntent};
+use crate::gateway::task_service::{InputOutcome, OwnedCallerContext, ServiceError, TaskIntent};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::meta::Declared;
@@ -215,6 +215,8 @@ pub(super) struct RecoveryCaller<'a> {
     pub cert_identity: Option<&'a CertIdentity>,
     pub api_key_name: Option<&'a str>,
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
+    /// The request's own declared label: audit attribution only (#2430).
+    pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     pub verified_identity: Option<&'a VerifiedIdentity>,
     pub is_admin: bool,
@@ -370,28 +372,139 @@ async fn recover_from_upstream(
 }
 
 pub(super) async fn tasks_update(
-    state: &AppState,
+    state: &Arc<AppState>,
     owner: &str,
     id: RequestId,
     params: Option<&Value>,
+    caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
     let Some(task_id) = task_id_param(params) else {
         return missing_task_error(id);
     };
-    if crate::protocol::mrtr::input_responses_nonempty(
-        params.and_then(|params| params.get("inputResponses")),
-    ) {
-        return JsonRpcResponse::error(
+    let answers = params.and_then(|params| params.get("inputResponses"));
+    if !crate::protocol::mrtr::input_responses_nonempty(answers) {
+        return match state.tasks.update(owner, task_id, 0, json!({})).await {
+            Ok(_) => JsonRpcResponse::success(id, ack_complete()),
+            Err(ServiceError::NotFound) => missing_task_error(id),
+            Err(_) => store_unavailable(id),
+        };
+    }
+    let Some(Value::Object(answers)) = answers.cloned() else {
+        return JsonRpcResponse::error(Some(id), -32602, "inputResponses must be an object");
+    };
+    // Owner-scoped first: a foreign or absent task is answered as absent
+    // before anything about a round is said.
+    match state.tasks.get(owner, task_id) {
+        Ok(current)
+            if current.task.status() == crate::protocol::tasks::TaskStatus::InputRequired => {}
+        Ok(current) => return settled_or_no_round(id, &current.task),
+        Err(ServiceError::NotFound) => return missing_task_error(id),
+        Err(_) => return store_unavailable(id),
+    }
+    let outcome = state
+        .task_executor
+        .provide_input(
+            update_caller(state, owner, params, caller),
+            owner,
+            task_id,
+            answers,
+        )
+        .await;
+    match outcome {
+        InputOutcome::Accepted => JsonRpcResponse::success(id, ack_complete()),
+        // A cancel may have landed between the look-up above and the write.
+        InputOutcome::NotOutstanding => match state.tasks.get(owner, task_id) {
+            Ok(current) => settled_or_no_round(id, &current.task),
+            Err(ServiceError::NotFound) => missing_task_error(id),
+            Err(_) => store_unavailable(id),
+        },
+        InputOutcome::TooLarge => JsonRpcResponse::error(
             Some(id),
             -32602,
-            "inputResponses are not accepted until an input round is outstanding",
-        );
+            "inputResponses exceed the task record size limit",
+        ),
+        InputOutcome::Busy => JsonRpcResponse::error(Some(id), -32603, "task busy, retry"),
+        InputOutcome::PoolFull => {
+            JsonRpcResponse::error(Some(id), -32603, "task worker pool is full, retry")
+        }
+        InputOutcome::Closed(closed) => JsonRpcResponse::error(
+            Some(id),
+            -32602,
+            format!(
+                "inputResponses refused: {}; the round is closed",
+                closed.reason()
+            ),
+        ),
+        InputOutcome::NotFound => missing_task_error(id),
+        InputOutcome::Unavailable => store_unavailable(id),
     }
-    match state.tasks.update(owner, task_id, 0, json!({})).await {
-        Ok(_) => JsonRpcResponse::success(id, ack_complete()),
-        Err(ServiceError::NotFound) => missing_task_error(id),
-        Err(_) => store_unavailable(id),
+}
+
+/// A late answer to a settled task is told how it settled, with the reason it
+/// carries (#2429); a live task without a round gets the plain refusal.
+fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
+    let wire = serde_json::to_value(task.wire()).unwrap_or_default();
+    let status = wire
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "completed" | "failed" | "cancelled") {
+        return no_round(id);
     }
+    let reason = wire
+        .get("statusMessage")
+        .and_then(Value::as_str)
+        .map_or_else(String::new, |message| format!(": {message}"));
+    JsonRpcResponse::error(
+        Some(id),
+        -32602,
+        format!("inputResponses refused: the task is {status}{reason}"),
+    )
+}
+
+fn no_round(id: RequestId) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        Some(id),
+        -32602,
+        "inputResponses are not accepted until an input round is outstanding",
+    )
+}
+
+/// The resume's caller: THIS update request's live identity, the bundle
+/// `tasks/get` re-authorizes with, never the context that created the task.
+fn update_caller(
+    state: &Arc<AppState>,
+    owner: &str,
+    params: Option<&Value>,
+    caller: &RecoveryCaller<'_>,
+) -> OwnedCallerContext {
+    OwnedCallerContext::new(
+        Arc::downgrade(state),
+        OwnedRouterAuthorizer::capture(
+            caller.client,
+            caller.oauth_agent_identity,
+            caller.cert_identity,
+        ),
+        caller.api_key_name.map(str::to_owned),
+        caller
+            .agent_id
+            .map(crate::security::OwnedProvenAgentId::from),
+        caller.agent_declared.map(|label| label.as_str().to_owned()),
+        caller.grant_subject.clone(),
+        caller.verified_identity.cloned(),
+        owner.to_owned(),
+        crate::gateway::meta_mcp::Authentication::of(caller.client),
+        crate::security::audit::CredentialKind::of(caller.client),
+        caller.is_admin,
+        caller.input_capabilities,
+        caller
+            .session_id
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
+        // No classifier revision: a resumed result is never response-cached.
+        None,
+        RetryFields::from_params(params).attestation,
+    )
 }
 
 pub(super) async fn tasks_cancel(

@@ -106,7 +106,7 @@ backend" and "fails a capability file" first.**
 | 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
-| 82 | Reserved: lands with a pending change | None yet |
+| 82 | A signature chain a backend puts in a result's `_meta` is stripped; the new `security.signature_chain` lets the gateway sign an origin link | Nothing unless you consumed a backend-sent chain; to emit links, configure `security.signature_chain` |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
@@ -128,6 +128,7 @@ backend" and "fails a capability file" first.**
 | 101 | A restart that finds the audit log's `.hwm` missing, on a log that went through segment handling, writes an `audit_segment_hwm_missing` record; `audit verify` then fails the log for as long as it is kept | Investigate how the mark went missing; archive the log and start a new one to clear the failure |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
+| 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2442,6 +2443,38 @@ and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is
 credentials the client config held. Library users replace struct literals with
 `DiscoveredServer::new`.
 
+## 82. Backend signature chains are stripped; the gateway can sign an origin link
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `security.signature_chain` set and invalid
+
+A backend result's `_meta["io.mcp-gateway/signature-chain"]` is now removed on every route, and
+from stored replays, before anything is delivered. Only this gateway may put a chain on a result.
+
+The new optional `security.signature_chain` gives the gateway an Ed25519 chain identity:
+
+```yaml
+security:
+  signature_chain:
+    signing_key: "env:CHAIN_SEED"   # base64 of a 32-byte seed
+    key_id: "gw-eu-1"               # 1 to 64 bytes
+    emit: on_request                # or always
+```
+
+With it set, a `gateway_invoke` result from an MCP backend (and its synchronous idempotent replay)
+carries one signed origin link when the request sends `params._meta["io.mcp-gateway/chain-nonce"]`
+(a 1 to 256 byte string, else `-32602`), or on every such result under `emit: always`. The link
+covers the delivered result and sits under the v2 `_signature` MAC. The direct `/mcp/{name}` route
+links its live `tools/call` results. Capability results, meta-only tools, Code Mode, playbooks,
+cache hits and direct-route idempotent replays are not linked in 4.0: the direct replay store can
+hold a gateway-authored side-effect notice and records no origin. The `gateway_invoke` `nonce` is
+the link's fallback nonce only while `message_signing` is enabled; with it off, a link carries the
+chain nonce or `null`. A result that cannot carry a link is
+refused with `-32001`. A change to `signing_key`, `key_id` or `emit` needs a restart; a reload
+that changes one is refused.
+
+**Action:** none unless a client read a chain a backend sent. To emit links, set
+`security.signature_chain`.
+
 ## 83. `MigratedCredential` has a public `reachability` field
 
 **Startup:** no notice
@@ -2916,6 +2949,23 @@ public or shared capabilities write none. Under `FailClosed`, a record that cann
 answers the call with `-32005`, as an invocation record does.
 
 **Action:** where a SIEM rule or script counts audit records per call, filter on `kind`.
+
+## 104. A session belongs to its subject and credential
+
+**Startup:** no notice
+
+In 3.x, a streaming session belonged to the credential that opened it. Callers that proved
+different subjects (an agent JWT `sub`, a trusted identity header, Cloudflare Access, an mTLS
+certificate) behind one shared API key or bearer token, or with authentication off, could resume
+and delete each other's sessions and read each other's notifications by presenting the session
+id. In 4.0 a session belongs to the subject and the credential together, on POST, GET and DELETE
+alike. A different subject, or the same subject under another credential, is given a new session.
+The credential half is what the caller presented, so a renewed token is another credential: in 3.x
+a delegated OIDC bearer kept its session across a refresh, and now it does not. Callers that prove
+no subject keep the 3.x behaviour.
+
+**Action:** a client that proves a subject and renews its bearer token mid-session must
+re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
 
 ## Upgrading from 3.5.x: a walkthrough
 

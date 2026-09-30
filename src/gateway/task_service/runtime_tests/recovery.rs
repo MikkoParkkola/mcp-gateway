@@ -287,11 +287,20 @@ async fn seed_row(
             revision = fixture
                 .service
                 .store
-                .transition(
+                .require_input(
                     fixture.owner,
                     &id,
                     revision,
-                    TaskTransition::RequireInput(round),
+                    round,
+                    // MIK-7311: the round carries a stored continuation, and
+                    // restart still settles it interrupted (I3).
+                    crate::gateway::task_service::record::InputRound {
+                        request_state: Some("sealed-by-the-previous-process".to_owned()),
+                        tool: "write".to_owned(),
+                        arguments: json!({}),
+                        accepted_inputs: serde_json::Map::new(),
+                        continuation_deadline: None,
+                    },
                     chrono::Utc::now(),
                 )
                 .await

@@ -29,6 +29,8 @@ pub(crate) const TOOL: &str = "echo";
 pub(crate) enum Answer {
     /// A successful tool result, carried verbatim.
     Result(Value),
+    /// One result per `tools/call`, in order; the last one repeats.
+    Sequence(Vec<Value>),
 }
 
 impl Answer {
@@ -178,8 +180,11 @@ impl MockBackend {
             .clone()
     }
 
-    fn answer(&self) -> JsonRpcResponse {
-        let Answer::Result(ref value) = self.answer;
+    fn answer(&self, call: usize) -> JsonRpcResponse {
+        let value = match &self.answer {
+            Answer::Result(value) => value,
+            Answer::Sequence(values) => &values[call.min(values.len() - 1)],
+        };
         JsonRpcResponse::success(RequestId::Number(1), value.clone())
     }
 }
@@ -209,7 +214,7 @@ impl Transport for MockBackend {
                     .lock()
                     .expect("recorder is never poisoned")
                     .push(params.unwrap_or(Value::Null));
-                self.calls.fetch_add(1, Ordering::SeqCst);
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
                 if let Some(ref gate) = self.gate {
                     // Announce before waiting: a row's barrier is "the backend
                     // was reached", and announcing after the wait would make
@@ -221,7 +226,7 @@ impl Transport for MockBackend {
                         .expect("the gate semaphore is never closed")
                         .forget();
                 }
-                Ok(self.answer())
+                Ok(self.answer(call))
             }
             _ => Ok(JsonRpcResponse::success(RequestId::Number(1), json!({}))),
         }

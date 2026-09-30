@@ -33,12 +33,7 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
         }
         Ok(Self {
             jsonrpc: shadow.jsonrpc,
-            id: shadow.id,
-            result: shadow.result,
-            error: shadow.error,
-            confirmation_refusal: false,
-            delivery_refusal: false,
-            discovery_inspected: false,
+            ..Self::envelope(shadow.id, shadow.result, shadow.error)
         })
     }
 }

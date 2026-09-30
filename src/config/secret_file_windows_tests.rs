@@ -177,3 +177,26 @@ fn symlink_to_a_bad_file_is_judged_on_the_target() {
 
     assert!(text.contains("ForeignSid"), "WT-ASSERT {row}: {text}");
 }
+
+/// #2305: a named pipe at a guarded path is refused as not a regular file,
+/// for a secret and for a trust file, before any DACL is judged
+/// (UPGRADING-4.0 item 99).
+#[tokio::test]
+async fn a_named_pipe_is_refused_as_not_a_regular_file() {
+    let row = "2305-P1";
+    for what in [SecretFile::Config, SecretFile::ControlPlaneCollection] {
+        // One pipe per class: a pipe instance takes one client.
+        let name = format!(r"\\.\pipe\mcp-gateway-2305-{}-{what:?}", std::process::id());
+        let _server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)
+            .unwrap_or_else(|e| fixture_fail(row, &format!("creating {name} failed: {e}")));
+
+        let text = refusal(row, read_guarded_file(&PathBuf::from(&name), what));
+
+        assert!(
+            text.contains("NotRegular") && text.contains("not a regular file"),
+            "WT-ASSERT {row}/{what:?}: {text}"
+        );
+    }
+}

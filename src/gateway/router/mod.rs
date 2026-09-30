@@ -38,6 +38,7 @@ pub(crate) use authorization::{
 mod backend_handlers;
 mod handlers;
 mod identity;
+mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
 // production constructor instead of reimplementing it; see its doc comment.
@@ -103,6 +104,8 @@ mod probe_tests;
 mod r2_identity_keys_tests;
 #[cfg(test)]
 mod r2_input_keys_tests;
+#[cfg(test)]
+mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Private durable record; never returned as the public Task wire projection.
 
-use crate::protocol::tasks::{Task, TaskSnapshot};
+use crate::protocol::tasks::{Task, TaskSnapshot, TaskStatus};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Current on-disk format. The loader accepts `1..=RECORD_VERSION` and never
 /// rewrites a supported legacy row. Bumped to 3 in the SAME increment that
@@ -21,6 +21,41 @@ pub(super) const MARKER_VERSION: u32 = 2;
 /// from [`RECORD_VERSION`] for the same reason [`MARKER_VERSION`] is: a later
 /// bump must not reclassify a v3 row that did record its handle.
 pub(super) const UPSTREAM_VERSION: u32 = 3;
+
+/// The record version that introduced [`Record::input_round`], and the
+/// highest the loader accepts. Written only on a row that opens a round, the
+/// way `mark_upstream` raises a row to [`UPSTREAM_VERSION`]: every other row
+/// stays at [`RECORD_VERSION`], byte-identical, and an older loader refuses
+/// only a row that holds a continuation it could not honour.
+pub(super) const INPUT_ROUND_VERSION: u32 = 4;
+
+/// How far before the stored continuation's own expiry a round stops taking
+/// answers: room for an accepted answer to reach redemption (#2429).
+pub(crate) const CONTINUATION_DEADLINE_MARGIN_SECS: u64 = 10;
+
+/// An open input round's continuation: what a resume needs and nothing else.
+///
+/// Gateway state, never part of the wire task. `request_state` is the
+/// continuation envelope this gateway sealed into the interim result, redeemed
+/// by the resume exactly as a client retry would present it. `tool` and
+/// `arguments` are the call the round interrupted, resent as they were, and
+/// `accepted_inputs` holds the answers accepted so far. Dropped on every
+/// terminal transition. Counts against `max_record_bytes`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InputRound {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_state: Option<String>,
+    pub(crate) tool: String,
+    pub(crate) arguments: Value,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub(crate) accepted_inputs: Map<String, Value>,
+    /// When the stored continuation stops being redeemable, less a margin, in
+    /// unix seconds (#2429). `None`: no continuation is stored, and the task's
+    /// TTL alone bounds the round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) continuation_deadline: Option<u64>,
+}
 
 /// Upper bound on a durable upstream handle, in bytes.
 ///
@@ -121,10 +156,28 @@ pub(super) struct Record {
     /// before the write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) upstream: Option<UpstreamRecord>,
+    /// The open input round, if any. Absent on v1-v3 rows and on every row
+    /// with no round outstanding, so such a row serializes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) input_round: Option<InputRound>,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
     pub(super) model: TaskSnapshot,
+}
+
+impl Record {
+    /// Store the model; a terminal task drops its input round's continuation
+    /// and answers with it, so nothing a settled task can no longer use stays.
+    pub(super) fn set_model(&mut self, task: &Task) {
+        self.model = task.snapshot();
+        if matches!(
+            task.status(),
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            self.input_round = None;
+        }
+    }
 }
 
 /// An explicitly pre-admitted creation boundary. Tests can construct it while
@@ -152,6 +205,7 @@ impl PreparedTask {
                 version: RECORD_VERSION,
                 dispatched: false,
                 upstream: None,
+                input_round: None,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -175,6 +229,7 @@ impl PreparedTask {
                 version: RECORD_VERSION,
                 dispatched: false,
                 upstream: None,
+                input_round: None,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),

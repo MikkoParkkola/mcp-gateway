@@ -74,6 +74,11 @@ impl MetaMcp {
         result: Result<Value>,
         dispatch_failure: Option<i32>,
     ) -> Result<Value> {
+        // D4: counted before the log check, so auth off still counts.
+        if let Some(reason) = crate::security::security_metrics::meta_denial(&result) {
+            use crate::security::security_metrics::{DenialRoute, denied};
+            denied(DenialRoute::Meta, reason);
+        }
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
@@ -98,6 +103,9 @@ impl MetaMcp {
             .get("_meta")
             .and_then(crate::protocol::trace::TraceContext::from_meta)
             .and_then(|tc| tc.trace_id().map(str::to_string));
+        // The modern HTTP route carries "no session" as `Some("")`; an empty
+        // id is no key, or every stateless call would correlate as one.
+        let session_id = session_id.filter(|session| !session.is_empty());
         let key = match (otel_trace_id.as_deref(), session_id) {
             (Some(otel), _) => CorrelationKey {
                 id: otel,

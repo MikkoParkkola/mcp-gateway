@@ -293,7 +293,7 @@ async fn run() -> ExitCode {
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
-        Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
+        Some(Command::Serve { stdio: false }) | None => Box::pin(run_server(cli)).await,
     }
 }
 

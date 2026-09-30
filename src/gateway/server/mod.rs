@@ -68,9 +68,9 @@ use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
+use crate::security::{ToolPolicy, posture};
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -579,17 +579,16 @@ impl Gateway {
     ) -> Result<Self> {
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
-        crate::security::posture::resolve(
-            &mut config,
-            crate::security::posture::FirewallBuild::CURRENT,
-        )?;
+        posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
         {
             // A cheap snapshot, dropped here: nothing environmental is held
             // while the gateway is built or awaited on.
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
+            let chain = &mut config.security.signature_chain; // key identity, as at load
+            crate::config::SignatureChainConfig::resolve_section(chain, &overlay)?;
         }
-        crate::security::posture::log_startup(&config);
+        posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
 
@@ -1029,6 +1028,10 @@ impl Gateway {
                 signing.require_nonce,
             );
         }
+        if let Some(chain) = &self.config.security.signature_chain {
+            let signer = chain.resolve_with_env(&self.env.get())?;
+            meta_mcp_builder.set_chain_signer(signer, chain.emit);
+        }
 
         let mut meta_mcp = Arc::new(meta_mcp_builder);
         meta_mcp.set_context_integrity_kernel(
@@ -1191,10 +1194,9 @@ impl Gateway {
         }
 
         // ── Idempotency (MIK-7272.SUB.4) ─────────────────────────────────────
-        // Unconditional and unconfigurable. A client-supplied idempotency key
-        // is a correctness mechanism, not a preference: the only thing an
-        // operator toggle would buy is the ability to switch duplicated side
-        // effects back on. Bounds are the constants in `crate::idempotency`.
+        // Unconditional and unconfigurable: an idempotency key is a correctness
+        // mechanism, and a toggle could only switch duplicated side effects
+        // back on. Bounds are the constants in `crate::idempotency`.
         // This is the only production construction site of `MetaMcp`, and both
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
         // All three of the criterion's routes reach a guard from here: generic
@@ -1393,10 +1395,8 @@ impl Gateway {
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
 
-            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES.
-            //
-            // The background scan below exists so a large capability directory
-            // does not delay the listener binding, and it stays the default.
+            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES. The background
+            // scan exists so a large directory does not delay the listener.
             // But when the configuration declares `accounts.descriptors`, the
             // scan is also the ADMISSION GATE that rejects a capability whose
             // `auth.account` names no declared descriptor or whose `auth.key`
@@ -2877,15 +2877,15 @@ impl Gateway {
         client: StdioClient<'_>,
         protocol_telemetry_sink: &StdioTelemetry,
     ) -> Option<serde_json::Value> {
-        // Borrowed views throughout: a request this dispatcher refuses must not
-        // be copied on its way to the refusal. Ownership is taken once, after
-        // admission, where the payload is actually executed.
+        // Borrowed views throughout: a refused request is never copied.
+        // Ownership is taken once, after admission, where it executes.
         use super::router::helpers::extract_tools_call_params_ref;
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let mut signing_context = match Self::prepare_signing(meta_mcp, &mut request) {
-            Ok(context) => context,
+        let prepared = Self::prepare_signing(meta_mcp, &mut request);
+        let (mut signing_context, chain_nonce) = match prepared {
+            Ok(prepared) => prepared,
             Err(response) => return Some(response),
         };
 
@@ -2903,13 +2903,10 @@ impl Gateway {
         };
 
         let (external_tool, response_targets) = {
-            // Response targets are still derived here, before anything dispatches,
-            // so no change in live backend state can move an accepted call's
-            // provenance. What is withheld is the payload: a target owns a copy of
-            // the call arguments, and the response-target mapping reads a target's
-            // server and tool and discards that copy on the next line. So the
-            // mapping is fed the routing keys alone — same servers, same tools,
-            // same sort, dedup and discovery handling, none of the megabytes.
+            // Response targets are derived here, before dispatch, so live backend
+            // state cannot move an accepted call's provenance. The mapping is fed
+            // the routing keys alone (same servers, tools, sort, dedup and
+            // discovery handling), never a copy of the call arguments.
             let (external_tool, backend_targets) = if method == "tools/call" {
                 let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
                 let (tool, arguments) = extract_tools_call_params_ref(params);
@@ -2951,15 +2948,11 @@ impl Gateway {
         } else {
             (
                 match method.as_str() {
-                    // 2026-07-28 MUST. Answered before anything else and without a
-                    // handshake, because on stdio this is also the backward-compatibility
-                    // probe: a legacy server answers it with an error, not a document.
-                    // Always the legacy list on stdio. This dispatcher has no
-                    // access to the running config, and the stateless revision is
-                    // specified over streamable HTTP; advertising it on a transport
-                    // whose modern path is not wired would be a claim the gateway
-                    // cannot honour. Recorded as a limitation, not a decision that
-                    // stdio is excluded.
+                    // 2026-07-28 MUST, answered without a handshake: on stdio it is
+                    // also the backward-compatibility probe. Always the legacy list:
+                    // this dispatcher has no running config, and the stateless
+                    // revision is specified over streamable HTTP (a limitation, not
+                    // a decision that stdio is excluded).
                     "server/discover" => {
                         JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
                     }
@@ -2989,6 +2982,7 @@ impl Gateway {
             )
         };
 
+        let chain_source = response.chain_source;
         let response = meta_mcp.finalize_response_for_delivery(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
@@ -3003,6 +2997,8 @@ impl Gateway {
                 mutation:
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
+                chain_source,
+                chain_nonce: chain_nonce.as_deref(),
             },
         ).await;
         if let Some(execution) = execution {
@@ -3011,30 +3007,34 @@ impl Gateway {
         Some(response.to_value_lossy())
     }
 
-    /// Capture and restore the signing envelope ahead of parsing, if signing
-    /// is enabled: the envelope lives in the caller's request, so it is taken
-    /// out before anything else reads that tree.
+    /// Capture the signing envelope and the chain nonce ahead of parsing:
+    /// both are taken out before anything else reads the request.
     fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
     ) -> std::result::Result<
-        Option<super::meta_mcp::signing::SigningInvocationContext>,
+        (
+            Option<super::meta_mcp::signing::SigningInvocationContext>,
+            Option<String>,
+        ),
         serde_json::Value,
     > {
+        // A bad chain nonce keeps the caller's id; a bad envelope has none.
+        let raw_id = crate::protocol::mrtr::raw_request_id(request);
         let mut signing_context = meta_mcp
             .signing_enabled()
             .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
-        if let Some(context) = signing_context.as_mut()
-            && let Err(error) = context.restore(request)
-        {
-            return Err(crate::protocol::JsonRpcResponse::error(
-                None,
+        let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
+        let id = restored.is_ok().then_some(raw_id).flatten();
+        match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
+            Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
+            Err(error) => Err(crate::protocol::JsonRpcResponse::error(
+                id,
                 error.to_rpc_code(),
                 super::meta_mcp::signing::wire_error_message(&error),
             )
-            .to_value_lossy());
+            .to_value_lossy()),
         }
-        Ok(signing_context)
     }
 
     /// Parse, classify and durably observe one inbound stdio request.
@@ -3143,13 +3143,10 @@ impl Gateway {
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             credential_kind: crate::security::audit::CredentialKind::LocalTransport,
             authorizer: stdio_authorizer,
-            // Stdio has no port and no network surface: the
-            // client SPAWNED this process, so it already holds
-            // whatever the operator holds — it could edit the
-            // config file just as easily. Withholding admin
-            // here would take the management tools away from
-            // exactly the single-user setup the origin gate
-            // exists to protect, and protect nothing.
+            // Stdio has no network surface: the client SPAWNED
+            // this process and holds what the operator holds.
+            // Withholding admin would disarm the single-user setup
+            // the origin gate protects, and protect nothing.
             //
             // Explicit since the admin gate moved to the
             // dispatcher: it previously lived on the HTTP path

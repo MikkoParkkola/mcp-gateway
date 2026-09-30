@@ -35,10 +35,14 @@ pub(crate) mod response_policy;
 pub mod response_scanner;
 pub mod sanitize;
 pub mod scope_collision;
-// Pure module; increment 2 of the ASI07 design adds its first caller, at
-// which point this `expect` stops being fulfilled and must be removed.
-#[cfg_attr(not(test), expect(dead_code))]
-mod signature_chain;
+pub(crate) mod security_metrics;
+// Emission and strip are wired (ASI07 increment 2); chain verification has
+// no caller until increment 3, which removes this `expect`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "verification lands in increment 3")
+)]
+pub(crate) mod signature_chain;
 pub mod ssrf;
 pub mod tool_integrity;
 pub mod transparency_log;

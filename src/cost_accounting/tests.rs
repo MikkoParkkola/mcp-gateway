@@ -231,3 +231,35 @@ fn aggregate_cost_is_zero_on_empty_tracker() {
     assert_eq!(agg.total_calls, 0);
     assert!(agg.total_cost_usd.abs() < 1e-12);
 }
+
+#[test]
+fn an_empty_session_id_opens_no_session_bucket() {
+    // A 2026-07-28 request has no session: its spend counts per key only.
+    let tracker = CostTracker::new();
+    tracker.record("", Some("alice"), "srv", "t", 200, 15.0);
+    tracker.record("", Some("bob"), "srv", "t", 100, 15.0);
+
+    assert!(tracker.session_snapshot("").is_none());
+    assert!(tracker.all_sessions().is_empty());
+    assert_eq!(
+        tracker.key_snapshot("alice").unwrap().window_24h.tokens,
+        200
+    );
+    assert_eq!(tracker.key_snapshot("bob").unwrap().window_24h.tokens, 100);
+}
+
+#[test]
+fn session_less_spend_still_counts_in_the_aggregate() {
+    // The admin total covers every call, with or without a session.
+    let tracker = CostTracker::new();
+    tracker.record("s1", Some("alice"), "srv", "t", 100, 15.0);
+    tracker.record("", Some("bob"), "srv", "t", 200, 15.0);
+
+    let total = tracker.aggregate();
+    assert_eq!(total.total_calls, 2);
+    assert_eq!(total.total_tokens, 300);
+    assert_eq!(
+        total.session_count, 1,
+        "no session was opened for the empty id"
+    );
+}
