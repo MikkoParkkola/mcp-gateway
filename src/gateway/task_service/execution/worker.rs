@@ -459,7 +459,7 @@ fn inspect_settled(
     id: &str,
     mut response: crate::protocol::JsonRpcResponse,
 ) -> crate::protocol::JsonRpcResponse {
-    if response.error.is_some() {
+    if response.error.is_some() || response.discovery_inspected {
         return response;
     }
     let Some(result) = response.result.as_mut() else {

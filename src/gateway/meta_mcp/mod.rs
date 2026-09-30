@@ -57,8 +57,7 @@ use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
-    wrap_tool_success,
+    build_routing_instructions, extract_client_version, extract_required_str, wrap_tool_success,
 };
 use super::meta_mcp_tool_defs::{
     MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
@@ -84,6 +83,7 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
+mod dispatch_names;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -1037,9 +1037,11 @@ impl MetaMcp {
     /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
     /// escaped copy hides a quoted key or a split injection phrase from them.
     /// A Block (or no admitting target) refuses the call; otherwise credentials
-    /// are redacted in place. The router or delivery pass still inspects the
-    /// served form: a name alone cannot prove this pass ran (a backend tool may
-    /// share the name), so neither pass is skipped.
+    /// are redacted in place. The discovery arm then marks its response
+    /// (`JsonRpcResponse::discovery_inspected`, set after the meta-tool match,
+    /// never on a direct-name route), and the router, delivery and task passes
+    /// skip only a marked response: the mark, not the tool name, proves this
+    /// pass ran. Every Ok path of the three discovery handlers must call this.
     ///
     /// # Errors
     /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
@@ -2354,53 +2356,11 @@ impl MetaMcp {
             "gateway_set_state" => self.set_state(&arguments, session_id, caller.scope()),
             "gateway_reload_config" => self.reload_config().await,
             "gateway_reload_capabilities" => self.reload_capabilities().await,
-            _ => {
-                const META_TOOLS: &[&str] = &[
-                    "gateway_search",
-                    "gateway_execute",
-                    "gateway_list_servers",
-                    "gateway_list_tools",
-                    "gateway_search_tools",
-                    "gateway_invoke",
-                    "gateway_get_stats",
-                    "gateway_cost_report",
-                    "gateway_webhook_status",
-                    "gateway_run_playbook",
-                    "gateway_kill_server",
-                    "gateway_revive_server",
-                    "gateway_list_disabled_capabilities",
-                    "gateway_set_profile",
-                    "gateway_get_profile",
-                    "gateway_list_profiles",
-                    "gateway_set_state",
-                    "gateway_reload_config",
-                    "gateway_reload_capabilities",
-                ];
-                // The candidate pool is the EXPOSED set, not the static list.
-                // The early return above keeps a hidden tool's exact name from
-                // being confirmed; a near miss of that name reached here and
-                // the suggester, drawing from every meta-tool that exists,
-                // would answer with the name the allow-list is hiding. Filtering
-                // the pool removes the route -- there is no longer a spelling
-                // that makes this branch name an unexposed tool -- rather than
-                // wording the hint more carefully and leaving the route open.
-                let exposed: Vec<&str> = META_TOOLS
-                    .iter()
-                    .copied()
-                    .filter(|name| self.meta_tool_exposure.is_exposed(name))
-                    // Nor a tool this caller's standing withholds (A3).
-                    .filter(|name| CallerStanding::from(caller.scope()).permits(name))
-                    .collect();
-                let suggestion = did_you_mean(tool_name, &exposed, 3, 3);
-                let msg = match suggestion {
-                    Some(hint) => format!("Unknown tool: {tool_name}. {hint}"),
-                    None => format!("Unknown tool: {tool_name}"),
-                };
-                Err(Error::json_rpc(-32601, msg))
-            }
+            _ => Err(self.no_such_meta_tool(tool_name, caller)),
         };
 
-        match result {
+        let inspected = self.marks_discovery(tool_name, result.is_ok());
+        let mut response = match result {
             Ok(content) => match shape {
                 // MRTR.11a: an interim round must not be pretty-printed into
                 // `content[0].text`. `wrap_tool_success` states `is_error:
@@ -2427,7 +2387,9 @@ impl MetaMcp {
                 ResultShape::Native => JsonRpcResponse::success(id, content),
             },
             Err(e) => error_response_preserving_status(id, &e),
-        }
+        };
+        response.discovery_inspected = inspected && response.error.is_none();
+        response
     }
 }
 
