@@ -1341,11 +1341,15 @@
     },
     {
       "id": "MIK-7272.OWNER.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. No typed StdioLocalOperator exists; stdio identity is the string constant STDIO_CREDENTIAL_PRINCIPAL (defined src/gateway/server/mod.rs:3621, used src/gateway/meta_mcp/admission_tests.rs:504)."
+      "evidence": [
+        "src/gateway/server/tests/owner3_stdio_keying.rs",
+        "src/gateway/meta_mcp/mod.rs",
+        "src/identity_propagation/caller_proof.rs"
+      ],
+      "note": "Graded 2026-09-30. Clause read, VERIFIED. (1) 'cannot select ... the stdio local operator': CallerProvenance::classify never returns LocalTransport for text; only CallerProvenance::local_transport(&StdioNonce) does (caller_proof.rs), and StdioNonce is constructible only by the stdio transport module (server/stdio_nonce.rs). Pinned by caller_proof_tests.rs::the_stdio_principal_text_is_not_a_local_transport. (2) 'cannot ... alias': retained results key through MetaMcpCallerContext::owner_principal (meta_mcp/mod.rs): the mark keys a reserved NUL-prefixed owner, and NUL-prefixed text is dropped. owner3_stdio_keying.rs T3.1 stdio_results_are_keyed_by_transport_not_by_name and T3.2 a_named_context_does_not_seed_the_stdio_operators_results (admission ledger, both orders, plain and API-key spellings), T3.4 stdio_idempotency_entries_are_keyed_by_transport (idempotency cache), T3.5 batched_stdio_calls_are_keyed_by_transport; reserved text refused, not pooled: reserved_owner_text_is_refused_not_pooled, reserved_owner_text_keeps_no_idempotency_entry. (3) 'only the transport creates the typed tag': a_chain_step_keeps_the_stdio_tag; cache_principal_tests.rs::the_reserved_owner_value_stays_in_the_reserved_prefix. (4) 'the real stdio owner works': T3.1 asserts the transport replays its own result; dispatcher_admission_arms.rs::a_replayed_key_returns_the_stored_result_without_re_running_it. Reachability: preventive; no remote caller can present the stdio text (recorded privately). CI EVIDENCE 2026-09-30: merged in #2494 as 5466ff37b. PR head 8a869aab2, CI run 36755620060, Tests job 110025416853 (cargo test --all-features): test result ok, 7145 passed, 0 failed; every test named here passed. Red proof: commit 2fc602722, CI run 36752309402, Tests job: 7130 passed, 4 failed, exactly T3.1, T3.2, T3.4, T3.5, each on its assertion (the named context was handed the operator's retained marker). Mutation check: throwaway/mutants-24942, run 36754883656, 8 of 8 RED. Feature combinations run 36755652848 success. Design docs/design/2026-09-30-sub4-stdio-owner.md D1 and D4 (#2496)."
     },
     {
       "id": "MIK-7272.OWNER.4",
@@ -1357,11 +1361,14 @@
     },
     {
       "id": "MIK-7272.OWNER.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Closest: src/gateway/meta_mcp/account_catalogue_sole_operator_tests.rs:291-304 asserts a string principal only."
+      "evidence": [
+        "src/gateway/server/tests/owner5_stdio_context.rs",
+        "src/gateway/server/tests/stdio_sole_operator.rs"
+      ],
+      "note": "Graded 2026-09-30. Clause read, VERIFIED. (1) 'carries its execution principal but no verified identity, personal account or delegated grant': owner5_stdio_context.rs::real_stdio_context_carries_principal_and_no_personal_identity asserts, on the context the production builder build_stdio_caller_context returns, credential_principal Some(\"stdio\"), the transport mark present, and verified_identity, grant_subject and api_key_name all None. (2) 'account-dependent calls are refused and an ordinary local mutation works': stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation, on the production boot path: a backend requiring a verified end-user identity is refused ('no verified end-user identity') with 0 backend calls, and gateway_set_state succeeds in the same session. Boundary kept (design D4): the sole-operator deployment account stays served on stdio (stdio_sole_operator.rs::stdio_run_path_serves_its_operator_the_managed_account); 'no personal account' means no per-user account. Green on arrival (pins); load-bearing per the mutant batch (M3, M6, M7 RED). CI EVIDENCE 2026-09-30: merged in #2494 as 5466ff37b. PR head 8a869aab2, CI run 36755620060, Tests job 110025416853 (cargo test --all-features): test result ok, 7145 passed, 0 failed; every test named here passed. Red proof: commit 2fc602722, CI run 36752309402, Tests job: 7130 passed, 4 failed, exactly T3.1, T3.2, T3.4, T3.5, each on its assertion (the named context was handed the operator's retained marker). Mutation check: throwaway/mutants-24942, run 36754883656, 8 of 8 RED. Feature combinations run 36755652848 success. Design docs/design/2026-09-30-sub4-stdio-owner.md D1 and D4 (#2496)."
     },
     {
       "id": "MIK-7272.LIFE.1",
