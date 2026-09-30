@@ -50,5 +50,13 @@ mod grant_decision_stdio;
 mod owner3_stdio_keying;
 mod owner5_stdio_context;
 
+// MIK-7272.OWNER.1 and OWNER.4 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I2).
+mod owner1_stdio_management;
+mod owner1_stdio_reload;
+mod owner4_stdio_policy;
+
+// #2480: a stdio idempotent replay writes its invocation record.
+mod stdio_replay_audit;
+
 #[cfg(feature = "firewall")]
 mod hardened_destination;

@@ -339,8 +339,6 @@ async fn store_04_live_owner_excludes_second_open_and_close_releases_lease() {
 }
 
 #[tokio::test]
-// Unix-only by the test plan: Windows paths are covered by the W-T rows.
-#[cfg(unix)]
 async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
@@ -350,7 +348,13 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
         .create(PreparedTask::for_test(&task, OWNER, 1))
         .await
         .unwrap();
+    // Windows strips a trailing dot from a path component (W-L10), so `task-..` cannot exist there.
+    #[cfg(unix)]
     fs::create_dir(path.join("task-..")).unwrap();
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut prefixed = vec![dir.path().join("outside-prefixed")];
+    #[cfg(unix)]
+    prefixed.push(path.join("task-..").join("outside-prefixed"));
     let absolute = dir.path().join("outside-absolute");
     let cases = [
         (
@@ -358,13 +362,7 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
             vec![dir.path().join("outside-traversal")],
         ),
         (absolute.to_str().unwrap().to_owned(), vec![absolute]),
-        (
-            "task-../outside-prefixed".to_owned(),
-            vec![
-                path.join("task-..").join("outside-prefixed"),
-                dir.path().join("outside-prefixed"),
-            ],
-        ),
+        ("task-../outside-prefixed".to_owned(), prefixed),
         (
             "%2e%2e%2foutside-encoded".to_owned(),
             vec![
@@ -418,18 +416,16 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
     store.close().await.unwrap();
 }
 
-// POSIX mode bits and symlinks: asserts 0700/0600 and refuses symlinked sources; Windows uses DACLs (win_acl).
+// Unix-only: asserts 0700/0600 and refuses a group/world-writable source (POSIX mode bits); Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn store_06_private_modes_and_unsafe_sources_are_enforced() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::PermissionsExt;
     for unsafe_kind in [
         "directory-mode",
         "record-mode",
-        "record-link",
-        "lease-link",
-        // A lease that IS a regular file and is NOT private. The link case
-        // above cannot reach this: a symlink fails BOTH halves of the guard, so
+        // A lease that IS a regular file and is NOT private. The link cases
+        // in `store_06_symlinked_sources_are_refused` cannot reach this: a symlink fails BOTH halves of the guard, so
         // it never proves the guard is a disjunction. Custody of a lease other
         // users can write is not custody.
         "lease-mode",
@@ -463,14 +459,6 @@ async fn store_06_private_modes_and_unsafe_sources_are_enforced() {
             "record-mode" => {
                 fs::set_permissions(&record, fs::Permissions::from_mode(0o644)).unwrap();
             }
-            "record-link" => {
-                fs::remove_file(&record).unwrap();
-                symlink(&outside, &record).unwrap();
-            }
-            "lease-link" => {
-                fs::remove_file(&lease).unwrap();
-                symlink(&outside, &lease).unwrap();
-            }
             "lease-mode" => {
                 fs::set_permissions(&lease, fs::Permissions::from_mode(0o644)).unwrap();
             }
@@ -488,6 +476,50 @@ async fn store_06_private_modes_and_unsafe_sources_are_enforced() {
             manifest(dir.path()),
             before,
             "failed readiness preserves types, inode, modes, links and bytes"
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+    }
+}
+
+#[tokio::test]
+async fn store_06_symlinked_sources_are_refused() {
+    for unsafe_kind in ["record-link", "lease-link", "record-directory"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let lease = created_sidecar(&path);
+        let task = task();
+        store
+            .create(PreparedTask::for_test(&task, OWNER, 1))
+            .await
+            .unwrap();
+        store.close().await.unwrap();
+        let record = path.join(format!("{}.json", task.id()));
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        match unsafe_kind {
+            "record-link" => {
+                fs::remove_file(&record).unwrap();
+                crate::test_symlink::symlink(&outside, &record).unwrap();
+            }
+            "lease-link" => {
+                fs::remove_file(&lease).unwrap();
+                crate::test_symlink::symlink(&outside, &lease).unwrap();
+            }
+            _ => {
+                fs::remove_file(&record).unwrap();
+                fs::create_dir(&record).unwrap();
+            }
+        }
+        let before = manifest(dir.path());
+        assert!(matches!(
+            TaskStore::open(&path, StoreLimits::default()).await,
+            Err(StoreError::UnsafeStore)
+        ));
+        assert_eq!(
+            manifest(dir.path()),
+            before,
+            "failed readiness changes nothing"
         );
         assert_eq!(fs::read(&outside).unwrap(), b"untouched");
     }

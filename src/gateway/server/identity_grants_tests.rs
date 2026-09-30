@@ -523,11 +523,9 @@ async fn fail_on_error_applies_to_the_audited_startup_read() {
 /// A directory this process cannot write does not prove there is no writer
 /// (root or the file's owner can still run the CLI there), so the grant file
 /// is never read without the lock: with `fail_on_error` the start is refused.
-// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
-#[cfg(unix)]
 #[tokio::test]
 async fn an_unwritable_grant_directory_is_not_read_without_the_lock() {
-    use std::os::unix::fs::PermissionsExt as _;
+    #[cfg(unix)]
     if rustix::process::geteuid().is_root() {
         return; // root ignores directory modes
     }
@@ -538,13 +536,26 @@ async fn an_unwritable_grant_directory_is_not_read_without_the_lock() {
     write_identity_grants_file(&grants, &IdentityGrantFile::new(vec![row("g1", "r")]))
         .await
         .unwrap();
-    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // Unix takes the write mode away; Windows denies the user write and append (DACL).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::deny_user("ro-grant-dir", &ro, "WD,AD");
     let mut config = config(dir.path(), true);
     config.security.identity_grants.path = grants.to_string_lossy().into_owned();
     config.security.identity_grants.fail_on_error = true;
 
     let s = Box::pin(Started::run(config)).await;
-    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::remove_deny("ro-grant-dir", &ro);
 
     assert!(
         s.is_err(),
@@ -578,11 +589,8 @@ async fn a_missing_grant_directory_still_reloads_later() {
 
 /// The first audited start with an unreadable journal still keeps a
 /// baseline: a grant later written directly into the file is recorded.
-// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
-#[cfg(unix)]
 #[tokio::test]
 async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let path = grants_path(dir.path());
     write_identity_grants_file(&path, &IdentityGrantFile::new(vec![row("g1", "r")]))
@@ -590,10 +598,31 @@ async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
         .unwrap();
     let journal = crate::identity_grants::journal::journal_path(&path);
     std::fs::write(&journal, b"").unwrap();
-    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o666)).unwrap();
+    // A journal anyone may write is not one the gateway trusts: mode 0666 on
+    // Unix, an Everyone full-control DACL on Windows.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o666)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let user = crate::private_fs::test_support::user_sid();
+        crate::private_fs::test_support::plant_any(
+            "open-journal",
+            &journal,
+            &format!("O:{user}D:(A;;FA;;;WD)"),
+        );
+    }
     let config = config(dir.path(), true);
     let s = Box::pin(Started::run(config.clone())).await.unwrap();
-    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::plant_owner_only("open-journal", &journal);
     write_identity_grants_file(
         &path,
         &IdentityGrantFile::new(vec![row("g1", "r"), row("g2", "r")]),

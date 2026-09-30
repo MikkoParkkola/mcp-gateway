@@ -1328,11 +1328,25 @@
     },
     {
       "id": "MIK-7272.OWNER.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). Amended by operator ruling C4 (2026-09-30): keyless data-changing stdio calls keep running, per the sub-4-idempotency-wiring Axis 3 design. The stdio path validates idempotency keys (stdio_refuses_a_malformed_idempotency_key, src/gateway/server/mod.rs:4302; sub4_boot_populates_the_idempotency_cache, :4721); no test asserts keyed replay without a second effect on real modern stdio, and the six management branches have no tests, so the row stays pending."
+      "evidence": [
+        "src/gateway/server/tests/dispatcher_admission_arms.rs:98",
+        "src/gateway/server/tests/dispatcher_admission_arms.rs:124",
+        "src/gateway/server/tests/owner1_stdio_management.rs:91",
+        "src/gateway/server/tests/owner1_stdio_management.rs:110",
+        "src/gateway/server/tests/owner1_stdio_management.rs:184",
+        "src/gateway/server/tests/owner1_stdio_management.rs:220",
+        "src/gateway/server/tests/owner1_stdio_management.rs:246",
+        "src/gateway/server/tests/owner1_stdio_management.rs:273",
+        "src/gateway/server/tests/owner1_stdio_management.rs:313",
+        "src/gateway/server/tests/owner1_stdio_management.rs:333",
+        "src/gateway/server/tests/owner1_stdio_reload.rs:228",
+        "src/gateway/server/tests/owner1_stdio_reload.rs:262",
+        "src/gateway/meta_mcp/admission.rs:531"
+      ],
+      "note": "Met 2026-09-30 (#2501, squash fe9e115c6). Over the stdio dispatcher with modern 2026-07-28 frames, a keyed mutation dispatches once (src/gateway/server/tests/dispatcher_admission_arms.rs:98) and its replay returns the stored result without re-running (src/gateway/server/tests/dispatcher_admission_arms.rs:124). A keyless modern write executes each time (src/gateway/server/tests/owner1_stdio_management.rs:91); a legacy unkeyed write sent twice executes twice (src/gateway/server/tests/owner1_stdio_management.rs:110). The six management branches: kill_server refused by the confirmation gate on stdio (src/gateway/server/tests/owner1_stdio_management.rs:184), revive replays (src/gateway/server/tests/owner1_stdio_management.rs:220), set_state replays without a second transition (src/gateway/server/tests/owner1_stdio_management.rs:246), set_profile refusal frees the key and the success replays (src/gateway/server/tests/owner1_stdio_management.rs:273), reload_config and reload_capabilities refused without their context (src/gateway/server/tests/owner1_stdio_management.rs:313, :333) and, through run_stdio_on, replay after the file changed (src/gateway/server/tests/owner1_stdio_reload.rs:228, :262). T1.6 was red on arrival (run 36763898945): the set_profile representation was bound to the profile the call itself changes; #2501 binds it to the session instead (src/gateway/meta_mcp/admission.rs:531). CI run 36774766836 and feature combinations run 36778328339 green on head 9a1f7353d; mutant run 36778396545 (batch c81537e26) red on all six mutants N1-N6, each at its named test. Two review seats (GLM, Kimi): SHIP.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). Amended by operator ruling C4 (2026-09-30): keyless data-changing stdio calls keep running, per the sub-4-idempotency-wiring Axis 3 design. The stdio path validates idempotency keys (stdio_refuses_a_malformed_idempotency_key, src/gateway/server/mod.rs:4302; sub4_boot_populates_the_idempotency_cache, :4721); no test asserts keyed replay without a second effect on real modern stdio, and the six management branches have no tests, so the row stays pending."
     },
     {
       "id": "MIK-7272.OWNER.2",
@@ -1344,27 +1358,41 @@
     },
     {
       "id": "MIK-7272.OWNER.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. No typed StdioLocalOperator exists; stdio identity is the string constant STDIO_CREDENTIAL_PRINCIPAL (defined src/gateway/server/mod.rs:3621, used src/gateway/meta_mcp/admission_tests.rs:504)."
+      "evidence": [
+        "src/gateway/server/tests/owner3_stdio_keying.rs",
+        "src/gateway/meta_mcp/mod.rs",
+        "src/identity_propagation/caller_proof.rs"
+      ],
+      "note": "Graded 2026-09-30. Clause read, VERIFIED. (1) 'cannot select ... the stdio local operator': CallerProvenance::classify never returns LocalTransport for text; only CallerProvenance::local_transport(&StdioNonce) does (caller_proof.rs), and StdioNonce is constructible only by the stdio transport module (server/stdio_nonce.rs). Pinned by caller_proof_tests.rs::the_stdio_principal_text_is_not_a_local_transport. (2) 'cannot ... alias': retained results key through MetaMcpCallerContext::owner_principal (meta_mcp/mod.rs): the mark keys a reserved NUL-prefixed owner, and NUL-prefixed text is dropped. owner3_stdio_keying.rs T3.1 stdio_results_are_keyed_by_transport_not_by_name and T3.2 a_named_context_does_not_seed_the_stdio_operators_results (admission ledger, both orders, plain and API-key spellings), T3.4 stdio_idempotency_entries_are_keyed_by_transport (idempotency cache), T3.5 batched_stdio_calls_are_keyed_by_transport; reserved text refused, not pooled: reserved_owner_text_is_refused_not_pooled, reserved_owner_text_keeps_no_idempotency_entry. (3) 'only the transport creates the typed tag': a_chain_step_keeps_the_stdio_tag; cache_principal_tests.rs::the_reserved_owner_value_stays_in_the_reserved_prefix. (4) 'the real stdio owner works': T3.1 asserts the transport replays its own result; dispatcher_admission_arms.rs::a_replayed_key_returns_the_stored_result_without_re_running_it. Reachability: preventive; no remote caller can present the stdio text (recorded privately). CI EVIDENCE 2026-09-30: merged in #2494 as 5466ff37b. PR head 8a869aab2, CI run 36755620060, Tests job 110025416853 (cargo test --all-features): test result ok, 7145 passed, 0 failed; every test named here passed. Red proof: commit 2fc602722, CI run 36752309402, Tests job: 7130 passed, 4 failed, exactly T3.1, T3.2, T3.4, T3.5, each on its assertion (the named context was handed the operator's retained marker). Mutation check: throwaway/mutants-24942, run 36754883656, 8 of 8 RED. Feature combinations run 36755652848 success. Design docs/design/2026-09-30-sub4-stdio-owner.md D1 and D4 (#2496)."
     },
     {
       "id": "MIK-7272.OWNER.4",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+      "evidence": [
+        "src/gateway/server/tests/owner4_stdio_policy.rs:190",
+        "src/gateway/server/tests/owner4_stdio_policy.rs:235",
+        "src/gateway/server/tests/owner4_stdio_policy.rs:242",
+        "src/gateway/server/tests/owner4_stdio_policy.rs:249",
+        "src/gateway/meta_mcp/admission.rs:405",
+        "src/gateway/meta_mcp/signing.rs:188"
+      ],
+      "note": "Met 2026-09-30 (#2501, squash fe9e115c6). One MetaMcp, policy passed per request over the stdio dispatcher: a keyed call under the permitting policy executes, and the same key under the denying policy is refused with no retained result and zero dispatch, while the neighbouring tool still works (src/gateway/server/tests/owner4_stdio_policy.rs:190, :235). With message signing on, signing preparation re-checks the current policy and the replay is refused (src/gateway/server/tests/owner4_stdio_policy.rs:242). A denied first call never dispatches (src/gateway/server/tests/owner4_stdio_policy.rs:249). Policy precedes the admission replay at src/gateway/meta_mcp/admission.rs:405 and in signing preparation at src/gateway/meta_mcp/signing.rs:188. CI run 36774766836 and feature combinations run 36778328339 green on head 9a1f7353d; mutant run 36778396545 (batch c81537e26) red on all six mutants N1-N6, each at its named test. Two review seats (GLM, Kimi): SHIP.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
     },
     {
       "id": "MIK-7272.OWNER.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Closest: src/gateway/meta_mcp/account_catalogue_sole_operator_tests.rs:291-304 asserts a string principal only."
+      "evidence": [
+        "src/gateway/server/tests/owner5_stdio_context.rs",
+        "src/gateway/server/tests/stdio_sole_operator.rs"
+      ],
+      "note": "Graded 2026-09-30. Clause read, VERIFIED. (1) 'carries its execution principal but no verified identity, personal account or delegated grant': owner5_stdio_context.rs::real_stdio_context_carries_principal_and_no_personal_identity asserts, on the context the production builder build_stdio_caller_context returns, credential_principal Some(\"stdio\"), the transport mark present, and verified_identity, grant_subject and api_key_name all None. (2) 'account-dependent calls are refused and an ordinary local mutation works': stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation, on the production boot path: a backend requiring a verified end-user identity is refused ('no verified end-user identity') with 0 backend calls, and gateway_set_state succeeds in the same session. Boundary kept (design D4): the sole-operator deployment account stays served on stdio (stdio_sole_operator.rs::stdio_run_path_serves_its_operator_the_managed_account); 'no personal account' means no per-user account. Green on arrival (pins); load-bearing per the mutant batch (M3, M6, M7 RED). CI EVIDENCE 2026-09-30: merged in #2494 as 5466ff37b. PR head 8a869aab2, CI run 36755620060, Tests job 110025416853 (cargo test --all-features): test result ok, 7145 passed, 0 failed; every test named here passed. Red proof: commit 2fc602722, CI run 36752309402, Tests job: 7130 passed, 4 failed, exactly T3.1, T3.2, T3.4, T3.5, each on its assertion (the named context was handed the operator's retained marker). Mutation check: throwaway/mutants-24942, run 36754883656, 8 of 8 RED. Feature combinations run 36755652848 success. Design docs/design/2026-09-30-sub4-stdio-owner.md D1 and D4 (#2496)."
     },
     {
       "id": "MIK-7272.LIFE.1",
@@ -1392,19 +1420,24 @@
     },
     {
       "id": "MIK-7216.IDEM.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. Closest tests: tests/mik_7272_sub4_adr012_acs.rs:561 (post-dispatch transport failure keeps its key) and :399 (keyed re-issue with a new id); tests/mik_7272_sub4_three_routes.rs:290. None breaks the stream, re-issues and asserts a backend count of 1."
+      "evidence": [
+        "src/gateway/router/stream_kill_tests.rs:225",
+        "src/gateway/router/stream_kill_tests.rs:243"
+      ],
+      "note": "MET 2026-09-30 by PR #2502: a keyed side-effecting call is killed mid-flight after the backend received it and re-issued with a new id and the same key; the backend saw it exactly once on the meta route (idem5_meta_killed_side_effecting_call_executes_once, re-issue answered 409) and the direct route (idem5_direct_killed_side_effecting_call_executes_once, stored uncertain outcome). Mutant proof, run 36773073604 on the PR head's tree: removing the meta pre-dispatch marking (m1a) and the direct-route arming (m1b) both turn these RED. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. Closest tests: tests/mik_7272_sub4_adr012_acs.rs:561 (post-dispatch transport failure keeps its key) and :399 (keyed re-issue with a new id); tests/mik_7272_sub4_three_routes.rs:290. None breaks the stream, re-issues and asserts a backend count of 1. Tests added in the test/idem-5-6-stream-kill PR: idem5_meta_killed_side_effecting_call_executes_once, idem5_direct_killed_side_effecting_call_executes_once; status is graded after CI."
     },
     {
       "id": "MIK-7216.IDEM.6",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. tests/mik_7272_sub4_adr012_acs.rs:674 shows a read-only call is still re-sent, but not inside the stream-kill test IDEM.5 requires."
+      "evidence": [
+        "src/gateway/router/stream_kill_tests.rs:268"
+      ],
+      "note": "MET 2026-09-30 by PR #2502: under server.idempotency_key required, a keyless side-effecting call is refused while a keyless call to an operator-classified read-only tool is killed mid-flight, re-issued and runs again with its normal result (idem6_read_only_call_is_unaffected_by_the_kill). Mutant proof, run 36773073604: dropping the required refusal (m2) turns it RED. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. tests/mik_7272_sub4_adr012_acs.rs:674 shows a read-only call is still re-sent, but not inside the stream-kill test IDEM.5 requires. Tests added in the test/idem-5-6-stream-kill PR: idem6_read_only_call_is_unaffected_by_the_kill; status is graded after CI."
     },
     {
       "id": "MIK-7217.ERA.1",

@@ -524,10 +524,19 @@ impl MetaMcp {
         full: bool,
         session: Option<&str>,
     ) -> Value {
+        // `gateway_set_profile` changes the profile it would be bound to, so a
+        // bound retry never matches its own stored result. Its output depends
+        // on the target profile, which the operation already carries, and on
+        // the session it names, so it is bound to that session instead.
+        let profile = if tool_name == "gateway_set_profile" {
+            json!({"session": super::session_key(session)})
+        } else {
+            self.active_profile(session).describe()
+        };
         json!({
             "route": "meta", "tool": tool_name, "full": full,
             "projection": format!("{:?}", self.projection_mode),
-            "profile": self.active_profile(session).describe(),
+            "profile": profile,
             "arm": crate::projection::projection_key_suffix(self.projection_mode, session),
         })
     }
