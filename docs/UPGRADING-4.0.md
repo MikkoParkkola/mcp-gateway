@@ -106,7 +106,7 @@ backend" and "fails a capability file" first.**
 | 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
-| 82 | Reserved: lands with a pending change | None yet |
+| 82 | A signature chain a backend puts in a result's `_meta` is stripped; the new `security.signature_chain` lets the gateway sign an origin link | Nothing unless you consumed a backend-sent chain; to emit links, configure `security.signature_chain` |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
@@ -2445,6 +2445,38 @@ and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is
 **Action:** after `cap discover --write-config`, review the written backends: they now carry the
 credentials the client config held. Library users replace struct literals with
 `DiscoveredServer::new`.
+
+## 82. Backend signature chains are stripped; the gateway can sign an origin link
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `security.signature_chain` set and invalid
+
+A backend result's `_meta["io.mcp-gateway/signature-chain"]` is now removed on every route, and
+from stored replays, before anything is delivered. Only this gateway may put a chain on a result.
+
+The new optional `security.signature_chain` gives the gateway an Ed25519 chain identity:
+
+```yaml
+security:
+  signature_chain:
+    signing_key: "env:CHAIN_SEED"   # base64 of a 32-byte seed
+    key_id: "gw-eu-1"               # 1 to 64 bytes
+    emit: on_request                # or always
+```
+
+With it set, a `gateway_invoke` result from an MCP backend (and its synchronous idempotent replay)
+carries one signed origin link when the request sends `params._meta["io.mcp-gateway/chain-nonce"]`
+(a 1 to 256 byte string, else `-32602`), or on every such result under `emit: always`. The link
+covers the delivered result and sits under the v2 `_signature` MAC. The direct `/mcp/{name}` route
+links its live `tools/call` results. Capability results, meta-only tools, Code Mode, playbooks,
+cache hits and direct-route idempotent replays are not linked in 4.0: the direct replay store can
+hold a gateway-authored side-effect notice and records no origin. The `gateway_invoke` `nonce` is
+the link's fallback nonce only while `message_signing` is enabled; with it off, a link carries the
+chain nonce or `null`. A result that cannot carry a link is
+refused with `-32001`. A change to `signing_key`, `key_id` or `emit` needs a restart; a reload
+that changes one is refused.
+
+**Action:** none unless a client read a chain a backend sent. To emit links, set
+`security.signature_chain`.
 
 ## 83. `MigratedCredential` has a public `reachability` field
 

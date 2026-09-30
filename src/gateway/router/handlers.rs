@@ -580,20 +580,12 @@ async fn meta_mcp_dispatch(
     // to route on.
     //
     // Decided from the header, before the body is parsed, because the session
-    // is created before the body is parsed. That is sound rather than a
-    // shortcut: the mirrored-header check refuses a modern request that omits
-    // `MCP-Protocol-Version`, so every modern request that survives carries it.
-    // Any modern declaration, not only a version this build serves. A client
-    // naming an unsupported 2026 revision is still a stateless client: minting
-    // it a session hands it state its own revision deleted and grows a table on
-    // behalf of a caller that is about to be refused.
-    // Read duplicate-safe, and read ONCE. `headers.get` returns the FIRST
-    // value, so a request sending the header twice — legacy first, modern
-    // second — would be classified legacy here and modern by the check further
-    // down, and the disagreement mints a session for a request that is about to
-    // be refused. Two occurrences is not a request to interpret; it is one to
-    // refuse, so an ambiguous header takes the modern reading and reaches the
-    // refusal with no session behind it.
+    // is created first; the mirrored-header check refuses a modern request
+    // without `MCP-Protocol-Version`. Any modern declaration counts, even an
+    // unsupported 2026 revision: it is stateless and about to be refused.
+    // Read duplicate-safe and ONCE (`headers.get` returns the FIRST value): a
+    // doubled header takes the modern reading and reaches the refusal with no
+    // session behind it.
     let mut version_headers = headers.get_all("mcp-protocol-version").iter();
     let declared_version = match (version_headers.next(), version_headers.next()) {
         (Some(only), None) => only.to_str().ok(),
@@ -623,16 +615,29 @@ async fn meta_mcp_dispatch(
         );
         (id, Some(rx))
     };
-    // This handler is not a stream reader. Holding the subscription would make
-    // a server-to-client prompt look deliverable to a caller with no live SSE
-    // stream: the send succeeds into a receiver nobody polls, and the caller
-    // waits out the 120-second response timeout instead of being told there is
-    // nobody to ask.
+    // Not a stream reader: a held subscription fakes a deliverable prompt.
     drop(session_rx);
 
+    let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
         crate::gateway::meta_mcp::signing::SigningInvocationContext::capture(&mut request)
     });
+    // Off the request before sanitization can rewrite or reject its bytes
+    // (ASI07 A3); a malformed one is refused here, with the request's own id.
+    let chain_nonce = match crate::protocol::mrtr::take_chain_nonce(&mut request) {
+        Ok(nonce) => nonce,
+        Err(error) => {
+            let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
+            let code = error.to_rpc_code();
+            return build_error_response(
+                raw_id,
+                code,
+                message,
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
     // Optionally sanitize input
     let mut request = if state.sanitize_input {
         match sanitize_json_value(&request) {
@@ -707,17 +712,10 @@ async fn meta_mcp_dispatch(
     // request, not per connection: 2026-07-28 removed the handshake precisely so
     // one connection can carry both.
     //
-    // The header is read here as well as the body. A request declaring
-    // `2026-07-28` in the header an upstream routes on, while carrying no body
-    // metadata, would otherwise classify as legacy and pass the feature gate
-    // and every mirrored-header check behind it.
-    // Read duplicate-safe. `headers.get` returns the FIRST value, so a request
-    // sending the header twice — legacy first, modern second — could hide its
-    // modern declaration behind the legacy one and be classified legacy, which
-    // is the bypass this argument exists to close. Two occurrences is not a
-    // request to interpret; it is one to refuse, and the mirrored-header check
-    // below refuses it. The value is read once, above the session decision, so
-    // the two readings cannot disagree.
+    // The header is read as well as the body: a `2026-07-28` header with no
+    // body metadata would otherwise classify legacy and pass the feature gate.
+    // It was read once, duplicate-safe, above the session decision, so the two
+    // readings cannot disagree; a doubled header is refused below.
     // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
     // dispatchers cannot drift apart on what a request declared.
     let shape = crate::protocol::meta::classify_and_observe(
@@ -1883,6 +1881,8 @@ async fn meta_mcp_dispatch(
         },
         mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
         signing: signing_context.as_ref(),
+        chain_source: response.chain_source,
+        chain_nonce: chain_nonce.as_deref(),
     };
     response = (state.meta_mcp)
         .finalize_response_after_inspection(response, &delivery, delivery_inspection)
@@ -1898,11 +1898,8 @@ async fn meta_mcp_dispatch(
     )
     .increment(1);
 
-    // A confirmation or delivery refusal is the gate working, not the client
-    // misbehaving. It is excluded from BOTH arms, not just the failure one:
-    // `record_client_success` resets the consecutive-failure count, so
-    // treating a refusal as a success would clear a breaker the caller had
-    // genuinely tripped.
+    // A confirmation or delivery refusal is the gate working, not a misbehaving
+    // client: excluded from BOTH arms (a success would clear a tripped breaker).
     if let Some(ref client) = client
         && !response.excludes_client_accounting()
     {

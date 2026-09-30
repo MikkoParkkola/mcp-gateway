@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::signature_chain::SignatureChainConfig;
+
 use crate::context_integrity::{ContextIntegrityPolicy, ContextIntegrityPolicyPreset};
 pub use crate::security::agent_identity::AgentIdentityConfig;
 use crate::security::policy::ToolPolicyConfig;
@@ -652,6 +654,8 @@ pub struct SecurityConfig {
     /// scoring (MIK-6908, rung 3.1). Default: disabled.
     #[serde(default)]
     pub claim_capture: ClaimCaptureConfig,
+    /// Signature-chain origin emission (ASI07). Absent means the feature is off.
+    pub signature_chain: Option<SignatureChainConfig>,
 }
 
 impl SecurityConfig {
@@ -695,6 +699,7 @@ impl Default for SecurityConfig {
             remote_server_signing: RemoteServerSigningConfig::default(),
             provenance_stamping: false,
             claim_capture: ClaimCaptureConfig::default(),
+            signature_chain: None,
         }
     }
 }
