@@ -1645,7 +1645,7 @@ impl MetaMcp {
         let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
-        let provenance = CallerProvenance::classify(caller.credential_principal);
+        let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
 
         // Capture once, before any authorization input is read. A bump after
@@ -1806,7 +1806,7 @@ impl MetaMcp {
             dispatch_binding.as_deref(),
             verified_identity,
             caller.grant_subject.as_ref(),
-            caller.credential_principal,
+            caller.owner_principal(),
             caller.authentication,
         );
 

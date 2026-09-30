@@ -262,3 +262,67 @@ async fn a_chain_step_keeps_the_stdio_tag() {
         "a chain step lost the transport's mark"
     );
 }
+
+// ── Reserved spelling ────────────────────────────────────────────────────────
+
+/// A context that did not come from the transport but spells the reserved
+/// operator principal. Its text is dropped, never keyed.
+fn reserved_spelling<'a>(
+    authorizer: &'a ToolPolicyAuthorizer<'a>,
+    retry: &'a RetryFields,
+) -> MetaMcpCallerContext<'a> {
+    MetaMcpCallerContext {
+        credential_principal: Some("\0local-operator.v1"),
+        ..named(authorizer, retry)
+    }
+}
+
+/// T3.8. Text in the reserved space gets no owner key at all rather than an
+/// empty or shared one: a keyed call is refused before admission (-32003),
+/// so no two such callers can share a replay bucket, and the operator's
+/// result is not reachable through it.
+#[tokio::test]
+async fn reserved_owner_text_is_refused_not_pooled() {
+    let fixture = Fixture::start_mutating().await;
+    let authorizer = ToolPolicyAuthorizer {
+        tool_policy: &fixture.tool_policy,
+    };
+    let retry = keyed_retry("owner-3-reserved");
+    complete_with(&fixture, &transport(&authorizer, &retry), MARKER);
+
+    for id in [2, 3] {
+        let seen = outcome(admit(&fixture, &reserved_spelling(&authorizer, &retry), id));
+        assert!(
+            seen.starts_with("refused") && seen.contains("verified execution principal"),
+            "reserved owner text must be refused, not keyed: {seen}"
+        );
+    }
+}
+
+/// T3.9. The same text through the invoke entry keeps no idempotency entry:
+/// each keyed call reaches the backend.
+#[tokio::test]
+async fn reserved_owner_text_keeps_no_idempotency_entry() {
+    let fixture = Fixture::start_mutating().await;
+    let authorizer = ToolPolicyAuthorizer {
+        tool_policy: &fixture.tool_policy,
+    };
+    let retry = keyed_retry("owner-3-reserved-cache");
+    for id in [1, 2] {
+        let _ = fixture
+            .meta
+            .handle_tools_call(
+                RequestId::Number(id),
+                "gateway_invoke",
+                invoke_arguments(),
+                Some(SESSION),
+                reserved_spelling(&authorizer, &retry),
+            )
+            .await;
+    }
+    assert_eq!(
+        fixture.backend.tools_call_count(),
+        2,
+        "reserved owner text must not be served from a shared entry"
+    );
+}

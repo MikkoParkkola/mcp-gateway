@@ -374,7 +374,7 @@ impl MetaMcp {
             }
         }
         let verified_identity = caller.verified_identity;
-        let credential_principal = caller.credential_principal;
+        let credential_principal = caller.owner_principal();
         let retry = caller.retry;
         let target = if tool_name == "gateway_invoke" {
             let server =

@@ -7,7 +7,7 @@
 //! not be assembled differently by each consumer.
 
 use super::VerifiedIdentity;
-use crate::gateway::STDIO_CREDENTIAL_PRINCIPAL;
+use crate::gateway::StdioNonce;
 
 /// How a request established its caller, APART from any verified identity.
 ///
@@ -30,7 +30,8 @@ pub(crate) enum CallerProvenance {
     /// there is no second party on the pipe to tell apart. No secret was
     /// presented, and `STDIO_CREDENTIAL_PRINCIPAL`'s own doc says reaching the
     /// gateway over stdio already grants full tool access
-    /// (`gateway/server/mod.rs`).
+    /// (`gateway/server/mod.rs`). Reached only through
+    /// [`Self::local_transport`], never from text.
     LocalTransport,
     /// A credential was presented and validated — a bearer token or an API
     /// key. Still nothing that identifies WHICH human holds it.
@@ -38,42 +39,29 @@ pub(crate) enum CallerProvenance {
 }
 
 impl CallerProvenance {
-    /// Classify from the credential principal a request carried.
+    /// Classify from the credential principal text a request carried.
     ///
-    /// The ONE place the mapping is made. `credential_principal` is a digest of
-    /// the validated secret and is "Empty for an identity that presented no
+    /// The ONE place text is mapped. `credential_principal` is a digest of the
+    /// validated secret and is "Empty for an identity that presented no
     /// credential" (`AuthenticatedClient::principal`, `gateway/auth.rs`), which
     /// is exactly what a public path's caller carries — the same test
-    /// `handlers::session_owner_key` makes. The stdio constant is matched by
-    /// name rather than counted as a secret, because it is not one.
+    /// `handlers::session_owner_key` makes.
     ///
-    /// COMPARED IN A GUARD, NEVER AS A PATTERN. `Some(STDIO_CREDENTIAL_PRINCIPAL)`
-    /// reads like a constant comparison and is not one unless the path resolves
-    /// to a constant: otherwise it is an irrefutable BINDING that matches every
-    /// `Some(_)`, makes the arms below unreachable, and classifies an anonymous
-    /// caller as the operator. The compiler says so only through an
-    /// `unused variable` warning naming the constant, which is a warning and not
-    /// an error. A guard cannot degrade that way — an unresolved name is a hard
-    /// error — so the stronger-failing form is the one used here.
-    ///
-    /// THE EMPTINESS TEST COMES FIRST. An anonymous caller carries `Some("")`,
-    /// so if `STDIO_CREDENTIAL_PRINCIPAL` were ever edited to the empty string,
-    /// a later emptiness check would classify every anonymous request as
-    /// `LocalTransport` — the same anonymous-as-operator defect the guard form
-    /// above exists to prevent, arriving through the constant instead of through
-    /// the pattern.
-    ///
-    /// `Some("")` is a PATTERN here while the constant above is a GUARD, and the
-    /// difference is not inconsistency: a string *literal* in pattern position
-    /// is always a literal. Only a bare *path* can silently resolve to a binding
-    /// instead of a comparison, which is the failure the constant is guarded
-    /// against.
+    /// Text never yields [`Self::LocalTransport`], whatever it spells, the stdio
+    /// principal included (MIK-7272.OWNER.3): only
+    /// [`Self::local_transport`] does, and it needs the transport's mark.
     pub(crate) fn classify(credential_principal: Option<&str>) -> Self {
         match credential_principal {
             Some("") | None => Self::Anonymous,
-            Some(principal) if principal == STDIO_CREDENTIAL_PRINCIPAL => Self::LocalTransport,
             Some(_) => Self::Credential,
         }
+    }
+
+    /// The stdio transport's provenance. The argument is the proof: a
+    /// [`StdioNonce`] is constructible only by the stdio transport module, so no
+    /// request data can reach this constructor.
+    pub(crate) fn local_transport(_mark: &StdioNonce) -> Self {
+        Self::LocalTransport
     }
 
     /// Whether this is enough to be trusted with a deployment-wide principal.

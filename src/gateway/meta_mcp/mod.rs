@@ -126,6 +126,15 @@ pub(crate) use task_confirmation::{
 #[cfg(feature = "spec-preview")]
 const MAX_PROMOTED_PER_SESSION: usize = 10;
 
+/// Reserved prefix for principals the gateway itself assigns. A NUL cannot
+/// occur in an HTTP header value or in any principal the auth layer derives
+/// (hex digests and fixed words), so no presented credential starts with it.
+const LOCAL_OPERATOR_PREFIX: char = '\0';
+
+/// The principal the stdio transport's own contexts key their retained
+/// results under. See [`MetaMcpCallerContext::owner_principal`].
+const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
+
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
 /// Deliberately has **no `Default`**: the authorizer is mandatory, and a
@@ -249,6 +258,31 @@ impl<'a> MetaMcpCallerContext<'a> {
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
             grant_subject: self.grant_subject.as_ref(),
+        }
+    }
+
+    /// The principal text that keys this caller's retained results (MIK-7272.OWNER.3).
+    ///
+    /// The stdio transport's mark, not its principal text, names the local
+    /// operator: a context the transport built keys under
+    /// [`LOCAL_OPERATOR_PRINCIPAL`], and text from any other source can never
+    /// spell it, because text carrying the reserved prefix is dropped here.
+    pub(crate) fn owner_principal(&self) -> Option<&'a str> {
+        if self.stdio_nonce.is_some() {
+            return Some(LOCAL_OPERATOR_PRINCIPAL);
+        }
+        self.credential_principal
+            .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
+    }
+
+    /// How this caller was established. The stdio transport's mark decides
+    /// `LocalTransport`; principal text alone never does (MIK-7272.OWNER.3).
+    pub(crate) fn provenance(&self) -> crate::identity_propagation::CallerProvenance {
+        match self.stdio_nonce {
+            Some(mark) => crate::identity_propagation::CallerProvenance::local_transport(mark),
+            None => {
+                crate::identity_propagation::CallerProvenance::classify(self.credential_principal)
+            }
         }
     }
 
