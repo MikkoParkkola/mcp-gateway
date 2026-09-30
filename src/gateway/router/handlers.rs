@@ -24,13 +24,12 @@ use super::helpers::{
     extract_tools_call_params, merge_client_meta, parse_elicitation_params, parse_request,
     parse_sampling_params,
 };
-use super::identity::{caller_grant_subject, identity_refusal_response};
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
-use crate::gateway::session_id::{SessionOwner, session_fp};
+use crate::gateway::session_id::session_fp;
 #[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
@@ -43,30 +42,16 @@ use crate::security::{
     extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
 };
 
+mod owner;
 mod tasks;
+
+use owner::request_session_owner;
+#[cfg(test)]
+use owner::session_owner;
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
-/// A stable owner key for a session.
-///
-/// Not the display name: `name` is operator-configured and two API keys may
-/// share one, which would let them attach to each other's sessions. The key
-/// records whether a credential was actually validated, so an API key named
-/// "anonymous" cannot claim the unauthenticated identity's sessions.
-fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
-    match client {
-        // The validated principal, a digest of the secret: two API keys
-        // configured with the same display name are different owners.
-        Some(c) if c.authenticated && !c.principal.is_empty() => {
-            SessionOwner::Credential(c.principal.clone())
-        }
-        // Every other caller, named or not, is one class: an unvalidated name is
-        // not a credential. Only the minted session id separates them (F9).
-        _ => SessionOwner::Anonymous,
-    }
-}
-
 /// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
 /// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
 fn session_id_header(headers: &HeaderMap) -> Option<&str> {
@@ -230,6 +215,7 @@ pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     let client = client.map(|axum::Extension(c)| c);
 
@@ -239,6 +225,12 @@ pub(super) async fn mcp_sse_handler(
     if let Some(refusal) = get_era_refusal(&state, &headers) {
         return refusal;
     }
+    // The owner the POST that minted the session used, so a subject resumes
+    // its own stream and nobody else's.
+    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
+        Ok((_, owner)) => owner,
+        Err(refusal) => return refusal,
+    };
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -275,10 +267,7 @@ pub(super) async fn mcp_sse_handler(
 
     let (session_id, _rx) = state.multiplexer.get_or_create_session_scoped(
         existing_session_id.as_deref(),
-        // The identity that owns the session. Every caller is "anonymous"
-        // when authentication is off, so a single-user gateway behaves
-        // exactly as before.
-        &session_owner(client.as_ref()),
+        &owner,
         crate::gateway::auth::live::held_credential(&headers),
     );
 
@@ -324,6 +313,7 @@ pub(super) async fn mcp_delete_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     let client = client.map(|axum::Extension(c)| c);
     // Public paths may reach this handler without a validated identity even
@@ -339,7 +329,10 @@ pub(super) async fn mcp_delete_handler(
         );
     }
     let session_id = session_id_header(&headers);
-    let owner = session_owner(client.as_ref());
+    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
+        Ok((_, owner)) => owner,
+        Err(refusal) => return refusal,
+    };
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
@@ -540,25 +533,14 @@ async fn meta_mcp_dispatch(
 
     // The caller as a grant subject, resolved once and before the body is
     // read, so a refused identity header reaches no dispatch, cache or
-    // idempotency work. The peer is the direct TCP peer only.
-    let peer = http_request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    let grant_subject = match caller_grant_subject(
-        verified_identity.as_ref(),
-        &headers,
-        peer,
-        state.meta_mcp.caller_identity(),
-        state.meta_mcp.access_verifier(),
-        cert_identity.as_ref(),
-        oauth_agent_identity.as_ref(),
-    )
-    .await
-    {
-        Ok(subject) => subject,
-        Err(refusal) => return identity_refusal_response(refusal).into_response(),
-    };
+    // idempotency work.
+    let (grant_subject, caller_owner) =
+        match request_session_owner(&state, &headers, http_request.extensions(), client.as_ref())
+            .await
+        {
+            Ok(resolved) => resolved,
+            Err(refusal) => return refusal,
+        };
 
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(http_request).await {
@@ -633,10 +615,10 @@ async fn meta_mcp_dispatch(
     } else {
         let (id, rx) = state.multiplexer.get_or_create_session_scoped(
             existing_session_id.as_deref(),
-            // The identity that owns the session. Every caller is "anonymous"
-            // when authentication is off, so a single-user gateway behaves
-            // exactly as before.
-            &session_owner(client.as_ref()),
+            // The identity that owns the session. A caller with neither a
+            // subject nor a credential is "anonymous", so a single-user
+            // gateway behaves exactly as before.
+            &caller_owner,
             crate::gateway::auth::live::held_credential(&headers),
         );
         (id, Some(rx))
@@ -2112,6 +2094,10 @@ mod health_predicate_tests;
 #[cfg(test)]
 #[path = "handlers_session_tests.rs"]
 mod session_tests;
+
+#[cfg(test)]
+#[path = "handlers_session_subject_tests.rs"]
+mod session_subject_tests;
 
 #[cfg(test)]
 mod cacheable_field_tests {

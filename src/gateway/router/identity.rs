@@ -312,6 +312,28 @@ fn cert_subject_id(identity: &CertIdentity) -> Option<String> {
         .map(String::from)
 }
 
+/// The `Subject(authority, id)` half of `caller_key`, in every build: session
+/// ownership keys on it too. `None` when no subject resolved, or when the only
+/// subject is a certificate's display-name fallback.
+pub(super) fn subject_key(
+    subject: Option<&GrantSubject>,
+    cert: Option<&CertIdentity>,
+) -> Option<String> {
+    let subject = subject?;
+    let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
+    let id = if from_cert {
+        cert.and_then(cert_subject_id)?
+    } else {
+        subject.subject.clone()
+    };
+    Some(format!(
+        "subject:{}:{}:{}:{id}",
+        subject.authority.len(),
+        subject.authority,
+        id.len()
+    ))
+}
+
 /// The key the per-caller firewall controls (anomaly, tenant, budget) score on:
 /// the hardened design's `CallerKey`.
 ///
@@ -330,21 +352,8 @@ pub(super) fn caller_key(
     cert: Option<&CertIdentity>,
     client: Option<&AuthenticatedClient>,
 ) -> String {
-    if let Some(subject) = subject {
-        let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
-        let id = if from_cert {
-            cert.and_then(cert_subject_id)
-        } else {
-            Some(subject.subject.clone())
-        };
-        if let Some(id) = id {
-            return format!(
-                "subject:{}:{}:{}:{id}",
-                subject.authority.len(),
-                subject.authority,
-                id.len()
-            );
-        }
+    if let Some(key) = subject_key(subject, cert) {
+        return key;
     }
     client
         .filter(|c| c.authenticated && !c.principal.is_empty())
