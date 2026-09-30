@@ -4,6 +4,7 @@
 
 mod context;
 mod expiry;
+mod input_round;
 mod observe;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
@@ -22,6 +23,7 @@ use tokio::sync::{Semaphore, oneshot};
 pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 /// The guard the gateway holds for the periodic sweep it started.
 pub(crate) use expiry::ExpirySweep;
+pub(crate) use input_round::InputOutcome;
 pub(crate) use observe::{
     CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
@@ -197,7 +199,9 @@ impl TaskExecutor {
         // Ownership first, and only then the spawn: the guard is live before
         // there is a task to run it, so the window in which the executor has
         // accepted work that no drain can see does not exist.
-        let (handoff, cancel_rx) = Handoff::accept(self, task.id());
+        // A fresh id: nobody else can own it, so a refusal is not reachable.
+        let (handoff, cancel_rx) =
+            Handoff::try_accept(self, task.id()).ok_or(ServiceError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
         tokio::spawn(commit_and_run(
             handoff, intent, task, backend, call, cancel_rx, tx,
@@ -454,7 +458,7 @@ impl TaskExecutor {
     /// The one publication seam, reached only after a durable write that
     /// changed something: a dedupe, a no-op or a failed commit never gets here,
     /// so a listener never learns of a transition that did not happen.
-    fn published(&self, outcome: &WriteOutcome, task_id: &str) {
+    pub(super) fn published(&self, outcome: &WriteOutcome, task_id: &str) {
         let status = match outcome {
             WriteOutcome::Create(CreateOutcome::Created { task, .. })
             | WriteOutcome::Transitioned(task) => task.task.status(),

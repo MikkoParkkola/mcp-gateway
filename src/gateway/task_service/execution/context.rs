@@ -119,8 +119,34 @@ impl OwnedCallerContext {
     /// - Capabilities are the creating request's.
     pub(crate) fn dispatch_context<'a>(
         &'a self,
+        state: &'a AppState,
+        authorizer: &'a RouterAuthorizer<'a>,
+    ) -> MetaMcpCallerContext<'a> {
+        self.dispatch_context_retrying(state, authorizer, &self.retry)
+    }
+
+    /// The retry fields of one input-round continuation: the gateway-sealed
+    /// `requestState` and the accumulated answers, beside this context's own
+    /// attestation token. Redeemed by the funnel as a client retry would be.
+    pub(crate) fn continuation(
+        &self,
+        request_state: Option<String>,
+        input_responses: Option<Value>,
+    ) -> RetryFields {
+        RetryFields {
+            input_responses,
+            request_state,
+            ..self.retry.clone()
+        }
+    }
+
+    /// [`Self::dispatch_context`] carrying `retry` instead of this context's
+    /// own fields: the continuation of an input round.
+    pub(crate) fn dispatch_context_retrying<'a>(
+        &'a self,
         _state: &'a AppState,
         authorizer: &'a RouterAuthorizer<'a>,
+        retry: &'a RetryFields,
     ) -> MetaMcpCallerContext<'a> {
         let authorizer: &'a (dyn ToolAuthorizer + Sync) = authorizer;
         MetaMcpCallerContext {
@@ -166,7 +192,7 @@ impl OwnedCallerContext {
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
-            retry: &self.retry,
+            retry,
             task: None,
             era: crate::protocol::meta::Era::Modern,
             channel: &crate::gateway::input_bridge::NoClientChannel,
