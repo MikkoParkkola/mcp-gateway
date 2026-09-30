@@ -25,6 +25,7 @@ use super::helpers::{
     parse_sampling_params,
 };
 use super::identity::{caller_grant_subject, identity_refusal_response};
+use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
@@ -1336,6 +1337,13 @@ async fn meta_mcp_dispatch(
                 tool_name,
                 &backend_targets,
             );
+            // A refusal below is written to the chain as the meta layer would (#2420).
+            let refused = Refused::of(
+                &arguments,
+                client.as_ref(),
+                grant_subject.as_ref(),
+                &session_id,
+            );
             for target in &backend_targets {
                 // A surfaced name this caller could not invoke is answered by
                 // the meta layer exactly as an unknown name is (`-32601`), and
@@ -1376,13 +1384,9 @@ async fn meta_mcp_dispatch(
                         &target.tool,
                         &e.message,
                     );
-                    return build_error_response(
-                        Some(id),
-                        e.code,
-                        e.message,
-                        &session_id,
-                        e.status,
-                    );
+                    return refused
+                        .answer(&state, target.as_target(), id, e.code, e.message, e.status)
+                        .await;
                 }
 
                 // Firewall: pre-invocation request scan
@@ -1448,13 +1452,9 @@ async fn meta_mcp_dispatch(
                                 });
                             (-32600_i32, format!("Firewall blocked: {desc}"))
                         };
-                        return build_error_response(
-                            Some(id),
-                            code,
-                            reason,
-                            &session_id,
-                            StatusCode::BAD_REQUEST,
-                        );
+                        return refused
+                            .answer(&state, target, id, code, reason, StatusCode::BAD_REQUEST)
+                            .await;
                     }
                 }
             }
