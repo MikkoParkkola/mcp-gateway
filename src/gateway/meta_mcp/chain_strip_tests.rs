@@ -108,3 +108,33 @@ async fn backend_chain_only_meta_is_dropped_meta() {
         "stamping on: the chain is stripped before the receipt is added, got: {result}"
     );
 }
+
+/// Task recovery reaches the response gates without the provenance stamp, so
+/// the gates themselves strip a backend-sent chain (final review, #2381).
+#[test]
+fn response_gates_strip_a_backend_chain_for_task_recovery() {
+    let meta = meta_with(chain_sending_backend(&json!({})), false);
+    let gated = meta
+        .apply_response_gates(
+            "remote_docs",
+            "search",
+            None,
+            "trace-recovery",
+            json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "_meta": {CHAIN_KEY: forged_chain(), "cache_key": "keep-me"},
+            }),
+        )
+        .expect("an ordinary result passes the gates");
+    assert!(
+        gated
+            .pointer("/_meta")
+            .and_then(|m| m.get(CHAIN_KEY))
+            .is_none(),
+        "recovered task results must not carry a backend-sent chain: {gated}"
+    );
+    assert_eq!(
+        gated.pointer("/_meta/cache_key").and_then(|v| v.as_str()),
+        Some("keep-me")
+    );
+}

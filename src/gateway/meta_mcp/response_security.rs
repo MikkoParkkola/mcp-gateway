@@ -163,6 +163,10 @@ impl super::MetaMcp {
         );
         // After the firewall, before the v2 HMAC: the link covers the final
         // content and the MAC covers the link.
+        // Egress: no result leaves with a chain this gateway did not just sign.
+        if let Some(result) = response.result.as_mut() {
+            crate::security::signature_chain::strip_chain(result);
+        }
         let invoke_nonce =
             (context.signing).and_then(super::signing::SigningInvocationContext::invoke_nonce);
         self.emit_origin_link(
@@ -410,31 +414,34 @@ impl super::MetaMcp {
     }
 }
 
-/// Whether context integrity replaced or transformed this result (A3 R2): its
-/// own metadata records `enforcement_applied`. Such a result is no longer the
-/// backend's answer and is never chain-eligible. A backend forging the key can
-/// only make its own result ineligible.
-pub(crate) fn context_integrity_enforced(result: &serde_json::Value) -> bool {
-    result
-        .pointer("/_context_integrity/policy/enforcement_applied")
-        .is_some_and(|applied| applied.as_bool() != Some(false))
+/// Whether the response gates passed a result through or replaced or
+/// transformed it (A3 R2'). Server-owned: never read back from the payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GateEffect {
+    /// The backend's answer, unchanged by the gates.
+    PassedThrough,
+    /// Context integrity withheld, refused or transformed the result.
+    Enforced,
 }
 
 impl super::MetaMcp {
-    /// Link a direct-route `tools/call` result after its idempotency settle, so
-    /// the stored body never carries a link. Only a backend success the
-    /// response gates passed through is eligible; a replay from the direct
-    /// store is not (it records no origin).
-    pub(crate) fn link_direct(
+    /// Finish a direct-route response after its idempotency settle, so the
+    /// stored body never carries a link: strip any chain from every method's
+    /// result, then link a `tools/call` result the response gates passed
+    /// through (`chain_source` set by the direct guards). A replay from the
+    /// direct store records no origin and is never linked (A3 L1).
+    pub(crate) fn finish_direct(
         &self,
         response: &mut crate::protocol::JsonRpcResponse,
+        method: &str,
         chain_nonce: Option<&str>,
     ) {
-        let passed = response.error.is_none()
-            && !response.delivery_refusal
-            && (response.result.as_ref()).is_some_and(|result| !context_integrity_enforced(result));
-        if passed {
-            self.emit_origin_link(response, ChainSource::Backend, chain_nonce, None);
+        if let Some(result) = response.result.as_mut() {
+            crate::security::signature_chain::strip_chain(result);
+        }
+        if method == "tools/call" && !response.delivery_refusal {
+            let source = response.chain_source;
+            self.emit_origin_link(response, source, chain_nonce, None);
         }
     }
 }

@@ -1431,7 +1431,22 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> Result<Value> {
-        let mut result = result;
+        let gated = self.apply_response_gates_effect(server, tool, api_key_name, trace_id, result);
+        gated.map(|(value, _)| value)
+    }
+
+    /// [`Self::apply_response_gates`] plus whether a gate replaced or
+    /// transformed the result (A3 R2'). Only this gateway may put a signature
+    /// chain on a result, so any backend-sent chain is stripped first.
+    pub(super) fn apply_response_gates_effect(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        mut result: Value,
+    ) -> Result<(Value, super::response_security::GateEffect)> {
+        crate::security::signature_chain::strip_chain(&mut result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -2524,8 +2539,9 @@ impl MetaMcp {
             api_key_name,
             trace_id,
         };
-        result = self.gate_payload(&call, result)?;
-        answered &= !super::response_security::context_integrity_enforced(&result);
+        let (gated, effect) = self.gate_payload(&call, result)?;
+        result = gated;
+        answered &= effect == super::response_security::GateEffect::PassedThrough;
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -2753,7 +2769,8 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         trace_id: &str,
         result: Value,
-    ) -> Value {
+    ) -> (Value, super::response_security::GateEffect) {
+        use super::response_security::GateEffect;
         let mut provenance = ContextProvenance::tool_result(
             server,
             tool,
@@ -2779,15 +2796,19 @@ impl MetaMcp {
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {
-            return result;
+            return (result, GateEffect::PassedThrough);
         }
 
-        let delivered = if evaluation.policy.enforcement_applied {
-            Self::context_integrity_delivered_result(&evaluation, &result)
+        let (delivered, effect) = if evaluation.policy.enforcement_applied {
+            let delivered = Self::context_integrity_delivered_result(&evaluation, &result);
+            (delivered, GateEffect::Enforced)
         } else {
-            result
+            (result, GateEffect::PassedThrough)
         };
-        Self::attach_context_integrity_metadata(delivered, &evaluation)
+        (
+            Self::attach_context_integrity_metadata(delivered, &evaluation),
+            effect,
+        )
     }
 
     fn capability_context_flags(&self, server: &str, tool: &str) -> (bool, bool) {

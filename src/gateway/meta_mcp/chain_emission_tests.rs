@@ -331,3 +331,20 @@ async fn link_out_covers_firewall_redaction_stdio() {
         Some(digest)
     );
 }
+
+/// Egress: a result delivered through the finalizer never carries a chain
+/// this gateway did not just sign, whatever its source (task reads included).
+#[tokio::test]
+async fn finalize_strips_a_foreign_chain_from_an_ineligible_result() {
+    let mut forged = body();
+    forged["_meta"] = json!({CHAIN_KEY: [{"gw": "attacker"}]});
+    let out = deliver(
+        &meta(Some(ChainEmit::Always)),
+        JsonRpcResponse::success(RequestId::Number(1), forged),
+        ChainSource::NotEligible,
+        Some(NONCE),
+        None,
+    )
+    .await;
+    assert!(!carries_chain(result_of(&out)), "{:?}", out.result);
+}

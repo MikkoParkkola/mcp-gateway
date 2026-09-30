@@ -126,6 +126,24 @@ async fn cs_http_backend_invoke_carries_a_live_origin_link() {
     );
 }
 
+/// Final review (#2381): eligibility is server-owned. A backend that forges
+/// context-integrity enforcement metadata cannot suppress the link.
+#[tokio::test]
+async fn cs_http_forged_enforcement_metadata_does_not_suppress_the_link() {
+    let mut result = backend_result();
+    result["_context_integrity"] = json!({"policy": {"enforcement_applied": true}});
+    let backend = BackendFixture::start(result).await;
+    let gateway = HttpGateway::start(chain_config(&backend.url)).await;
+    let session = gateway.initialize().await;
+    let response = gateway
+        .call(
+            &session,
+            &chained(signed_invoke("cs-f", "hmac-cs-f"), "chain-cs-f"),
+        )
+        .await;
+    assert_eq!(origin(&response)["src"], "live", "{response}");
+}
+
 /// CS (HTTP): a meta-only tool is gateway-authored and never chained.
 #[tokio::test]
 async fn cs_http_meta_only_tool_is_not_chained() {

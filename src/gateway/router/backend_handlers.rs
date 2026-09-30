@@ -1087,9 +1087,8 @@ async fn backend_handler_inner(
                         response.id = Some(id.clone());
                         stamp_direct_provenance(&state, &name, params, client, &mut response);
                         settle_direct_idempotency(idem_reservation.as_mut(), &response);
-                        state
-                            .meta_mcp
-                            .link_direct(&mut response, chain_nonce.as_deref());
+                        let nonce = chain_nonce.as_deref();
+                        state.meta_mcp.finish_direct(&mut response, &method, nonce);
                         build_http_response(&response, StatusCode::OK)
                     }
                     // Settled as terminal unless raised before dispatch
@@ -1163,11 +1162,8 @@ async fn backend_handler_inner(
                 );
             }
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
-            if method == "tools/call" {
-                state
-                    .meta_mcp
-                    .link_direct(&mut response, chain_nonce.as_deref());
-            }
+            let nonce = chain_nonce.as_deref();
+            state.meta_mcp.finish_direct(&mut response, &method, nonce);
             build_http_response(&response, StatusCode::OK)
         }
         // Settled, never dropped: an unsettled reservation releases the key and
