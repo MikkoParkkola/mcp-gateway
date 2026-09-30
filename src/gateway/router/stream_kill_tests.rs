@@ -267,7 +267,12 @@ async fn idem5_direct_killed_side_effecting_call_executes_once() {
 #[tokio::test]
 async fn idem6_read_only_call_is_unaffected_by_the_kill() {
     let fx = fixture(IdempotencyKeyMode::Required).await;
-    let (status, refused) = send(&fx, "/mcp", &invoke(9, "w", None)).await;
+    // Bounded: a refusal answers at once, while a call that is wrongly admitted
+    // parks at the closed gate, so a missing refusal fails here, never hangs.
+    let control = send(&fx, "/mcp", &invoke(9, "w", None));
+    let (status, refused) = tokio::time::timeout(Duration::from_secs(5), control)
+        .await
+        .expect("a keyless side-effecting call must be refused at once, not dispatched");
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert!(refused.contains("idempotency key is required"), "{refused}");
     assert_eq!(fx.deliveries(), 0, "the refused call was delivered");
