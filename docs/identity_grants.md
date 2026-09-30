@@ -159,9 +159,17 @@ An `IdentityGrant` records:
 - Expiry and revocation timestamps.
 - Provenance and human-readable reason.
 
-Grant evaluation emits an `IdentityGrantAuditEvent` for every allow or deny
-decision. Audit events contain the subject, agent id, capability, tool, scope,
-reason code, matching grant id when present, and timestamp.
+With a transparency log configured, every call to a personal capability writes
+one `identity_grant_decision` record per grant decision into the audit log,
+allow (`outcome: ok`) and deny (`outcome: denied`) alike. The record carries
+the subject as `authority` and `subject` (never the label), the agent id,
+capability, tool, scope, reason code, the matching grant id when present, a
+timestamp, and the call's `trace_id`, so it pairs with the call's invocation
+record. A call refused before dispatch (signing, admission) has only this
+record. Listings, searches, and public or shared capabilities write none. A
+signed task has two records: the decision at signing and the decision at
+execution. Under `FailClosed`, a record that cannot be written answers the call
+with `-32005` instead of its result.
 
 ## Behavior
 

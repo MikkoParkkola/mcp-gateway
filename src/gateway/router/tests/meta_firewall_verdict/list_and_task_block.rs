@@ -173,6 +173,36 @@ async fn blocked_discovery_listings_are_refused_once() {
     }
 }
 
+/// MIK-7407.RESPONSE.3: an allowed discovery listing is inspected once, on its
+/// canonical value in the Meta-MCP; the router does not scan the served copy.
+#[tokio::test]
+async fn allowed_discovery_listings_are_inspected_once() {
+    let (state, handler, meta, _store) = listing_state("echo".to_string(), Vec::new()).await;
+    let calls = [
+        ("gateway_list_tools", json!({"server": "demo"})),
+        ("gateway_list_tools", json!({})),
+        ("gateway_search_tools", json!({"query": "echo"})),
+        ("gateway_search", json!({"query": "echo"})),
+    ];
+    for (i, (tool, arguments)) in calls.into_iter().enumerate() {
+        let before = (inspections(&handler), inspections(&meta));
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": i,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}
+        });
+        let (_status, body) = post(&state, "/mcp", &[], &body).await;
+        assert!(body.get("error").is_none(), "{tool}: {body}");
+        let after = (inspections(&handler), inspections(&meta));
+        assert_eq!(
+            (after.0 - before.0, after.1 - before.1),
+            (0, 1),
+            "{tool}: one inspection, on the canonical value"
+        );
+    }
+}
+
 /// The discovery inspection sees raw strings, not the escaped JSON text the
 /// result is served in: a double-quoted generic key, and an injection phrase
 /// split by newlines under a `tools/list` Block rule, are both refused.

@@ -514,11 +514,7 @@ impl TransparencyLogger {
         {
             self.append_attempts
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            if self
-                .fail_next_append
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-                || self.fail_appends.load(std::sync::atomic::Ordering::Acquire)
-            {
+            if self.injected_fault(&fields) {
                 return Err(io::Error::other("injected transparency append failure"));
             }
         }
