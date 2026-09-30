@@ -324,6 +324,10 @@ mod identity_slot_probe_tests;
 mod start_failure_slot_tests;
 
 #[cfg(test)]
+#[path = "era_stale_probe_tests.rs"]
+mod era_stale_probe_tests;
+
+#[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
 

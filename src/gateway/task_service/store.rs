@@ -134,7 +134,7 @@ struct Shared {
     state: Mutex<State>,
     lease: Mutex<Option<ExclusiveFileLock>>,
     #[cfg(test)]
-    hook: Mutex<Option<CommitHook>>,
+    seams: input::TestSeams,
     temp: AtomicU64,
 }
 
@@ -158,7 +158,7 @@ impl TaskStore {
             }),
             lease: Mutex::new(Some(lease)),
             #[cfg(test)]
-            hook: Mutex::new(None),
+            seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
         })))
     }
@@ -357,7 +357,7 @@ impl TaskStore {
 
     #[cfg(test)]
     pub(super) async fn set_hook(&self, hook: Option<CommitHook>) {
-        *self.0.hook.lock().unwrap_or_else(PoisonError::into_inner) = hook;
+        self.0.seams.set_hook(hook);
     }
 
     /// Stop serving and release custody — after any mutation already in flight
@@ -570,14 +570,10 @@ impl Shared {
     /// The test-only commit hook. Production installs none and pays nothing.
     #[cfg(test)]
     fn hook(&self) -> Option<CommitHook> {
-        self.hook
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.seams.hook()
     }
 
-    // `&self` is load-bearing even here: the cfg(test) twin above reads the
-    // hook slot, and every caller writes `self.hook()`. One shape, two bodies.
+    // `&self` is load-bearing: one shape with the cfg(test) twin above.
     #[cfg(not(test))]
     #[expect(
         clippy::unused_self,

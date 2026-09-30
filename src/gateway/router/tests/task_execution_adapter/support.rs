@@ -77,6 +77,7 @@ pub(super) fn two_principal_auth() -> AuthConfig {
         allowed_tools: None,
         denied_tools: None,
         admin,
+        kind: crate::config::ApiKeyKind::Shared,
     };
     AuthConfig {
         enabled: true,
@@ -314,6 +315,27 @@ fn verified_subject(principal: &str) -> Option<&'static str> {
 /// POST as `principal`, returning the parsed JSON body.
 pub(super) async fn post(state: &Arc<AppState>, principal: &str, body: Value) -> Value {
     post_full(state, principal, body).await.1
+}
+
+/// POST as `principal` with one extra request header, returning the body.
+pub(super) async fn post_with_header(
+    state: &Arc<AppState>,
+    principal: &str,
+    body: Value,
+    header: (&'static str, &str),
+) -> Value {
+    let mut request = http_request(Some(principal), &body);
+    request
+        .headers_mut()
+        .insert(header.0, header.1.parse().expect("a valid header value"));
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("the router must answer");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body must read");
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
 /// POST as `principal`, returning status and body.

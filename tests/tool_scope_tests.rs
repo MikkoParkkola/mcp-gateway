@@ -279,6 +279,7 @@ fn test_api_key_config_with_tool_scopes() {
         allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
         denied_tools: Some(vec!["read_secrets".to_string()]),
         admin: false,
+        kind: mcp_gateway::config::ApiKeyKind::Shared,
     };
 
     // Verify config fields are set correctly

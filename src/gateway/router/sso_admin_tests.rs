@@ -120,6 +120,7 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 

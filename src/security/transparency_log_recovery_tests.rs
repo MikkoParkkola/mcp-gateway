@@ -301,6 +301,7 @@ fn reserve_is_written_not_sparse() {
     rotate_n(&l, &path, 1);
     let meta = std::fs::metadata(sibling(&path, "reserve")).unwrap();
     assert_eq!(meta.len(), 1024 * 1024);
+    // Unix-only: `blocks()` (allocated size) is a POSIX stat field with no Windows equivalent.
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

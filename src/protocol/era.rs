@@ -252,13 +252,30 @@ impl EraCache {
         self.resolve_triggered(ProbeTrigger::Start, probe).await
     }
 
-    /// Return the cached era, or determine it by probing after a contradiction.
-    pub async fn reprobe_with<F, Fut>(&self, probe: F) -> Era
+    /// Return the cached era, or determine it by probing after a contradiction,
+    /// unless the probed peer has been replaced by the time it answers.
+    ///
+    /// `install` decides that, and it must check and write as one step: it is called
+    /// with the write as `store`, and runs `store` only if the probed transport is
+    /// still the one in service, returning whether it did. A bare "is it current?"
+    /// answered before the write would let a restart replace the transport in
+    /// between, because a replacement takes the slot's lock, not this one. When
+    /// `install` declines, nothing is written and `era_probe_discarded` says so
+    /// (MIK-7217.ERA.1, ERA.2).
+    pub async fn reprobe_with<F, Fut, I>(&self, probe: F, install: I) -> Era
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
+        I: FnOnce(&mut dyn FnMut()) -> bool,
     {
-        self.resolve_triggered(ProbeTrigger::Reprobe, probe).await
+        let mut guard = self.observation.lock().await;
+        if guard.source == EraSource::Probed {
+            tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = true);
+            return guard.era;
+        }
+        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+        self.probe_and_store(&mut guard, ProbeTrigger::Reprobe, probe, install)
+            .await
     }
 
     /// The probe runs while the lock is held. That is deliberate: it serialises
@@ -279,7 +296,8 @@ impl EraCache {
             return guard.era;
         }
         tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
-        self.probe_and_store(&mut guard, trigger, probe).await
+        self.probe_and_store(&mut guard, trigger, probe, install_always)
+            .await
     }
 
     /// Discard any determination and probe the peer that replaced it, holding the
@@ -312,25 +330,42 @@ impl EraCache {
         // discarded. The miss is recorded for the same reason the start path records
         // one -- an era resolved by probing must never read as a cache hit.
         tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
-        self.probe_and_store(&mut guard, ProbeTrigger::Start, probe)
+        self.probe_and_store(&mut guard, ProbeTrigger::Start, probe, install_always)
             .await
     }
 
     /// Run one probe and record what it decided. The caller owns the lock.
-    async fn probe_and_store<F, Fut>(
+    async fn probe_and_store<F, Fut, I>(
         &self,
         guard: &mut EraObservation,
         trigger: ProbeTrigger,
         probe: F,
+        install: I,
     ) -> Era
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
+        I: FnOnce(&mut dyn FnMut()) -> bool,
     {
         let started = std::time::Instant::now();
         let outcome = probe().await;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
+
+        if !install(&mut || *guard = observation) {
+            // The probed peer is gone: what it said is about a process no longer on
+            // the wire. Same fields as the probe record, minus `error_code`, plus why.
+            tracing::info!(
+                target: "mcp_gateway::observed",
+                backend = %self.name,
+                reason = "transport_replaced",
+                outcome = outcome.outcome_label(observation.era),
+                evidence = observation.evidence.as_str(),
+                duration_ms,
+                trigger = trigger.as_str(),
+            );
+            return guard.era;
+        }
 
         // Two call sites rather than an optional field: `error_code` is absent
         // on the non-error rows, and `tracing` has no way to omit a field.
@@ -355,9 +390,15 @@ impl EraCache {
             );
         }
 
-        *guard = observation;
         observation.era
     }
+}
+
+/// The `install` of a probe nothing can supersede: the start path holds the slot's start
+/// lock, so its transport cannot be replaced underneath it.
+fn install_always(store: &mut dyn FnMut()) -> bool {
+    store();
+    true
 }
 
 /// Whether a discovery document names a revision we can speak statelessly.
@@ -656,5 +697,54 @@ mod tests {
             "the second observer of the same contradiction must not be told it discarded \
              a determination that was already gone"
         );
+    }
+
+    /// An `install` that declines writes nothing and says why: the observation is exactly
+    /// what the contradiction left, and one record carries the reason and the probe's own fields.
+    #[test]
+    fn a_declined_install_writes_nothing_and_reports_why() {
+        let records = crate::test_log_capture::records(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("runtime")
+                .block_on(async {
+                    let cache = EraCache::for_backend("swapped-mid-probe");
+                    let before = cache.observation().await;
+                    cache
+                        .reprobe_with(|| async { modern_document() }, |_store| false)
+                        .await;
+                    assert_eq!(cache.observation().await, before);
+                    assert_eq!(cache.cached().await, None);
+                });
+        });
+        let discarded: Vec<_> = records
+            .iter()
+            .filter(|r| r["fields"]["reason"] == "transport_replaced")
+            .collect();
+        assert_eq!(discarded.len(), 1, "{records:?}");
+        let fields = &discarded[0]["fields"];
+        assert_eq!(fields["backend"], "swapped-mid-probe");
+        assert_eq!(fields["evidence"], "discover_modern");
+        assert_eq!(fields["trigger"], "reprobe");
+        assert!(fields.get("duration_ms").is_some(), "{fields}");
+        assert!(fields.get("outcome").is_some(), "{fields}");
+        assert!(fields.get("error_code").is_none(), "{fields}");
+    }
+
+    /// An `install` that accepts stores through the closure it is given.
+    #[tokio::test]
+    async fn an_accepting_install_stores_the_answer() {
+        let cache = EraCache::for_backend("still-in-service");
+        let era = cache
+            .reprobe_with(
+                || async { modern_document() },
+                |store| {
+                    store();
+                    true
+                },
+            )
+            .await;
+        assert_eq!(era, Era::Modern);
+        assert_eq!(cache.cached().await, Some(Era::Modern));
     }
 }

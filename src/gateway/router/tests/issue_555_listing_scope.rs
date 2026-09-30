@@ -36,6 +36,7 @@ mod backend_scope;
 #[cfg(feature = "cost-governance")]
 mod cost_scope;
 mod direct_route;
+mod direct_session;
 mod guide;
 mod meta_tools;
 mod residuals;
@@ -178,6 +179,7 @@ pub(super) fn key(name: &str, backends: &[&str]) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 

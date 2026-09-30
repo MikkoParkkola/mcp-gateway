@@ -3316,7 +3316,7 @@ impl Gateway {
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
-                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response)) => {
+                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response, _)) => {
                     break 'tool_call response;
                 }
                 Err(error) => {
