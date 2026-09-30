@@ -8,21 +8,20 @@
 //! The code never travels in a URL, so no proxy access log, history entry or
 //! `Referer` carries it, and no proxy header is trusted to vouch for anything.
 
-use axum::body::Body;
-use axum::http::{HeaderValue, Method, Request, StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+#[cfg(feature = "webui")]
 use tracing::warn;
 
+#[cfg(feature = "webui")]
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
-use super::{AuthState, Now, Redemption, bearer_unauthorized_response};
+use super::AuthState;
+#[cfg(feature = "webui")]
+use super::{DashboardBootstrap, Now, Redemption, bearer_unauthorized_response};
 
 /// Where the code is entered, on the public origin.
-pub(super) const HANDOFF_PATH: &str = "/dashboard/handoff";
-
-/// The code form's body limit: `code=` and a 43-character value, with room to
-/// spare, and nothing a client could use to make this path buffer much.
-const MAX_FORM_BYTES: usize = 512;
+pub(crate) const HANDOFF_PATH: &str = "/dashboard/handoff";
 
 /// The HTTPS origin browsers reach this gateway at, from the live
 /// `public_url`; `None` when there is none or it is not HTTPS.
@@ -45,25 +44,9 @@ pub(super) fn code_page(origin: &str, code: &str) -> Response {
     )))
 }
 
-/// The code exchange on the public origin, or the request back when this is
-/// not one. It runs before the session cookie is judged, so a browser holding
-/// a live or a dead cookie still signs in.
-pub(super) async fn try_handoff(
-    state: &AuthState,
-    request: Request<Body>,
-) -> Result<Response, Request<Body>> {
-    if request.uri().path() != HANDOFF_PATH {
-        return Err(request);
-    }
-    Ok(match *request.method() {
-        Method::GET | Method::HEAD => form_page(),
-        Method::POST => redeem(state, request.into_body()).await,
-        _ => private(StatusCode::METHOD_NOT_ALLOWED.into_response()),
-    })
-}
-
-/// A form that holds nothing: served to anyone.
-fn form_page() -> Response {
+/// `GET /dashboard/handoff`: a form that holds nothing, served to anyone.
+#[cfg(feature = "webui")]
+pub(crate) fn handoff_form() -> Response {
     private(html(format!(
         "<!doctype html><meta charset=\"utf-8\"><title>Dashboard sign-in</title>\
          <form method=\"post\" action=\"{HANDOFF_PATH}\"><label>Code \
@@ -72,19 +55,23 @@ fn form_page() -> Response {
     )))
 }
 
-/// Spend the posted code for a session. Neither the body nor the code is
-/// logged or echoed: the refusal names the outcome only.
-async fn redeem(state: &AuthState, body: Body) -> Response {
-    let code = axum::body::to_bytes(body, MAX_FORM_BYTES)
-        .await
-        .ok()
-        .and_then(|bytes| {
-            url::form_urlencoded::parse(&bytes)
-                .find(|(key, _)| key == "code")
-                .map(|(_, value)| value.trim().to_string())
-        });
+/// `POST /dashboard/handoff`: spend the posted code for a session.
+///
+/// Routed outside authentication, like logout: the code is the credential,
+/// and a live or dead session cookie the browser holds must not decide it.
+/// The origin gate still applies, so only a same-origin form can post here.
+/// Neither the body nor the code is logged or echoed.
+#[cfg(feature = "webui")]
+pub(crate) fn redeem_handoff(
+    bootstrap: &DashboardBootstrap,
+    live: &crate::config_reload::LiveConfig,
+    body: &[u8],
+) -> Response {
+    let code = url::form_urlencoded::parse(body)
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.trim().to_string());
     let Some(Redemption { not_after }) =
-        code.and_then(|code| state.dashboard_bootstrap.take_handoff(&code, Now::read()))
+        code.and_then(|code| bootstrap.take_handoff(&code, Now::read()))
     else {
         auth_failure(AuthFailureKind::BootstrapRefused);
         warn!("Dashboard handoff refused: wrong, used or expired code");
@@ -94,7 +81,9 @@ async fn redeem(state: &AuthState, body: Body) -> Response {
     };
     // Always `Secure`: a code exists only because this origin is HTTPS, and a
     // reload since it was minted must not downgrade the cookie it sets.
-    private(super::bootstrap::signed_in(state, not_after, true))
+    private(super::bootstrap::signed_in(
+        bootstrap, live, not_after, true,
+    ))
 }
 
 /// Nothing on these pages may be cached or sent onward as a `Referer`.

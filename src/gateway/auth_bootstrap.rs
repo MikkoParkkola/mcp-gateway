@@ -11,8 +11,8 @@ use tracing::warn;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
 use super::{
-    AuthState, Now, Redemption, bearer_unauthorized_response, cookie_secure, session_cookie,
-    session_limits,
+    AuthState, DashboardBootstrap, Now, Redemption, SessionLimits, bearer_unauthorized_response,
+    cookie_secure, session_cookie,
 };
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
@@ -155,7 +155,12 @@ pub(super) fn try_dashboard_bootstrap(
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
-        Some(signed_in(state, not_after, secure))
+        Some(signed_in(
+            &state.dashboard_bootstrap,
+            &state.live_config,
+            not_after,
+            secure,
+        ))
     }
 }
 
@@ -163,15 +168,14 @@ pub(super) fn try_dashboard_bootstrap(
 /// cookie and a 303 to `/dashboard`. The session ends at `not_after`, the
 /// minting credential's expiry, when that comes before the absolute limit.
 pub(super) fn signed_in(
-    state: &AuthState,
+    bootstrap: &DashboardBootstrap,
+    live: &crate::config_reload::LiveConfig,
     not_after: Option<std::time::SystemTime>,
     secure: bool,
 ) -> Response {
-    let limits = session_limits(state);
+    let limits = SessionLimits::from(&live.get().auth.dashboard_session);
     let now = Now::read();
-    let handle = state
-        .dashboard_bootstrap
-        .issue_session_until(now, &limits, not_after);
+    let handle = bootstrap.issue_session_until(now, &limits, not_after);
     // The cookie lives exactly as long as the server will honour it, so a
     // browser never keeps presenting a handle the server already dropped:
     // the absolute limit, or less when the minting credential expires first.
