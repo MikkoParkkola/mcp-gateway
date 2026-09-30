@@ -84,6 +84,7 @@ mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
 mod dispatch_names;
+pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -2296,7 +2297,7 @@ impl MetaMcp {
         .await
     }
 
-    async fn dispatch_below_gate_shaped(
+    async fn dispatch_below_gate_shaped_in_slot(
         &self,
         target: DispatchTarget<'_>,
         shape: ResultShape,
@@ -2709,6 +2710,12 @@ mod test_callers;
 #[cfg(test)]
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
+#[cfg(test)]
+pub(super) mod grant_audit_fixture;
+#[cfg(test)]
+mod grant_decision_audit_tests;
+#[cfg(test)]
+mod grant_decision_slot_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
