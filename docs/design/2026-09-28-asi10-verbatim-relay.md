@@ -304,6 +304,10 @@ post-merge feature-combinations job, and a red result there blocks.
 
 ### 13.1 Increment 2a-i (delta r3, 2026-09-30; split ruled by the coordinator)
 
+Reviewed in one round by two independent seats, both SHIP-WITH-FIXES with no HIGH finding; the
+fixes are folded in below. Deferred, as LOW: a relay-specific refusal prefix instead of the
+shared "Anomaly detection blocked:", and a pre-merge run of the no-default `validate` step.
+
 Increment 2a is split. **2a-i** is the direct route plus the shared config and state.
 **2a-ii** covers the meta route (`accounted_dispatch` check, delivery-boundary recording on HTTP
 and stdio, outer sync replay, composite source, playbook projection, pre-dispatch refusal error
@@ -344,8 +348,9 @@ either `SequenceAnomaly`/`High` or `CollusionRelay`.
 
 **Caller.** `RelayCaller::{Keyed(key), Unkeyed(fallback)}` (crate-internal). On direct it is
 decided from `identity::caller_key(grant_subject, cert, client)` before the `direct:{backend}`
-fallback, which is the same rule `direct_control_identity` uses. The same value is used for the
-check and for recording.
+fallback. One helper, shared with `direct_control_identity`, returns both the key and whether it
+fell back, so the relay key cannot drift from the anomaly, tenant and budget identity. The same
+value is used for the check and for recording.
 
 **Egress check (direct).** `Firewall::check_relay(caller, server, tool, args) -> FirewallVerdict`
 runs in `apply_backend_tool_call_security` immediately after `check_request` allows the call.
@@ -354,7 +359,9 @@ the meta pre-check and meta is 2a-ii.
 1. `action == off`, or `server:tool` matching `non_egress`: allow.
 2. `Unkeyed` under `block`: refuse (finding `CollusionRelay`, "relay check needs an
    authenticated caller"). Under `observe`, check under the fallback key and never refuse.
-3. Text: every string leaf of `arguments`, joined with `\n`, including any caller-supplied
+3. Text: every string leaf of the whole forwarded `params` object, joined with `\n`. That covers
+   `arguments`, `_meta` and any other sibling, because the direct route forwards the whole object
+   (r3 review: `_meta` would otherwise be a side channel). It includes any caller-supplied
    `_context_integrity`. No cap. The direct route is HTTP-only, so `server.max_body_size`
    (10 MiB) bounds it. That bound is not claimed for meta or stdio.
 4. A hit becomes a `CollusionRelay` finding (`Medium`, `RequestArgs`) whose `matched` is the
@@ -364,38 +371,49 @@ the meta pre-check and meta is 2a-ii.
    idempotency reservation is taken, because the check runs before `direct_route_idempotency`
    (#2445 ordering).
 5. The verdict is audit-logged like `check_request`'s.
-Passthrough backends skip `apply_backend_tool_call_security`, so they are not checked, the same
-as every other firewall control.
+Passthrough backends are checked too: their early return in `apply_backend_tool_call_security`
+(`backend_handlers.rs:184`) comes after `check_request`, and `check_relay` sits beside it.
 
 **Recording (direct).** A helper `record_direct_delivery(state, caller, server, tool, &response)`
 runs on the final delivered response. That is after `after_dispatch` (gates, response-firewall
 redaction, refusal) and after `stamp_direct_provenance`, immediately before
 `build_http_response`, on both `tools/call` arms (sanitised and passthrough). It also runs on
-the idempotency `CachedResult` return (`backend_handlers.rs:1042`). It records only when
-`response.error` is `None`. `CachedError`, refusals and transport failures record nothing.
+the idempotency `CachedResult` return (`backend_handlers.rs:1042`). It records whenever the
+delivered response carries a `result`, whether or not an `error` sits beside it. `CachedError`,
+refusals (a fresh response with no `result`) and transport failures record nothing.
 The source is `server:tool`.
 - Text: string leaves of `result`, joined with `\n`, skipping the `_context_integrity` subtree.
-  Capped at 64 KiB of text, cut on a UTF-8 boundary; each cut is counted.
+  Capped at 64 KiB of text: the first and last 32 KiB, each cut on a UTF-8 boundary, so a
+  tail-only excerpt still matches. Each cut is counted; the middle of a larger result is the
+  known, observable residual.
 - Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
   `_context_integrity.classification` reports `personal_data`, `financial_data` or
-  `guarded_material`. A backend can forge that field only to mark its own content sensitive,
-  which adds findings and never removes them.
+  `guarded_material`. The gateway's own attach overwrites any backend-supplied
+  `_context_integrity`, so a backend can forge the field only where the gateway attached none,
+  and then only to mark its own content sensitive: that adds findings and never removes them.
 
 **Absent feature.** `security.firewall` is already refused by strict keys when built without
 `firewall`. `missing_feature()` gains `security.firewall` -> `firewall`, so the message names the
 feature. The table logic takes the feature predicate as a parameter, so a default-build unit test
 exercises the no-firewall entry in the required Tests job. The behavioural proof is a new step in
 the post-merge feature-combinations job: the `--no-default-features` binary runs
-`mcp-gateway validate` on a fixture holding `security.firewall.collusion` and must fail naming
-`firewall`. A red result there blocks the next merge.
+`mcp-gateway validate` on a fixture holding `security.firewall.collusion`. It must exit non-zero
+with the exact text `built without feature "firewall"` and the key `security.firewall`, which the
+old generic message lacks. That job runs post-merge only. "A red result blocks the next merge"
+is lane policy (operator decision 2026-09-29), not something the workflow enforces.
 
 **2a-i tests.** Direct route only:
-- §8 rows 1 (relay refused under block, `-32002`, backend not called),
+- §8 rows 1 (relay refused under block, `-32002`, HTTP 403, backend not called; the same
+  idempotency key re-issued without the relay then executes, so no reservation was taken),
   2 (observe: `Warn`, call proceeds), 11 (a refused/error delivery records nothing),
   12 (`non_egress` skip), 13 (unkeyed: refused under block, checked under observe),
   15 (own copy excuses), 16 (every validation refusal and `off` untouched);
 - a cache-hit delivery excuses its receiver;
-- argument-side `_context_integrity` relay;
+- argument-side `_context_integrity` relay, and a relay carried only in `params._meta`;
+- a passthrough backend is relay-checked;
+- a result carrying both `result` and `error` is recorded;
+- a tail-only excerpt of an over-cap result matches;
+- a backend-forged `_context_integrity` is overwritten where the gateway attaches its own;
 - `sources` and `_context_integrity` sensitivity;
 - result-text cap counted;
 - `is_anomaly_block` truth table;
