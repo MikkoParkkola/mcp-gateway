@@ -301,3 +301,103 @@ post-merge feature-combinations job, and a red result there blocks.
 - a chain attribution case (T unrelated, V relays);
 - the result cap;
 - name-map eviction.
+
+### 13.1 Increment 2a-i (delta r3, 2026-09-30; split ruled by the coordinator)
+
+Increment 2a is split. **2a-i** is the direct route plus the shared config and state.
+**2a-ii** covers the meta route (`accounted_dispatch` check, delivery-boundary recording on HTTP
+and stdio, outer sync replay, composite source, playbook projection, pre-dispatch refusal error
+variant, egress-argument cap). It gets its own design round on the r3 direction in the handoff.
+In 2a-i the meta route is untouched: no check and no recording.
+The r2 findings about the meta route (receipt staging, meta cache hits, refusal propagation
+through `dispatch_error_result`, chain/bridge codes, stdio and playbook argument bounds) are
+2a-ii items. 2a-i does not claim to close them.
+
+**One detector.** `Gateway` builds one `Arc<CollusionDetector>` when `action != off`.
+`response_firewall` attaches that same `Arc` to both firewalls it builds, the `MetaMcp` one
+(`server/mod.rs:1235`) and the `AppState` one (`:1789`), through a crate-internal
+`Firewall::with_collusion`. In 2a-i only `AppState`'s is exercised; 2a-ii reuses the same `Arc`.
+`RelayAction` gains `Block`.
+
+**Config (public, pending operator approval).**
+`FirewallConfig.collusion: CollusionConfig`, `#[serde(default)]`:
+- `action: CollusionAction` (`off` | `observe` | `block`, default `off`);
+- `window_secs` (600), `min_matches` (2), `common_principals` (5);
+- `sources: Vec<String>` and `non_egress: Vec<String>`: globs over `server:tool`, compiled once
+  with the `glob` crate as `FirewallRule` is.
+
+It maps onto `RelayParams`; `max_fingerprints` stays internal.
+`ScanType::CollusionRelay` is added.
+`FirewallVerdict::is_anomaly_block()` becomes: not allowed, non-empty, and every finding is
+either `SequenceAnomaly`/`High` or `CollusionRelay`.
+
+**Startup validation.** In `FirewallConfig::validate`, before the anomaly-off early return, when
+`collusion.action != off`, each of these is refused with an error naming
+`security.firewall.collusion.<field>`:
+- `enabled: false`;
+- `min_matches == 0`;
+- `common_principals < 2`;
+- `window_secs == 0`;
+- any `sources`/`non_egress` pattern that does not compile.
+
+`action: off` loads exactly as before, whatever the other fields hold.
+
+**Caller.** `RelayCaller::{Keyed(key), Unkeyed(fallback)}` (crate-internal). On direct it is
+decided from `identity::caller_key(grant_subject, cert, client)` before the `direct:{backend}`
+fallback, which is the same rule `direct_control_identity` uses. The same value is used for the
+check and for recording.
+
+**Egress check (direct).** `Firewall::check_relay(caller, server, tool, args) -> FirewallVerdict`
+runs in `apply_backend_tool_call_security` immediately after `check_request` allows the call.
+It is a separate method, not a step inside `check_request`, because `check_request` also serves
+the meta pre-check and meta is 2a-ii.
+1. `action == off`, or `server:tool` matching `non_egress`: allow.
+2. `Unkeyed` under `block`: refuse (finding `CollusionRelay`, "relay check needs an
+   authenticated caller"). Under `observe`, check under the fallback key and never refuse.
+3. Text: every string leaf of `arguments`, joined with `\n`, including any caller-supplied
+   `_context_integrity`. No cap. The direct route is HTTP-only, so `server.max_body_size`
+   (10 MiB) bounds it. That bound is not claimed for meta or stdio.
+4. A hit becomes a `CollusionRelay` finding (`Medium`, `RequestArgs`) whose `matched` is the
+   hex digests of source, receiver and sender plus the match count, never content. Under
+   `observe` the verdict is `Warn` and the call proceeds. Under `block` it is refused through
+   the existing `is_anomaly_block` branch: `-32002`, HTTP 403. Nothing is dispatched and no
+   idempotency reservation is taken, because the check runs before `direct_route_idempotency`
+   (#2445 ordering).
+5. The verdict is audit-logged like `check_request`'s.
+Passthrough backends skip `apply_backend_tool_call_security`, so they are not checked, the same
+as every other firewall control.
+
+**Recording (direct).** A helper `record_direct_delivery(state, caller, server, tool, &response)`
+runs on the final delivered response. That is after `after_dispatch` (gates, response-firewall
+redaction, refusal) and after `stamp_direct_provenance`, immediately before
+`build_http_response`, on both `tools/call` arms (sanitised and passthrough). It also runs on
+the idempotency `CachedResult` return (`backend_handlers.rs:1042`). It records only when
+`response.error` is `None`. `CachedError`, refusals and transport failures record nothing.
+The source is `server:tool`.
+- Text: string leaves of `result`, joined with `\n`, skipping the `_context_integrity` subtree.
+  Capped at 64 KiB of text, cut on a UTF-8 boundary; each cut is counted.
+- Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
+  `_context_integrity.classification` reports `personal_data`, `financial_data` or
+  `guarded_material`. A backend can forge that field only to mark its own content sensitive,
+  which adds findings and never removes them.
+
+**Absent feature.** `security.firewall` is already refused by strict keys when built without
+`firewall`. `missing_feature()` gains `security.firewall` -> `firewall`, so the message names the
+feature. The table logic takes the feature predicate as a parameter, so a default-build unit test
+exercises the no-firewall entry in the required Tests job. The behavioural proof is a new step in
+the post-merge feature-combinations job: the `--no-default-features` binary runs
+`mcp-gateway validate` on a fixture holding `security.firewall.collusion` and must fail naming
+`firewall`. A red result there blocks the next merge.
+
+**2a-i tests.** Direct route only:
+- §8 rows 1 (relay refused under block, `-32002`, backend not called),
+  2 (observe: `Warn`, call proceeds), 11 (a refused/error delivery records nothing),
+  12 (`non_egress` skip), 13 (unkeyed: refused under block, checked under observe),
+  15 (own copy excuses), 16 (every validation refusal and `off` untouched);
+- a cache-hit delivery excuses its receiver;
+- argument-side `_context_integrity` relay;
+- `sources` and `_context_integrity` sensitivity;
+- result-text cap counted;
+- `is_anomaly_block` truth table;
+- the shared detector: the `MetaMcp` and `AppState` firewalls hold the same `Arc`;
+- the absent-feature table test.
