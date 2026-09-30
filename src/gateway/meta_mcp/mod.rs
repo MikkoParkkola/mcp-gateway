@@ -2192,7 +2192,9 @@ impl MetaMcp {
             };
 
         if let Some(intent) = caller.task.take() {
-            return self.begin_task(id, tool_name, arguments, intent).await;
+            return self
+                .begin_task(id, tool_name, arguments, intent, (session_id, &caller))
+                .await;
         }
 
         self.dispatch_below_gate(
@@ -2212,6 +2214,7 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         intent: crate::gateway::task_service::TaskIntent,
+        (session_id, caller): (Option<&str>, &MetaMcpCallerContext<'_>),
     ) -> JsonRpcResponse {
         let task = crate::gateway::task_service::Task::create_at(
             tool_name,
@@ -2220,11 +2223,26 @@ impl MetaMcp {
         );
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
+        // #2450: a repeat is answered from the stored task, so the policy a
+        // sync replay passes runs first. A fresh task is checked by its worker.
+        let policy_arguments = arguments.clone();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
         };
         match executor.begin(intent, task, backend, call).await {
+            Ok(outcome @ crate::gateway::task_service::execution::BeginOutcome::Existing(_)) => {
+                let policy = self.check_task_admission_policy(
+                    caller,
+                    tool_name,
+                    &policy_arguments,
+                    session_id,
+                );
+                match policy {
+                    Ok(()) => outcome.into_response(id),
+                    Err(error) => error_response_preserving_status(id, &error),
+                }
+            }
             Ok(outcome) => outcome.into_response(id),
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
