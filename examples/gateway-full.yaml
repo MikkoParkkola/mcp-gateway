@@ -224,6 +224,15 @@ capabilities:
 # --- Context Integrity (tool-result boundary protection) ---
 
 # security:
+#   # standard (default) or hardened. Restart-only. hardened currently enforces:
+#   # context_integrity preset at least team_shared (enterprise_strict kept),
+#   # non_bypassable on; firewall and anomaly detection on, blocking at
+#   # anomaly_block_threshold 1.0 unless set within [0.9, 1.0] (below 0.9
+#   # refuses start); refusal of calls the full learned-pair map cannot learn;
+#   # and a build with the firewall feature. Later releases extend this list.
+#   # A multi-user deployment on standard gets a startup warning and a
+#   # `doctor` security-posture finding.
+#   posture: standard
 #   context_integrity:
 #     # monitor_only is the default safe rollout. Use team_shared to enforce the
 #     # free/core shared-team baseline. enterprise_strict is enterprise scope.
