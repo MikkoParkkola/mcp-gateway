@@ -271,7 +271,9 @@ async fn an_input_round_past_its_ttl_is_cancelled_by_the_expiry_pass() {
     let (state, _store) = state_with_config(&mock, config).await;
     let _sweep = state
         .task_executor
-        .start_expiry(Duration::from_millis(250))
+        // The cancelled row lives one interval before the next pass deletes it;
+        // a slow runner must not out-stall that window between two polls.
+        .start_expiry(Duration::from_millis(1000))
         .expect("a non-zero interval starts the sweep");
     let id = parked(&state, "expiry-round").await;
 

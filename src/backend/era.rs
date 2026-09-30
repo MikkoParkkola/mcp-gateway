@@ -209,8 +209,24 @@ impl Backend {
 
     /// Probe deadline: never longer than the backend's own request timeout.
     fn probe_timeout(&self) -> Duration {
-        self.config.timeout.min(PROBE_TIMEOUT)
+        self.config.timeout.min(probe_cap())
     }
+}
+
+/// The probe's cap. Debug builds let a test widen it (#2425): a shell-script
+/// peer on a stalled runner can answer later than [`PROBE_TIMEOUT`]. Release
+/// builds compile the override out, and the release job greps for its name.
+#[cfg(debug_assertions)]
+fn probe_cap() -> Duration {
+    std::env::var("MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(PROBE_TIMEOUT, Duration::from_millis)
+}
+
+#[cfg(not(debug_assertions))]
+fn probe_cap() -> Duration {
+    PROBE_TIMEOUT
 }
 
 #[cfg(test)]
