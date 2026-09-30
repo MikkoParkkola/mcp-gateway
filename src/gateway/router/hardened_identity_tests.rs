@@ -20,6 +20,7 @@ use crate::security::SecurityPosture;
 
 const SHARED: &str = "hardened-shared-key-0123456789";
 const PERSONAL: &str = "hardened-personal-key-0123456789";
+const BEARER: &str = "hardened-static-bearer-0123456789";
 
 fn api_key(secret: &str, kind: ApiKeyKind) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -46,6 +47,7 @@ fn config(posture: SecurityPosture) -> Config {
 async fn gateway(posture: SecurityPosture, auth_on: bool) -> (Arc<AppState>, tempfile::TempDir) {
     let auth = AuthConfig {
         enabled: auth_on,
+        bearer_token: auth_on.then(|| BEARER.to_string()),
         api_keys: if auth_on {
             vec![
                 api_key(SHARED, ApiKeyKind::Shared),
@@ -112,6 +114,8 @@ async fn hardened_refuses_without_subject_meta() {
         let reply = send(&state, request(method, "/mcp", Some(SHARED))).await;
         assert_refused(&reply, &format!("{method} /mcp with a shared key"));
     }
+    let reply = send(&state, request("POST", "/mcp", Some(BEARER))).await;
+    assert_refused(&reply, "POST /mcp with the static bearer");
 }
 
 #[tokio::test]
@@ -119,6 +123,8 @@ async fn hardened_refuses_without_subject_direct() {
     let (state, _store) = gateway(SecurityPosture::Hardened, true).await;
     let reply = send(&state, request("POST", "/mcp/alpha", Some(SHARED))).await;
     assert_refused(&reply, "POST /mcp/alpha with a shared key");
+    let alias = send(&state, request("POST", "/mcp/alpha/extra", Some(SHARED))).await;
+    assert_refused(&alias, "POST /mcp/alpha/extra with a shared key");
 }
 
 #[tokio::test]
