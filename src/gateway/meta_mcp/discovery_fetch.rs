@@ -8,7 +8,7 @@
 
 use super::MetaMcp;
 use crate::backend::Backend;
-use crate::identity_propagation::{CallerProof, CallerProvenance};
+use crate::identity_propagation::CallerProof;
 use crate::personal_accounts::identity::Principal;
 use crate::protocol::Tool;
 use std::sync::Arc;
@@ -74,10 +74,7 @@ impl MetaMcp {
     /// What `caller` proved: its verified identity, else its credential's
     /// provenance.
     pub(super) fn proof_of<'a>(caller: &super::MetaMcpCallerContext<'a>) -> CallerProof<'a> {
-        CallerProof::new(
-            caller.verified_identity,
-            CallerProvenance::classify(caller.credential_principal),
-        )
+        CallerProof::new(caller.verified_identity, caller.provenance())
     }
 
     /// Whether `backend` has no view at all for `caller`: it is `required`

@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::authz::ToolTarget;
+use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::security::audit::{
@@ -82,6 +83,10 @@ impl<'a> Refused<'a> {
             crate::hashing::canonical_json_sha256(self.arguments)
         );
         let (server, tool) = (target.server.to_string(), target.tool.to_string());
+        // MIK-7116.MIN.1: the tenants the refused request named; nothing was
+        // fetched, so there is no response side and no data class.
+        let tenants = state.meta_mcp.request_tenants(target.arguments);
+        let attribution = DispatchNotes::default().attribution(&state.meta_mcp, tenants, None);
         let session = self.session_id.to_string();
         // The meta writer's correlation ladder: caller trace id, then session.
         let written = log
@@ -98,12 +103,13 @@ impl<'a> Refused<'a> {
                         source: CorrelationSource::SessionId,
                     },
                 };
-                log.log_invocation_correlated(
+                log.log_invocation_attributed(
                     key,
                     &envelope,
                     InvocationTarget::meta(&server, &tool),
                     &request_hash,
                     None,
+                    attribution,
                 )
             })
             .await;

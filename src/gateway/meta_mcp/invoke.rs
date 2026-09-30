@@ -102,7 +102,7 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
-mod audit;
+pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
@@ -1209,21 +1209,15 @@ impl MetaMcp {
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
-            let (result, dispatch_failure) = audit::with_dispatch_scope(traced).await;
+            let (result, notes) = audit::with_dispatch_scope(traced).await;
             // Single delivery boundary: unwrap the guard-sealed result.
             let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
                 Ok((value, source, upstream)) => (Ok(value), source, upstream),
                 Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible, None),
             };
             // One record per call, refusals and failures included (D1-d).
-            let audited = self.audit_invocation(
-                args,
-                session_id,
-                caller,
-                &trace_id_clone,
-                result,
-                dispatch_failure,
-            );
+            let audited =
+                self.audit_invocation(args, session_id, caller, &trace_id_clone, result, notes);
             audited.await.map(|value| (value, source, upstream))
         })
         .await
@@ -1346,6 +1340,7 @@ impl MetaMcp {
         mut result: Value,
     ) -> Result<(Value, super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
+        let mut result = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -1538,7 +1533,7 @@ impl MetaMcp {
         let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
-        let provenance = CallerProvenance::classify(caller.credential_principal);
+        let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
 
         // Capture once, before any authorization input is read. A bump after
@@ -1699,7 +1694,7 @@ impl MetaMcp {
             dispatch_binding.as_deref(),
             verified_identity,
             caller.grant_subject.as_ref(),
-            caller.credential_principal,
+            caller.owner_principal(),
             caller.authentication,
         );
 
@@ -1742,6 +1737,7 @@ impl MetaMcp {
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
+                    audit::note_cached();
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
                     // it would skip the delivery-refusal projection and count
@@ -2718,7 +2714,7 @@ impl MetaMcp {
             ContextActionRisk::Medium
         };
 
-        let evaluation = self.context_integrity_kernel.read().evaluate(input);
+        let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {

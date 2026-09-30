@@ -355,6 +355,78 @@ impl MetaMcp {
         }
     }
 
+    /// The policy a retained result must pass before it is served: the
+    /// invocation policy of a `gateway_invoke` or surfaced-tool target (#2445).
+    /// Returns the target, if the call names one.
+    fn check_target_policy<'v>(
+        &'v self,
+        caller: &super::MetaMcpCallerContext<'_>,
+        tool_name: &'v str,
+        arguments: &'v Value,
+        session: Option<&str>,
+    ) -> Result<Option<(&'v str, &'v str, Value)>> {
+        let target = if tool_name == "gateway_invoke" {
+            let server =
+                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
+            let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
+            Some((
+                server,
+                tool,
+                crate::gateway::meta_mcp_helpers::parse_tool_arguments(arguments)?,
+            ))
+        } else {
+            self.surfaced_tool_server(tool_name)
+                .map(|server| (server, tool_name, arguments.clone()))
+        };
+        if let Some((server, tool, operation_arguments)) = &target {
+            let (server, tool) = (*server, *tool);
+            if !caller
+                .signing
+                .is_some_and(|context| context.prepared_for(server, tool))
+            {
+                // `gateway_invoke` already arrives as a policy envelope, and it
+                // carries fields the synthesized one cannot reconstruct — the
+                // attestation token among them. Rebuilding it here dropped the
+                // token before enforcement could see it, so a correctly signed
+                // call was refused as unattested. A surfaced tool has no such
+                // envelope, so that branch still synthesizes one.
+                let synthesized;
+                let envelope = if tool_name == "gateway_invoke" {
+                    arguments
+                } else {
+                    synthesized = named_tool_envelope(server, tool, operation_arguments, caller);
+                    &synthesized
+                };
+                if tool_name != "gateway_invoke"
+                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
+                {
+                    return Err(absent);
+                }
+                self.check_invocation_policy(envelope, session, caller)?;
+            }
+        }
+        Ok(target)
+    }
+
+    /// #2450: a task-augmented call skips `admit_meta_sync`, but its durable
+    /// admission can answer a repeat from the stored task, so the same policy
+    /// runs first: the target's invocation policy, else the keyed plan check.
+    pub(crate) fn check_task_admission_policy(
+        &self,
+        caller: &super::MetaMcpCallerContext<'_>,
+        tool_name: &str,
+        arguments: &Value,
+        session: Option<&str>,
+    ) -> Result<()> {
+        if self
+            .check_target_policy(caller, tool_name, arguments, session)?
+            .is_none()
+        {
+            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+        }
+        Ok(())
+    }
+
     /// Protect one outer logical meta invocation, including all its inner steps.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_meta_sync(
@@ -380,51 +452,18 @@ impl MetaMcp {
             }
         }
         let verified_identity = caller.verified_identity;
-        let credential_principal = caller.credential_principal;
+        // The key owner, not a display principal: for stdio it is the reserved
+        // owner value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
+        let owner_principal = caller.owner_principal();
         let retry = caller.retry;
-        let target = if tool_name == "gateway_invoke" {
-            let server =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
-            let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
-            Some((
-                server,
-                tool,
-                crate::gateway::meta_mcp_helpers::parse_tool_arguments(arguments)?,
-            ))
-        } else {
-            self.surfaced_tool_server(tool_name)
-                .map(|server| (server, tool_name, arguments.clone()))
-        };
-        if let Some((server, tool, mut operation_arguments)) = target {
-            if !caller
-                .signing
-                .is_some_and(|context| context.prepared_for(server, tool))
-            {
-                // `gateway_invoke` already arrives as a policy envelope, and it
-                // carries fields the synthesized one cannot reconstruct — the
-                // attestation token among them. Rebuilding it here dropped the
-                // token before enforcement could see it, so a correctly signed
-                // call was refused as unattested. A surfaced tool has no such
-                // envelope, so that branch still synthesizes one.
-                let synthesized;
-                let envelope = if tool_name == "gateway_invoke" {
-                    arguments
-                } else {
-                    synthesized = named_tool_envelope(server, tool, &operation_arguments, caller);
-                    &synthesized
-                };
-                if tool_name != "gateway_invoke"
-                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
-                {
-                    return Err(absent);
-                }
-                self.check_invocation_policy(envelope, session, caller)?;
-            }
+        if let Some((server, tool, mut operation_arguments)) =
+            self.check_target_policy(caller, tool_name, arguments, session)?
+        {
             let full = execution_arguments(&mut operation_arguments);
             return self.admit_sync(
                 is_modern,
                 verified_identity,
-                credential_principal,
+                owner_principal,
                 retry,
                 server,
                 tool,
@@ -462,7 +501,7 @@ impl MetaMcp {
         let mut admission = self.admit_operation(
             is_modern,
             verified_identity,
-            credential_principal,
+            owner_principal,
             retry,
             // Already built above, because the playbook digest folds into it.
             // Handed over as a thunk to match the parameter; the saving on this
