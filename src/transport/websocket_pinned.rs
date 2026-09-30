@@ -119,7 +119,7 @@ pub(super) async fn connect_pinned(
     }
     Err(Error::Transport(format!(
         "WebSocket connect failed: {}",
-        last_error.map_or_else(|| "no address".to_string(), ToString::to_string)
+        last_error.map_or_else(|| "no address".to_string(), |e| e.to_string())
     )))
 }
 

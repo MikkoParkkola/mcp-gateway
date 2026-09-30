@@ -132,7 +132,9 @@ impl std::error::Error for SsrfDenied {}
 /// The [`PinningResolver`] refusal somewhere in `error`'s source chain.
 ///
 /// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
-pub(crate) fn ssrf_denial(error: &(dyn std::error::Error + 'static)) -> Option<&SsrfDenied> {
+pub(crate) fn ssrf_denial<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a SsrfDenied> {
     let mut next = Some(error);
     while let Some(current) = next {
         let wrapped = current
