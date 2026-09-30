@@ -61,7 +61,7 @@ pub(crate) struct RelayFinding {
     pub(crate) source: u64,
     pub(crate) receiver: u64,
     pub(crate) sender: u64,
-    pub(crate) tool: String,
+    pub(crate) tool: u64,
     pub(crate) matches: usize,
 }
 
@@ -198,6 +198,9 @@ impl CollusionDetector {
     /// NFC-normalized and whitespace-collapsed first; then every `K`-char
     /// k-gram is hashed and the rightmost minimum of each `W`-hash window is
     /// kept. Offset-independent: a shifted copy selects the same minima.
+    ///
+    /// Scratch memory is linear in `text`; callers bound it with the request
+    /// and response size limits, not this function.
     #[expect(
         clippy::unused_self,
         reason = "the key is per process; a method keeps callers from hashing with any other"
@@ -253,8 +256,12 @@ impl CollusionDetector {
         let mut state = self.state.lock();
         state.sweep(now, window);
         for fp in fps {
+            // Calls can reach the lock out of time order; an entry's age only
+            // ever moves forward.
+            let mut touched = now;
             let holders = if let Some(entry) = state.entries.remove(&fp) {
                 state.order.remove(&entry.order);
+                touched = touched.max(entry.order.0);
                 self.add(entry.holders, holder(now), now)
             } else {
                 if state.entries.len() >= self.params.max_fingerprints
@@ -265,7 +272,7 @@ impl CollusionDetector {
                 }
                 self.add(Holders::Tracked(Vec::new()), holder(now), now)
             };
-            let order = state.stamp(now, fp);
+            let order = state.stamp(touched, fp);
             state.entries.insert(fp, Entry { holders, order });
         }
     }
@@ -280,8 +287,9 @@ impl CollusionDetector {
             .find(|t| t.source == new.source && t.principal == new.principal)
         {
             Some(t) => {
-                t.last_seen = now;
-                t.sensitive_at = new.sensitive_at.or(t.sensitive_at);
+                // Keep the latest of each time, whatever order calls arrive in.
+                t.last_seen = t.last_seen.max(new.last_seen);
+                t.sensitive_at = t.sensitive_at.max(new.sensitive_at);
             }
             None => tuples.push(new),
         }
@@ -351,7 +359,7 @@ impl CollusionDetector {
             source,
             receiver,
             sender,
-            tool: tool.to_owned(),
+            tool: self.digest(tool),
             matches,
         })
     }

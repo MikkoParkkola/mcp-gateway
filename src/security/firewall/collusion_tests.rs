@@ -85,7 +85,7 @@ fn prefixed_copy_detected() {
     assert_eq!(finding.sender, d.digest(B));
     assert_eq!(finding.receiver, d.digest(A));
     assert_eq!(finding.source, d.digest(T));
-    assert_eq!(finding.tool, U);
+    assert_eq!(finding.tool, d.digest(U));
 }
 
 #[test]
@@ -290,6 +290,30 @@ fn stale_sensitivity_not_refreshed() {
     assert!(d.check_egress_at(B, U, &s, late).is_none());
 }
 
+/// Calls can reach the lock out of time order. An older delivery arriving
+/// late must not pull back B's excuse or A's evidence.
+#[test]
+fn late_older_delivery_keeps_latest_times() {
+    let t0 = Instant::now();
+    let t1 = t0 + Duration::from_secs(300);
+    let s = secret();
+    let window = RelayParams::default().window;
+    let between = t0 + window + Duration::from_secs(1);
+
+    // B's excuse at t1, then a stale copy of it at t0: still excused.
+    let excuse = detector();
+    excuse.record_delivery_at(T, A, true, &s, t1);
+    excuse.record_delivery_at(T, B, false, &s, t1);
+    excuse.record_delivery_at(T, B, false, &s, t0);
+    assert!(excuse.check_egress_at(B, U, &s, between).is_none());
+
+    // A's evidence at t1, then a stale copy at t0: still a relay.
+    let evidence = detector();
+    evidence.record_delivery_at(T, A, true, &s, t1);
+    evidence.record_delivery_at(T, A, true, &s, t0);
+    assert!(evidence.check_egress_at(B, U, &s, between).is_some());
+}
+
 // Row 10 ───────────────────────────────────────────────────────────────────
 
 #[test]
@@ -429,6 +453,10 @@ fn saturated_fingerprint_never_flags() {
     let d = crowded(true, 7);
     assert!(d.saturated() > 0);
     assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Saturated never counts, even with no excuse to hide behind.
+    let bare = crowded(false, 8);
+    assert!(bare.saturated() > 0);
+    assert!(bare.check_egress_at(B, U, &s, now).is_none());
 }
 
 // The primitive ────────────────────────────────────────────────────────────
@@ -471,5 +499,6 @@ fn source_fingerprints_capped() {
         first[..1_024].iter().all(|&fp| d.is_tracked(fp)),
         "keeps the first 1,024"
     );
-    assert!(d.source_truncated() > 0);
+    let dropped = d.fingerprints(&big).len() - 1_024;
+    assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
 }
