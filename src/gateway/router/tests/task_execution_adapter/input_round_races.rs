@@ -251,7 +251,18 @@ async fn a_resume_with_the_pool_full_is_refused_and_the_round_stays_open() {
 
     gate.release();
     poll_until_terminal(&state, "key-a", &busy).await;
-    let retried = post(&state, "key-a", completing(4, &parked_id)).await;
+    // The worker returns its permit just after it settles, so the terminal
+    // status is visible a moment before the pool has room: a refusal that
+    // still says "pool is full" is the retry the error asks for, bounded.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut retried = post(&state, "key-a", completing(4, &parked_id)).await;
+    while retried.pointer("/error/message").and_then(Value::as_str)
+        == Some("task worker pool is full, retry")
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        retried = post(&state, "key-a", completing(4, &parked_id)).await;
+    }
     std::assert!(
         retried.get("error").is_none(),
         "a retry after the pool frees resumes: {retried}"
