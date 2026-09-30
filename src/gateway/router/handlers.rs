@@ -24,12 +24,12 @@ use super::helpers::{
     extract_tools_call_params, merge_client_meta, parse_elicitation_params, parse_request,
     parse_sampling_params,
 };
-use super::identity::{caller_grant_subject, identity_refusal_response};
+use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
-use crate::gateway::session_id::{SessionOwner, session_fp};
+use crate::gateway::session_id::session_fp;
 #[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
@@ -42,30 +42,16 @@ use crate::security::{
     extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
 };
 
+mod owner;
 mod tasks;
+
+use owner::request_session_owner;
+#[cfg(test)]
+use owner::session_owner;
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
-/// A stable owner key for a session.
-///
-/// Not the display name: `name` is operator-configured and two API keys may
-/// share one, which would let them attach to each other's sessions. The key
-/// records whether a credential was actually validated, so an API key named
-/// "anonymous" cannot claim the unauthenticated identity's sessions.
-fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
-    match client {
-        // The validated principal, a digest of the secret: two API keys
-        // configured with the same display name are different owners.
-        Some(c) if c.authenticated && !c.principal.is_empty() => {
-            SessionOwner::Credential(c.principal.clone())
-        }
-        // Every other caller, named or not, is one class: an unvalidated name is
-        // not a credential. Only the minted session id separates them (F9).
-        _ => SessionOwner::Anonymous,
-    }
-}
-
 /// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
 /// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
 fn session_id_header(headers: &HeaderMap) -> Option<&str> {
@@ -229,6 +215,7 @@ pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     let client = client.map(|axum::Extension(c)| c);
 
@@ -238,6 +225,12 @@ pub(super) async fn mcp_sse_handler(
     if let Some(refusal) = get_era_refusal(&state, &headers) {
         return refusal;
     }
+    // The owner the POST that minted the session used, so a subject resumes
+    // its own stream and nobody else's.
+    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
+        Ok((_, owner)) => owner,
+        Err(refusal) => return refusal,
+    };
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -274,10 +267,7 @@ pub(super) async fn mcp_sse_handler(
 
     let (session_id, _rx) = state.multiplexer.get_or_create_session_scoped(
         existing_session_id.as_deref(),
-        // The identity that owns the session. Every caller is "anonymous"
-        // when authentication is off, so a single-user gateway behaves
-        // exactly as before.
-        &session_owner(client.as_ref()),
+        &owner,
         crate::gateway::auth::live::held_credential(&headers),
     );
 
@@ -323,6 +313,7 @@ pub(super) async fn mcp_delete_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     let client = client.map(|axum::Extension(c)| c);
     // Public paths may reach this handler without a validated identity even
@@ -338,7 +329,10 @@ pub(super) async fn mcp_delete_handler(
         );
     }
     let session_id = session_id_header(&headers);
-    let owner = session_owner(client.as_ref());
+    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
+        Ok((_, owner)) => owner,
+        Err(refusal) => return refusal,
+    };
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
@@ -539,25 +533,14 @@ async fn meta_mcp_dispatch(
 
     // The caller as a grant subject, resolved once and before the body is
     // read, so a refused identity header reaches no dispatch, cache or
-    // idempotency work. The peer is the direct TCP peer only.
-    let peer = http_request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    let grant_subject = match caller_grant_subject(
-        verified_identity.as_ref(),
-        &headers,
-        peer,
-        state.meta_mcp.caller_identity(),
-        state.meta_mcp.access_verifier(),
-        cert_identity.as_ref(),
-        oauth_agent_identity.as_ref(),
-    )
-    .await
-    {
-        Ok(subject) => subject,
-        Err(refusal) => return identity_refusal_response(refusal).into_response(),
-    };
+    // idempotency work.
+    let (grant_subject, caller_owner) =
+        match request_session_owner(&state, &headers, http_request.extensions(), client.as_ref())
+            .await
+        {
+            Ok(resolved) => resolved,
+            Err(refusal) => return refusal,
+        };
 
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(http_request).await {
@@ -632,10 +615,10 @@ async fn meta_mcp_dispatch(
     } else {
         let (id, rx) = state.multiplexer.get_or_create_session_scoped(
             existing_session_id.as_deref(),
-            // The identity that owns the session. Every caller is "anonymous"
-            // when authentication is off, so a single-user gateway behaves
-            // exactly as before.
-            &session_owner(client.as_ref()),
+            // The identity that owns the session. A caller with neither a
+            // subject nor a credential is "anonymous", so a single-user
+            // gateway behaves exactly as before.
+            &caller_owner,
             crate::gateway::auth::live::held_credential(&headers),
         );
         (id, Some(rx))
@@ -1336,6 +1319,13 @@ async fn meta_mcp_dispatch(
                 tool_name,
                 &backend_targets,
             );
+            // A refusal below is written to the chain as the meta layer would (#2420).
+            let refused = Refused::of(
+                &arguments,
+                client.as_ref(),
+                grant_subject.as_ref(),
+                &session_id,
+            );
             for target in &backend_targets {
                 // A surfaced name this caller could not invoke is answered by
                 // the meta layer exactly as an unknown name is (`-32601`), and
@@ -1376,13 +1366,9 @@ async fn meta_mcp_dispatch(
                         &target.tool,
                         &e.message,
                     );
-                    return build_error_response(
-                        Some(id),
-                        e.code,
-                        e.message,
-                        &session_id,
-                        e.status,
-                    );
+                    return refused
+                        .answer(&state, target.as_target(), id, e.code, e.message, e.status)
+                        .await;
                 }
 
                 // Firewall: pre-invocation request scan
@@ -1448,13 +1434,9 @@ async fn meta_mcp_dispatch(
                                 });
                             (-32600_i32, format!("Firewall blocked: {desc}"))
                         };
-                        return build_error_response(
-                            Some(id),
-                            code,
-                            reason,
-                            &session_id,
-                            StatusCode::BAD_REQUEST,
-                        );
+                        return refused
+                            .answer(&state, target, id, code, reason, StatusCode::BAD_REQUEST)
+                            .await;
                     }
                 }
             }
@@ -1856,42 +1838,30 @@ async fn meta_mcp_dispatch(
         // The owner is `task_principal`'s answer, not the raw session key: it is
         // what admission was keyed on when the record was created, and reading
         // with anything else would miss a task the caller does own.
-        "tasks/get" => {
-            // The recovery read re-authorizes the ORIGINAL target with THIS
-            // request's live context, so the context is handed over whole
-            // rather than rebuilt inside the arm from a different set of
-            // extractions.
-            tasks::tasks_get(
-                &state,
-                &owner,
-                id.clone(),
-                params.as_ref(),
-                &tasks::RecoveryCaller {
-                    client: client.as_ref(),
-                    oauth_agent_identity: oauth_agent_identity.as_ref(),
-                    cert_identity: cert_identity.as_ref(),
-                    api_key_name: client.as_ref().map(|client| client.name.as_str()),
-                    // Recovery is an AUTHORIZATION context, not an attribution
-                    // record: its own doc comment says it "checks
-                    // authorization only", and `signing: None` keeps
-                    // `check_invocation_policy` running on this read. So it
-                    // reads the proven principal, never the declared label.
-                    agent_id: agent_identity.proven_agent_id(),
-                    grant_subject: grant_subject.clone(),
-                    verified_identity: verified_identity.as_ref(),
-                    is_admin: client.as_ref().is_some_and(|client| client.admin),
-                    input_capabilities: declared_capabilities,
-                    session_id: Some(session_id.as_str()),
-                },
-            )
-            .await
+        // Both arms act for THIS request's live context: a recovery read
+        // re-authorizes the original target with it, and an update that
+        // completes an input round resumes the call as it.
+        "tasks/get" | "tasks/update" => {
+            let caller = tasks::RecoveryCaller {
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+                api_key_name: client.as_ref().map(|client| client.name.as_str()),
+                // An AUTHORIZATION context, not an attribution record: the
+                // proven principal, never the declared label.
+                agent_id: agent_identity.proven_agent_id(),
+                grant_subject: grant_subject.clone(),
+                verified_identity: verified_identity.as_ref(),
+                is_admin: client.as_ref().is_some_and(|client| client.admin),
+                input_capabilities: declared_capabilities,
+                session_id: Some(session_id.as_str()),
+            };
+            if method == "tasks/get" {
+                tasks::tasks_get(&state, &owner, id.clone(), params.as_ref(), &caller).await
+            } else {
+                tasks::tasks_update(&state, &owner, id.clone(), params.as_ref(), &caller).await
+            }
         }
-        // `tasks/update` and `tasks/cancel` differ in what they do to the
-        // record — one acknowledges without writing, the other commits a
-        // durable terminal transition — but both answer with the bare
-        // completion the specification asks for, and neither echoes the task
-        // back. Separate arms because they no longer share an implementation.
-        "tasks/update" => tasks::tasks_update(&state, &owner, id.clone(), params.as_ref()).await,
         "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params.as_ref()).await,
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
@@ -2124,6 +2094,10 @@ mod health_predicate_tests;
 #[cfg(test)]
 #[path = "handlers_session_tests.rs"]
 mod session_tests;
+
+#[cfg(test)]
+#[path = "handlers_session_subject_tests.rs"]
+mod session_subject_tests;
 
 #[cfg(test)]
 mod cacheable_field_tests {

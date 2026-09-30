@@ -1,0 +1,504 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+//! Tests for the relay detector: design §8 rows 3-10, 14, 17, 18.
+//!
+//! Every test that asserts "no finding" carries a positive control on the same
+//! text, so an inert detector cannot pass it.
+
+use std::time::{Duration, Instant};
+
+use std::collections::HashSet;
+
+use super::{CollusionDetector, RelayAction, RelayParams, W, winnow};
+
+const A: &str = "principal-a";
+const B: &str = "principal-b";
+const T: &str = "backend:read_doc";
+const U: &str = "backend:post_message";
+
+fn observe() -> RelayParams {
+    RelayParams {
+        action: RelayAction::Observe,
+        ..RelayParams::default()
+    }
+}
+
+fn detector() -> CollusionDetector {
+    CollusionDetector::new(observe())
+}
+
+/// Non-periodic ASCII prose from a fixed-seed LCG: single-spaced, so
+/// normalization never changes its length, and no k-gram repeats in practice.
+fn text(seed: u64, words: usize) -> String {
+    const SYLLABLES: [&str; 16] = [
+        "ka", "lo", "mi", "nu", "pe", "ri", "so", "ta", "ve", "zu", "ba", "de", "fi", "go", "hu",
+        "ja",
+    ];
+    let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    let mut out = String::new();
+    for i in 0..words {
+        if i > 0 {
+            out.push(' ');
+        }
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let len = 2 + usize::try_from(state >> 60).unwrap() % 3;
+        for j in 0..len {
+            let idx = usize::try_from((state >> (8 * j + 4)) & 0xF).unwrap();
+            out.push_str(SYLLABLES[idx]);
+        }
+    }
+    out
+}
+
+fn secret() -> String {
+    text(7, 250)
+}
+
+/// First offset from 200 where a 63- and a 79-char slice neither start nor
+/// end on a space, so normalization cannot shorten them.
+fn solid_start(s: &str) -> usize {
+    let b = s.as_bytes();
+    (200..s.len() - 79)
+        .find(|&i| b[i] != b' ' && b[i + 62] != b' ' && b[i + 78] != b' ')
+        .unwrap()
+}
+
+fn shared(d: &CollusionDetector, a: &str, b: &str) -> usize {
+    let fa = d.fingerprints(a);
+    d.fingerprints(b).iter().filter(|f| fa.contains(f)).count()
+}
+
+// Row 3 ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn prefixed_copy_detected() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    let finding = d
+        .check_egress_at(B, U, &format!("x{s}"), now)
+        .expect("a one-char-shifted copy must match");
+    assert_eq!(finding.sender, d.digest(B));
+    assert_eq!(finding.receiver, d.digest(A));
+    assert_eq!(finding.source, d.digest(T));
+    assert_eq!(finding.tool, d.digest(U));
+}
+
+#[test]
+fn embedded_excerpt_detected() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    let payload = format!("{} {} {}", text(101, 600), &s[400..500], text(202, 600));
+    assert!(d.check_egress_at(B, U, &payload, now).is_some());
+}
+
+/// The winnowing guarantee itself: every 63-char span of a document shares a
+/// fingerprint with it. A fixed stride or a global bottom-N sample leaves
+/// spans with none.
+#[test]
+fn every_63_char_span_shares_a_fingerprint() {
+    let d = detector();
+    // Several times more k-grams than the 1,024-fingerprint source cap, so a
+    // global bottom-1024 sample cannot reach every span.
+    let s = text(7, 2_000);
+    let all: HashSet<u64> = d.fingerprints(&s).into_iter().collect();
+    assert!(!all.is_empty());
+    for start in 0..=s.len() - 63 {
+        let span = &s[start..start + 63];
+        // Normalization trims edge spaces, which would shorten the span.
+        if span.starts_with(' ') || span.ends_with(' ') {
+            continue;
+        }
+        let span = d.fingerprints(span);
+        assert!(
+            span.iter().any(|f| all.contains(f)),
+            "span at {start} shares no fingerprint"
+        );
+    }
+}
+
+/// The same guarantee on controlled hash values, independent of the key:
+/// every window's minimum is kept. 1,100 low hashes then a high run: a global
+/// bottom-N for any N up to 1,100 (so the 1,024 source cap included) drops
+/// every high minimum, and a fixed stride skips positions.
+#[test]
+fn winnow_keeps_every_window_minimum() {
+    let hashes: Vec<u64> = (0..1_100).chain((10_000..10_064).rev()).collect();
+    let kept: HashSet<u64> = winnow(&hashes).into_iter().collect();
+    for window in hashes.windows(W) {
+        let min = window.iter().min().unwrap();
+        assert!(kept.contains(min), "window minimum {min} dropped");
+    }
+    assert!(kept.iter().any(|&h| h >= 10_000));
+}
+
+// Row 4 ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn same_source_self_copy_excused() {
+    let now = Instant::now();
+    let s = secret();
+
+    let control = detector();
+    control.record_delivery_at(T, A, true, &s, now);
+    assert!(control.check_egress_at(B, U, &s, now).is_some());
+
+    let d = detector();
+    d.record_delivery_at(T, A, true, &s, now);
+    d.record_delivery_at(T, B, false, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}
+
+// Row 5 ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn shared_store_relay_not_excused() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    d.record_delivery_at("memory:recall", B, false, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
+
+// Row 6 ────────────────────────────────────────────────────────────────────
+
+/// A holds it sensitive; `others` more principals hold it from other sources.
+fn spread(others: usize) -> CollusionDetector {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    for i in 0..others {
+        d.record_delivery_at(&format!("src-{i}"), &format!("p-{i}"), false, &s, now);
+    }
+    d
+}
+
+#[test]
+fn common_content_skipped() {
+    let now = Instant::now();
+    let s = secret();
+    // 4 distinct holders: below common_principals (5), still a relay.
+    assert!(spread(3).check_egress_at(B, U, &s, now).is_some());
+    // 5 distinct holders: Common, skipped.
+    assert!(spread(4).check_egress_at(B, U, &s, now).is_none());
+}
+
+// Row 7 ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn one_match_not_flagged() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    // k + w - 1 = 63 chars: 16 k-grams, one winnowing window, one fingerprint.
+    let at = solid_start(&s);
+    let excerpt = &s[at..at + 63];
+    assert_eq!(d.fingerprints(excerpt).len(), 1, "premise: one fingerprint");
+    assert_eq!(
+        shared(&d, &s, excerpt),
+        1,
+        "premise: shared with the source"
+    );
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, excerpt, now).is_none());
+    // Control: 79 chars hold two disjoint 16-hash windows, so two matches.
+    assert!(d.check_egress_at(B, U, &s[at..at + 79], now).is_some());
+}
+
+#[test]
+fn two_matches_flagged() {
+    let d = detector();
+    let now = Instant::now();
+    // Space-free, so every prefix length keeps its length through
+    // normalization and the count can be walked one char at a time.
+    let s = secret().replace(' ', "");
+    let at = 200;
+    let end = (at + 64..=at + 79)
+        .find(|&end| shared(&d, &s, &s[at..end]) == 2)
+        .expect("premise: two shared fingerprints by 79 chars");
+    d.record_delivery_at(T, A, true, &s, now);
+    let finding = d
+        .check_egress_at(B, U, &s[at..end], now)
+        .expect("two matches meet the default min_matches");
+    assert_eq!(finding.matches, 2);
+}
+
+// Row 8 ────────────────────────────────────────────────────────────────────
+
+/// "Drop A != B" is an equivalent mutant: A's own (T, A) tuple is also A's
+/// same-source excuse. Kept as a behavioural pin, not claimed as a kill.
+#[test]
+fn self_relay_not_flagged() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(A, U, &s, now).is_none());
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
+
+// Row 9 ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn relay_outside_window_not_flagged() {
+    let t0 = Instant::now();
+    let s = secret();
+    let window = RelayParams::default().window;
+
+    let inside = detector();
+    inside.record_delivery_at(T, A, true, &s, t0);
+    let before = t0 + window.checked_sub(Duration::from_secs(1)).unwrap();
+    assert!(inside.check_egress_at(B, U, &s, before).is_some());
+
+    // "Within the window" is inclusive.
+    let edge = detector();
+    edge.record_delivery_at(T, A, true, &s, t0);
+    assert!(edge.check_egress_at(B, U, &s, t0 + window).is_some());
+
+    let outside = detector();
+    outside.record_delivery_at(T, A, true, &s, t0);
+    let after = t0 + window + Duration::from_secs(1);
+    assert!(outside.check_egress_at(B, U, &s, after).is_none());
+}
+
+/// A non-sensitive re-delivery refreshes the pair's time but not its
+/// sensitivity: the sensitive receipt still ages out on schedule.
+#[test]
+fn stale_sensitivity_not_refreshed() {
+    let t0 = Instant::now();
+    let s = secret();
+    let window = RelayParams::default().window;
+    let d = detector();
+    d.record_delivery_at(T, A, true, &s, t0);
+    d.record_delivery_at(
+        T,
+        A,
+        false,
+        &s,
+        t0 + window.checked_sub(Duration::from_secs(1)).unwrap(),
+    );
+    assert!(d.check_egress_at(B, U, &s, t0 + window).is_some());
+    let late = t0 + window + Duration::from_secs(1);
+    assert!(d.check_egress_at(B, U, &s, late).is_none());
+}
+
+/// Calls can reach the lock out of time order. An older delivery arriving
+/// late must not pull back B's excuse or A's evidence.
+#[test]
+fn late_older_delivery_keeps_latest_times() {
+    let t0 = Instant::now();
+    let t1 = t0 + Duration::from_secs(300);
+    let s = secret();
+    let window = RelayParams::default().window;
+    let between = t0 + window + Duration::from_secs(1);
+
+    // B's excuse at t1, then a stale copy of it at t0: still excused.
+    let excuse = detector();
+    excuse.record_delivery_at(T, A, true, &s, t1);
+    excuse.record_delivery_at(T, B, false, &s, t1);
+    excuse.record_delivery_at(T, B, false, &s, t0);
+    assert!(excuse.check_egress_at(B, U, &s, between).is_none());
+
+    // A's evidence at t1, then a stale copy at t0: still a relay.
+    let evidence = detector();
+    evidence.record_delivery_at(T, A, true, &s, t1);
+    evidence.record_delivery_at(T, A, true, &s, t0);
+    assert!(evidence.check_egress_at(B, U, &s, between).is_some());
+}
+
+// Row 10 ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn dedup_per_pair() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    for i in 0..20 {
+        d.record_delivery_at(T, A, true, &s, now + Duration::from_millis(i));
+    }
+    // Appending duplicates would saturate every fingerprint at the 9th.
+    assert!(
+        d.check_egress_at(B, U, &s, now + Duration::from_secs(1))
+            .is_some()
+    );
+    assert_eq!(d.saturated(), 0);
+}
+
+#[test]
+fn cap_evicts_oldest_counted() {
+    // The key is per process, so a probe detector fingerprints as `d` does.
+    let probe = detector();
+    let old = secret();
+    let new = text(99, 250);
+    let old_len = probe.fingerprints(&old).len();
+    let new_len = probe.fingerprints(&new).len();
+    assert!(
+        old_len > 0 && new_len > 0,
+        "premise: both texts fingerprint"
+    );
+    assert!(
+        old_len <= 1_024 && new_len <= 1_024,
+        "premise: no source truncation"
+    );
+    assert_eq!(shared(&probe, &old, &new), 0, "premise: disjoint texts");
+
+    let d = CollusionDetector::new(RelayParams {
+        max_fingerprints: new_len,
+        ..observe()
+    });
+    let t0 = Instant::now();
+    d.record_delivery_at(T, A, true, &old, t0);
+    d.record_delivery_at("backend:other", A, true, &new, t0 + Duration::from_secs(1));
+    let now = t0 + Duration::from_secs(2);
+    // Old entries are all older than new ones, so each eviction takes an old
+    // one: exactly `old_len` evictions whatever the two sizes, none of new.
+    assert_eq!(d.tracked_fingerprints(), new_len);
+    assert_eq!(d.evicted(), u64::try_from(old_len).unwrap());
+    assert!(d.check_egress_at(B, U, &old, now).is_none());
+    assert!(d.check_egress_at(B, U, &new, now).is_some());
+}
+
+// Row 14 ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn finding_has_no_content() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    let args = format!("please forward: {s}");
+    d.record_delivery_at(T, A, true, &s, now);
+    let finding = d.check_egress_at(B, U, &args, now).expect("a relay");
+    let rendered = format!("{finding:?}");
+    for text in [s.as_str(), args.as_str()] {
+        let chars: Vec<char> = text.chars().collect();
+        for window in chars.windows(16) {
+            let piece: String = window.iter().collect();
+            assert!(!rendered.contains(&piece), "finding leaks content: {piece}");
+        }
+    }
+}
+
+#[test]
+fn off_records_nothing() {
+    let now = Instant::now();
+    let s = secret();
+
+    let on = detector();
+    on.record_delivery_at(T, A, true, &s, now);
+    assert!(on.tracked_fingerprints() > 0);
+    assert!(on.check_egress_at(B, U, &s, now).is_some());
+
+    let off = CollusionDetector::new(RelayParams::default());
+    off.record_delivery_at(T, A, true, &s, now);
+    assert_eq!(off.tracked_fingerprints(), 0);
+    assert!(off.check_egress_at(B, U, &s, now).is_none());
+}
+
+// Row 17 ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn excuse_holds_when_b_first() {
+    let t0 = Instant::now();
+    let t1 = t0 + Duration::from_secs(1);
+    let s = secret();
+
+    let control = detector();
+    control.record_delivery_at(T, A, true, &s, t1);
+    assert!(control.check_egress_at(B, U, &s, t1).is_some());
+
+    let d = detector();
+    d.record_delivery_at(T, B, false, &s, t0);
+    d.record_delivery_at(T, A, true, &s, t1);
+    assert!(d.check_egress_at(B, U, &s, t1).is_none());
+}
+
+// Row 18 ───────────────────────────────────────────────────────────────────
+
+/// Optional excuse for B first, then A's sensitive copy, then `fillers` more
+/// (source, principal) tuples. `Common` is set out of reach so only the
+/// tuple bound is in play.
+fn crowded(with_excuse: bool, fillers: usize) -> CollusionDetector {
+    let d = CollusionDetector::new(RelayParams {
+        common_principals: 100,
+        ..observe()
+    });
+    let now = Instant::now();
+    let s = secret();
+    if with_excuse {
+        d.record_delivery_at(T, B, false, &s, now);
+    }
+    d.record_delivery_at(T, A, true, &s, now);
+    for i in 0..fillers {
+        d.record_delivery_at(&format!("src-{i}"), &format!("p-{i}"), false, &s, now);
+    }
+    d
+}
+
+#[test]
+fn saturated_fingerprint_never_flags() {
+    let now = Instant::now();
+    let s = secret();
+    // Controls at 8 tuples: the excuse holds, and without it the relay flags.
+    assert!(crowded(true, 6).check_egress_at(B, U, &s, now).is_none());
+    assert!(crowded(false, 7).check_egress_at(B, U, &s, now).is_some());
+    // A 9th tuple saturates: evicting the oldest would drop B's excuse.
+    let d = crowded(true, 7);
+    assert!(d.saturated() > 0);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Saturated never counts, even with no excuse to hide behind.
+    let bare = crowded(false, 8);
+    assert!(bare.saturated() > 0);
+    assert!(bare.check_egress_at(B, U, &s, now).is_none());
+}
+
+// The primitive ────────────────────────────────────────────────────────────
+
+#[test]
+fn short_text_has_no_fingerprints() {
+    let d = detector();
+    assert!(d.fingerprints(&"x".repeat(47)).is_empty());
+    assert!(!d.fingerprints(&secret()[..48]).is_empty());
+    // k-grams count characters, not bytes: 48 two-byte chars are one k-gram.
+    assert_eq!(d.fingerprints(&"\u{e9}".repeat(48)).len(), 1);
+    assert!(d.fingerprints(&"\u{e9}".repeat(47)).is_empty());
+}
+
+#[test]
+fn whitespace_and_nfc_normalized() {
+    let d = detector();
+    // Every syllable with an 'e' carries the accent, so nearly every k-gram
+    // changes if normalization is skipped.
+    let s = secret().replace('e', "\u{e9}");
+    let spaced = s.replace(' ', "  \n ");
+    let decomposed = s.replace('\u{e9}', "e\u{301}");
+    assert!(!d.fingerprints(&s).is_empty());
+    assert_eq!(d.fingerprints(&s), d.fingerprints(&spaced));
+    assert_eq!(d.fingerprints(&s), d.fingerprints(&decomposed));
+}
+
+#[test]
+fn source_fingerprints_capped() {
+    let d = detector();
+    let big = text(5, 12_000);
+    assert!(
+        d.fingerprints(&big).len() > 1_024,
+        "premise: oversized result"
+    );
+    d.record_delivery_at(T, A, true, &big, Instant::now());
+    assert_eq!(d.tracked_fingerprints(), 1_024);
+    let first = d.fingerprints(&big);
+    assert!(
+        first[..1_024].iter().all(|&fp| d.is_tracked(fp)),
+        "keeps the first 1,024"
+    );
+    let dropped = d.fingerprints(&big).len() - 1_024;
+    assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
+}
