@@ -896,11 +896,18 @@
     },
     {
       "id": "MIK-7570.CHART.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "scripts/dev/helm-chart-auth-modes.sh",
+        "scripts/dev/helm-chart-smoke.sh",
+        "scripts/dev/helm-kind-real-image.sh",
+        "tests/fixtures/helm-golden/credential.yaml",
+        "tests/fixtures/helm-golden/mesh.yaml",
+        "tests/team_deployment_guide_claims.rs"
+      ],
+      "note": "Graded 2026-09-30 (B4). Merged in #2392 as 8acdc69e3. Post-merge Docker run 36631422954 (job 109635405534, Build amd64) installs the chart on the release image in kind under Pod Security restricted twice: credential mode, then auth.mode api_keys with persistence.enabled; it prints 'helm kind real image passed: ... api_keys key 200, none/wrong 401, state kept across a replaced pod'. Render contract pinned by scripts/dev/helm-chart-auth-modes.sh (api_keys, oidc, per-mode secret injection, extraEnv/envFrom guards, persistence PVC/Recreate/OnRootMismatch/store_dir, credential and mesh golden renders). Red first: run 36616532350 job 109617965066 on b40aecc96 (41 FAIL). Operator approved the new values keys in chat 2026-09-29."
     },
     {
       "id": "MIK-7570.AUDIT.2",
