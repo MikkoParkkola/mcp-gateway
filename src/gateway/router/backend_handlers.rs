@@ -19,8 +19,9 @@ use super::authorization::{
     ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
+use super::hardened_identity::hardened_identity_refusal;
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::auth::{AuthenticatedClient, NamedApiKey};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
@@ -600,6 +601,11 @@ async fn backend_handler_inner(
         Ok(subject) => subject,
         Err(refusal) => return super::identity::identity_refusal_response(refusal),
     };
+    let key = super::identity::subject_key(grant_subject.as_ref(), cert_identity.as_ref());
+    let named = request.extensions().get::<NamedApiKey>();
+    if let Some(refusal) = hardened_identity_refusal(&state, key.as_deref(), named) {
+        return refusal;
+    }
 
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(request).await {

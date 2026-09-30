@@ -114,12 +114,19 @@ impl std::fmt::Debug for ResolvedAuthConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NamedApiKey {
     name: String,
+    personal: bool,
 }
 
 impl NamedApiKey {
     /// The configured `name` of the API key that authenticated this request.
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether the key is configured `kind: personal`: held by one person,
+    /// so it is a per-caller identity on its own.
+    pub(crate) fn is_personal(&self) -> bool {
+        self.personal
     }
 }
 
@@ -174,6 +181,7 @@ impl ResolvedAuthConfig {
                     allowed_tools: k.allowed_tools.clone(),
                     denied_tools: k.denied_tools.clone(),
                     admin: k.admin,
+                    personal: k.kind == crate::config::ApiKeyKind::Personal,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -306,6 +314,7 @@ impl ResolvedAuthConfig {
             },
             Some(NamedApiKey {
                 name: key.name.clone(),
+                personal: key.personal,
             }),
         ))
     }
@@ -1078,6 +1087,7 @@ mod tests {
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
+                personal: false,
             }],
             public_paths: vec![],
             rate_limiters: DashMap::new(),
@@ -1152,6 +1162,7 @@ mod tests {
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
+                personal: false,
             }],
             public_paths: vec![],
             rate_limiters: DashMap::new(),
@@ -1204,6 +1215,7 @@ mod tests {
                     allowed_tools: None,
                     denied_tools: None,
                     admin: false,
+                    personal: false,
                 },
                 ResolvedApiKey {
                     digest: test_digest("key2"),
@@ -1215,6 +1227,7 @@ mod tests {
                     allowed_tools: None,
                     denied_tools: None,
                     admin: false,
+                    personal: false,
                 },
             ],
             public_paths: vec![],
@@ -1553,6 +1566,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: None,
             admin,
+            personal: false,
         }
     }
 
