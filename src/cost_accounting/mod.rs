@@ -498,19 +498,19 @@ impl CostTracker {
 
         // Per-session. An empty id is no session (a 2026-07-28 request has
         // none): keying on it would pool every such caller into one bucket.
-        if !session_id.is_empty() {
+        if session_id.is_empty() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let micro = (rec.estimated_cost_usd * 1_000_000.0) as u64;
+            for (total, add) in self.sessionless.iter().zip([1, rec.token_count, micro]) {
+                total.fetch_add(add, Ordering::Relaxed);
+            }
+        } else {
             self.per_session
                 .entry(session_id.to_string())
                 .or_insert_with(|| {
                     Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
                 })
                 .record(rec.clone());
-        } else {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let micro = (rec.estimated_cost_usd * 1_000_000.0) as u64;
-            for (total, add) in self.sessionless.iter().zip([1, rec.token_count, micro]) {
-                total.fetch_add(add, Ordering::Relaxed);
-            }
         }
 
         // Per-key (if we have a key name)
