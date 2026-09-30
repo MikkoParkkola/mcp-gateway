@@ -432,9 +432,14 @@ pub(super) fn round_deadline(
 /// envelope itself expired (the stored deadline plus the margin).
 ///
 /// The funnel answers every refusal with one message, but past the expiry
-/// the refusal of this gateway's own stored envelope IS the expiry:
-/// `redeem_retry` opens the envelope before any other check, and `open`
-/// tests the deadline straight after authentication. `>` as `open` uses it.
+/// the refusal of this gateway's own stored envelope is, in practice, the
+/// expiry: `redeem_retry` opens the envelope before any other check, `open`
+/// tests the deadline straight after authentication, and the hold checked
+/// next dies with the envelope. `>` as `open` uses it.
+// ponytail: an envelope opened just before expiry and then refused by the
+// spent-ledger's capacity bound just after reads as expiry, settling
+// `cancelled` rather than `failed`. A typed refusal through the funnel would
+// separate them; add it if that window is ever observed.
 fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) -> bool {
     let expired = crate::protocol::continuation::ContinuationError::Expired;
     now > deadline.saturating_add(CONTINUATION_DEADLINE_MARGIN_SECS)
