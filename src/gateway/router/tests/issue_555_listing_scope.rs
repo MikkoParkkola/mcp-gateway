@@ -34,6 +34,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 
 mod backend_scope;
 mod direct_route;
+mod direct_session;
 mod guide;
 mod meta_tools;
 mod residuals;
