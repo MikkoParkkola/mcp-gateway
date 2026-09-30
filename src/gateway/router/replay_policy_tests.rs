@@ -166,7 +166,9 @@ async fn post(fx: &Fixture, uri: &str, body: &Value) -> String {
 fn call(id: u32, name: &str, arguments: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
            "params": {"name": name, "arguments": arguments,
-                      "_meta": {IDEMPOTENCY_KEY_META: "key-2445"}}})
+                      "_meta": {IDEMPOTENCY_KEY_META: "key-2445",
+                                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                "io.modelcontextprotocol/clientCapabilities": {}}}})
 }
 
 /// The shared cell: a first keyed call runs, `t` is withheld, and the
