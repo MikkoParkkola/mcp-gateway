@@ -183,6 +183,7 @@ impl TaskStore {
         Ok(CommittedTask::of(entry.task.clone(), &entry.record))
     }
 
+    #[cfg(test)]
     pub(crate) async fn transition(
         &self,
         owner: &str,
@@ -411,6 +412,7 @@ impl Shared {
         Ok(committed)
     }
 
+    #[cfg(test)]
     fn transition_blocking(
         &self,
         owner: &str,
