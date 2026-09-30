@@ -37,6 +37,35 @@ pub(crate) enum ChainSource {
     NotEligible,
 }
 
+/// A backend's signature chain as checked at raw receipt (ASI07 inc3, D3/D4).
+/// Server-owned: never read from or written to the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired by the inc3 implementation")
+)]
+pub(crate) struct UpstreamChain {
+    /// The verified upstream links as received; empty when unverified.
+    pub(crate) links: Vec<serde_json::Value>,
+    /// `H(raw result)` the chain was checked against: this hop's `in`.
+    pub(crate) received: String,
+    /// What this gateway's appended link records about the upstream.
+    pub(crate) state: UpstreamState,
+}
+
+/// Whether the upstream chain verified (design D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired by the inc3 implementation")
+)]
+pub(crate) enum UpstreamState {
+    /// Every rule passed; the links are the delivered prefix.
+    Verified,
+    /// Absent or failed under `verify`; this gateway's link says so.
+    Unverified,
+}
+
 /// MCP Protocol version (latest)
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 

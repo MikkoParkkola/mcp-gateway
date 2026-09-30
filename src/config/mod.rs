@@ -53,15 +53,15 @@ pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file}
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
-    IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig,
-    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
-    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
-    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
-    RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig,
-    ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, ChainMode,
+    CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
+    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig,
+    HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
+    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
+    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
+    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig,
+    TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub(crate) use features::{api_key_expired, parse_api_key_digest};
 
@@ -564,16 +564,9 @@ impl Config {
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and
-        // `auth.api_keys[].key_sha256`: after it, a credential written `env:SHARED`
-        // holds the VALUE `SHARED` had, and the `env:` spelling is gone. The
-        // structural alias check inside `validate_with_env` compares an
-        // adapter's `env:SHARED` reference against that gateway text, so on
-        // this path it was comparing a reference against plaintext and never
-        // matched. With a DISABLED store the material half is deliberately
-        // skipped, so the one variable wired into both places was accepted in
-        // silence — the very case the structural check exists to catch, and the
-        // one an operator only discovers on the day they enable custody.
-        //
+        // `auth.api_keys[].key_sha256`, so the structural alias check inside
+        // `validate_with_env` would compare an adapter's `env:SHARED` reference
+        // against plaintext and never match (silent with a DISABLED store).
         // Running it here, before any inlining, is the only point on this path
         // where BOTH sides are still references. The call inside
         // `validate_with_env` stays for callers that never inline; re-running a
@@ -787,6 +780,7 @@ impl Config {
         self.auth.validate_api_key_names()?;
         self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
+        features::validate_backend_chains(self)?;
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
         self.tasks.validate()?;
@@ -1677,19 +1671,20 @@ pub struct BackendConfig {
     /// static-credential behavior (IDP.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
-    /// Explicit reference to an `accounts.descriptors` MAP KEY.
-    ///
-    /// The value is the descriptor's logical id — the `backend_id` half of the
-    /// account key — and never the backend registry name, the provider id, an
-    /// email or a display name. A name that is not a declared descriptor key is
-    /// a startup refusal (`account_bindings`), never a silent downgrade to the
-    /// static credential this backend also carries.
-    ///
-    /// Mutually exclusive with [`Self::identity_propagation`]: the descriptor
-    /// decides how this backend is authenticated, and two answers to that
-    /// question are a conflict rather than a precedence rule.
+    /// Explicit reference to an `accounts.descriptors` MAP KEY: the descriptor's
+    /// logical id, never a registry name, provider id or email. An undeclared
+    /// key refuses startup (`account_bindings`). Mutually exclusive with
+    /// [`Self::identity_propagation`]: two answers to how this backend is
+    /// authenticated are a conflict, not a precedence rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// ASI07: whether this backend's signature chain is ignored, verified or
+    /// required (design 2026-09-30-asi07-chain-inc3, D1). Default `off`.
+    pub signature_chain: ChainMode,
+    /// Key ids that may sign the origin link of this backend's chains.
+    pub chain_origins: Vec<String>,
+    /// Key id that must sign the last link this backend delivers.
+    pub chain_signer: Option<String>,
 }
 
 impl Default for BackendConfig {
@@ -1711,6 +1706,9 @@ impl Default for BackendConfig {
             runtime_profile: None,
             identity_propagation: None,
             account: None,
+            signature_chain: ChainMode::Off,
+            chain_origins: Vec::new(),
+            chain_signer: None,
         }
     }
 }

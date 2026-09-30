@@ -16,6 +16,19 @@ pub enum ChainEmit {
     Always,
 }
 
+/// A backend's chain policy (design D1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainMode {
+    /// Strip any chain the backend sends (increment 2 behaviour).
+    #[default]
+    Off,
+    /// Verify a chain when present; deliver an unverified one as `up: unverified`.
+    Verify,
+    /// Refuse a result whose chain is absent or does not verify.
+    Require,
+}
+
 const fn default_chain_max_links() -> usize {
     8
 }
@@ -151,6 +164,14 @@ impl SignatureChainConfig {
         .into_iter()
         .find_map(|(field, changed)| changed.then_some(field))
     }
+}
+
+/// Startup rules for per-backend chain policy (design D1): `verify`/`require`
+/// need origins, a signer, every key in `remote_server_signing.trusted_keys`,
+/// and this gateway's own `security.signature_chain`. Errors name the field.
+pub(crate) fn validate_backend_chains(config: &crate::config::Config) -> crate::Result<()> {
+    let _ = config;
+    Ok(())
 }
 
 #[cfg(test)]

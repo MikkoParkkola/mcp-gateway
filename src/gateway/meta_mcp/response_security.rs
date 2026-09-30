@@ -385,6 +385,8 @@ impl super::MetaMcp {
         invoke_nonce: Option<&str>,
     ) {
         use crate::security::signature_chain::{LinkSource, attach_origin_link};
+        // inc3 stub: the upstream outcome is read here once append exists.
+        let _ = response.chain_upstream.as_ref();
         let Some((signer, emit)) = &self.chain_signer else {
             return;
         };
@@ -496,6 +498,24 @@ pub(super) fn shape_meta_result(
         response.chain_source = source;
     }
     response
+}
+
+/// The chain outcome a gated result may keep (A3 R2', inc3 D4): a result the
+/// gates replaced or transformed keeps neither eligibility nor upstream links.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired by the inc3 implementation")
+)]
+pub(crate) fn chain_after_gates(
+    effect: GateEffect,
+    source: ChainSource,
+    upstream: Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
+) -> (
+    ChainSource,
+    Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
+) {
+    let _ = effect;
+    (source, upstream)
 }
 
 #[cfg(all(test, feature = "firewall"))]

@@ -107,6 +107,19 @@ pub(crate) enum ChainRefusal {
     Unhashable,
 }
 
+/// Why a chain is verified, which decides its length rule (design R3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChainPurpose {
+    /// A gateway about to append its own link: needs room for one more.
+    Forward,
+    /// A client verifying what it received: may hold exactly `max_links`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "wired by the inc3 implementation")
+    )]
+    Terminal,
+}
+
 /// Per-backend verification policy.
 pub(crate) struct ChainPolicy<'a> {
     /// The shared `remote_server_signing.trusted_keys` map.
@@ -117,8 +130,10 @@ pub(crate) struct ChainPolicy<'a> {
     pub(crate) signer: &'a str,
     /// `message_signing.replay_window`, seconds.
     pub(crate) replay_window: u64,
-    /// `security.signature_chain.max_links`; incoming chains hold at most one less.
+    /// `security.signature_chain.max_links`; see [`ChainPurpose`].
     pub(crate) max_links: usize,
+    /// Forwarding or terminal verification.
+    pub(crate) purpose: ChainPurpose,
 }
 
 /// This gateway's persistent Ed25519 chain identity.
@@ -332,6 +347,7 @@ pub(crate) fn verify_chain(
     now: u64,
 ) -> std::result::Result<Vec<ChainLink>, ChainRefusal> {
     // 1. Size caps before anything is parsed or verified, then schema.
+    let _ = policy.purpose;
     if exceeds(chain, MAX_CHAIN_BYTES) {
         return Err(ChainRefusal::Size);
     }

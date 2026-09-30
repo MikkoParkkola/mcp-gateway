@@ -93,6 +93,10 @@ struct StoredDelivery {
 #[serde(rename_all = "snake_case")]
 enum StoredChain {
     Backend,
+    /// A chained backend's result (inc3 R8): its upstream links answered
+    /// another request's nonce, so a replay is never linked.
+    #[expect(dead_code, reason = "wired by the inc3 implementation")]
+    ChainedBackend,
     #[default]
     NotEligible,
 }

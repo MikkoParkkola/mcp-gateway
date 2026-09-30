@@ -351,3 +351,136 @@ async fn finalize_strips_a_foreign_chain_from_an_ineligible_result() {
     .await;
     assert!(!carries_chain(result_of(&out)), "{:?}", out.result);
 }
+
+// ── increment 3 (design 2026-09-30-asi07-chain-inc3) ────────────────────────
+
+fn upstream(
+    state: crate::protocol::UpstreamState,
+    links: Vec<Value>,
+) -> crate::protocol::UpstreamChain {
+    crate::protocol::UpstreamChain {
+        links,
+        received: content_digest(&body()).expect("digest"),
+        state,
+    }
+}
+
+/// G1 (D4): a result the gates replaced keeps neither eligibility nor its
+/// upstream links; one they passed through keeps both. Never serialized.
+#[test]
+fn gate_substitution_drops_the_upstream_outcome() {
+    use super::{GateEffect, chain_after_gates};
+    use crate::protocol::UpstreamState;
+    let verified = Arc::new(upstream(
+        UpstreamState::Verified,
+        vec![json!({"gw": "gw-u"})],
+    ));
+    assert_eq!(verified.links.len(), 1);
+    assert!(!verified.received.is_empty());
+    let (source, kept) = chain_after_gates(
+        GateEffect::Enforced,
+        ChainSource::Backend,
+        Some(Arc::clone(&verified)),
+    );
+    assert_eq!(source, ChainSource::NotEligible);
+    assert!(
+        kept.is_none(),
+        "an enforced substitution drops the upstream links"
+    );
+    let (source, kept) = chain_after_gates(
+        GateEffect::PassedThrough,
+        ChainSource::Backend,
+        Some(verified),
+    );
+    assert_eq!(source, ChainSource::Backend);
+    assert_eq!(kept.map(|u| u.state), Some(UpstreamState::Verified));
+    let mut response = JsonRpcResponse::success(RequestId::Number(1), body());
+    response.chain_upstream = Some(Arc::new(upstream(UpstreamState::Unverified, vec![])));
+    let wire = serde_json::to_string(&response).expect("serialize");
+    assert!(
+        !wire.contains("received") && !wire.contains("Unverified"),
+        "{wire}"
+    );
+}
+
+/// D5: a verified upstream outcome is delivered as the upstream links followed
+/// by this gateway's link: prev = H(last upstream link), in = received,
+/// up = verified, out = H(delivered).
+#[tokio::test]
+async fn verified_upstream_is_preserved_and_appended() {
+    use crate::security::signature_chain::{LinkFields, Upstream, link_hash};
+    let upstream_signer =
+        crate::security::signature_chain::ChainSigner::from_seed(&[5; 32], "gw-u")
+            .expect("upstream signer");
+    let received = content_digest(&body()).expect("digest");
+    let origin = upstream_signer.sign(LinkFields {
+        up: Upstream::None,
+        src: LinkSource::Live,
+        input: None,
+        out: Some(received.clone()),
+        prev: None,
+        nonce: Some("upstream-nonce".into()),
+        ts: 1,
+    });
+    let origin_wire = serde_json::to_value(&origin).expect("link");
+    let mut response = JsonRpcResponse::success(RequestId::Number(1), body());
+    response.chain_upstream = Some(Arc::new(crate::protocol::UpstreamChain {
+        links: vec![origin_wire.clone()],
+        received: received.clone(),
+        state: crate::protocol::UpstreamState::Verified,
+    }));
+    let out = deliver(
+        &meta(Some(ChainEmit::OnRequest)),
+        response,
+        ChainSource::Backend,
+        Some(NONCE),
+        None,
+    )
+    .await;
+    let chain = chain_of(result_of(&out))
+        .and_then(Value::as_array)
+        .expect("chain");
+    assert_eq!(
+        chain.len(),
+        2,
+        "upstream link preserved plus this gateway's"
+    );
+    assert_eq!(chain[0], origin_wire, "upstream link unchanged");
+    let own: crate::security::signature_chain::ChainLink =
+        serde_json::from_value(chain[1].clone()).expect("own link");
+    assert_eq!(own.gw, KEY_ID);
+    assert_eq!(own.up, Upstream::Verified);
+    assert_eq!(own.prev.as_deref(), Some(link_hash(&origin).as_str()));
+    assert_eq!(own.input.as_deref(), Some(received.as_str()));
+    assert_eq!(own.nonce.as_deref(), Some(NONCE));
+}
+
+/// D5: an unverified upstream (under `verify`) yields only this gateway's
+/// link, which says so: up = unverified, prev = null, in = received.
+#[tokio::test]
+async fn unverified_upstream_is_declared_not_hidden() {
+    use crate::security::signature_chain::Upstream;
+    let received = content_digest(&body()).expect("digest");
+    let mut response = JsonRpcResponse::success(RequestId::Number(1), body());
+    response.chain_upstream = Some(Arc::new(upstream(
+        crate::protocol::UpstreamState::Unverified,
+        vec![],
+    )));
+    let out = deliver(
+        &meta(Some(ChainEmit::OnRequest)),
+        response,
+        ChainSource::Backend,
+        Some(NONCE),
+        None,
+    )
+    .await;
+    let chain = chain_of(result_of(&out))
+        .and_then(Value::as_array)
+        .expect("chain");
+    assert_eq!(chain.len(), 1);
+    let own: crate::security::signature_chain::ChainLink =
+        serde_json::from_value(chain[0].clone()).expect("own link");
+    assert_eq!(own.up, Upstream::Unverified);
+    assert_eq!(own.prev, None);
+    assert_eq!(own.input.as_deref(), Some(received.as_str()));
+}

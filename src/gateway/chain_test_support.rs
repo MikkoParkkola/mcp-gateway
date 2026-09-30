@@ -15,7 +15,7 @@ use crate::security::remote_provenance::{
     RemoteServerSignatureAlgorithm, TrustedRemoteServerKeyConfig,
 };
 use crate::security::signature_chain::{
-    ChainLink, ChainPolicy, ChainSigner, LinkSource, Upstream, verify_chain,
+    ChainLink, ChainPolicy, ChainPurpose, ChainSigner, LinkSource, Upstream, verify_chain,
 };
 
 /// `_meta` key that carries the chain on a result.
@@ -70,6 +70,7 @@ pub(crate) fn verify_self(
         signer: KEY_ID,
         replay_window: 300,
         max_links: 8,
+        purpose: ChainPurpose::Terminal,
     };
     verify_chain(chain, &policy, received, nonce, now())
 }
