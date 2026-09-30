@@ -2335,9 +2335,6 @@ impl MetaMcp {
         // `requestState` would present an already-spent continuation to a
         // second consumer and the approved action would die as a stale retry.
         // A retry that reaches here confirmed is, by construction, ours.
-        if self.signing_enabled() && self.require_nonce && tool_name != "gateway_invoke" {
-            return JsonRpcResponse::error(Some(id), -32001, "MUTANT: nonce required");
-        }
         if !confirmed_in_band
             && let Some(response) = self
                 .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
