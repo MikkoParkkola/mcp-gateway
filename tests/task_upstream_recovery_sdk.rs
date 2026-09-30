@@ -81,10 +81,12 @@ async fn durable_handle(root: &std::path::Path, task_id: &str) -> String {
     }
 
     let record = durable_record(root, task_id);
+    // Version 5: a direct task records its target at creation (#2450), which
+    // raises the row past the v3 that introduced the upstream handle.
     assert_eq!(
         record["version"],
-        json!(3),
-        "a recoverable row is a v3 row: {record}"
+        json!(5),
+        "a recoverable row with a recorded target is a v5 row: {record}"
     );
     assert_eq!(
         record["dispatched"],
