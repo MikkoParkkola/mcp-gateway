@@ -282,3 +282,15 @@ mod invoke_path {
         );
     }
 }
+
+/// MIK-7272.OWNER.3. The reserved owner value is only unreachable from
+/// presented text while it sits in the reserved prefix, and the stdio display
+/// principal sits outside it. An edit to either constant that breaks this
+/// would key the transport and a text spelling into one bucket unnoticed.
+#[test]
+fn the_reserved_owner_value_stays_in_the_reserved_prefix() {
+    use super::super::{LOCAL_OPERATOR_PREFIX, LOCAL_OPERATOR_PRINCIPAL};
+    assert!(LOCAL_OPERATOR_PRINCIPAL.starts_with(LOCAL_OPERATOR_PREFIX));
+    assert!(LOCAL_OPERATOR_PRINCIPAL.len() > LOCAL_OPERATOR_PREFIX.len_utf8());
+    assert!(!crate::gateway::STDIO_CREDENTIAL_PRINCIPAL.starts_with(LOCAL_OPERATOR_PREFIX));
+}

@@ -452,7 +452,9 @@ impl MetaMcp {
             }
         }
         let verified_identity = caller.verified_identity;
-        let credential_principal = caller.credential_principal;
+        // The key owner, not a display principal: for stdio it is the reserved
+        // owner value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
+        let owner_principal = caller.owner_principal();
         let retry = caller.retry;
         if let Some((server, tool, mut operation_arguments)) =
             self.check_target_policy(caller, tool_name, arguments, session)?
@@ -461,7 +463,7 @@ impl MetaMcp {
             return self.admit_sync(
                 is_modern,
                 verified_identity,
-                credential_principal,
+                owner_principal,
                 retry,
                 server,
                 tool,
@@ -499,7 +501,7 @@ impl MetaMcp {
         let mut admission = self.admit_operation(
             is_modern,
             verified_identity,
-            credential_principal,
+            owner_principal,
             retry,
             // Already built above, because the playbook digest folds into it.
             // Handed over as a thunk to match the parameter; the saving on this
