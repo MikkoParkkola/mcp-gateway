@@ -62,7 +62,7 @@ use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::config::{
     BackendConfig, Config, EnvOverlay, LiveEnv, ResolvedEnvFiles, RuntimeConfig, ServerConfig,
 };
-use crate::security::posture;
+use crate::security::{posture, ssrf::DestinationPolicy};
 
 // ============================================================================
 // Public types
@@ -1474,6 +1474,9 @@ impl ReloadContext {
         failsafe_config: crate::config::FailsafeConfig,
         cache_ttl: Duration,
     ) -> Self {
+        // A registry built by the caller still serves this config's posture.
+        let posture = live_config.running().security.posture;
+        registry.enforce_destination(DestinationPolicy::for_posture(posture));
         Self {
             config_path,
             live_config,

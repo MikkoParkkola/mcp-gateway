@@ -805,3 +805,5 @@ impl Default for CapabilityExecutor {
 #[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;
+#[cfg(test)]
+mod ssrf_denial_tests;

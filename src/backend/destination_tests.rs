@@ -1,0 +1,106 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! T3 and T4: a backend in a `hardened` registry never connects to a private
+//! address, whether the URL spells it as a literal or as a name that resolves
+//! to one. `ensure_started` is called directly, so the router's proxy-time
+//! check cannot be what refuses.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use super::{Backend, BackendRegistry};
+use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use crate::security::ssrf::DestinationPolicy;
+
+/// A loopback listener that counts connections and drops each at once.
+async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    (port, accepted)
+}
+
+fn transport(template: &str, port: u16) -> TransportConfig {
+    let url = template.replace("{port}", &port.to_string());
+    if url.starts_with("ws") {
+        TransportConfig::WebSocket {
+            ws_url: url,
+            protocol_version: None,
+        }
+    } else {
+        TransportConfig::Http {
+            http_url: url,
+            streamable_http: !template.contains("sse"),
+            protocol_version: None,
+        }
+    }
+}
+
+/// Start one backend at `template` in a registry under `policy`.
+async fn start(template: &str, policy: DestinationPolicy) -> (crate::Result<()>, usize) {
+    let (port, accepted) = counting_listener().await;
+    let registry = BackendRegistry::new();
+    registry.enforce_destination(policy);
+    let config = BackendConfig {
+        transport: transport(template, port),
+        timeout: Duration::from_secs(2),
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "b",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    let started = backend.ensure_started().await;
+    // Read after the start returned: every connection it made is counted.
+    (started, accepted.load(Ordering::SeqCst))
+}
+
+fn assert_refused(template: &str, started: &crate::Result<()>, accepted: usize) {
+    let error = started.as_ref().expect_err(template);
+    assert!(
+        error.to_string().contains("SSRF blocked"),
+        "{template}: {error}"
+    );
+    assert_eq!(error.to_rpc_code(), -32600, "{template}: {error}");
+    assert_eq!(accepted, 0, "{template}: nothing may connect");
+}
+
+#[tokio::test]
+async fn hardened_backend_refuses_private_literal() {
+    for template in [
+        "http://127.0.0.1:{port}/mcp",
+        "http://127.0.0.1:{port}/sse",
+        "ws://127.0.0.1:{port}/",
+        "http://[::ffff:127.0.0.1]:{port}/mcp",
+        "http://[2002:7f00:1::]:{port}/mcp",
+    ] {
+        let (started, accepted) = start(template, DestinationPolicy::Public).await;
+        assert_refused(template, &started, accepted);
+    }
+}
+
+#[tokio::test]
+async fn hardened_backend_pins_private_hostname() {
+    for template in [
+        "http://localhost:{port}/mcp",
+        "http://localhost:{port}/sse",
+        "ws://localhost:{port}/",
+    ] {
+        let (started, accepted) = start(template, DestinationPolicy::Public).await;
+        assert_refused(template, &started, accepted);
+        // Control: standard connects to the same place.
+        let (_, accepted) = start(template, DestinationPolicy::Configured).await;
+        assert!(accepted > 0, "{template}: standard reaches the listener");
+    }
+}

@@ -98,9 +98,12 @@
 //! - [`resolver`] — DNS-pinning resolver (MIK-4019): `HostResolver`, `SystemResolver`, `PinningResolver`
 //! - [`redirect`] — redirect-chain SSRF re-validation policy
 
+mod destination;
 mod ranges;
 mod redirect;
 mod resolver;
+
+pub(crate) use destination::DestinationPolicy;
 
 #[cfg(test)]
 mod tests;
