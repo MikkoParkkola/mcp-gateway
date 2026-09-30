@@ -101,13 +101,17 @@ C. **One durable window per data directory, partitioned by transport, loss-sensi
     (30 s by default), and launchd SIGKILLs the operator's gateway after its default 20 s exit
     timeout. The plist sets no `ExitTimeOut`. An open SSE stream would therefore kill every
     post-drain close.
+  - The HTTP window is on only with `server.protocol_revision_window: true` (default off;
+    RFC-0060 sets no default). Off, no segment is written and shutdown serves as in 3.5.x
+    (coordinator ruling, 2026-09-30).
   - Why this is exact: the seal and the count exclude each other. Each gateway instance owns a
     seal flag (`MetaMcp::window_seal`). On the shutdown broadcast its saver sets that flag and
     takes the counts in one critical section under the registry lock
     (`window::global_segment_counts(Some(seal))`). Its HTTP handlers check the same flag under the
     same lock before counting (`observe_inbound_request_from`, `HttpCaller::sealed`). A request that
     finds it set is answered 503 without being served (`router/helpers.rs`,
-    `window_sealed_response`). A served request is therefore always in the sealed counts.
+    `window_sealed_response`). A served measured request (anything but a notification, which is
+    never counted) is therefore always in the sealed counts.
     - Only the moment of counting matters. A long tool call, an SSE stream or a task counted
       before the seal runs to completion and holds nothing open.
     - The seal is immediate, so the operator's always-on callers (`periodic-refresh.sh` every
