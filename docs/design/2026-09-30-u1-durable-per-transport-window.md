@@ -101,9 +101,14 @@ C. **One durable window per data directory, partitioned by transport, loss-sensi
     (30 s by default), and launchd SIGKILLs the operator's gateway after its default 20 s exit
     timeout. The plist sets no `ExitTimeOut`. An open SSE stream would therefore kill every
     post-drain close.
-  - Why this is safe: requests are counted when they arrive (`router/handlers.rs:697`,
-    `router/backend_handlers.rs:668`), and a stopped listener admits no new request. So nothing
-    counted after the close can belong to this segment.
+  - Why this is safe: the seal is a time boundary. The segment holds exactly what was counted
+    before `last_checkpoint_at`, and the span ends there. A request accepted before the seal but
+    still uploading its body (counting happens after identity and body read,
+    `router/handlers.rs:697`, `router/backend_handlers.rs:668`) is counted after the seal and
+    belongs to no segment. That time sits in the gap before the next process starts, which the
+    coverage check bounds at 300 s. The loss is unbiased with respect to revision, and nothing
+    outside the span is claimed. (Corrected after the final review: an earlier text said nothing
+    could be counted after the close.)
   - Counter dirtiness and lifecycle metadata are tracked separately, so a shutdown with no new
     requests still writes the close.
 - **`Transport::Internal`** is a label that nothing observes in production. A segment's snapshot

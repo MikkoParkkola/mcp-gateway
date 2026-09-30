@@ -351,8 +351,10 @@ const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 /// The close is written on the shutdown broadcast, not after the drain:
 /// open connections get `server.shutdown_timeout` (30 s by default) and
 /// launchd SIGKILLs after 20 s, so a post-drain close would never land while
-/// an SSE stream is open. Requests are counted on arrival and the stopped
-/// listener admits none, so nothing counted later belongs to this segment.
+/// an SSE stream is open. The seal is a time boundary: the segment holds what
+/// was counted before `last_checkpoint_at`. A request still uploading its body
+/// is counted after the seal and belongs to no segment, the same as the
+/// restart gap the decision's coverage check bounds (300 s).
 /// A sink that fails to open is retried every tick; counts are cumulative
 /// from process start, so a late open still records everything.
 pub(super) fn spawn_window_saver(

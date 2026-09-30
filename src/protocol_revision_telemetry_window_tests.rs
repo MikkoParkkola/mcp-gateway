@@ -152,7 +152,7 @@ fn t3_unclean_and_concurrent_writers_block_but_a_same_second_restart_passes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut first = HttpSegmentSink::open(dir.path(), identity(PROD, 10), 10).expect("open");
     first
-        .checkpoint(&SegmentCounts::default(), 10, true)
+        .checkpoint(&counts("2026-07-28", 0), 10, true)
         .expect("close");
     HttpSegmentSink::open(dir.path(), identity(PROD, 10), 10).expect("same-second restart");
     let window = read_window_v2(&path_of(dir.path())).expect("read");
@@ -220,7 +220,7 @@ fn t5_checkpoints_are_cumulative_and_survive_a_failed_write() {
     let mut sink = HttpSegmentSink::open(dir.path(), identity(PROD, 100), 100).expect("open");
 
     // An idle interval still advances the checkpoint.
-    sink.checkpoint(&SegmentCounts::default(), 105, false)
+    sink.checkpoint(&counts("2026-07-28", 0), 105, false)
         .expect("idle");
     assert_eq!(
         read_window_v2(&path).unwrap().http_segments[0].last_checkpoint_at,
