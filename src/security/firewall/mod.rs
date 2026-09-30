@@ -33,6 +33,10 @@ mod anomaly_gate;
 use anomaly_config::{default_anomaly_min_observations, default_anomaly_threshold};
 pub mod audit;
 pub mod budget_guard;
+// Pure module; increment 2 of the ASI10 design adds its first caller, at
+// which point this `expect` stops being fulfilled and must be removed.
+#[cfg_attr(not(test), expect(dead_code))]
+mod collusion;
 pub mod input_scanner;
 pub mod memory_scanner;
 pub mod principal_window;
