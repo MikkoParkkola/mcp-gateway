@@ -7,6 +7,7 @@ use std::env;
 use super::*;
 use crate::gateway::test_helpers::write_owner_only;
 
+// POSIX mode bits: chmod 0000 forces PermissionDenied; Windows directory/file attributes do not deny reads.
 #[cfg(unix)]
 #[test]
 fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing() {
@@ -1613,6 +1614,7 @@ fn overlay_env_parses_values_the_way_the_figment_env_provider_did() {
 /// variable belonging to some other part of the system is lossily converted.
 /// `std::env::vars` panics on the same input, which would abort a load over a
 /// variable the gateway never reads.
+// Unix-only: builds a non-UTF-8 env value from raw bytes (OsStringExt); Windows env strings are UTF-16.
 #[cfg(unix)]
 #[test]
 fn overlay_env_survives_a_non_utf8_process_variable() {

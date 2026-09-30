@@ -2104,8 +2104,11 @@ reached the log.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
 With an HTTPS `server.public_url` on a plain-HTTP listener (the `tls_terminated_upstream` shape),
-the link is refused with 409 whichever way it is opened, until #2130 lands: enable `mtls` so the
-listener serves HTTPS, or remove `public_url`, to sign in by link.
+the loopback URL shows a one-time code instead of signing in there, since the session cookie must
+be `Secure` and belongs to the public origin (#2130). Type `<public_url>/dashboard/handoff` into the
+browser and enter the code within 60 seconds; the session cookie is then set on the public origin.
+The code works once and never appears in a URL, so the proxy's access log does not record it; do
+not configure the proxy to log request bodies for that path.
 
 ## 71. Dashboard sessions expire, and logout ends them
 

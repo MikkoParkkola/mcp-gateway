@@ -87,13 +87,17 @@ impl Service<Request<()>> for EchoIdentity {
     }
 }
 
-/// The banner refuses the plain-HTTP link for an HTTPS `public_url` in any
-/// letter case, matching the cookie's `Secure` decision.
+/// Behind an HTTPS `public_url` in any letter case, matching the cookie's
+/// `Secure` decision, the banner says where the link's code is entered (#2130).
 #[test]
-fn an_uppercase_https_public_url_refuses_the_banner_link() {
+fn an_uppercase_https_public_url_names_the_code_page() {
     let mut config = Config::default();
-    config.server.public_url = Some("HTTPS://Gateway.Example".to_string());
-    assert!(dashboard_link_refusal(&config).is_some());
+    config.server.public_url = Some("HTTPS://Gateway.Example/".to_string());
+    let note = dashboard_link_handoff(&config).expect("a handoff note");
+    assert!(
+        note.contains("HTTPS://Gateway.Example/dashboard/handoff"),
+        "{note}"
+    );
     config.server.public_url = Some("http://gateway.example".to_string());
-    assert!(dashboard_link_refusal(&config).is_none());
+    assert!(dashboard_link_handoff(&config).is_none());
 }

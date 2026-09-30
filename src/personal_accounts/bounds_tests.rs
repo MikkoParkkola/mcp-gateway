@@ -103,6 +103,7 @@ fn s03_plaintext_limit_accepts_exact_boundary_and_rejects_next_byte() {
 }
 
 #[test]
+// Unix-only: the store fixture creates its directories with mode 0700 (DirBuilderExt).
 #[cfg(unix)]
 fn s03_each_invalid_store_configuration_refuses_before_authority_creation() {
     use super::{PersonalAccountStore, config};
