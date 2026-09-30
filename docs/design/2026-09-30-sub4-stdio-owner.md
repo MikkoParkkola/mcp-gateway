@@ -315,8 +315,21 @@ inline, is never tracked, and cannot be cancelled (spec: MUST NOT).
 Reading the ledger's "its waiter gets a terminal answer": the waiter is the gateway-side future
 that awaits the held exchange, not the client, which by the spec has stopped waiting. The
 alternative reading, an error frame to the client, contradicts the spec's SHOULD NOT and is
-rejected. Reviewers and the lead are asked to confirm this reading; a different ruling changes
-the test, not the mechanism.
+rejected. The lead confirmed this reading on 2026-09-30.
+
+The spec text the mechanism rests on (MCP 2025-06-18, Basic > Utilities > Cancellation, the
+revision a legacy RPC speaks;
+https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation):
+
+> 2. The `initialize` request **MUST NOT** be cancelled by clients
+> 3. Receivers of cancellation notifications **SHOULD**:
+>    * Stop processing the cancelled request
+>    * Free associated resources
+>    * Not send a response for the cancelled request
+> 4. Receivers **MAY** ignore cancellation notifications if:
+>    * The referenced request is unknown
+>    * Processing has already completed
+>    * The request cannot be cancelled
 
 Why abort rather than a cooperative signal to the waiter. A targeted "resolve this dispatch's
 prompts with an error" needs (a) a map from the inbound request id to the outbound prompt ids the
@@ -360,7 +373,7 @@ Not done: forwarding the cancel upstream as the backend's own `notifications/can
 backend call may keep running after the abort, as it does today when an HTTP client disconnects.
 That is a separate feature, recorded here rather than dropped.
 
-### D6 — OWNER.2: a typed local operator in the task store (rev 3; scope ruling requested)
+### D6 — OWNER.2: a typed local operator in the task store (rev 3; build ruled in scope)
 
 Facts at `41ef8781c` (#2414 merged, which did not change them):
 - Stdio never opens the task store: `task: None` (`server/mod.rs:3137,3656`). The store is opened
@@ -375,8 +388,9 @@ Facts at `41ef8781c` (#2414 merged, which did not change them):
   and HTTP never hold the same store at once. "Same-store HTTP owner" means sequential opens.
 
 The row needs the stdio operator to retrieve a task. Today it has neither a store nor a route,
-so this is a build item, not a test. Whether 4.0 builds it or the row moves is the operator's
-call (asked 2026-09-30). The design below is the minimal build if 4.0 keeps it.
+so this is a build item, not a test. The lead ruled it in scope for 4.0 (2026-09-30): build the
+minimal version, with the existing config key and no new config. Escalate only if it forces a
+public API or config change.
 
 1. Owner. `ExecutionAdmission::local_operator_owner(StdioLocalOperator) -> TaskOwner`, a digest
    of `[LOCAL_OPERATOR_TAG]` under a separate domain tag, with no string input. Every string
@@ -394,6 +408,11 @@ call (asked 2026-09-30). The design below is the minimal build if 4.0 keeps it.
    the id is absent. On the same store, HTTP-shaped owners (`"stdio"`, `local:auth-disabled:…`,
    a credential digest) get the not-found answer and cannot cancel or update it. The
    independent functional gate runs the binary over real pipes.
+5. Advertisement honesty. Stdio's `server/discover` declares the Tasks extension today
+   (`ExtensionSet::gateway_declares`) while stdio serves no `tasks/*`: a shipped claim the code
+   does not honour. I4 makes it true and adds a test that every extension stdio's discover answer
+   declares is served over stdio: a `tasks/get` for an unknown id gets the extension's
+   not-found, not -32601. If I4 slips, the fallback strips Tasks from stdio discover; not now.
 
 Size and risk: about 500+ lines across `task_service`, `router/handlers/tasks.rs` and the stdio
 loop, FULL tier. No public API item, if `TaskRoute` and the helper stay crate-private.
@@ -423,7 +442,7 @@ Change. `run_stdio_on` already holds the config; its `modern_protocol` value goe
 | I1 | OWNER.3, OWNER.5 | FULL (identity) | D1 + D4 |
 | I2 | OWNER.1, OWNER.4 | FULL (policy) | D2 + D3 tests; a fix only if red |
 | I3 | LIFE.1 | FULL (it touches admission settlement) | D5 |
-| I4 | OWNER.2 | FULL | D6, if the operator keeps it in 4.0 |
+| I4 | OWNER.2 | FULL | D6 (ruled in scope) |
 | I5 | STDIO.1 | STANDARD | D7, after I4 |
 
 Red proof with CI as the only compiler. A failing-tests commit must fail on assertions, not fail
