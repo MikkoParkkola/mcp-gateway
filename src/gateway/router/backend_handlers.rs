@@ -662,9 +662,17 @@ async fn backend_handler_inner(
     let protocol_header = inbound_headers
         .get("mcp-protocol-version")
         .and_then(|value| value.to_str().ok());
+    // A presented session counts only when this caller holds it (the `/mcp`
+    // owner rule), or it would pick another caller's profile and cost bucket.
+    let owner = super::handlers::owner_of(
+        super::identity::subject_key(grant_subject.as_ref(), cert_identity.as_ref()),
+        &inbound_headers,
+        client.as_ref(),
+    );
     let session_id = inbound_headers
         .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok());
+        .and_then(|value| value.to_str().ok())
+        .filter(|id| state.multiplexer.is_owned_by(id, &owner));
     crate::protocol_revision_telemetry::observe_inbound_request(
         &json_request,
         params.as_ref(),

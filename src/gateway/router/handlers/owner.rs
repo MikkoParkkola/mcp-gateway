@@ -65,17 +65,26 @@ pub(super) async fn request_session_owner(
     )
     .await
     .map_err(|refusal| identity_refusal_response(refusal).into_response())?;
-    // A proven subject outranks the credential, so two people behind one shared
-    // key never share a session. The credential half is what was presented,
-    // not the principal (a delegated bearer's principal is its stable actor),
-    // so one person's two credentials never share one either: a resumed
-    // session's held credential is overwritten (GH1942.HARDEN.1 row 9).
-    let owner = match subject_key(subject.as_ref(), cert) {
+    let owner = owner_of(subject_key(subject.as_ref(), cert), headers, client);
+    Ok((subject, owner))
+}
+
+/// The owner a caller's session carries, one rule for `/mcp` and the direct
+/// route. A proven subject outranks the credential, so two people behind one
+/// shared key never share a session. The credential half is what was
+/// presented, not the principal (a delegated bearer's principal is its stable
+/// actor), so one person's two credentials never share one either: a resumed
+/// session's held credential is overwritten (GH1942.HARDEN.1 row 9).
+pub(in crate::gateway::router) fn owner_of(
+    subject_key: Option<String>,
+    headers: &HeaderMap,
+    client: Option<&AuthenticatedClient>,
+) -> SessionOwner {
+    match subject_key {
         Some(key) => SessionOwner::Subject {
             key,
             credential: held_credential(headers).map(|held| held.digest()),
         },
         None => session_owner(client),
-    };
-    Ok((subject, owner))
+    }
 }
