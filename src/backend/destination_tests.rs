@@ -51,7 +51,9 @@ async fn start(template: &str, policy: DestinationPolicy) -> (crate::Result<()>,
     registry.enforce_destination(policy);
     let config = BackendConfig {
         transport: transport(template, port),
-        timeout: Duration::from_secs(2),
+        // Long enough for a `localhost` control on Windows, which tries `::1`
+        // first and waits about 2s on its refusal before trying 127.0.0.1.
+        timeout: Duration::from_secs(10),
         ..BackendConfig::default()
     };
     let backend = Arc::new(Backend::new(
