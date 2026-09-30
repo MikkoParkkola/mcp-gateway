@@ -34,6 +34,11 @@ pub struct SignatureChainConfig {
     /// Maximum links accepted or produced in one chain.
     #[serde(default = "default_chain_max_links")]
     pub max_links: usize,
+    /// SHA-256 of the resolved seed, set when the config loads (off the async
+    /// worker) so reload compares key identities with no file I/O. Never the
+    /// seed itself, never serialized.
+    #[serde(skip)]
+    pub(crate) resolved_identity: Option<[u8; 32]>,
 }
 
 // `signing_key` may be a literal seed, so `Debug` never prints it (CWE-532).
@@ -56,6 +61,20 @@ impl SignatureChainConfig {
         &self,
         overlay: &crate::config::EnvOverlay,
     ) -> crate::Result<crate::security::signature_chain::ChainSigner> {
+        let seed = self.seed(overlay)?;
+        crate::security::signature_chain::ChainSigner::from_seed(&seed, &self.key_id)
+    }
+
+    /// Validate at config load and record the seed's identity for reload.
+    pub(crate) fn resolved(mut self, overlay: &crate::config::EnvOverlay) -> crate::Result<Self> {
+        use sha2::Digest as _;
+        let seed = self.seed(overlay)?;
+        crate::security::signature_chain::ChainSigner::from_seed(&seed, &self.key_id)?;
+        self.resolved_identity = Some(sha2::Sha256::digest(&seed).into());
+        Ok(self)
+    }
+
+    fn seed(&self, overlay: &crate::config::EnvOverlay) -> crate::Result<Vec<u8>> {
         use base64::Engine as _;
         let invalid = |field: &str, rule: &str| {
             crate::Error::ConfigValidation(format!("security.signature_chain.{field} {rule}"))
@@ -69,11 +88,8 @@ impl SignatureChainConfig {
         }
         let seed = crate::config::secret_ref::SecretRef::parse(&self.signing_key)
             .resolve("security.signature_chain.signing_key", overlay)?;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(seed.trim());
-        match bytes {
-            Ok(bytes) if bytes.len() == 32 => {
-                crate::security::signature_chain::ChainSigner::from_seed(&bytes, &self.key_id)
-            }
+        match base64::engine::general_purpose::STANDARD.decode(seed.trim()) {
+            Ok(bytes) if bytes.len() == 32 => Ok(bytes),
             _ => Err(invalid(
                 "signing_key",
                 "must be a base64 32-byte Ed25519 seed",
@@ -83,25 +99,21 @@ impl SignatureChainConfig {
 
     /// Name of the first identity field that differs between the running and
     /// the reloaded section; a change to any of them requires a restart.
-    /// `signing_key` compares the reference text and the seed it resolves to
-    /// under each side's environment, so a rotated `env:`/`file:` secret
-    /// behind an unchanged reference is caught. Adding or removing the
-    /// section changes the identity, so it reports `signing_key`.
+    /// `signing_key` compares the reference text and the resolved seed
+    /// identity recorded at load, so a rotated `env:`/`file:` secret behind an
+    /// unchanged reference is caught without reading it again. Adding or
+    /// removing the section changes the identity, so it reports `signing_key`.
     pub(crate) fn restart_changed_field(
-        running: Option<(&Self, &crate::config::EnvOverlay)>,
-        reloaded: Option<(&Self, &crate::config::EnvOverlay)>,
+        running: Option<&Self>,
+        reloaded: Option<&Self>,
     ) -> Option<&'static str> {
-        let ((a, a_env), (b, b_env)) = match (running, reloaded) {
+        let (a, b) = match (running, reloaded) {
             (None, None) => return None,
             (Some(a), Some(b)) => (a, b),
             _ => return Some("signing_key"),
         };
-        let seed = |c: &Self, env| {
-            let key = crate::config::secret_ref::SecretRef::parse(&c.signing_key);
-            key.resolve("security.signature_chain.signing_key", env)
-                .ok()
-        };
-        let key_changed = a.signing_key != b.signing_key || seed(a, a_env) != seed(b, b_env);
+        let key_changed =
+            a.signing_key != b.signing_key || a.resolved_identity != b.resolved_identity;
         [
             ("signing_key", key_changed),
             ("key_id", a.key_id != b.key_id),

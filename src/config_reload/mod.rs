@@ -1812,10 +1812,8 @@ impl ReloadContext {
             .restart_changed_field(&proposed.security.message_signing, env, overlay)
             .map_err(|error| error.to_string())?;
         let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
-        let chain = crate::config::SignatureChainConfig::restart_changed_field(
-            was.as_ref().map(|c| (c, env)),
-            now.as_ref().map(|c| (c, overlay)),
-        );
+        let chain =
+            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
         if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
             .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
         {

@@ -576,11 +576,8 @@ impl Config {
         //
         // Running it here, before any inlining, is the only point on this path
         // where BOTH sides are still references. The call inside
-        // `validate_with_env` stays exactly where it is: callers that parse and
-        // validate without ever inlining (and the reload/validation entry
-        // points) reach only that one, and re-running a text-only check costs
-        // nothing. Nothing else moves — allowlist semantics and runtime wiring
-        // are untouched by this.
+        // `validate_with_env` stays for callers that never inline; re-running a
+        // text-only check costs nothing.
         // The API key digest check sits here for the same reason: an `env:`
         // variable holding plaintext must be refused by NAME, before inlining.
         config.auth.validate_api_key_material(&overlay)?;
@@ -598,6 +595,12 @@ impl Config {
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
+                let sec = &mut config.security;
+                sec.signature_chain = sec
+                    .signature_chain
+                    .take()
+                    .map(|c| c.resolved(&overlay))
+                    .transpose()?;
                 refs
             }
             Expansion::Literal => (BTreeSet::new(), SecretFileDigests::new()),
@@ -976,18 +979,11 @@ impl Config {
                      stdio/websocket cannot carry the credential header (IDP.2)"
                 )));
             }
-            // `SessionMode::PerUser` is now supported by the per-user transport
-            // pool (MIK-6735): the backend keeps a distinct transport/session per
-            // caller identity, so no shared session is reused across users
-            // (IDP.7). No rejection needed here.
-            // A backend running the gateway's own OAuth client authorizes and
-            // persists a gateway-held token during initialize(), authenticating
-            // the transport session as the gateway *before* the per-request
-            // credential override is applied. Combined with identity_propagation
-            // that silently defeats per-user propagation: the session is already
-            // gateway-authenticated, so the per-user credential rides on top of a
-            // channel that no longer represents the end user. Refuse the pairing
-            // at load rather than dispatch under a contradictory trust model (F3).
+            // `SessionMode::PerUser` is supported by the per-user transport pool
+            // (MIK-6735, IDP.7). A backend running the gateway's own OAuth client
+            // authenticates its session as the gateway during initialize(), so a
+            // per-user credential would ride a channel that no longer represents
+            // the end user. Refuse the pairing at load (F3).
             if backend.oauth.as_ref().is_some_and(|o| o.enabled) {
                 return Err(Error::ConfigValidation(format!(
                     "backend '{name}' cannot combine identity_propagation with its own enabled \

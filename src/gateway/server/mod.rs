@@ -1192,10 +1192,9 @@ impl Gateway {
         }
 
         // ── Idempotency (MIK-7272.SUB.4) ─────────────────────────────────────
-        // Unconditional and unconfigurable. A client-supplied idempotency key
-        // is a correctness mechanism, not a preference: the only thing an
-        // operator toggle would buy is the ability to switch duplicated side
-        // effects back on. Bounds are the constants in `crate::idempotency`.
+        // Unconditional and unconfigurable: an idempotency key is a correctness
+        // mechanism, and a toggle could only switch duplicated side effects
+        // back on. Bounds are the constants in `crate::idempotency`.
         // This is the only production construction site of `MetaMcp`, and both
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
         // All three of the criterion's routes reach a guard from here: generic
@@ -3008,9 +3007,8 @@ impl Gateway {
         Some(response.to_value_lossy())
     }
 
-    /// Capture and restore the signing envelope, and take the chain nonce,
-    /// ahead of parsing: both live in the caller's request, so they are taken
-    /// out before anything else reads that tree.
+    /// Capture the signing envelope and the chain nonce ahead of parsing:
+    /// both are taken out before anything else reads the request.
     fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
@@ -3021,15 +3019,17 @@ impl Gateway {
         ),
         serde_json::Value,
     > {
+        // A bad chain nonce keeps the caller's id; a bad envelope has none.
+        let raw_id = crate::protocol::mrtr::raw_request_id(request);
         let mut signing_context = meta_mcp
             .signing_enabled()
             .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
         let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
-        let id = (restored.is_ok()).then(|| crate::protocol::mrtr::raw_request_id(request));
+        let id = restored.is_ok().then_some(raw_id).flatten();
         match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
             Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
             Err(error) => Err(crate::protocol::JsonRpcResponse::error(
-                id.flatten(),
+                id,
                 error.to_rpc_code(),
                 super::meta_mcp::signing::wire_error_message(&error),
             )

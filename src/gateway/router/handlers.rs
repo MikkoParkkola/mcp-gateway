@@ -580,20 +580,12 @@ async fn meta_mcp_dispatch(
     // to route on.
     //
     // Decided from the header, before the body is parsed, because the session
-    // is created before the body is parsed. That is sound rather than a
-    // shortcut: the mirrored-header check refuses a modern request that omits
-    // `MCP-Protocol-Version`, so every modern request that survives carries it.
-    // Any modern declaration, not only a version this build serves. A client
-    // naming an unsupported 2026 revision is still a stateless client: minting
-    // it a session hands it state its own revision deleted and grows a table on
-    // behalf of a caller that is about to be refused.
-    // Read duplicate-safe, and read ONCE. `headers.get` returns the FIRST
-    // value, so a request sending the header twice — legacy first, modern
-    // second — would be classified legacy here and modern by the check further
-    // down, and the disagreement mints a session for a request that is about to
-    // be refused. Two occurrences is not a request to interpret; it is one to
-    // refuse, so an ambiguous header takes the modern reading and reaches the
-    // refusal with no session behind it.
+    // is created first; the mirrored-header check refuses a modern request
+    // without `MCP-Protocol-Version`. Any modern declaration counts, even an
+    // unsupported 2026 revision: it is stateless and about to be refused.
+    // Read duplicate-safe and ONCE (`headers.get` returns the FIRST value): a
+    // doubled header takes the modern reading and reaches the refusal with no
+    // session behind it.
     let mut version_headers = headers.get_all("mcp-protocol-version").iter();
     let declared_version = match (version_headers.next(), version_headers.next()) {
         (Some(only), None) => only.to_str().ok(),
@@ -626,11 +618,25 @@ async fn meta_mcp_dispatch(
     // Not a stream reader: a held subscription fakes a deliverable prompt.
     drop(session_rx);
 
+    let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
         crate::gateway::meta_mcp::signing::SigningInvocationContext::capture(&mut request)
     });
-    // Off the request before sanitization can rewrite its bytes (ASI07 A3).
-    let chain_nonce = crate::protocol::mrtr::take_chain_nonce(&mut request);
+    // Off the request before sanitization can rewrite or reject its bytes
+    // (ASI07 A3); a malformed one is refused here, with the request's own id.
+    let chain_nonce = match crate::protocol::mrtr::take_chain_nonce(&mut request) {
+        Ok(nonce) => nonce,
+        Err(error) => {
+            let (code, message) = (error.to_rpc_code(), error.to_string());
+            return build_error_response(
+                raw_id,
+                code,
+                message,
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
     // Optionally sanitize input
     let mut request = if state.sanitize_input {
         match sanitize_json_value(&request) {
@@ -649,20 +655,17 @@ async fn meta_mcp_dispatch(
         request
     };
 
-    let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(&mut request));
-    let id = (restored.is_ok()).then(|| crate::protocol::mrtr::raw_request_id(&request));
-    let chain_nonce = match restored.and(chain_nonce) {
-        Ok(nonce) => nonce,
-        Err(error) => {
-            return build_error_response(
-                id.flatten(),
-                error.to_rpc_code(),
-                crate::gateway::meta_mcp::signing::wire_error_message(&error),
-                &session_id,
-                StatusCode::BAD_REQUEST,
-            );
-        }
-    };
+    if let Some(context) = signing_context.as_mut()
+        && let Err(error) = context.restore(&mut request)
+    {
+        return build_error_response(
+            None,
+            error.to_rpc_code(),
+            crate::gateway::meta_mcp::signing::wire_error_message(&error),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
 
     // Detect client POST-back responses (has "result" or "error" but no "method").
     // These are replies to server-to-client requests such as `sampling/createMessage`.
@@ -708,17 +711,10 @@ async fn meta_mcp_dispatch(
     // request, not per connection: 2026-07-28 removed the handshake precisely so
     // one connection can carry both.
     //
-    // The header is read here as well as the body. A request declaring
-    // `2026-07-28` in the header an upstream routes on, while carrying no body
-    // metadata, would otherwise classify as legacy and pass the feature gate
-    // and every mirrored-header check behind it.
-    // Read duplicate-safe. `headers.get` returns the FIRST value, so a request
-    // sending the header twice — legacy first, modern second — could hide its
-    // modern declaration behind the legacy one and be classified legacy, which
-    // is the bypass this argument exists to close. Two occurrences is not a
-    // request to interpret; it is one to refuse, and the mirrored-header check
-    // below refuses it. The value is read once, above the session decision, so
-    // the two readings cannot disagree.
+    // The header is read as well as the body: a `2026-07-28` header with no
+    // body metadata would otherwise classify legacy and pass the feature gate.
+    // It was read once, duplicate-safe, above the session decision, so the two
+    // readings cannot disagree; a doubled header is refused below.
     // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
     // dispatchers cannot drift apart on what a request declared.
     let shape = crate::protocol::meta::classify_and_observe(

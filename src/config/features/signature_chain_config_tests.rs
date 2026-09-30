@@ -14,6 +14,7 @@ fn config(signing_key: &str, key_id: &str) -> SignatureChainConfig {
         key_id: key_id.to_owned(),
         emit: ChainEmit::OnRequest,
         max_links: 8,
+        resolved_identity: None,
     }
 }
 
@@ -72,18 +73,12 @@ fn signature_chain_reload_refused() {
         (&other_emit, "emit"),
     ] {
         assert_eq!(
-            SignatureChainConfig::restart_changed_field(
-                Some((&running, &EnvOverlay::none())),
-                Some((reloaded, &EnvOverlay::none()))
-            ),
+            SignatureChainConfig::restart_changed_field(Some(&running), Some(reloaded)),
             Some(field)
         );
     }
     assert_eq!(
-        SignatureChainConfig::restart_changed_field(
-            Some((&running, &EnvOverlay::none())),
-            Some((&running, &EnvOverlay::none()))
-        ),
+        SignatureChainConfig::restart_changed_field(Some(&running), Some(&running)),
         None
     );
 }
