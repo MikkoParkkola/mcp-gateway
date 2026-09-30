@@ -46,6 +46,7 @@ use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_versio
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
+use crate::security::signature_chain::ChainSigner;
 use crate::stats::UsageStats;
 use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
@@ -57,7 +58,7 @@ use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, extract_client_version, extract_required_str, wrap_tool_success,
+    build_routing_instructions, extract_client_version, extract_required_str,
 };
 use super::meta_mcp_tool_defs::{
     MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
@@ -531,6 +532,9 @@ pub struct MetaMcp {
     /// are byte-identical to the un-stamped path (rung 1.2 guarantee).
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
+    /// ASI07 chain identity and emission mode; `None` = feature off.
+    pub(super) chain_signer: Option<(Arc<ChainSigner>, crate::config::ChainEmit)>,
+
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
     /// `Some` when `security.claim_capture.enabled = true`; `None` otherwise.
@@ -686,6 +690,7 @@ impl MetaMcp {
             message_signer: None,
             nonce_store: None,
             provenance_signer: None,
+            chain_signer: None,
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
@@ -960,25 +965,6 @@ impl MetaMcp {
         self.message_signer = Some(Arc::new(signer));
         self.nonce_store = Some(nonce_store);
         self.require_nonce = require_nonce;
-    }
-
-    /// Enable signed runtime provenance stamping (MIK-6905, rung 1.2).
-    ///
-    /// When set, every aggregated tool result is stamped with a signed
-    /// `_meta.provenance` receipt. Off by default; the field is `None` unless
-    /// this is called, so the stamping branch never runs on the hot path
-    /// otherwise.
-    pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
-        self.provenance_signer = Some(Arc::new(signer));
-    }
-
-    /// Enable shadow claim capture (MIK-6908, rung 3.1).
-    ///
-    /// Only has an observable effect once `provenance_signer` is also
-    /// `Some` — capture runs alongside stamping at the same chokepoint, not
-    /// independently of it.
-    pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
-        self.claim_capture = Some(sink);
     }
 
     /// Attach a transparency logger (issue #133, D3).
@@ -2334,13 +2320,23 @@ impl MetaMcp {
             return error_response_preserving_status(id, &error);
         }
 
+        // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
+        let mut source = crate::protocol::ChainSource::NotEligible;
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
             "gateway_list_servers" => self.list_servers(caller, session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
+            "gateway_invoke" => {
+                let sourced = self
+                    .invoke_tool_sourced(&arguments, session_id, caller)
+                    .await;
+                sourced.map(|(value, origin)| {
+                    source = origin;
+                    value
+                })
+            }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
             "gateway_webhook_status" => self.webhook_status(),
@@ -2360,34 +2356,9 @@ impl MetaMcp {
         };
 
         let inspected = self.marks_discovery(tool_name, result.is_ok());
-        let mut response = match result {
-            Ok(content) => match shape {
-                // MRTR.11a: an interim round must not be pretty-printed into
-                // `content[0].text`. `wrap_tool_success` states `is_error:
-                // false` and buries `resultType` inside a JSON string, where
-                // neither a protocol client nor the firewall's
-                // `PreserveInputRequired` policy can read it — a question
-                // committed as an answer. The task worker already escapes via
-                // `ResultShape::Native`; this is the same escape for the
-                // synchronous thread, gated so a backend cannot mint one.
-                ResultShape::Wrapped => {
-                    match interim_promotion::promote_interim(&content, caller.input_capabilities) {
-                        interim_promotion::Promotion::Native => {
-                            JsonRpcResponse::success(id, content)
-                        }
-                        interim_promotion::Promotion::Wrap => {
-                            let has_output_schema = tool_name == "gateway_search_tools";
-                            wrap_tool_success(id, &content, has_output_schema)
-                        }
-                        interim_promotion::Promotion::UpstreamFault(message) => {
-                            error_response_preserving_status(id, &Error::json_rpc(-32603, message))
-                        }
-                    }
-                }
-                ResultShape::Native => JsonRpcResponse::success(id, content),
-            },
-            Err(e) => error_response_preserving_status(id, &e),
-        };
+        let declared = caller.input_capabilities;
+        let mut response =
+            response_security::shape_meta_result(id, tool_name, result, shape, declared, source);
         response.discovery_inspected = inspected && response.error.is_none();
         response
     }
