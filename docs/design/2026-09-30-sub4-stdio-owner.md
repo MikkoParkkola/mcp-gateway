@@ -218,6 +218,12 @@ execution context carries as data (`task_service/execution/context.rs:42`), so a
 could carry it; the ticket asks for a tag only the transport creates. (b) A field on
 `AuthenticatedClient` — public API widening. (c) Leaving it because F3 makes it unreachable today.
 
+Batch items (rev 3, round-2 check): a JSON-RPC batch on stdio goes through
+`dispatch_batch_with_sink` (`server/mod.rs:3367`), which calls the same `dispatch_single_with_sink`
+with a `StdioClient` for each item (`:3391-3403`). Batch items therefore get their context from
+`build_stdio_caller_context` and carry the tag with no extra site. I1 still asserts the tag for a
+batched `tools/call`, so a later divergence of the batch path turns a test red.
+
 Risk (corrected in rev 2; rev 1 claimed a lost tag fails closed, which is false): a stdio path
 that loses the tag classifies as `Credential`, which still establishes the operator on a
 sole-operator deployment (`caller_proof.rs:87-94`, `vault.rs:210-226`). Accounts keep working and
@@ -337,6 +343,12 @@ bridge mints, and (b) a `DeliveryError` variant for "cancelled". `DeliveryError`
 without `#[non_exhaustive]` (`input_bridge.rs:159-160`), so (b) is a public-API change (C7).
 Abort reaches the same end state, with no new variant and no second map.
 
+Batched calls cannot be held. A batch runs inline in the read loop, and each item gets
+`NoClientChannel` (`server/mod.rs:3403`), so an item that needs input fails at once and never
+parks at the bridge. LIFE.1's held legacy RPC is therefore always a spawned single dispatch. A
+test pins this: a batched call that asks for input returns its refusal without an outbound
+prompt, and `pending` stays empty.
+
 Bookkeeping:
 - `HashMap<RequestId, (task::Id, AbortHandle)>`, keyed by the protocol `RequestId`, which keeps
   numeric and string ids distinct (`protocol/messages.rs:200-207`).
@@ -399,7 +411,14 @@ public API or config change.
    id, so it survives reopen and relocation (C3: no global lookup, no new UUID).
 2. Store. Stdio opens the same store `Gateway::run` opens, from `config.tasks.store_dir` (existing
    key; no new config). The open sequence moves into one `pub(crate)` helper shared by both
-   transports, so they cannot drift. A second open of a leased directory fails as it does today.
+   transports, so they cannot drift.
+   Lease conflict (round-2 finding). A client may spawn a stdio gateway while an HTTP gateway
+   already holds the same store directory, which is the default path. Stdio works in that setup
+   today, so failing to start would be a regression. Rule: HTTP keeps failing fast as it does now.
+   Stdio, on an open failure, logs a warning naming the path and the cause, serves without tasks
+   (`tasks/*` answers -32601 as today), and leaves Tasks out of its discover answer for the life
+   of the process. The advertisement then matches the surface in both outcomes (item 5). A test
+   covers the leased-directory case.
 3. Route. The three `tasks/*` arms and task-augmented `tools/call` take a crate-private
    `TaskRoute { service, executor, owner }` instead of `&AppState`, extracted from the arms as
    they stand. HTTP builds it from `route_task_owner`; stdio builds it from (1).
@@ -412,7 +431,9 @@ public API or config change.
    (`ExtensionSet::gateway_declares`) while stdio serves no `tasks/*`: a shipped claim the code
    does not honour. I4 makes it true and adds a test that every extension stdio's discover answer
    declares is served over stdio: a `tasks/get` for an unknown id gets the extension's
-   not-found, not -32601. If I4 slips, the fallback strips Tasks from stdio discover; not now.
+   not-found, not -32601. A second test checks the degraded case: with the store unavailable, the
+   discover answer carries no Tasks. If I4 slips, the fallback strips Tasks from stdio discover;
+   not now.
 
 Size and risk: about 500+ lines across `task_service`, `router/handlers/tasks.rs` and the stdio
 loop, FULL tier. No public API item, if `TaskRoute` and the helper stay crate-private.
@@ -429,6 +450,11 @@ Dependency (the lead's rule: advertise only what stdio can serve). Advertising 2
 while also declaring Tasks claims a modern tasks surface that stdio lacks until D6 lands. So D7
 lands after D6. If the operator moves OWNER.2 out of 4.0, D7 instead drops Tasks from the stdio
 discover answer, and that change of today's stdio advertisement is reported to the lead first.
+
+Left in place and out of scope: with `server.modern_protocol` off, stdio still serves
+modern-shaped requests (`classify_and_observe` ignores the flag) while discover hides
+2026-07-28. D7 fixes what discover advertises and does not change what stdio serves; the
+exact-version test asserts the advertisement only.
 
 Change. `run_stdio_on` already holds the config; its `modern_protocol` value goes to the dispatcher
 (a field alongside `handshake_capabilities`) and into `discover_document(modern)`. Test: exact
@@ -474,3 +500,12 @@ failing tests are written.
   decision. Criteria switched to the ledger text. D1 catalogue path corrected (public-API
   reachability via `gateway::test_helpers`). D5 rewritten to the ledger's LIFE.1 text. D6 (OWNER.2)
   and D7 (STDIO.1) added. Sent to both seats as round 2.
+- Rev 3, round 2, seat 2 (`kimi-review`, content inline, SHIP-WITH-FIXES):
+  (1) HIGH "batch path untagged": refuted at source. Batch items call `dispatch_single_with_sink`
+  with a `StdioClient` (`server/mod.rs:3391-3403`). Recorded in D1, and I1 asserts it.
+  (2) MEDIUM "batched held RPC": resolved. Batch items get `NoClientChannel` and cannot hold;
+  pinned in D5.
+  (3) MEDIUM "store lease conflict": accepted. Stdio degrades to serving without tasks and
+  advertises none (D6 item 2).
+  Improvements taken: the D7 out-of-scope note, and pre-running D2 on the current tree (it runs
+  in I2's first CI). Improvement deferred: the `classify` input-enum shape, decided during I1.
