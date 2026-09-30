@@ -24,6 +24,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod meta_refusal;
+mod meta_replay;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
