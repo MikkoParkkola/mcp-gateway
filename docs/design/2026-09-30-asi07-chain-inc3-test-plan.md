@@ -73,9 +73,7 @@ sends, and it signs with test code according to a per-test mode:
 - `input_required`;
 - unsolicited task handle.
 
-The real second gateway stays only in H1/H1d (interop). "Preserved" is asserted as JSON-value
-equality between each delivered upstream link and the link the upstream recorded sending, not as
-raw-byte equality.
+The real second gateway stays only in H1/H1d (interop). "Preserved" is asserted as RFC 8785 byte equality between each delivered upstream link and the link the upstream recorded sending. That is the form the signature covers; the JSON transport does not keep raw bytes, so raw-byte equality is not observable.
 
 Changed and added rows:
 
@@ -97,3 +95,14 @@ Changed and added rows:
 Mutant rule (binding). An inequivalent surviving mutant on a required rule blocks acceptance; only
 an equivalent mutant may be recorded with a reason. The raw-receipt `verify_chain` bypass must be
 killed by the tamper, swap and dropped-hop rows on both routes.
+
+## r3 (round 2: both seats SHIP-WITH-FIXES; adopted with these additions, per the review cap)
+
+| # | Addition |
+|---|---|
+| P2b | Link-count boundary, restored, on both routes. `max_links: 3`: an upstream chain of 3 links means D cannot append, so -32001. A control chain of 2 links is appended to exactly 3 and the oracle verifies it (Terminal, `len == max_links`). |
+| H7b | `verify` with an absent upstream chain, both routes: delivered, exactly one link by D with `up: unverified`, `prev` null, `in` = H(raw); the oracle refuses it for `Unverified`. |
+| E1 | Enforcement without an emission trigger, both routes: `emit: on_request` and no client nonce. D still sends its fresh upstream challenge. A tampered upstream under `require` gives -32001 `BadSignature`; an honest upstream succeeds with no chain key. |
+| H1 | The preservation oracle is RFC 8785 byte equality of each upstream link against the upstream's recorded emission. The design wording is aligned. |
+
+Status: ADOPTED at r3 after two review rounds.
