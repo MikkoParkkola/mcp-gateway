@@ -233,9 +233,15 @@ impl Backend {
         // arriving at once both find the stale verdict and each fan out a detached probe.
         let discarded = self
             .era
-            .discard_if(|era| match era {
-                Era::Legacy => contradicts_legacy(code),
-                Era::Modern => contradicts_modern(method, code),
+            .discard_if(|era| {
+                // Re-checked under the era lock: a restart may have installed and resolved a new
+                // peer since the lookup above, and a contradiction from the old one must not
+                // erase that peer's verdict.
+                holds(&entry, transport)
+                    && match era {
+                        Era::Legacy => contradicts_legacy(code),
+                        Era::Modern => contradicts_modern(method, code),
+                    }
             })
             .await;
         if !discarded {

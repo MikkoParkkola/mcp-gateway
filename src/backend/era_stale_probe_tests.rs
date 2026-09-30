@@ -296,3 +296,30 @@ fn the_installer_holds_the_slot_guard_while_it_stores() {
         "an evicted slot's answer must not be stored"
     )));
 }
+
+/// A contradiction that arrives over a transport the slot no longer holds says nothing about
+/// the peer now in service: its verdict survives and no probe starts.
+#[test]
+fn a_contradiction_over_a_replaced_transport_leaves_the_current_verdict() {
+    let records = run(async {
+        let backend = backend();
+        let (old, _handles) = Peer::new(Answer::MethodNotFound);
+        let old: Arc<dyn Transport> = old;
+        let (new, _handles) = Peer::new(Answer::Modern);
+        let new: Arc<dyn Transport> = new;
+        backend.set_transport_for_test(Arc::clone(&new));
+        backend.resolve_era_for_test(&new).await;
+        assert_eq!(backend.cached_era().await, Some(Era::Modern));
+
+        backend
+            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &old)
+            .await;
+
+        assert_eq!(
+            backend.cached_era().await,
+            Some(Era::Modern),
+            "the replaced peer's refusal must not erase the current peer's verdict"
+        );
+    });
+    assert!(discarded(&records).is_empty(), "{records:?}");
+}
