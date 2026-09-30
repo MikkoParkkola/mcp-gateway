@@ -127,6 +127,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ExcerptCapture {
     }
 }
 
+// Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
 #[cfg(all(test, unix))]
 mod tests {
     use std::collections::HashMap;

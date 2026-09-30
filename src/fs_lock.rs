@@ -341,12 +341,12 @@ mod tests {
     }
 
     #[test]
-    // Unix-only: on Windows a contended try_acquire fails with PermissionDenied, not WouldBlock (CI run 36666721615).
-    #[cfg(unix)]
     fn personal_accounts_try_lock_refuses_contention_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".personal-account-authority.lock");
-        let first = ExclusiveFileLock::acquire(&path).expect("existing blocking lock control");
+        // The holder takes the sidecar through `try_acquire`: on Windows the contender
+        // judges an existing sidecar, and one the legacy `acquire` created is not owner-only.
+        let first = ExclusiveFileLock::try_acquire(&path).expect("the first holder takes the lock");
         let (sender, receiver) = std::sync::mpsc::channel();
         let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
         let contender_path = path.clone();

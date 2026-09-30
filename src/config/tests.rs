@@ -7,17 +7,20 @@ use std::env;
 use super::*;
 use crate::gateway::test_helpers::write_owner_only;
 
-// POSIX mode bits: chmod 0000 forces PermissionDenied; Windows directory/file attributes do not deny reads.
-#[cfg(unix)]
 #[test]
 fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, "this is: [invalid yaml").expect("write invalid config");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
-        .expect("remove config read permission");
+    // Unix: chmod 0000. Windows: a DACL entry denying the user read.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("remove config read permission");
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::deny_user("unreadable-config", &path, "RD");
 
     // Root and similarly privileged CI users can bypass mode 000. In that
     // environment this fixture cannot exercise PermissionDenied, so say why
@@ -33,9 +36,11 @@ fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing
         message.contains(&path.display().to_string()),
         "the diagnostic must name the selected config path: {message}"
     );
+    // Unix names the container UID/GID to grant; Windows says to grant it through the ACL.
+    let remediation = if cfg!(windows) { "ACL" } else { "1001" };
     assert!(
-        message.contains("1001"),
-        "the diagnostic must name the official container UID/GID: {message}"
+        message.contains(remediation),
+        "the diagnostic must carry the platform's remediation ({remediation}): {message}"
     );
     assert!(
         !message.contains("invalid type") && !message.contains("invalid YAML"),
