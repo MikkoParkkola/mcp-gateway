@@ -54,7 +54,9 @@ async fn post_direct(
 ) -> Value {
     let backend = Arc::new(Backend::new(
         "demo",
-        BackendConfig::default(),
+        // R2 off: the fixed transport answers every method with one body, so
+        // it cannot describe its tool; the R2 check would refuse the call.
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
