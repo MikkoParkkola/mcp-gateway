@@ -19,7 +19,7 @@ pub(super) fn check_security_posture(config: &Config) -> CheckResult {
 }
 
 /// Under hardened, also the refusal an operator meets first (M5): the
-/// dashboard's MCP calls need an IdP or Access subject.
+/// dashboard's MCP calls need an identity-provider or Access subject.
 fn pass_detail(config: &Config) -> String {
     let name = posture_name(config);
     if config.security.posture == mcp_gateway::security::SecurityPosture::Hardened {

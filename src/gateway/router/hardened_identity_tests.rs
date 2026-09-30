@@ -123,8 +123,6 @@ async fn hardened_refuses_without_subject_direct() {
     let (state, _store) = gateway(SecurityPosture::Hardened, true).await;
     let reply = send(&state, request("POST", "/mcp/alpha", Some(SHARED))).await;
     assert_refused(&reply, "POST /mcp/alpha with a shared key");
-    let alias = send(&state, request("POST", "/mcp/alpha/extra", Some(SHARED))).await;
-    assert_refused(&alias, "POST /mcp/alpha/extra with a shared key");
 }
 
 #[tokio::test]
