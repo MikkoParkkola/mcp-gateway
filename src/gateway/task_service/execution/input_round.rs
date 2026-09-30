@@ -21,7 +21,7 @@ use super::settlement::{
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcome};
 use crate::gateway::router::AppState;
-use crate::gateway::task_service::record::InputRound;
+use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
@@ -122,12 +122,23 @@ impl<'a> Settling<'a> {
                 .settle(TaskTransition::Complete(abandoned_input_round()))
                 .await;
         };
+        // The continuation the resume will redeem dies at its own deadline;
+        // a round that could only fail is settled now, never parked.
+        let now = unix_secs(self.executor.service.store.now());
+        let continuation = self.state.meta_mcp.continuation();
+        let Ok(continuation_deadline) =
+            round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
+        else {
+            return self
+                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .await;
+        };
         let stored = InputRound {
             request_state: round.request_state.clone(),
             tool: self.call.tool.clone(),
             arguments: self.call.arguments.clone(),
             accepted_inputs: Map::new(),
-            continuation_deadline: None,
+            continuation_deadline,
         };
         let parked = self
             .executor
@@ -358,6 +369,20 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
         executor.settle_cas(&principal, &id, revision, event).await;
         return;
     };
+    // An answer taken in time can still reach dispatch late; redeeming then
+    // could only fail, so the round is closed as the sweep would close it.
+    if let Some(deadline) = round.continuation_deadline
+        && unix_secs(executor.service.store.now()) >= deadline
+    {
+        let Ok(owner) = executor.service.owner(&principal) else {
+            return;
+        };
+        let reason = RoundClosed::Continuation(deadline).reason();
+        let _ = executor
+            .close_round(owner.as_digest(), &id, revision, reason)
+            .await;
+        return;
+    }
     let call = TaskCall {
         tool: round.tool,
         arguments: round.arguments,
@@ -379,14 +404,57 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
 /// continuation's own expiry, less the margin. `Ok(None)` when no
 /// continuation is stored; an error when it cannot be opened or is already
 /// due, since such a round could only ever fail.
-#[allow(dead_code)] // red commit: called by the fix
 pub(super) fn round_deadline(
     keyring: &crate::protocol::continuation::Keyring,
     request_state: Option<&str>,
     now: u64,
 ) -> Result<Option<u64>, crate::protocol::continuation::ContinuationError> {
-    let _ = (keyring, request_state, now);
-    Ok(None)
+    let Some(token) = request_state else {
+        return Ok(None);
+    };
+    let deadline = keyring
+        .open(token, now)?
+        .expires_at
+        .saturating_sub(CONTINUATION_DEADLINE_MARGIN_SECS);
+    if now >= deadline {
+        return Err(crate::protocol::continuation::ContinuationError::Expired);
+    }
+    Ok(Some(deadline))
+}
+
+fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
+    u64::try_from(at.timestamp()).unwrap_or(0)
+}
+
+impl TaskExecutor {
+    /// Cancel a task with `reason` in one store write, then publish it (#2429).
+    pub(super) async fn close_round(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+    ) -> Result<(), super::CommitFailure> {
+        match self
+            .service
+            .store
+            .close_round(owner_digest, id, revision, reason)
+            .await
+        {
+            Ok(committed) => {
+                self.published(&WriteOutcome::Transitioned(committed), id);
+                self.notify_observer(CommitStage::Transitioned, id).await;
+                Ok(())
+            }
+            Err(StoreError::RevisionConflict) => Err(super::CommitFailure::RevisionConflict),
+            Err(StoreError::NotFound) => Err(super::CommitFailure::Service(
+                crate::gateway::task_service::ServiceError::NotFound,
+            )),
+            Err(_) => Err(super::CommitFailure::Service(
+                crate::gateway::task_service::ServiceError::Unavailable,
+            )),
+        }
+    }
 }
 
 #[cfg(test)]

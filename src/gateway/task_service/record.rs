@@ -31,7 +31,6 @@ pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 
 /// How far before the stored continuation's own expiry a round stops taking
 /// answers: room for an accepted answer to reach redemption (#2429).
-#[allow(dead_code)] // red commit: read by the fix
 pub(crate) const CONTINUATION_DEADLINE_MARGIN_SECS: u64 = 10;
 
 /// An open input round's continuation: what a resume needs and nothing else.

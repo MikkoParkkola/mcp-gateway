@@ -215,6 +215,8 @@ pub(super) struct RecoveryCaller<'a> {
     pub cert_identity: Option<&'a CertIdentity>,
     pub api_key_name: Option<&'a str>,
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
+    /// The request's own declared label: audit attribution only (#2430).
+    pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     pub verified_identity: Option<&'a VerifiedIdentity>,
     pub is_admin: bool,
@@ -395,7 +397,7 @@ pub(super) async fn tasks_update(
     match state.tasks.get(owner, task_id) {
         Ok(current)
             if current.task.status() == crate::protocol::tasks::TaskStatus::InputRequired => {}
-        Ok(_) => return no_round(id),
+        Ok(current) => return settled_or_no_round(id, &current.task),
         Err(ServiceError::NotFound) => return missing_task_error(id),
         Err(_) => return store_unavailable(id),
     }
@@ -433,6 +435,28 @@ pub(super) async fn tasks_update(
     }
 }
 
+/// A late answer to a settled task is told how it settled, with the reason it
+/// carries (#2429); a live task without a round gets the plain refusal.
+fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
+    let wire = serde_json::to_value(task.wire()).unwrap_or_default();
+    let status = wire
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "completed" | "failed" | "cancelled") {
+        return no_round(id);
+    }
+    let reason = wire
+        .get("statusMessage")
+        .and_then(Value::as_str)
+        .map_or_else(String::new, |message| format!(": {message}"));
+    JsonRpcResponse::error(
+        Some(id),
+        -32602,
+        format!("inputResponses refused: the task is {status}{reason}"),
+    )
+}
+
 fn no_round(id: RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(
         Some(id),
@@ -460,7 +484,7 @@ fn update_caller(
         caller
             .agent_id
             .map(crate::security::OwnedProvenAgentId::from),
-        None,
+        caller.agent_declared.map(|label| label.as_str().to_owned()),
         caller.grant_subject.clone(),
         caller.verified_identity.cloned(),
         owner.to_owned(),

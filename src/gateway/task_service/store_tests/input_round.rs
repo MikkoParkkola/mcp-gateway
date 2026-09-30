@@ -312,6 +312,10 @@ async fn opened() -> (tempfile::TempDir, TaskStore, Task) {
 /// caller's `at`: an update queued while the round was open is let through
 /// after it closed.
 #[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding the ordering lock across the wait is the race under test"
+)]
 async fn an_update_queued_across_the_deadline_is_refused_under_the_lock() {
     let (_dir, store, task) = opened().await;
     let deadline = secs(at(30));
