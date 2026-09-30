@@ -62,6 +62,7 @@ use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::config::{
     BackendConfig, Config, EnvOverlay, LiveEnv, ResolvedEnvFiles, RuntimeConfig, ServerConfig,
 };
+use crate::security::posture;
 
 // ============================================================================
 // Public types
@@ -1820,6 +1821,10 @@ impl ReloadContext {
             return Err(format!(
                 "config reload refused: security.{field} requires restart"
             ));
+        }
+        let running = self.live_config.running();
+        if let Some(refusal) = posture::reload_refusal(running, &evaluated.config) {
+            return Err(refusal);
         }
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.

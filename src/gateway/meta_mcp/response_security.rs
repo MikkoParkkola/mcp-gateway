@@ -130,6 +130,7 @@ impl super::MetaMcp {
         #[cfg(feature = "firewall")]
         if matches!(context.method, "tools/call" | "tools/list")
             && inspection == DeliveryInspection::Required
+            && !response.discovery_inspected
             && response.error.is_none()
             && let Some(result) = response.result.as_mut()
             && let Some(firewall) = &self.firewall

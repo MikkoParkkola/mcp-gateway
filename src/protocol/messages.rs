@@ -70,39 +70,19 @@ pub struct JsonRpcResponse {
     /// or serialized; it excludes both client strikes and success resets.
     #[serde(skip)]
     pub(crate) delivery_refusal: bool,
+    /// Server-owned: a discovery handler inspected this result's canonical
+    /// value before it was serialised (MIK-7407.RESPONSE.3), so no later pass
+    /// scans the served copy. Never read from or written to the wire, so a
+    /// backend or a retried call under a discovery name cannot set it.
+    #[serde(skip)]
+    pub(crate) discovery_inspected: bool,
     /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
 }
 
-impl<'de> Deserialize<'de> for JsonRpcResponse {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        /// Mirrors [`JsonRpcResponse`] and additionally observes `method`, the
-        /// field that marks a frame as a request or a notification.
-        #[derive(Deserialize)]
-        struct Shadow {
-            jsonrpc: String,
-            id: Option<RequestId>,
-            result: Option<Value>,
-            error: Option<JsonRpcError>,
-            method: Option<serde::de::IgnoredAny>,
-        }
-
-        let shadow = Shadow::deserialize(deserializer)?;
-        if shadow.method.is_some() {
-            return Err(serde::de::Error::custom(
-                "frame carries `method`: a request or notification, not a response",
-            ));
-        }
-        Ok(Self {
-            jsonrpc: shadow.jsonrpc,
-            ..Self::envelope(shadow.id, shadow.result, shadow.error)
-        })
-    }
-}
+#[path = "messages_response_de.rs"]
+mod response_de;
 
 impl JsonRpcResponse {
     /// The one place every server-owned marker gets its default.
@@ -114,6 +94,7 @@ impl JsonRpcResponse {
             error,
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
             chain_source: super::ChainSource::NotEligible,
         }
     }

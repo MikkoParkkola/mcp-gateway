@@ -589,6 +589,10 @@ impl Default for ClaimCaptureConfig {
 #[serde(default)]
 #[allow(clippy::struct_excessive_bools)] // config surface: independent on/off feature flags
 pub struct SecurityConfig {
+    /// Security posture: `standard` (default) or `hardened`. Restart-only.
+    /// See [`crate::security::posture`] for what `hardened` enforces.
+    #[serde(default)]
+    pub posture: crate::security::posture::SecurityPosture,
     /// Enable input sanitization (null byte rejection, control char stripping, NFC).
     pub sanitize_input: bool,
     /// Enable SSRF protection for outbound URLs.
@@ -677,6 +681,7 @@ const fn default_trust_configured_backends() -> bool {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
+            posture: crate::security::posture::SecurityPosture::default(),
             sanitize_input: true,
             ssrf_protection: true,
             trust_configured_backends: default_trust_configured_backends(),
