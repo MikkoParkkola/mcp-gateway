@@ -76,6 +76,7 @@ mod lifecycle;
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+mod replay_policy;
 mod result_shapes;
 mod settlement;
 mod signing_joint;
