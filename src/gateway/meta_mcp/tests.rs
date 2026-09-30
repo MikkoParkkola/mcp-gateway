@@ -1997,6 +1997,9 @@ mod attestation_wiring;
 #[cfg(test)]
 #[path = "attestation_plan_tests.rs"]
 mod attestation_plan;
+#[cfg(test)]
+#[path = "chain_strip_tests.rs"]
+mod chain_strip;
 
 /// `gateway_cost_report`'s own schema calls `include_all_sessions` an "admin
 /// view". It read the flag straight from the arguments, so any caller got the

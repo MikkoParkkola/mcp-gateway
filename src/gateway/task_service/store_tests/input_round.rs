@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::gateway::task_service::record::InputRound;
-use crate::gateway::task_service::store::input::ProvideOutcome;
+use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
+use std::sync::Arc;
 
 const CAP: usize = 4 * 1024;
 
@@ -32,6 +33,7 @@ fn round(state: &str) -> InputRound {
         tool: "gateway_invoke".to_owned(),
         arguments: json!({ "server": "mock", "tool": "echo", "arguments": { "q": 1 } }),
         accepted_inputs: serde_json::Map::new(),
+        continuation_deadline: None,
     }
 }
 
@@ -43,6 +45,13 @@ fn answers(value: Value) -> serde_json::Map<String, Value> {
 }
 
 async fn parked(store: &TaskStore, task: &Task, keys: &[&str]) -> u64 {
+    parked_with(store, task, keys, round("sealed")).await
+}
+
+/// Park `round` under `keys`, with the store's clock frozen at the fixture's
+/// own time (the fixture task was created at `at(0)` with a one-day TTL).
+async fn parked_with(store: &TaskStore, task: &Task, keys: &[&str], round: InputRound) -> u64 {
+    store.set_clock_for_test(Some(at(1)));
     let created = store
         .create(PreparedTask::for_test(task, OWNER, 1))
         .await
@@ -60,14 +69,7 @@ async fn parked(store: &TaskStore, task: &Task, keys: &[&str]) -> u64 {
         request_state: None,
     };
     store
-        .require_input(
-            OWNER,
-            task.id(),
-            created.revision,
-            requested,
-            round("sealed"),
-            at(1),
-        )
+        .require_input(OWNER, task.id(), created.revision, requested, round, at(1))
         .await
         .expect("a small round fits")
         .revision
@@ -271,7 +273,7 @@ async fn expired_input_rounds_selects_open_rounds_past_their_ttl_only() {
     let selected: Vec<_> = store
         .expired_input_rounds(later)
         .into_iter()
-        .map(|(id, _, owner)| (id, owner))
+        .map(|(id, _, owner, _)| (id, owner))
         .collect();
     assert_eq!(
         selected,
@@ -280,5 +282,169 @@ async fn expired_input_rounds_selects_open_rounds_past_their_ttl_only() {
     assert!(
         store.expired_input_rounds(at(5)).is_empty(),
         "not before the TTL"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #2429: the round closes at its continuation deadline.
+// ---------------------------------------------------------------------------
+
+fn secs(at: chrono::DateTime<chrono::Utc>) -> u64 {
+    u64::try_from(at.timestamp()).unwrap()
+}
+
+fn due(deadline: u64) -> InputRound {
+    InputRound {
+        continuation_deadline: Some(deadline),
+        ..round("sealed")
+    }
+}
+
+async fn opened() -> (tempfile::TempDir, TaskStore, Task) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TaskStore::open(&dir.path().join("tasks"), limits())
+        .await
+        .unwrap();
+    (dir, store, task())
+}
+
+/// Mutant: the clock read before the ordering lock, or taken from the
+/// caller's `at`: an update queued while the round was open is let through
+/// after it closed.
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "holding the ordering lock across the wait is the race under test"
+)]
+async fn an_update_queued_across_the_deadline_is_refused_under_the_lock() {
+    let (_dir, store, task) = opened().await;
+    let deadline = secs(at(30));
+    let revision = parked_with(&store, &task, &["confirm"], due(deadline)).await;
+    let workers = Arc::new(tokio::sync::Semaphore::new(1));
+    let held = store.hold_order_for_test();
+    let queued = {
+        let (store, id) = (store.clone(), task.id().to_owned());
+        tokio::spawn(async move {
+            store
+                .provide_input(
+                    OWNER,
+                    &id,
+                    answers(json!({ "confirm": {} })),
+                    move || workers.try_acquire_owned().ok(),
+                    at(2),
+                )
+                .await
+        })
+    };
+    // The write has entered the store and is waiting on the held lock, with
+    // the clock still before the deadline.
+    let bound = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while store.arrivals_for_test() == 0 {
+        assert!(
+            tokio::time::Instant::now() < bound,
+            "the update never reached the store"
+        );
+        tokio::task::yield_now().await;
+    }
+    store.set_clock_for_test(Some(at(30)));
+    drop(held);
+    let refused = queued.await.unwrap();
+    assert!(
+        matches!(
+            refused,
+            Ok(ProvideOutcome::Closed(RoundClosed::Continuation(d))) if d == deadline
+        ),
+        "refused naming the deadline"
+    );
+    assert_eq!(store.get(OWNER, task.id()).unwrap().revision, revision);
+}
+
+/// Pin: a round with no stored continuation has no deadline; the TTL alone
+/// bounds it. Mutant: `None` read as already expired.
+#[tokio::test]
+async fn a_round_without_a_deadline_takes_answers_until_the_ttl() {
+    let (_dir, store, task) = opened().await;
+    parked(&store, &task, &["a", "b"]).await;
+    store.set_clock_for_test(Some(at(1) + chrono::Duration::hours(1)));
+    let accepted = store
+        .provide_input(
+            OWNER,
+            task.id(),
+            answers(json!({ "a": {} })),
+            || None,
+            at(2),
+        )
+        .await;
+    assert!(matches!(accepted, Ok(ProvideOutcome::Partial(_))));
+}
+
+/// Pin: a record written before the field loads as `None`, and a `None`
+/// round writes no field. Mutant: `skip_serializing_if` removed.
+#[test]
+fn the_deadline_field_is_absent_when_none_and_round_trips_when_set() {
+    let old = json!({ "requestState": "s", "tool": "t", "arguments": {} });
+    let loaded: InputRound = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(loaded.continuation_deadline, None);
+    assert_eq!(serde_json::to_value(&loaded).unwrap(), old);
+    let set = InputRound {
+        continuation_deadline: Some(7),
+        ..loaded
+    };
+    let back: InputRound = serde_json::from_value(serde_json::to_value(&set).unwrap()).unwrap();
+    assert_eq!(back, set);
+}
+
+/// Mutant: the settlement written without the revision check.
+#[tokio::test]
+async fn closing_a_round_at_a_stale_revision_writes_nothing() {
+    let (_dir, store, task) = opened().await;
+    let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
+    let stale = store
+        .close_round(OWNER, task.id(), revision - 1, "closed".to_owned())
+        .await;
+    assert!(
+        matches!(stale, Err(StoreError::RevisionConflict)),
+        "{stale:?}"
+    );
+    let after = store.get(OWNER, task.id()).unwrap();
+    assert_eq!(after.task.status(), TaskStatus::InputRequired);
+    assert_eq!(after.revision, revision);
+}
+
+/// Mutants: two writes; the round kept; the reason dropped.
+#[tokio::test]
+async fn closing_a_round_cancels_it_with_the_reason_in_one_write() {
+    let (_dir, store, task) = opened().await;
+    let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
+    let closed = store
+        .close_round(OWNER, task.id(), revision, "the reason".to_owned())
+        .await
+        .expect("an open round closes");
+    assert_eq!(closed.revision, revision + 1);
+    assert_eq!(closed.task.status(), TaskStatus::Cancelled);
+    let wire = serde_json::to_value(closed.task.wire()).unwrap();
+    assert_eq!(wire["statusMessage"], "the reason");
+    assert!(store.input_round_for_test(task.id()).0.is_none());
+}
+
+/// Mutant: a settled row closed again (a second terminal write and publish).
+#[tokio::test]
+async fn closing_an_already_settled_round_writes_nothing() {
+    let (_dir, store, task) = opened().await;
+    let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
+    let closed = store
+        .close_round(OWNER, task.id(), revision, "first".to_owned())
+        .await
+        .expect("an open round closes");
+    let again = store
+        .close_round(OWNER, task.id(), closed.revision, "second".to_owned())
+        .await;
+    assert!(
+        matches!(again, Err(StoreError::InvalidTransition)),
+        "{again:?}"
+    );
+    assert_eq!(
+        store.get(OWNER, task.id()).unwrap().revision,
+        closed.revision
     );
 }

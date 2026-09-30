@@ -47,6 +47,10 @@ pub(crate) struct Target {
     pub(crate) tool: String,
 }
 
+/// How far before the stored continuation's own expiry a round stops taking
+/// answers: room for an accepted answer to reach redemption (#2429).
+pub(crate) const CONTINUATION_DEADLINE_MARGIN_SECS: u64 = 10;
+
 /// An open input round's continuation: what a resume needs and nothing else.
 ///
 /// Gateway state, never part of the wire task. `request_state` is the
@@ -64,6 +68,11 @@ pub(crate) struct InputRound {
     pub(crate) arguments: Value,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub(crate) accepted_inputs: Map<String, Value>,
+    /// When the stored continuation stops being redeemable, less a margin, in
+    /// unix seconds (#2429). `None`: no continuation is stored, and the task's
+    /// TTL alone bounds the round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) continuation_deadline: Option<u64>,
 }
 
 /// Upper bound on a durable upstream handle, in bytes.

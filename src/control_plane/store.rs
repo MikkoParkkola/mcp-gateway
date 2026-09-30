@@ -70,7 +70,8 @@ const MAX_AUDIT_SCAN_BYTES: u64 = 1 << 20;
 pub enum StoreError {
     /// Underlying I/O failure.
     Io(std::io::Error),
-    /// A collection file exists but could not be parsed. The store fails closed
+    /// A collection file exists but could not be parsed, or holds a schema
+    /// version this build does not support. The store fails closed
     /// rather than treating the collection as empty and overwriting good data.
     Corrupt(String),
     /// A compare-and-swap write was rejected because the on-disk generation
@@ -593,12 +594,18 @@ impl ControlPlaneStore for InMemoryControlPlaneStore {
 // ── Atomic-file backend ─────────────────────────────────────────────────────────
 
 /// A collection serialised whole-file, with a generation for compare-and-swap.
+/// Its `schema_version` is read first, by [`CollectionVersion`].
 #[derive(serde::Deserialize)]
 struct VersionedCollection<T> {
-    #[allow(dead_code)]
-    schema_version: u32,
     generation: u64,
     items: Vec<T>,
+}
+
+/// Only the format version of a collection file, read before its items: a
+/// later format's items need not parse as this build's.
+#[derive(serde::Deserialize)]
+struct CollectionVersion {
+    schema_version: u32,
 }
 
 /// Borrowing view used only for serialisation, so a compare-and-swap write need
@@ -658,10 +665,24 @@ impl FileControlPlaneStore {
     fn load<T: DeserializeOwned>(file: &Path) -> StoreResult<VersionedCollection<T>> {
         let what = CheckedFile::ControlPlaneCollection; // mode-checked on read (F18 I4)
         match crate::config::read_checked_file(file, what) {
-            Ok(text) => serde_json::from_str(&text)
-                .map_err(|e| StoreError::Corrupt(format!("{}: {e}", file.display()))),
+            Ok(text) => {
+                let corrupt =
+                    |e: serde_json::Error| StoreError::Corrupt(format!("{}: {e}", file.display()));
+                // An access-control store fails closed on a version it does not
+                // know: read as this one, a newer file's grants and policies
+                // would change meaning, and a write would drop fields (#2142).
+                let CollectionVersion { schema_version } =
+                    serde_json::from_str(&text).map_err(corrupt)?;
+                if schema_version != COLLECTION_SCHEMA_VERSION {
+                    return Err(StoreError::Corrupt(format!(
+                        "{}: schema_version {schema_version} is not supported; this build \
+                         supports {COLLECTION_SCHEMA_VERSION}",
+                        file.display()
+                    )));
+                }
+                serde_json::from_str(&text).map_err(corrupt)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(VersionedCollection {
-                schema_version: COLLECTION_SCHEMA_VERSION,
                 generation: 0,
                 items: Vec::new(),
             }),

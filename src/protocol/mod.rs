@@ -22,6 +22,21 @@ pub use messages::*;
 pub use negotiate::*;
 pub use types::*;
 
+/// Where a final result came from, decided by the dispatch outcome and carried
+/// server-side to delivery. Only these results are eligible for a signature
+/// chain origin link; anything unset is `NotEligible`, so a missed site emits
+/// nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ChainSource {
+    /// A live cache-miss `Ok` from an MCP backend whose gates passed it through.
+    Backend,
+    /// A sync-admission replay of a stored `Backend` result.
+    Replay,
+    /// Gateway-authored output, composites, cache hits and capability results.
+    #[default]
+    NotEligible,
+}
+
 /// MCP Protocol version (latest)
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 

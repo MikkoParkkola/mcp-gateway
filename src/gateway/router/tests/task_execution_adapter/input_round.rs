@@ -252,7 +252,7 @@ async fn partial_answers_wait_and_the_resume_carries_every_accepted_answer() {
     );
 }
 
-fn reason_of(body: &Value) -> Option<&str> {
+pub(super) fn reason_of(body: &Value) -> Option<&str> {
     body.pointer("/result/result/_meta/io.mcp-gateway~1reason")
         .and_then(Value::as_str)
 }
