@@ -15,6 +15,7 @@ mod features;
 mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
+mod remote_provenance_posture;
 mod secret_file;
 mod secret_ref;
 mod strict_keys;
@@ -34,7 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
-use crate::security::verify_remote_server_provenance;
+use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 use config_file::ConfigFile;
 
@@ -594,6 +595,7 @@ impl Config {
         let (mut secret_refs, mut files) = match expansion {
             Expansion::Resolve => {
                 let refs = config.expand_env_vars(&overlay)?;
+                posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 refs

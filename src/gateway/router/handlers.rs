@@ -455,11 +455,12 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|accept| accept.contains("text/event-stream"));
 
-    let dispatch = async {
-        Box::pin(meta_mcp_dispatch(state, http_request))
-            .await
-            .into_response()
-    };
+    // D3-a: one grant-decision slot spans signing, admission and dispatch.
+    let logger = state.meta_mcp.transparency_logger.clone();
+    let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
+        logger,
+        Box::pin(meta_mcp_dispatch(state, http_request)),
+    );
 
     if offers_event_stream {
         // Scope rather than collect: the client offered a stream, so the first
@@ -1737,8 +1738,12 @@ async fn meta_mcp_dispatch(
             // credential in place, so a later target whose policy blocks on that
             // finding inspects an already-cleaned artifact and returns Allow —
             // the block silently depended on which target sorted first.
+            // A discovery result the Meta-MCP already inspected on its
+            // canonical value is not scanned again (MIK-7407.RESPONSE.3).
             #[cfg(feature = "firewall")]
-            {
+            if call_response.discovery_inspected {
+                delivery_inspection = DeliveryInspection::AlreadyInspected;
+            } else {
                 delivery_inspection = super::response_pass::inspect_tools_call_response(
                     state.firewall.as_deref(),
                     &mut call_response,

@@ -20,6 +20,8 @@ mod identity_grants;
 mod listener;
 mod persistence;
 #[cfg(test)]
+mod remote_provenance_start_tests;
+#[cfg(test)]
 mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -506,7 +508,8 @@ impl Gateway {
         let fw = Arc::new(
             Firewall::from_config(fw_cfg, tt)
                 .with_env(Arc::clone(&self.env))
-                .with_continuations(meta_mcp.continuation()),
+                .with_continuations(meta_mcp.continuation())
+                .with_posture(self.config.security.posture),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
@@ -570,16 +573,23 @@ impl Gateway {
     /// registration fails.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
     async fn new_with_env(
-        config: Config,
+        mut config: Config,
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        // A config built in memory never passed through `Config::load`.
+        // Before validation, so the ranges of what it forces are checked.
+        crate::security::posture::resolve(
+            &mut config,
+            crate::security::posture::FirewallBuild::CURRENT,
+        )?;
         {
             // A cheap snapshot, dropped here: nothing environmental is held
             // while the gateway is built or awaited on.
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
         }
+        crate::security::posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
 
@@ -614,6 +624,9 @@ impl Gateway {
                 "a freshly built registry refused a backend registration"
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
+        }
+        if let Some(warning) = config.remote_provenance_warning() {
+            warn!("{warning}");
         }
 
         Ok(Self {
@@ -2920,15 +2933,20 @@ impl Gateway {
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
         let (response, execution) = if method == "tools/call" {
-            Box::pin(Self::dispatch_tools_call(
-                meta_mcp,
-                tool_policy,
-                &mut request,
-                id,
-                client,
-                &mut signing_context,
-                &request_shape,
-            ))
+            // D3-a: one grant-decision slot spans signing, admission and dispatch.
+            super::meta_mcp::grant_audit::slot_rpc(
+                meta_mcp.transparency_logger.as_ref(),
+                id.clone(),
+                Box::pin(Self::dispatch_tools_call(
+                    meta_mcp,
+                    tool_policy,
+                    &mut request,
+                    id,
+                    client,
+                    &mut signing_context,
+                    &request_shape,
+                )),
+            )
             .await
         } else {
             (

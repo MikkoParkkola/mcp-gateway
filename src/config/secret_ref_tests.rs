@@ -104,6 +104,31 @@ fn literal_empty_api_key_refused() {
     assert!(err.to_string().contains("empty"), "got: {err}");
 }
 
+/// One field with several unset variables names all of them, not the first.
+#[test]
+fn every_unset_variable_in_one_field_is_named() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let err = load_c4(
+        dir.path(),
+        "backends:\n  x:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n    headers:\n      Authorization: \"${MCP_GW_C4_A}${MCP_GW_C4_B:-ok}${MCP_GW_C4_C}${MCP_GW_C4_A}\"\n",
+    )
+    .expect_err("unset variables with no default must refuse an enabled backend");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("${MCP_GW_C4_A}"),
+        "first variable missing: {msg}"
+    );
+    assert!(
+        msg.contains("${MCP_GW_C4_C}"),
+        "later variable missing: {msg}"
+    );
+    assert!(
+        !msg.contains("MCP_GW_C4_B"),
+        "a defaulted variable is not unset: {msg}"
+    );
+    assert_eq!(msg.matches("MCP_GW_C4_A").count(), 1, "named once: {msg}");
+}
+
 #[test]
 fn missing_env_file_named_in_error() {
     let dir = tempfile::tempdir().expect("tempdir");

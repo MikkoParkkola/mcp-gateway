@@ -11,7 +11,9 @@
 //! signing_allocation_tests;` — the name `tests` is already taken by the inline
 //! test module further down that file.
 
+mod admission_allocations;
 mod alloc_meter;
+mod input_key_allocations;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
 mod visibility_allocations;
@@ -27,6 +29,8 @@ mod stdout_death_admission;
 
 mod r2_stdio_keys;
 mod stdio_listing_scope;
+#[cfg(feature = "firewall")]
+mod stdio_response_firewall;
 
 mod stdio_initialize_order;
 
@@ -39,3 +43,5 @@ mod stdio_cost_persistence;
 
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
+
+mod grant_decision_stdio;
