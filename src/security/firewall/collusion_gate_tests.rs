@@ -4,10 +4,11 @@
 
 use serde_json::json;
 
-use super::{RECORD_CAP, capped, text_of};
+use super::{CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, capped, text_of};
 use crate::config::Config;
 use crate::security::firewall::{
-    Finding, FindingLocation, FirewallAction, FirewallVerdict, ScanType, Severity,
+    Finding, FindingLocation, Firewall, FirewallAction, FirewallConfig, FirewallVerdict, ScanType,
+    Severity,
 };
 
 fn finding(scan_type: ScanType, severity: Severity) -> Finding {
@@ -94,9 +95,14 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
             "{field}: {err}"
         );
     }
-    let off = "    enabled: false\n    collusion:\n      action: off\n      min_matches: 0\n      \
-               common_principals: 1\n      window_secs: 0\n      sources: [\"a:[\"]\n";
-    load(off).expect("action off loads whatever the other fields hold");
+    for enabled in ["false", "true"] {
+        let off = format!(
+            "    enabled: {enabled}\n    collusion:\n      action: off\n      min_matches: 0\n      \
+             common_principals: 1\n      window_secs: 0\n      sources: [\"a:[\"]\n      \
+             non_egress: [\"b:[\"]\n"
+        );
+        load(&off).expect("action off loads whatever the other fields hold");
+    }
     load("    collusion:\n      action: block\n").expect("the defaults are valid");
 }
 
@@ -115,23 +121,119 @@ fn the_text_walker_skips_only_the_gateways_own_metadata_on_responses() {
     assert_eq!(all, ["one", "two"]);
 }
 
-/// B3: over the cap, the head and tail halves are kept, each cut on a char
-/// boundary, and the cut is reported.
+/// B3: the adopted cap, pinned apart from the constant; at and below it the
+/// text is kept whole, above it exactly the first and last half, each cut on
+/// a char boundary, joined by one newline.
 #[test]
-fn an_over_cap_text_keeps_head_and_tail_on_char_boundaries() {
-    let short = "x".repeat(RECORD_CAP);
-    assert_eq!(capped(short.clone()), (short, false));
+fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
+    assert_eq!(RECORD_CAP, 6 * 1024, "the documented evasion bound");
+    for len in [RECORD_CAP - 1, RECORD_CAP] {
+        let text = "x".repeat(len);
+        assert_eq!(capped(text.clone()), (text, false), "{len}");
+    }
+    let half = RECORD_CAP / 2;
+    let plain: String = (b'a'..=b'z')
+        .cycle()
+        .take(RECORD_CAP + 1)
+        .map(char::from)
+        .collect();
+    let (kept, cut) = capped(plain.clone());
+    assert!(cut);
+    assert_eq!(
+        kept,
+        format!("{}\n{}", &plain[..half], &plain[plain.len() - half..])
+    );
 
-    // A 4-byte char straddles both cut points.
+    // A 4-byte char straddles both cut points: the head ends before it, the
+    // tail starts after it.
     let text = format!(
         "{}{}{}",
-        "a".repeat(RECORD_CAP / 2 - 1),
-        "𝄞".repeat(RECORD_CAP),
+        "a".repeat(half - 1),
+        "\u{1D11E}".repeat(RECORD_CAP),
         "z"
     );
     let (kept, cut) = capped(text.clone());
     assert!(cut);
-    assert!(kept.len() <= RECORD_CAP + 1, "{}", kept.len());
-    assert!(kept.starts_with('a') && kept.ends_with('z'));
-    assert!(text.ends_with(kept.rsplit('\n').next().unwrap()));
+    let (head, tail) = kept.split_once('\n').expect("one separator");
+    assert_eq!(head, "a".repeat(half - 1));
+    assert!(tail.len() < half && tail.len() > half - 4, "{}", tail.len());
+    assert!(text.ends_with(tail));
+}
+
+fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut collusion = CollusionConfig {
+        action: CollusionAction::Observe,
+        sources: vec!["alpha:*".to_string()],
+        ..CollusionConfig::default()
+    };
+    extra(&mut collusion);
+    let config = FirewallConfig {
+        audit_log: Some(dir.path().join("audit.ndjson")),
+        collusion,
+        ..FirewallConfig::default()
+    };
+    (Firewall::from_config(config, None), dir)
+}
+
+const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+    the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
+    August, and which crew pruned the older trees after the second frost.";
+
+fn delivered(fw: &Firewall, who: &str) {
+    let result = json!({"content": [{"type": "text", "text": PROSE}]});
+    fw.record_delivery(RelayCaller::Keyed(who), "alpha", "read", &result);
+}
+
+fn egress(fw: &Firewall, caller: RelayCaller<'_>) -> FirewallVerdict {
+    let params = json!({"name": "send", "arguments": {"text": PROSE}});
+    fw.check_relay(caller, "alpha", "send", &params, ("direct:alpha", "bob"))
+}
+
+/// B6: under `observe` a relay is a `Warn` verdict with one digest-only
+/// `CollusionRelay` finding, audited; an unkeyed sender is checked too.
+#[test]
+fn observe_reports_a_relay_without_content_and_audits_it() {
+    let (fw, dir) = observing(|_| {});
+    delivered(&fw, "alice");
+    for caller in [
+        RelayCaller::Keyed("bob"),
+        RelayCaller::Unkeyed("direct:alpha"),
+    ] {
+        let verdict = egress(&fw, caller);
+        assert!(verdict.allowed, "{caller:?}");
+        assert_eq!(verdict.action, FirewallAction::Warn, "{caller:?}");
+        let [finding] = verdict.findings.as_slice() else {
+            panic!("one finding: {:?}", verdict.findings);
+        };
+        assert_eq!(finding.scan_type, ScanType::CollusionRelay);
+        assert_eq!(finding.severity, Severity::Medium);
+        assert_eq!(finding.location, FindingLocation::RequestArgs);
+        assert!(
+            finding.matched.starts_with("source="),
+            "{}",
+            finding.matched
+        );
+        assert!(!finding.matched.contains("orchard"), "content leaked");
+    }
+    let audit = std::fs::read_to_string(dir.path().join("audit.ndjson")).expect("audited");
+    assert_eq!(audit.matches("collusion_relay").count(), 2, "{audit}");
+    // Neither side, nor the receiver itself, is a relay.
+    assert!(egress(&fw, RelayCaller::Keyed("alice")).findings.is_empty());
+}
+
+/// B7: `min_matches` and `common_principals` reach the detector.
+#[test]
+fn the_configured_thresholds_reach_the_detector() {
+    let (fw, _dir) = observing(|c| c.min_matches = 10_000);
+    delivered(&fw, "alice");
+    assert!(egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty());
+
+    let (fw, _dir) = observing(|c| c.common_principals = 2);
+    delivered(&fw, "alice");
+    delivered(&fw, "carol");
+    assert!(
+        egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
+        "text two principals hold is common at common_principals: 2"
+    );
 }
