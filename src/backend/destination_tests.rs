@@ -172,3 +172,28 @@ fn enforced_public_is_never_downgraded() {
     assert_eq!(before.destination(), DestinationPolicy::Public);
     assert_eq!(after.destination(), DestinationPolicy::Public);
 }
+
+/// A standard pairing first does not stop a later hardened one: only
+/// `Public` is recorded.
+#[test]
+fn configured_first_does_not_block_public() {
+    let registry = BackendRegistry::new();
+    registry.enforce_destination(DestinationPolicy::Configured);
+    let backend = Arc::new(Backend::new(
+        "b",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    registry.enforce_destination(DestinationPolicy::Public);
+    assert_eq!(backend.destination(), DestinationPolicy::Public);
+    let later = Arc::new(Backend::new(
+        "later",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&later)));
+    assert_eq!(later.destination(), DestinationPolicy::Public);
+}

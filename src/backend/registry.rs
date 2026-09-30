@@ -278,12 +278,17 @@ impl BackendRegistry {
 
     /// Put `policy` on every backend this registry holds or will hold.
     ///
-    /// Set once (the first call wins), by whoever pairs this registry with a
+    /// Only `Public` is recorded, and once, by whoever pairs this registry with a
     /// config: the gateway at startup, and [`crate::config_reload::ReloadContext::new`]
     /// when the running posture is `hardened`, so a caller-built registry
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
     pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+        // Unset already means `Configured`; recording anything but `Public`
+        // would let a standard pairing block a later hardened one.
+        if policy != crate::security::ssrf::DestinationPolicy::Public {
+            return;
+        }
         let _stopping = self.stopping.lock();
         let policy = *self.destination.get_or_init(|| policy);
         for backend in &self.backends {
