@@ -1806,18 +1806,19 @@ impl ReloadContext {
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = self.load_off_worker().await?;
         let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
-        let (env, overlay) = (self.env.startup(), &evaluated.overlay);
+        let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
+            (self.env.startup(), &evaluated.overlay);
         let signing = (running.message_signing)
             .restart_changed_field(&proposed.security.message_signing, env, overlay)
             .map_err(|error| error.to_string())?;
+        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
         let chain = crate::config::SignatureChainConfig::restart_changed_field(
-            running.signature_chain.as_ref(),
-            proposed.security.signature_chain.as_ref(),
+            was.as_ref().map(|c| (c, env)),
+            now.as_ref().map(|c| (c, overlay)),
         );
         if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
             .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
         {
-            // Before the empty-patch path; this refusal changes no live state.
             return Err(format!(
                 "config reload refused: security.{field} requires restart"
             ));

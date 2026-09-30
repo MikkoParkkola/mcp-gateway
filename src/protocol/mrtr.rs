@@ -63,6 +63,12 @@ pub(crate) fn take_chain_nonce(request: &mut Value) -> crate::Result<Option<Stri
     take_chain_nonce_params(request.get_mut("params"))
 }
 
+/// The id of a restored raw request, so a refusal raised before parsing still
+/// correlates with the call it refuses.
+pub(crate) fn raw_request_id(request: &Value) -> Option<super::RequestId> {
+    serde_json::from_value(request.get("id")?.clone()).ok()
+}
+
 /// Remove the chain nonce from `params._meta`, and an emptied `_meta` with it.
 /// The value is validated as [`chain_nonce_from_params`] does; a malformed one
 /// is a `-32602`.

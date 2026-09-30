@@ -63,6 +63,10 @@ impl SignatureChainConfig {
         if self.key_id.is_empty() || self.key_id.len() > 64 {
             return Err(invalid("key_id", "must be 1 to 64 bytes"));
         }
+        // An origin link is itself one link, so zero could never be honoured.
+        if self.max_links == 0 {
+            return Err(invalid("max_links", "must be at least 1"));
+        }
         let seed = crate::config::secret_ref::SecretRef::parse(&self.signing_key)
             .resolve("security.signature_chain.signing_key", overlay)?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(seed.trim());
@@ -79,19 +83,27 @@ impl SignatureChainConfig {
 
     /// Name of the first identity field that differs between the running and
     /// the reloaded section; a change to any of them requires a restart.
-    /// Adding or removing the section changes the identity, so it reports
-    /// `signing_key`.
+    /// `signing_key` compares the reference text and the seed it resolves to
+    /// under each side's environment, so a rotated `env:`/`file:` secret
+    /// behind an unchanged reference is caught. Adding or removing the
+    /// section changes the identity, so it reports `signing_key`.
     pub(crate) fn restart_changed_field(
-        running: Option<&Self>,
-        reloaded: Option<&Self>,
+        running: Option<(&Self, &crate::config::EnvOverlay)>,
+        reloaded: Option<(&Self, &crate::config::EnvOverlay)>,
     ) -> Option<&'static str> {
-        let (a, b) = match (running, reloaded) {
+        let ((a, a_env), (b, b_env)) = match (running, reloaded) {
             (None, None) => return None,
             (Some(a), Some(b)) => (a, b),
             _ => return Some("signing_key"),
         };
+        let seed = |c: &Self, env| {
+            let key = crate::config::secret_ref::SecretRef::parse(&c.signing_key);
+            key.resolve("security.signature_chain.signing_key", env)
+                .ok()
+        };
+        let key_changed = a.signing_key != b.signing_key || seed(a, a_env) != seed(b, b_env);
         [
-            ("signing_key", a.signing_key != b.signing_key),
+            ("signing_key", key_changed),
             ("key_id", a.key_id != b.key_id),
             ("emit", a.emit != b.emit),
         ]

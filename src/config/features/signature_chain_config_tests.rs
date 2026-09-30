@@ -72,12 +72,18 @@ fn signature_chain_reload_refused() {
         (&other_emit, "emit"),
     ] {
         assert_eq!(
-            SignatureChainConfig::restart_changed_field(Some(&running), Some(reloaded)),
+            SignatureChainConfig::restart_changed_field(
+                Some((&running, &EnvOverlay::none())),
+                Some((reloaded, &EnvOverlay::none()))
+            ),
             Some(field)
         );
     }
     assert_eq!(
-        SignatureChainConfig::restart_changed_field(Some(&running), Some(&running)),
+        SignatureChainConfig::restart_changed_field(
+            Some((&running, &EnvOverlay::none())),
+            Some((&running, &EnvOverlay::none()))
+        ),
         None
     );
 }

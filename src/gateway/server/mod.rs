@@ -3025,10 +3025,11 @@ impl Gateway {
             .signing_enabled()
             .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
         let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
+        let id = (restored.is_ok()).then(|| crate::protocol::mrtr::raw_request_id(request));
         match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
             Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
             Err(error) => Err(crate::protocol::JsonRpcResponse::error(
-                None,
+                id.flatten(),
                 error.to_rpc_code(),
                 super::meta_mcp::signing::wire_error_message(&error),
             )

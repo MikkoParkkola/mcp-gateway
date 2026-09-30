@@ -650,11 +650,12 @@ async fn meta_mcp_dispatch(
     };
 
     let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(&mut request));
+    let id = (restored.is_ok()).then(|| crate::protocol::mrtr::raw_request_id(&request));
     let chain_nonce = match restored.and(chain_nonce) {
         Ok(nonce) => nonce,
         Err(error) => {
             return build_error_response(
-                None,
+                id.flatten(),
                 error.to_rpc_code(),
                 crate::gateway::meta_mcp::signing::wire_error_message(&error),
                 &session_id,
@@ -1900,9 +1901,8 @@ async fn meta_mcp_dispatch(
     )
     .increment(1);
 
-    // A confirmation or delivery refusal is the gate working, not the client
-    // misbehaving: excluded from BOTH arms, since a success would clear a
-    // breaker the caller genuinely tripped.
+    // A confirmation or delivery refusal is the gate working, not a misbehaving
+    // client: excluded from BOTH arms (a success would clear a tripped breaker).
     if let Some(ref client) = client
         && !response.excludes_client_accounting()
     {

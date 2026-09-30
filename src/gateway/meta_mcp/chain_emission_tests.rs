@@ -184,8 +184,11 @@ async fn replay_link_rebinds_nonce_meta() {
     assert_eq!(link.out.as_deref(), Some(digest.as_str()));
 }
 
-/// Signing on and off: the invoke nonce is the chain nonce only when the
-/// request carried no chain nonce, and never a trigger on its own.
+/// Finalize-level only: the invoke context is supplied directly, even with
+/// signing off. In production it is captured only while signing is on (design
+/// limit A3 L2), so `signing_on = false` pins the finalizer's precedence rule,
+/// not production capture. The invoke nonce is used only when the request
+/// carried no chain nonce, and it is never a trigger on its own.
 async fn deliver_with_invoke(
     signing_on: bool,
     emit: ChainEmit,
