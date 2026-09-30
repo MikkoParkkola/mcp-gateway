@@ -387,7 +387,7 @@ The source is `server:tool`.
   tail-only excerpt still matches. Each cut is counted; the middle of a larger result is the
   known, observable residual.
 - Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
-  `_context_integrity.classification` reports `personal_data`, `financial_data` or
+  `_context_integrity.classification.data_classes` holds `personal_data`, `financial_data` or
   `guarded_material`. The gateway's own attach overwrites any backend-supplied
   `_context_integrity`, so a backend can forge the field only where the gateway attached none,
   and then only to mark its own content sensitive: that adds findings and never removes them.
@@ -396,8 +396,9 @@ The source is `server:tool`.
 `firewall`. `missing_feature()` gains `security.firewall` -> `firewall`, so the message names the
 feature. The table logic takes the feature predicate as a parameter, so a default-build unit test
 exercises the no-firewall entry in the required Tests job. The behavioural proof is a new step in
-the post-merge feature-combinations job: the `--no-default-features` binary runs
-`mcp-gateway validate` on a fixture holding `security.firewall.collusion`. It must exit non-zero
+the post-merge feature-combinations job: the `--no-default-features` binary is started as
+`mcp-gateway -c <fixture>` on a fixture holding `security.firewall.collusion` (`validate` is the
+capability validator and never loads gateway config). It must exit non-zero at config load
 with the exact text `built without feature "firewall"` and the key `security.firewall`, which the
 old generic message lacks. That job runs post-merge only. "A red result blocks the next merge"
 is lane policy (operator decision 2026-09-29), not something the workflow enforces.
