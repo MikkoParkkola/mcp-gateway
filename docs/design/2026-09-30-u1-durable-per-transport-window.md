@@ -101,8 +101,8 @@ C. **One durable window per data directory, partitioned by transport, loss-sensi
     (30 s by default), and launchd SIGKILLs the operator's gateway after its default 20 s exit
     timeout. The plist sets no `ExitTimeOut`. An open SSE stream would therefore kill every
     post-drain close.
-  - The HTTP window is on only with `server.protocol_revision_window: true` (default off;
-    RFC-0060 sets no default). Off, no segment is written and shutdown serves as in 3.5.x
+  - The HTTP window is recorded only with `server.protocol_revision_window: record` (values
+    `off` | `record`, default `off`; RFC-0060 sets no default). With `off`, no segment is written and shutdown serves as in 3.5.x
     (coordinator ruling, 2026-09-30).
   - Why this is exact: the seal and the count exclude each other. Each gateway instance owns a
     seal flag (`MetaMcp::window_seal`). On the shutdown broadcast its saver sets that flag and

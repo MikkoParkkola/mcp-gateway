@@ -2124,7 +2124,8 @@ impl Gateway {
                 )
             });
         let window_saver = persistence::spawn_window_saver(
-            self.config.server.protocol_revision_window,
+            self.config.server.protocol_revision_window
+                == crate::config::ProtocolRevisionWindow::Record,
             data_dir.clone(),
             addr,
             Arc::clone(&meta_mcp_for_shutdown.window_seal),

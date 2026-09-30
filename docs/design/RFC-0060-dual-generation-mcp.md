@@ -106,8 +106,8 @@ whose clients are all HTTP. Design and review:
 1. Stop the gateway gracefully. Archive (move, never edit) any earlier
    `protocol-revision-telemetry` directory under the data directory. A v1
    window is refused on open and never converted.
-2. Deploy the release build with `server.protocol_revision_window: true`
-   (off by default) and start it. Every HTTP `serve` process appends
+2. Deploy the release build with `server.protocol_revision_window: record`
+   (default `off`) and start it. Every HTTP `serve` process appends
    its own segment to `window.json`, rewrites its cumulative counts every 5 s,
    and seals the segment on the shutdown signal.
 3. Keep other gateways (the compat lane, dev runs) off the production data
@@ -138,7 +138,7 @@ The decision certifies HTTP only. Stdio children record no segments, so a
 stdio observation in the window, or a declaration other than `http`, blocks
 with `PopulationMismatch`.
 
-With the window on, a segment seals the moment shutdown begins. From then on
+With `record`, a segment seals the moment shutdown begins. From then on
 the process refuses measured HTTP requests with 503 instead of counting them,
 so every served request is in the sealed counts. Calls already counted carry
 on within the usual shutdown bounds.

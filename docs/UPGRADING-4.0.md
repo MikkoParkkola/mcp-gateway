@@ -2948,9 +2948,9 @@ stdio keeps its counts apart, so a stdio request can no longer stand in for HTTP
 window is not converted: the gateway keeps serving, logs that telemetry is not durable, and leaves
 the file untouched. The decision is run as described in RFC-0060.
 
-The HTTP window is recorded only when `server.protocol_revision_window` is on. It is off by
-default, and then nothing is recorded for HTTP and shutdown behaves as in 3.5.x. When it is on,
-and only then, a shutting-down `serve` seals its window segment as soon as the shutdown signal
+The HTTP window is recorded only when `server.protocol_revision_window` is `record` (values:
+`off` | `record`; default `off`). With `off`, nothing is recorded for HTTP and shutdown behaves
+as in 3.5.x. With `record`, and only then, a shutting-down `serve` seals its window segment as soon as the shutdown signal
 arrives. A request that reaches counting after that point is refused with HTTP 503
 (`U1 window sealed: this gateway is shutting down; retry`) instead of being served uncounted.
 Calls counted before the seal carry on within the usual shutdown bounds.
