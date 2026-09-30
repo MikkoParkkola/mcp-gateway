@@ -230,13 +230,16 @@ fn profiles() -> crate::routing_profile::ProfileRegistry {
 #[tokio::test]
 async fn t4_the_session_profile_applies_on_the_direct_route() {
     for backend in BACKENDS {
-        let fx = fixture_built(Answer::Ok, |meta| {
-            let meta = meta.with_profile_registry(profiles());
-            meta.session_profiles()
-                .set_profile("sess-t4", "no-alpha-read");
-            meta
-        })
-        .await;
+        let fx = fixture_built(Answer::Ok, |meta| meta.with_profile_registry(profiles())).await;
+        // A session the caller owns: a presented id is honoured only then (#2468).
+        let owner = crate::gateway::session_id::SessionOwner::Credential(
+            crate::gateway::auth::principal_of("k-std"),
+        );
+        let (session, _rx) = fx.state.multiplexer.get_or_create_session_for(None, &owner);
+        fx.state
+            .meta_mcp
+            .session_profiles()
+            .set_profile(&session, "no-alpha-read");
         let (_, body) = post_direct(
             &fx,
             backend,
@@ -244,7 +247,7 @@ async fn t4_the_session_profile_applies_on_the_direct_route() {
             "read",
             json!({}),
             None,
-            Some("sess-t4"),
+            Some(&session),
         )
         .await;
         assert!(

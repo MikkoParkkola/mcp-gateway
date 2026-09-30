@@ -69,6 +69,7 @@ mod dedupe;
 mod drain;
 /// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
 mod input_round;
+mod input_round_deadline;
 mod input_round_races;
 mod interlock;
 mod lifecycle;

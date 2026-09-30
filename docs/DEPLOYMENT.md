@@ -1236,7 +1236,18 @@ The cookie carries an opaque handle, never the admin credential: a bearer token
 in a cookie is long-lived and recoverable from the wire without TLS, while a
 handle means nothing outside the running process and dies with it. It is
 `HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
-cross-site, and it is marked `Secure` when the listener speaks TLS.
+cross-site, and it is marked `Secure` when the listener speaks TLS or
+`server.public_url` is HTTPS.
+
+Behind a TLS-terminating proxy (an HTTPS `server.public_url` on a plain-HTTP
+listener, the `tls_terminated_upstream` shape), signing in takes two steps,
+because the `Secure` cookie belongs to the public origin, not to the loopback
+URL. Opening the link at the loopback URL spends it and shows a one-time code.
+Type `<public_url>/dashboard/handoff` into the browser and enter the code within
+60 seconds: the form posts it on the public origin, which sets the cookie there
+and redirects to `/dashboard`. The code works once, never appears in a URL, and
+is refused, without being spent, when it is posted anywhere but the public
+origin. Keep request bodies for that path out of the proxy's logs.
 
 #### Session limits, logout and signing in again
 

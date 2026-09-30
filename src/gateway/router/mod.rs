@@ -368,7 +368,8 @@ fn metrics_route(config: &crate::config::Config) -> Router {
 
 /// Routes on the app state that run outside authentication and the E1-f audit
 /// layer, merged after both are applied: dashboard logout (E5), which an
-/// expired session and an audit outage must never block.
+/// expired session and an audit outage must never block, and the dashboard
+/// handoff code (#2130), whose posted code is its own credential.
 fn unauthenticated_routes() -> Router<Arc<AppState>> {
     #[cfg(feature = "webui")]
     {

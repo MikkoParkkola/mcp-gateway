@@ -75,6 +75,7 @@ fn u5_a_file_that_vanished_is_some() {
 
 /// U6: refused by the loader's own mode rule (a world bit), which holds for
 /// root too, so this is not an EACCES test.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[test]
 fn u6_a_mode_refused_file_is_some() {
@@ -238,6 +239,7 @@ fn r4_two_failing_paths_each_warn_once() {
 }
 
 /// A link loop where an env file should be: two links pointing at each other.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 fn link_loop(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
@@ -249,6 +251,7 @@ fn link_loop(dir: &Path, name: &str) -> PathBuf {
 
 /// U15: a lookup error is not absence: the checked load fails rather than
 /// recording the file missing and succeeding without its values.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn u15_a_lookup_error_fails_the_load_instead_of_reading_as_absent() {
@@ -262,6 +265,7 @@ fn u15_a_lookup_error_fails_the_load_instead_of_reading_as_absent() {
 
 /// U16: a file recorded absent that now fails its lookup differs, so the
 /// failure is reported instead of compared equal to "missing".
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn u16_a_lookup_error_on_a_recorded_absent_path_differs() {

@@ -33,7 +33,10 @@ use crate::identity_grants::{
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 mod backend_scope;
+#[cfg(feature = "cost-governance")]
+mod cost_scope;
 mod direct_route;
+mod direct_session;
 mod guide;
 mod meta_tools;
 mod residuals;
