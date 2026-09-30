@@ -131,6 +131,7 @@ backend" and "fails a capability file" first.**
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
 | 105 | Reserved: lands with #2461 | None yet |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
+| 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2999,6 +3000,42 @@ auth:
       kind: personal
 ```
 
+## 107. Gateways can verify and extend each other's signature chains
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with a backend set to `verify` or `require` and an incomplete chain setting
+
+A backend that is itself a chain-signing gateway can now be verified hop by hop:
+
+```yaml
+security:
+  signature_chain: {signing_key: "env:CHAIN_SEED", key_id: "gw-edge"}
+  remote_server_signing:
+    trusted_keys:
+      gw-core: {algorithm: ed25519, public_key: "<base64>"}
+backends:
+  core:
+    http_url: "https://core.example/mcp/tools"
+    signature_chain: require   # off (default) | verify | require
+    chain_origins: [gw-core]
+    chain_signer: gw-core
+```
+
+For such a backend this gateway sends each call its own random challenge and checks the reply's
+chain before anything else reads it: trusted signers, signatures, origin, linkage, content, the
+challenge, and freshness within `message_signing.replay_window`. A verified chain is delivered
+unchanged, with this gateway's link appended, so the client verifies the whole chain. Under
+`require`, a chain that is absent or fails a rule is refused with `-32001`, naming the rule, and so
+are an interim reply and a task-augmented call. Under `verify`, the result is delivered with this
+gateway's link marked `up: unverified`, which a client verifier refuses. A chain that would exceed
+`max_links` or 16 KiB when this gateway appends its link is refused in either mode.
+
+Chained results are not served from the response cache, and an idempotent replay of one carries
+no chain. Chaining covers `gateway_invoke` and direct-route `tools/call`, for requests that carry a
+chain nonce. Tasks, Code Mode, playbooks and capability backends are not chained.
+
+**Action:** none unless you chain gateways. The three backend settings are refused at startup,
+naming the field, when `chain_origins` or `chain_signer` is missing or names a key absent from
+`trusted_keys`, or when this gateway has no `security.signature_chain`.
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`

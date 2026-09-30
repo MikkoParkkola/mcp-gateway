@@ -77,7 +77,10 @@ impl SyncLease {
         if let Some(result) = secured.get_mut("result") {
             crate::security::signature_chain::strip_chain(result);
         }
+        // A chained backend's upstream links answered this request's nonce, so
+        // its replay is never linked (inc3 R8).
         let chain = match response.chain_source {
+            _ if response.chain_upstream.is_some() => StoredChain::ChainedBackend,
             crate::protocol::ChainSource::Backend => StoredChain::Backend,
             _ => StoredChain::NotEligible,
         };
@@ -159,6 +162,9 @@ impl ReplayAudit {
 #[serde(rename_all = "snake_case")]
 enum StoredChain {
     Backend,
+    /// A chained backend's result (inc3 R8): its upstream links answered
+    /// another request's nonce, so a replay is never linked.
+    ChainedBackend,
     #[default]
     NotEligible,
 }

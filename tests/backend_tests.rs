@@ -31,6 +31,9 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         runtime_profile: None,
         identity_propagation: None,
         account: None,
+        signature_chain: mcp_gateway::config::ChainMode::default(),
+        chain_origins: Vec::new(),
+        chain_signer: None,
     };
 
     let failsafe = FailsafeConfig::default();

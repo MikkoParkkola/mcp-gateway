@@ -271,12 +271,9 @@ fn normalize_tools_list_response(
         return;
     };
 
-    // Parsed element by element on purpose. A single descriptor the `Tool`
-    // shape cannot accept used to abort the whole pass and forward the list
-    // verbatim — which handed a backend a one-element bypass for the exclusion
-    // applied to all of its siblings. An unparseable element is now dropped:
-    // it cannot be judged by the call predicate, and forwarding it would
-    // disclose a name the caller may not invoke (A3).
+    // Element by element: one unparseable descriptor must not forward the
+    // whole list verbatim (a bypass). It is dropped, since it cannot be judged
+    // and would disclose a name the caller may not invoke (A3).
     let mut tools = Vec::with_capacity(items.len());
     for item in items {
         match serde_json::from_value::<Tool>(item.clone()) {
@@ -439,14 +436,9 @@ async fn dispatch_in_scope(
     propagated_headers: &[(String, String)],
     identity_key: Option<&str>,
 ) -> crate::Result<JsonRpcResponse> {
-    // Unlike the three meta-dispatch call sites (each gating one hardcoded
-    // method), `method` here is client-chosen: this is the one place every
-    // direct-route request funnels through, so it is the one place that must
-    // refuse whatever the peer's era removed before it reaches the wire
-    // (MIK-7217, OUTBOUND.1). The refusal carries the caller's own id rather
-    // than relying on the callers to restamp it: a refusal never reaches the
-    // transport, so there is no gateway correlation id here to replace, and an
-    // `id: null` error is one a direct-route client cannot correlate at all.
+    // `method` here is client-chosen, so this funnel refuses whatever the
+    // peer's era removed before it reaches the wire (MIK-7217, OUTBOUND.1),
+    // with the caller's own id: an `id: null` error cannot be correlated.
     if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
         return Ok(JsonRpcResponse::error(
             Some(id.clone()),
@@ -769,6 +761,17 @@ async fn backend_handler_inner(
     let chain_nonce = crate::protocol::mrtr::take_chain_nonce_params(params.as_mut())
         .ok()
         .flatten();
+    // Then this dispatch's own challenge for a chained backend (ASI07 R7).
+    let mut challenge = None;
+    if let (Some(sent), "tools/call") = (params.as_mut(), method.as_str()) {
+        match state
+            .meta_mcp
+            .chain_challenge(backend.chain_policy().0, sent)
+        {
+            Ok(minted) => challenge = minted,
+            Err(e) => return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK),
+        }
+    }
 
     // End-user identity propagation for the direct backend route (MIK-6704 /
     // ADR-007). Parity with the meta dispatch path: for a propagation-configured
@@ -777,12 +780,9 @@ async fn backend_handler_inner(
     // verified identity rather than silently forwarding with only the static
     // credential. Empty for a non-propagation backend → unchanged static path.
     //
-    // Applies to every caller-data method (`tools/call`, `resources/read`,
-    // `prompts/get`, `resources/list`, `prompts/list`, …), not just `tools/call`
-    // — otherwise a required backend could serve those methods without the caller
-    // credential, downgrading to the shared static credential and leaking one
-    // user's backend data/metadata under another's account (GPT review F2,
-    // MIK-6746; merged with ADR-007 IDP.2/IDP.3 fail-closed gate, MIK-6728).
+    // Applies to every caller-data method, not just `tools/call`: otherwise a
+    // required backend could serve them on the shared static credential and
+    // leak one user's data under another's account (F2, MIK-6746, MIK-6728).
     // `resolve_propagation_headers` returns an empty set for a non-propagation or
     // non-`required` backend, so the static path below is unchanged for those
     // (IDP.5 backward-compat). Exempt: the handshake (`initialize`, `ping`) and
@@ -825,12 +825,10 @@ async fn backend_handler_inner(
             .backends
             .get(&name)
             .and_then(|b| b.identity_propagation_config().cloned());
-        // Passthrough (ADR-008 rung 2, MIK-6746): a backend whose caller attaches
-        // its OWN credential is handled here — forward it verbatim, mint/store
-        // NOTHING (INV-4). Any other propagation strategy is resolved by the
-        // shared minting chokepoint. Isolation (INV-3) holds by construction:
-        // each request forwards its own header via `request_with_headers`, never
-        // via the shared transport, and the direct route keeps no per-user cache.
+        // Passthrough (ADR-008 rung 2, MIK-6746): the caller's OWN credential is
+        // forwarded verbatim, nothing minted or stored (INV-4); other strategies
+        // use the shared minting chokepoint. Isolation (INV-3) holds: each
+        // request forwards its own header, with no per-user cache.
         let passthrough_cfg = idp_cfg.clone().filter(|c| {
             c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
         });
@@ -1094,8 +1092,9 @@ async fn backend_handler_inner(
         ))
         .await;
         let (params, client) = (params.as_ref(), client.as_ref());
+        let seen = (&call, challenge.as_deref());
         let forward =
-            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward);
+            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward);
         return match forward {
             Ok(mut response) => {
                 // Restore the caller's ID over the transport's own.
@@ -1142,7 +1141,8 @@ async fn backend_handler_inner(
         let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
         if method == "tools/call" {
             let (params, client) = (params.as_ref(), client.as_ref());
-            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward)
+            let seen = (&call, challenge.as_deref());
+            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward)
         } else {
             forward.inspect(|_| record_client_success(&state, client.as_ref()))
         }

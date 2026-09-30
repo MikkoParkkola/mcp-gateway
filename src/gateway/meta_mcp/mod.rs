@@ -42,11 +42,10 @@ use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::meta::Declared;
-use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
+use crate::protocol::{ChainSource, JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
-use crate::security::signature_chain::ChainSigner;
 use crate::stats::UsageStats;
 use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
@@ -533,7 +532,7 @@ pub struct MetaMcp {
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
     /// ASI07 chain identity and emission mode; `None` = feature off.
-    pub(super) chain_signer: Option<(Arc<ChainSigner>, crate::config::ChainEmit)>,
+    pub(super) chain_signer: Option<Arc<response_security::ChainIdentity>>,
 
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
@@ -1182,12 +1181,9 @@ impl MetaMcp {
         // THREE independent ways a backend is bound to one person, enumerated
         // from `BackendConfig` (`config::BackendConfig::oauth`, `::account`,
         // `::identity_propagation`) rather than discovered one leak at a time.
-        // Any of them means the gateway-held static credential is somebody's
-        // personal login, and every caller of this function resolves no per-user
-        // credential of its own (MIK-6745.JOURNEY.3).
-        // Each arm carries its OWN remediation: a single generic fix line sent
-        // the propagation arm to "enable identity propagation", which is already
-        // enabled and required there.
+        // Any of them makes the static credential somebody's personal login,
+        // and no caller here resolves a per-user one (MIK-6745.JOURNEY.3). Each
+        // arm carries its OWN remediation.
         let (reason, fix) = if backend.oauth_requires_per_user_isolation() {
             (
                 "uses a gateway-held OAuth login that is not isolated per user",
@@ -2178,6 +2174,10 @@ impl MetaMcp {
             };
 
         if let Some(intent) = caller.task.take() {
+            // A `require` backend's answer must be a checked chain (inc3 R2).
+            if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {
+                return error_response_preserving_status(id, &error);
+            }
             return self.begin_task(id, tool_name, arguments, intent).await;
         }
 
@@ -2321,7 +2321,7 @@ impl MetaMcp {
         }
 
         // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
-        let mut source = crate::protocol::ChainSource::NotEligible;
+        let (mut source, mut upstream) = (ChainSource::NotEligible, None);
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
@@ -2332,8 +2332,8 @@ impl MetaMcp {
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller)
                     .await;
-                sourced.map(|(value, origin)| {
-                    source = origin;
+                sourced.map(|(value, origin, chain)| {
+                    (source, upstream) = (origin, chain);
                     value
                 })
             }
@@ -2356,9 +2356,9 @@ impl MetaMcp {
         };
 
         let inspected = self.marks_discovery(tool_name, result.is_ok());
-        let declared = caller.input_capabilities;
+        let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
-            response_security::shape_meta_result(id, tool_name, result, shape, declared, source);
+            response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
         response.discovery_inspected = inspected && response.error.is_none();
         response
     }
