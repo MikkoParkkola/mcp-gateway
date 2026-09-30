@@ -211,3 +211,73 @@ the lead hears about it before a fix is written.
   - T1.7 and T1.9 quote the full literals, matched as substrings.
   - T1.4 and T1.5 name their distinguishing observable.
   - T4.4 states its precondition.
+
+---
+
+# Test plan — I3: MIK-7272.LIFE.1
+
+Design: D5 (rev 4). Written 2026-09-30, in parallel with I1's gates. Red commit after I2 lands.
+
+## Row under test (verbatim, `RELEASE-4.0.0-scope-update.md:146`)
+
+- **MIK-7272.LIFE.1**: A held legacy RPC can be cancelled and joined: cancelling it releases the
+  held exchange and its waiter gets a terminal answer, with nothing left pending (MIK-7272
+  SUB4.BRIDGE.LIFE.1).
+
+Vocabulary (D5): the held exchange is the `StdioClientChannel.pending` entry for the outbound
+`elicitation/create`. The waiter is the dispatch's `send_request` future, which is dropped; its
+terminal answer is the joined task's `Cancelled` outcome. "Nothing left pending" means no
+`pending` entry, no task in the `JoinSet`, and the slot and permit released.
+
+## Harness
+
+`Gateway::run_stdio_on` over `tokio::io::duplex`, with an HTTP fixture backend whose tool answers
+`input_required` with one `elicitation/create` (the `stdio_initialize_order.rs` backend shape).
+The fixture counts `tools/call` rounds. The client side is driven line by line:
+1. `initialize` declaring `elicitation`;
+2. a legacy `tools/call` to the asking tool (id `"held-1"`);
+3. read frames until the outbound `elicitation/create` arrives (its id is `E`). The call is now
+   held.
+
+`pending` and the `JoinSet` are not visible from outside the loop, so "nothing left pending" is
+observed through behaviour that differs only when an entry or task survives:
+- a late answer to `E` resolves nothing, so no round 2 reaches the backend;
+- no frame for `"held-1"` appears, even after stdin closes;
+- `run_stdio_on` returns promptly at EOF, meaning every task was joined.
+
+A bounded read helper collects frames for a fixed window (`ARRIVAL`, 5 s); every wait is bounded.
+
+## Tests (new file `src/gateway/server/tests/life1_stdio_cancel.rs`)
+
+| # | Test | Action | Assertion | Today |
+|---|---|---|---|---|
+| L1 | `cancel_releases_the_held_exchange` | Hold `"held-1"`. Send `notifications/cancelled {requestId: "held-1"}`. Then send the client's answer to `E`. | No second `tools/call` round reaches the backend (round count stays 1), and no frame with id `"held-1"` arrives within the window. | RED: the answer resolves `pending[E]`, the bridge retries, and a result frame for `"held-1"` is written |
+| L2 | `a_cancelled_call_is_joined_before_eof_returns` | Hold, cancel, then close stdin. | `run_stdio_on` returns within 5 s, and no frame with id `"held-1"` was written at any point. | RED: `close()` fails the held prompt and an error frame for `"held-1"` is written |
+| L3 | `an_unknown_cancel_is_ignored` | Send `notifications/cancelled` for an id never sent; then a normal `gateway_list_servers` call. | The normal call is answered; no error frame for the unknown id. | green (pin) |
+| L4 | `initialize_is_not_cancelled` | Send `initialize` and a cancel naming its id in the same write. | The `initialize` response arrives. | green (pin; spec 2025-06-18 rule 2) |
+| L5 | `cancelling_a_finished_call_changes_nothing` | A plain call that completes; then a cancel naming it; then another call. | Both calls answered once each; nothing else written. | green (pin; spec rule 4) |
+| L6 | `a_cancelled_keyed_call_is_not_re_executed` | As L1 with the call keyed (legacy key in `_meta`); after the cancel, re-issue the same key and arguments. | Refused 409 "Secured execution result is unavailable" (settled as outcome-unknown, `admission.rs:333-336`); backend rounds stay 1 (settlement matrix, "held at the input bridge" row). | RED: the lease is still held, so the re-issue gets 409 "Execution is already in progress" (`:330-332`) |
+| L7 | `a_batched_call_cannot_hold` | A batch holding one call to the asking tool. | The item's response is the bridge refusal (no session), and no outbound `elicitation/create` is written. | green (pin; D5 batch rule) |
+| L8 | `eof_is_bounded_when_the_client_stops_reading` | A held call; then the client stops reading stdout and fills it (a duplex with a small buffer that the test never drains), then closes stdin. | `run_stdio_on` returns within `STDIO_DRAIN_TIMEOUT` plus 10 s. | RED: `writer_task.await` is unbounded (`server/mod.rs:2718`) |
+
+L8 costs about 30 s of wall time (the drain bound). It stays one test, and it is the only slow
+row.
+
+## Settlement matrix coverage
+
+| Matrix row | Covered by |
+|---|---|
+| queued before dispatch | Not driven end to end: it needs 64 running dispatches to hold the permit. It is covered by the lease drop semantics already pinned in `idempotency/admission.rs` tests (`Lease::drop` abandons an undispatched lease). Named here so the gap is visible. |
+| held at the input bridge | L6 |
+| backend call in flight | L9 `a_cancel_during_the_backend_call_settles_unknown`: a fixture tool that sleeps 3 s; cancel mid-call; re-issue the same key → 409 "Secured execution result is unavailable"; backend rounds 1. RED for the same reason as L6 (today: "Execution is already in progress"). |
+| result secured, waiting to be queued | Not forcible without a hook between securing and queueing; the replay-on-reissue behaviour for completed keys is `dispatcher_admission_arms.rs::a_replayed_key_returns...`. Named gap. |
+
+## Mutant batch
+
+| M | Mutation | Must kill |
+|---|---|---|
+| P1 | the cancel handler ignores every id | L1, L2, L6, L9 |
+| P2 | abort without recording the cancelled id (no frame suppression) | L2 (when the frame races the abort; kept only if the batch shows it deterministic, else recorded as a timing-dependent row) |
+| P3 | the completion arm never removes map entries | L5 (a later cancel for a reused id aborts the wrong task; the test reuses the finished id) |
+| P4 | writer join unbounded again | L8 |
+| P5 | `initialize` inserted into the cancel map | L4 |
