@@ -191,6 +191,15 @@ impl MetaMcp {
     }
 }
 
+/// The tool value a `gateway_invoke` result carries: its `structuredContent`,
+/// else its first text block parsed as JSON.
+fn invoke_value(result: &Value) -> Option<Value> {
+    result.get("structuredContent").cloned().or_else(|| {
+        let text = result.pointer("/content/0/text")?.as_str()?;
+        serde_json::from_str(text).ok()
+    })
+}
+
 fn sha256_of(value: &Value) -> String {
     format!(
         "sha256:{}",
@@ -371,8 +380,14 @@ impl MetaMcp {
         let trace_id =
             crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
         // MIK-7116.MIN.1: a replay is answered past every gate, so it is
-        // attributed like a cached delivery, from the value it delivers.
-        let delivered = replay.result.as_ref();
+        // attributed like a cached delivery, from the value it delivers. A
+        // `gateway_invoke` result wraps the tool's value as JSON text
+        // (`wrap_tool_success`); attribute that value, as a live call does.
+        let unwrapped = match (tool_name, replay.result.as_ref()) {
+            ("gateway_invoke", Some(result)) => invoke_value(result),
+            _ => None,
+        };
+        let delivered = unwrapped.as_ref().or(replay.result.as_ref());
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(&envelope);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
         let attribution = DispatchNotes {

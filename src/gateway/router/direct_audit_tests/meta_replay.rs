@@ -108,3 +108,44 @@ async fn meta_replay_of_a_failure_keeps_its_outcome() {
         assert_eq!(replay[field], original[field], "{field}: {replay}");
     }
 }
+
+/// MIK-7116.MIN.1 T31. A meta replay is a cached delivery: its record names
+/// the delivered value's tenants (hashed) and says no backend ran for it.
+/// Attribution reads the firewall's `arg_keys`, so the cell needs the feature.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn meta_replay_record_carries_delivered_tenants() {
+    let rows = json!({"rows": [{"customer_id": "cust-9"}]});
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        reply: Some(
+            json!({"content": [{"type": "text", "text": rows.to_string()}],
+                           "isError": false}),
+        ),
+        tenant_limit: Some(0),
+        ..Setup::default()
+    })
+    .await;
+    for id in [1, 2] {
+        let (status, answer) = post_modern(&fx, &keyed_invoke(id).0).await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+    }
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the second call must replay"
+    );
+
+    let all = invocations(&fx);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let replay = &all[1];
+    assert_eq!(replay["attribution"], "cached_delivery", "{replay}");
+    let tenant = crate::security::hash_argument(&json!("cust-9"));
+    assert!(
+        replay["tenants"]
+            .as_array()
+            .is_some_and(|tenants| tenants.contains(&json!(tenant))),
+        "{replay}"
+    );
+    assert!(replay.get("data_classes").is_none(), "{replay}");
+}
