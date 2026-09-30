@@ -232,7 +232,10 @@ async fn ac_control_3a_empty_modern_session_is_not_a_correlation_key() {
         .find(|entry| entry.get("correlation_source").is_some())
         .expect("one correlated invocation entry");
     assert_eq!(
-        (entry["session_id"].as_str(), entry["correlation_source"].as_str()),
+        (
+            entry["session_id"].as_str(),
+            entry["correlation_source"].as_str()
+        ),
         (Some(minted.as_str()), Some("trace_id")),
         "an empty session id must fall through to the minted trace id: {raw}"
     );
