@@ -49,6 +49,10 @@ impl std::fmt::Debug for SignatureChainConfig {
             .field("key_id", &self.key_id)
             .field("emit", &self.emit)
             .field("max_links", &self.max_links)
+            .field(
+                "resolved_identity",
+                &self.resolved_identity.map(|_| "<recorded>"),
+            )
             .finish()
     }
 }
