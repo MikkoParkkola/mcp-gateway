@@ -13,12 +13,23 @@ pub(super) fn check_security_posture(config: &Config) -> CheckResult {
         CheckResult::warn("security-posture", warning)
             .with_manual_fix("set security.posture: hardened in gateway.yaml, then restart")
     } else {
-        CheckResult::pass(
-            "security-posture",
-            format!("security.posture={}", posture_name(config)),
-        )
+        CheckResult::pass("security-posture", pass_detail(config))
     };
     row.with_category("security")
+}
+
+/// Under hardened, also the refusal an operator meets first (M5): the
+/// dashboard's MCP calls need an identity-provider or Access subject.
+fn pass_detail(config: &Config) -> String {
+    let name = posture_name(config);
+    if config.security.posture == mcp_gateway::security::SecurityPosture::Hardened {
+        format!(
+            "security.posture={name}: HTTP MCP callers need a per-caller identity; dashboard MCP \
+             calls are refused (403) without an IdP or Access subject"
+        )
+    } else {
+        format!("security.posture={name}")
+    }
 }
 
 fn posture_name(config: &Config) -> String {
@@ -84,6 +95,12 @@ mod tests {
                     CheckStatus::Pass
                 };
                 assert_eq!(row.status, status, "{shape} under {posture:?}");
+                assert_eq!(
+                    row.detail.contains("dashboard MCP calls are refused (403)"),
+                    posture == SecurityPosture::Hardened,
+                    "{shape} under {posture:?}: {}",
+                    row.detail
+                );
             }
         }
     }

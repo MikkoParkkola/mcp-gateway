@@ -33,6 +33,7 @@ fn api_key(name: &str, secret: &[u8]) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 

@@ -19,6 +19,7 @@ use super::authorization::{
     ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
+use super::hardened_identity::hardened_identity_refusal;
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
@@ -600,7 +601,11 @@ async fn backend_handler_inner(
         Ok(subject) => subject,
         Err(refusal) => return super::identity::identity_refusal_response(refusal),
     };
-
+    let key = super::identity::subject_key(grant_subject.as_ref(), cert_identity.as_ref());
+    if let Some(no) = hardened_identity_refusal(&state, key.as_deref(), request.extensions().get())
+    {
+        return no;
+    }
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(request).await {
         Ok(bytes) => bytes,
@@ -662,13 +667,8 @@ async fn backend_handler_inner(
     let protocol_header = inbound_headers
         .get("mcp-protocol-version")
         .and_then(|value| value.to_str().ok());
-    // A presented session counts only when this caller holds it (the `/mcp`
-    // owner rule), or it would pick another caller's profile and cost bucket.
-    let owner = super::handlers::owner_of(
-        super::identity::subject_key(grant_subject.as_ref(), cert_identity.as_ref()),
-        &inbound_headers,
-        client.as_ref(),
-    );
+    // A presented session counts only for its owner, by the `/mcp` owner rule.
+    let owner = super::handlers::owner_of(key, &inbound_headers, client.as_ref());
     let session_id = inbound_headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())

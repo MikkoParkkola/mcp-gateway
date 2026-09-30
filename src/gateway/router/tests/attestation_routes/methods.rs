@@ -418,6 +418,7 @@ async fn direct_route_enforce_set_level_needs_only_an_authentic_token() {
             allowed_tools: None,
             denied_tools: None,
             admin: true,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         ..Default::default()
     };

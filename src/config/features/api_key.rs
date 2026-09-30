@@ -41,6 +41,26 @@ pub(crate) fn parse_api_key_digest(spec: &str) -> Option<[u8; 32]> {
     Some(digest)
 }
 
+/// Who holds an API key. Under `security.posture: hardened` only a
+/// `personal` key counts as a per-caller identity on its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ApiKeyKind {
+    /// Held by several people or agents (the default).
+    #[default]
+    Shared,
+    /// Held by exactly one person.
+    Personal,
+}
+
+impl ApiKeyKind {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+    const fn is_shared(&self) -> bool {
+        matches!(self, Self::Shared)
+    }
+}
+
 /// API key configuration for multi-client access.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
@@ -76,6 +96,9 @@ pub struct ApiKeyConfig {
     /// Whether this API key can use admin-only HTTP UI and management tools.
     #[serde(default)]
     pub admin: bool,
+    /// Who holds the key; `shared` unless set.
+    #[serde(default, skip_serializing_if = "ApiKeyKind::is_shared")]
+    pub kind: ApiKeyKind,
 }
 
 // Manual `Debug` (CWE-532): a derived one printed the key. The digest is not a
@@ -94,6 +117,7 @@ impl std::fmt::Debug for ApiKeyConfig {
             .field("allowed_tools", &self.allowed_tools)
             .field("denied_tools", &self.denied_tools)
             .field("admin", &self.admin)
+            .field("kind", &self.kind)
             .finish()
     }
 }

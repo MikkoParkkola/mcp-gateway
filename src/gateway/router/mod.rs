@@ -37,6 +37,7 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+mod hardened_identity;
 mod identity;
 mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
@@ -94,6 +95,9 @@ mod e5_dashboard_session_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+/// GH1942.HARDEN.1 rows 8 and 16: hardened requires a per-caller identity.
+#[cfg(test)]
+mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
