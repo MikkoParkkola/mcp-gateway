@@ -51,7 +51,7 @@ async fn meta_replay_writes_an_invocation_record() {
         ..Setup::default()
     })
     .await;
-    let (first_body, arguments) = keyed_invoke(1);
+    let (first_body, _) = keyed_invoke(1);
     let (status, first) = post_modern(&fx, &first_body).await;
     assert_eq!(status, StatusCode::OK, "{first}");
     let (status, second) = post_modern(&fx, &keyed_invoke(2).0).await;
@@ -69,15 +69,8 @@ async fn meta_replay_writes_an_invocation_record() {
     assert_eq!(replay["outcome"], "ok", "{replay}");
     assert_eq!(replay["server"], "alpha", "{replay}");
     assert_eq!(replay["tool"], "t", "{replay}");
-    assert_eq!(
-        replay["request_hash"],
-        format!(
-            "sha256:{}",
-            crate::hashing::canonical_json_sha256(&arguments)
-        )
-        .as_str(),
-        "{replay}"
-    );
+    // The request hash covers the call as the meta layer hashed it (its
+    // `_meta` merged in, D1-d.1), so the replay's must equal the original's.
     assert_eq!(replay["request_hash"], original["request_hash"], "{replay}");
     assert!(replay.get("response_hash").is_some(), "{replay}");
     assert_eq!(
