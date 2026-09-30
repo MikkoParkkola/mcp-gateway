@@ -148,6 +148,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/protocol_revision_telemetry.rs",
         "telemetry window counters in a 0700 directory; no secret",
     ),
+    (
+        "src/protocol_revision_telemetry_window.rs",
+        "U1 v2 window counters in the same 0700 directory; no secret",
+    ),
     ("src/ranking/mod.rs", "tool usage counts JSON; no secret"),
     (
         "src/registry/marketplace/mod.rs",
