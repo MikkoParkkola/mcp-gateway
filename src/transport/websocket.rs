@@ -409,9 +409,14 @@ impl WebSocketTransport {
 
     /// Enqueue a message for the I/O task to write, applying backpressure.
     async fn send_message(&self, msg: Message) -> Result<()> {
-        let guard = self.inner.outbound_tx.lock().await;
-        let tx = guard
-            .as_ref()
+        // Clone the sender out and release the slot before awaiting: a full
+        // queue must not keep `close()` waiting on the slot's mutex.
+        let tx = self
+            .inner
+            .outbound_tx
+            .lock()
+            .await
+            .clone()
             .ok_or_else(|| Error::Transport("WebSocket not connected".to_string()))?;
 
         tx.send(msg)

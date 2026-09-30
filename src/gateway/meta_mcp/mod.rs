@@ -85,6 +85,7 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
+pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -1017,38 +1018,52 @@ impl MetaMcp {
         self.firewall = firewall;
     }
 
-    /// Firewall-scan an aggregated tool-list / search response value in place
-    /// (OWASP ASI01 tool-poisoning). Backend-supplied `description` strings are
-    /// scanned for prompt injection and have embedded credentials redacted
-    /// before the discovery response reaches the client.
+    /// Inspect a `gateway_list_tools` / `gateway_search_tools` result once, on
+    /// the canonical value before it is serialised into `content[].text`
+    /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
+    /// escaped copy hides a quoted key or a split injection phrase from them.
+    /// A Block (or no admitting target) refuses the call; otherwise credentials
+    /// are redacted in place. The router or delivery pass still inspects the
+    /// served form: a name alone cannot prove this pass ran (a backend tool may
+    /// share the name), so neither pass is skipped.
     ///
-    /// No-op when the firewall is absent or response scanning is disabled — the
-    /// same gate the `tools/call` path uses ([`Firewall::check_response`]
-    /// short-circuits), so behavior is unchanged when the feature/config is off.
+    /// # Errors
+    /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
     #[cfg(feature = "firewall")]
-    pub(super) fn scan_tool_list_value(&self, value: &mut serde_json::Value) {
+    pub(super) fn inspect_discovery_value(&self, value: &mut serde_json::Value) -> Result<()> {
+        use crate::security::firewall::FirewallAction;
         let Some(ref fw) = self.firewall else {
-            return;
+            return Ok(());
         };
         let verdict = fw.check_response(
             "meta:tools/list",
-            "meta-mcp",
+            "gateway",
             "tools/list",
             value,
             "meta-mcp",
         );
-        if verdict.action == crate::security::firewall::FirewallAction::Warn {
+        if !verdict.allowed || verdict.action == FirewallAction::Block {
             tracing::warn!(
                 findings = verdict.findings.len(),
-                "Firewall: meta tools/list response warning"
+                "Firewall: discovery response blocked"
+            );
+            return Err(Error::ResponseFirewallRefused);
+        }
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(
+                findings = verdict.findings.len(),
+                "Firewall: discovery response warning"
             );
         }
+        Ok(())
     }
 
-    /// No-op tool-list scan when the `firewall` feature is disabled.
+    /// No discovery inspection when the `firewall` feature is disabled.
     #[cfg(not(feature = "firewall"))]
-    #[allow(clippy::unused_self)]
-    pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(super) fn inspect_discovery_value(&self, _value: &mut serde_json::Value) -> Result<()> {
+        Ok(())
+    }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
@@ -1519,13 +1534,13 @@ impl MetaMcp {
     pub(super) fn active_profile(
         &self,
         session_id: Option<&str>,
-    ) -> crate::routing_profile::RoutingProfile {
+    ) -> std::sync::Arc<crate::routing_profile::RoutingProfile> {
         let default_name = self.profile_registry.default_name();
         let name = session_key(session_id).map_or_else(
             || default_name.to_string(),
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
-        self.profile_registry.get(&name)
+        self.profile_registry.get_shared(&name)
     }
 }
 
@@ -2102,28 +2117,27 @@ impl MetaMcp {
         // Operator exposure allow-list. Enforced ahead of the admin gate, not
         // beside it: a meta-tool hidden from `tools/list` but still executable is
         // security theatre, and the admin gate answering first would disclose the
-        // tool's existence to the caller the allow-list is hiding it from. Reaching
-        // this check before the admin gate is what makes the refusal wording below
-        // load-bearing rather than decorative. `exposed_meta_tools` promises
-        // that an unlisted tool "is not callable either". Names outside the
-        // governed meta-tool set - surfaced and backend tools - are unaffected.
-        //
-        // The refusal is worded exactly like the unrecognised-tool fallback below:
-        // an operator hiding a tool must not get a reply confirming it exists and
-        // was deliberately withheld.
+        // tool's existence to the caller the allow-list is hiding it from.
+        // `exposed_meta_tools` promises that an unlisted tool "is not callable
+        // either"; names outside the governed set (surfaced and backend tools)
+        // are unaffected. The refusal is worded exactly like the unrecognised-tool
+        // fallback below: a reply confirming the tool exists would disclose it.
         if !self.meta_tool_exposure.is_exposed(tool_name) {
-            // Built the same way the fallback below builds its no-suggestion
-            // form, and returned through the same helper, so the two answers
-            // are byte-identical. Constructing the response directly here
-            // produced a message without the error type's
-            // "JSON-RPC error -32601: " prefix, and that difference was itself
-            // the disclosure. The fallback's did-you-mean hint is deliberately
-            // not reached: a hidden tool name matches itself, so a suggestion
-            // would name the tool the allow-list is hiding.
+            // Built and returned exactly as the fallback below builds its
+            // no-suggestion form, so the two answers are byte-identical (the
+            // error type's "JSON-RPC error -32601: " prefix was itself a
+            // disclosure). The did-you-mean hint is deliberately not reached:
+            // a hidden tool name matches itself and would name it.
             return error_response_preserving_status(
                 id,
                 &crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
             );
+        }
+        // Answers without the requestState this gateway issued answer nothing
+        // it asked: every tool refuses them, before any dispatch can repeat a
+        // side effect.
+        if let Err(error) = caller.retry.solicited_input_responses() {
+            return error_response_preserving_status(id, &error);
         }
 
         // Admin gate for the meta-tools that change the gateway for every
@@ -2267,7 +2281,7 @@ impl MetaMcp {
         .await
     }
 
-    async fn dispatch_below_gate_shaped(
+    async fn dispatch_below_gate_shaped_in_slot(
         &self,
         target: DispatchTarget<'_>,
         shape: ResultShape,
@@ -2734,6 +2748,12 @@ mod test_callers;
 #[cfg(test)]
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
+#[cfg(test)]
+pub(super) mod grant_audit_fixture;
+#[cfg(test)]
+mod grant_decision_audit_tests;
+#[cfg(test)]
+mod grant_decision_slot_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;

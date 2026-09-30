@@ -84,6 +84,8 @@ mod append;
 // F20: the bounded async append.
 #[path = "transparency_log_bounded.rs"]
 mod bounded;
+#[path = "transparency_log_hwm_scan.rs"]
+mod hwm_scan;
 #[path = "transparency_log_rotation.rs"]
 mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
@@ -512,11 +514,7 @@ impl TransparencyLogger {
         {
             self.append_attempts
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            if self
-                .fail_next_append
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-                || self.fail_appends.load(std::sync::atomic::Ordering::Acquire)
-            {
+            if self.injected_fault(&fields) {
                 return Err(io::Error::other("injected transparency append failure"));
             }
         }
@@ -752,6 +750,9 @@ mod bounded_tests;
 #[cfg(test)]
 #[path = "transparency_log_errors_tests.rs"]
 mod errors_tests;
+#[cfg(test)]
+#[path = "transparency_log_hwm_missing_tests.rs"]
+mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;

@@ -372,6 +372,9 @@ fi
 "$HELM" template t "$CHART" --set audit.rotation.retainSegments=20 \
   --set audit.existingClaim=big >/dev/null 2>&1 || fail "a PVC must lift the emptyDir size guard"
 
+# shellcheck source=scripts/dev/helm-chart-auth-modes.sh
+source "$(dirname "${BASH_SOURCE[0]}")/helm-chart-auth-modes.sh"
+
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 
 echo "helm chart smoke passed"

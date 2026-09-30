@@ -20,6 +20,8 @@ mod identity_grants;
 mod listener;
 mod persistence;
 #[cfg(test)]
+mod remote_provenance_start_tests;
+#[cfg(test)]
 mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -614,6 +616,9 @@ impl Gateway {
                 "a freshly built registry refused a backend registration"
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
+        }
+        if let Some(warning) = config.remote_provenance_warning() {
+            warn!("{warning}");
         }
 
         Ok(Self {
@@ -1364,6 +1369,8 @@ impl Gateway {
                 &self.config.capabilities.name,
                 executor,
             ));
+            // The scan below runs in the background; readiness waits on it.
+            cap_backend.begin_initial_scan();
             meta_mcp.set_capabilities(Arc::clone(&cap_backend));
 
             let capability_dirs = self.config.capabilities.directories.clone();
@@ -1408,7 +1415,7 @@ impl Gateway {
             let scan = async move {
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    CapabilityBackend::settle_before_initial_scan().await;
                 }
 
                 let mut total_caps = 0;
@@ -2919,15 +2926,20 @@ impl Gateway {
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
         let (response, execution) = if method == "tools/call" {
-            Box::pin(Self::dispatch_tools_call(
-                meta_mcp,
-                tool_policy,
-                &mut request,
-                id,
-                client,
-                &mut signing_context,
-                &request_shape,
-            ))
+            // D3-a: one grant-decision slot spans signing, admission and dispatch.
+            super::meta_mcp::grant_audit::slot_rpc(
+                meta_mcp.transparency_logger.as_ref(),
+                id.clone(),
+                Box::pin(Self::dispatch_tools_call(
+                    meta_mcp,
+                    tool_policy,
+                    &mut request,
+                    id,
+                    client,
+                    &mut signing_context,
+                    &request_shape,
+                )),
+            )
             .await
         } else {
             (

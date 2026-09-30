@@ -279,18 +279,30 @@ fn helm_values_block_names_real_chart_values() {
         .into_iter()
         .filter(|b| b.starts_with(HELM_MARKER))
         .collect();
-    assert_eq!(blocks.len(), 1, "the guide has one Helm values block");
+    assert!(!blocks.is_empty(), "the guide has no Helm values block");
     let chart = values();
-    let block: serde_yaml::Value = serde_yaml::from_str(&blocks[0]).expect("block parses");
+    let mut with_config = 0;
+    for block in &blocks {
+        check_helm_block(&chart, block, &mut with_config);
+    }
+    assert!(with_config > 0, "no Helm block sets config");
+}
+
+/// Every leaf of one Helm values block is a chart value (inside the schema's
+/// enum where it has one), and its `config` subtree loads as gateway config.
+fn check_helm_block(chart: &serde_yaml::Value, block: &str, with_config: &mut usize) {
+    let block: serde_yaml::Value = serde_yaml::from_str(block).expect("block parses");
     let mut leaves = Vec::new();
     collect_leaves(&block, String::new(), &mut leaves);
-    assert!(leaves.len() >= 5, "the Helm block has only {leaves:?}");
+    assert!(leaves.len() >= 3, "the Helm block has only {leaves:?}");
     // The `config` subtree is gateway config the chart passes through; it
     // must load as written.
-    let config = block.get("config").expect("the Helm block sets config");
-    let config = serde_yaml::to_string(config).expect("serialize config");
-    if let Err(e) = load(&config, "TEAM_GUIDE_UNUSED=1\n") {
-        panic!("the Helm block's `config` does not load: {e}");
+    if let Some(config) = block.get("config") {
+        *with_config += 1;
+        let config = serde_yaml::to_string(config).expect("serialize config");
+        if let Err(e) = load(&config, "TEAM_GUIDE_UNUSED=1\n") {
+            panic!("the Helm block's `config` does not load: {e}");
+        }
     }
     for (path, value) in leaves {
         if let Some(gateway_key) = path.strip_prefix("config.") {
@@ -301,7 +313,7 @@ fn helm_values_block_names_real_chart_values() {
             continue;
         }
         assert!(
-            helm_value(&chart, &path).is_some(),
+            helm_value(chart, &path).is_some(),
             "`{path}` is not a chart value"
         );
         if let Some(allowed) = schema_enum(&path) {

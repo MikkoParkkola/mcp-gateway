@@ -524,6 +524,11 @@ def segments(command):
     return [piece.strip() for piece in found if piece.strip()]
 
 
+# W8 (GH1941.SIGN.1): the post-publish re-check, matched at command position.
+VERIFY_ASSETS = re.compile(r"scripts/release/verify-release-assets\.sh\s+\S+")
+GH_RELEASE_DOWNLOAD = re.compile(r"gh\s+release\s+download\b")
+
+
 def runs(command, program):
     """Whether `command` runs `program` — a compiled pattern — as a command.
 
@@ -736,12 +741,22 @@ TAG_GATE = re.compile(
 )
 
 
+def step_props(block):
+    """The step mapping's own keys, without the `run:`/`env:`/`with:` bodies
+    nested under it: a key at any other depth is not a property of the step, so
+    a `timeout-minutes:` or `id:` written inside a body must not count."""
+    item = len(block[0]) - len(block[0].lstrip())
+    return [block[0].lstrip()[2:]] + [
+        line.strip() for line in block[1:] if len(line) - len(line.lstrip()) == item + 2
+    ]
+
+
 def gate_steps(workflow, job):
     """`job`'s own steps that run the tag gate under `id: meta`."""
     return [
         block
         for block in steps(workflow, job=job)
-        if any(line.strip() in ("id: meta", "- id: meta") for line in block)
+        if "id: meta" in step_props(block)
         and any(runs(command, TAG_GATE) for command in joined(block))
     ]
 
@@ -2076,8 +2091,8 @@ class WorkflowWiring(unittest.TestCase):
             # Bounded low: a timeout raised to 360 is the 6-hour stall again.
             minutes = [
                 int(m.group(1))
-                for line in block
-                if (m := re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line))
+                for line in step_props(block)
+                if (m := re.match(r"^timeout-minutes:\s*(\d+)\s*$", line))
             ]
             self.assertTrue(minutes, f"ci.yml: {block[0].strip()} has no step timeout-minutes")
             self.assertLessEqual(max(minutes), 15, f"ci.yml: {block[0].strip()} timeout is not low")
@@ -2481,6 +2496,20 @@ class WorkflowWiring(unittest.TestCase):
         self.assertLess(sign, create, "W2: signing must come before the release exists")
         self.assertLess(create, check, "W3: the draft must be verified after it is created")
         self.assertLess(check, publish, "W3: publish only after the draft is verified")
+        # W8 (GH1941.SIGN.1): the release as published is downloaded and
+        # verified again, so a change between the draft check and publication
+        # fails the run instead of passing unseen.
+        recheck = [
+            i for i, b in enumerate(blocks)
+            if i > publish and any(runs(c, VERIFY_ASSETS) for c in joined(b))
+        ]
+        self.assertTrue(recheck, "W8: the published release must be verified again after it is published")
+        self.assertTrue(
+            any(runs(c, GH_RELEASE_DOWNLOAD) for c in joined(blocks[recheck[0]])),
+            "W8: the re-check must read what the release serves",
+        )
+        self.assertIn("set -euo pipefail", "\n".join(blocks[recheck[0]]), "W8: the re-check must stop on the first failure")
+        self.assertNotRegex("\n".join(blocks[recheck[0]]), r"continue-on-error|if:\s*always\(\)", "W8: the re-check must not be skipped past")
         self.assertIn("draft: true", "\n".join(blocks[create]), "W3: the release must be created as a draft")
         for i in (sign, check, publish):
             text = "\n".join(blocks[i])
@@ -3128,8 +3157,8 @@ def cosign_calls(block):
 
 
 def timeout_of(block):
-    for line in block:
-        match = re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line)
+    for line in step_props(block):
+        match = re.match(r"^timeout-minutes:\s*(\d+)\s*$", line)
         if match:
             return int(match.group(1))
     return None

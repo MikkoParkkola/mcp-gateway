@@ -467,6 +467,55 @@ chosen maintenance window:
 5. Remove old trust only after every consumer has migrated and the operator has
    ended the rollback window. Retention and key disposal follow your PKI policy.
 
+## Response signing
+
+`security.message_signing` adds an HMAC-SHA256 `_signature` block to results, so a
+client holding the shared secret can check that the result came from a holder of
+that secret and was not modified after signing. Any holder of the secret can
+produce a valid MAC, so keep it to the gateway and the clients that verify.
+
+What is signed:
+
+- Successful `gateway_invoke` results on `POST /mcp` and on stdio. The block is
+  added at delivery, after the response firewall, so it covers the result the
+  client receives. Every delivery is signed again, including cache hits and
+  idempotent replays, with that request's own `nonce` and timestamp.
+- The MAC is HMAC-SHA256, keyed with `shared_secret`, over the RFC 8785 (JCS)
+  serialization of this single object:
+
+  ```json
+  {"domain": "mcp-gateway-response-v2", "body": <result without _signature>,
+   "request_id": {"kind": "string"|"number", "value": "<id as a string>"} | null,
+   "alg": "hmac-sha256", "version": 2, "nonce": "<nonce>" | null,
+   "ts": <unix seconds>, "key_id": "<key_id>"}
+  ```
+
+  `request_id` is `null` when the request id was `null`. Notifications get no
+  response, so nothing is signed for them. The `_signature` block carries `alg`,
+  `sig` (lowercase hex), `nonce`, `ts`, `key_id` and `version`.
+- A result holding an integer beyond ±2^53-1 is refused rather than signed.
+
+What is not signed: named backend tools called through the meta surface, Code
+Mode, playbook steps, and every JSON-RPC error. `tools/call` on
+`POST /mcp/{name}` is refused with `-32001` ("message signing is enabled; use
+gateway_invoke") while signing is on.
+
+Key rotation is sender-side only. The gateway signs with `shared_secret` alone.
+`previous_secret` is only checked (at least 32 bytes, not all zero) when the config
+loads. It never signs a response and is never used to check a signature; the
+gateway does not verify inbound signatures at all. To rotate:
+
+1. Give clients the new key and have them accept a signature from either key,
+   matching on `key_id`.
+2. Set the new `shared_secret` and a new `key_id`, then restart the gateway.
+3. Once no client needs the old key, remove it from the clients.
+
+Every `security.message_signing` field (`enabled`, `shared_secret`,
+`previous_secret`, `key_id`, `require_nonce`, `replay_window`) needs a restart. A
+config reload that changes any of them is refused with
+`config reload refused: security.message_signing.<field> requires restart` and
+leaves the running config untouched.
+
 ## Reverse Proxy
 
 Bind the gateway to `127.0.0.1` (default) and proxy from the public-facing server. SSE streaming requires disabled response buffering.

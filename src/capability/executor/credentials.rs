@@ -224,14 +224,15 @@ impl CapabilityExecutor {
 
         if let Some(var_name) = key.strip_prefix("env:") {
             // Empty is refused like unset, as `SecretRef::resolve` does (C4).
-            self.env
-                .get()
-                .resolve(var_name)
+            let env = self.env.get();
+            env.resolve(var_name)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| {
                     Error::Config(format!(
-                        "Environment variable '{}' not set or empty (required for {})",
-                        var_name, auth.description
+                        "Environment variable '{}' not set or empty (required for {}){}",
+                        var_name,
+                        auth.description,
+                        env.absent_files_hint()
                     ))
                 })
         } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
@@ -243,21 +244,23 @@ impl CapabilityExecutor {
             self.fetch_from_file(file_spec)
         } else if key.starts_with("{env.") && key.ends_with('}') {
             let var_name = &key[5..key.len() - 1];
-            self.env
-                .get()
-                .resolve(var_name)
+            let env = self.env.get();
+            env.resolve(var_name)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| {
                     Error::Config(format!(
-                        "Environment variable '{var_name}' not set or empty"
+                        "Environment variable '{var_name}' not set or empty{}",
+                        env.absent_files_hint()
                     ))
                 })
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
         } else if Self::looks_like_env_var_name(key) {
-            self.env.get().resolve(key).filter(|v| !v.is_empty()).ok_or_else(|| {
+            let env = self.env.get();
+            env.resolve(key).filter(|v| !v.is_empty()).ok_or_else(|| {
                 Error::Config(format!(
-                    "Environment variable '{key}' not set or empty. Set it with: export {key}=your_key"
+                    "Environment variable '{key}' not set or empty{}. Set it with: export {key}=your_key",
+                    env.absent_files_hint()
                 ))
             })
         } else {
