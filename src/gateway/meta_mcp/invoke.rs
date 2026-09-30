@@ -2081,15 +2081,13 @@ impl MetaMcp {
         })?;
 
         // Derive a prompt_cache_key for OpenAI-compatible backends.
-        // Priority: explicit _meta.prompt_cache_key from caller > session hash.
+        // Priority: explicit _meta.prompt_cache_key > hash of a real session id.
         let prompt_cache_key: Option<String> = args
             .get("_meta")
             .and_then(|m| m.get("prompt_cache_key"))
             .and_then(Value::as_str)
             .map(CacheKeyDeriver::from_header)
             .or_else(|| {
-                // An empty id is no session: a key derived from it would be
-                // shared by every 2026-07-28 caller.
                 session_id.filter(|sid| !sid.is_empty()).map(|sid| {
                     let deriver = CacheKeyDeriver::with_slots(3);
                     let base = CacheKeyDeriver::from_context(sid);
