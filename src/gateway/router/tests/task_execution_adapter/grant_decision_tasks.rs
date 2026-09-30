@@ -36,8 +36,10 @@ async fn unsigned_task_writes_the_workers_record() {
     let records = decisions(&row.dir);
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     let invocation = only(invocations(&row.dir), "invocation record");
-    let record = only(records, "decision record at settlement");
-    std::assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
+    // The worker's decision, then the terminal read's replay-check decision
+    // (#2450): reading a finished task re-runs the grant check.
+    std::assert_eq!(records.len(), 2, "{records:#?}");
+    std::assert_eq!(trace_of(&records[0]), trace_of(&invocation), "{records:#?}");
 }
 
 /// T13. A signed task has two records: signing preparation's (untraced
@@ -51,7 +53,8 @@ async fn signed_task_writes_preparation_and_execution_records() {
     let records = decisions(&row.dir);
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     let invocation = only(invocations(&row.dir), "invocation record");
-    std::assert_eq!(records.len(), 2, "{records:#?}");
+    // Preparation, the worker's, then the terminal read's replay check (#2450).
+    std::assert_eq!(records.len(), 3, "{records:#?}");
     assert_ne!(
         trace_of(&records[0]),
         trace_of(&invocation),
@@ -187,13 +190,33 @@ async fn surfaced_task_grant_denial_writes_one_record() {
         true,
     );
     let created = post(&row.state, "key-a", as_task(body, "d3a-t27")).await;
-    let settled = poll_until_terminal(&row.state, "key-a", &task_id(&created)).await;
-    std::assert_eq!(error_code(&settled), Some(-32601), "{settled}");
+    // The task settles failed with the worker's refusal, but reading it now
+    // re-runs the grant check on the stored target (#2450), which is denied
+    // again: the read is refused with the grant denial and no stored result.
+    let id = task_id(&created);
+    let mut read = get_task(&row.state, "key-a", &id).await;
+    for _ in 0..2_000 {
+        if read.get("error").is_some() || is_terminal(&status_of(&read)) {
+            break;
+        }
+        tokio::task::yield_now().await;
+        read = get_task(&row.state, "key-a", &id).await;
+    }
+    std::assert_eq!(read.pointer("/error/code"), Some(&json!(-32004)), "{read}");
+    std::assert!(read.get("result").is_none(), "{read}");
     std::assert_eq!(
         row.endpoint.arrivals(),
         0,
         "the refused task reaches nothing"
     );
-    let record = only(decisions(&row.dir), "decision record");
-    std::assert_eq!(record["outcome"], json!("denied"), "{record}");
+    let records = decisions(&row.dir);
+    std::assert_eq!(
+        records.len(),
+        2,
+        "worker's denial, then the read's: {records:#?}"
+    );
+    std::assert!(
+        records.iter().all(|r| r["outcome"] == json!("denied")),
+        "{records:#?}"
+    );
 }

@@ -107,6 +107,15 @@ pub(crate) enum ChainRefusal {
     Unhashable,
 }
 
+/// Why a chain is verified, which decides its length rule (design R3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChainPurpose {
+    /// A gateway about to append its own link: needs room for one more.
+    Forward,
+    /// A client verifying what it received: may hold exactly `max_links`.
+    Terminal,
+}
+
 /// Per-backend verification policy.
 pub(crate) struct ChainPolicy<'a> {
     /// The shared `remote_server_signing.trusted_keys` map.
@@ -117,8 +126,10 @@ pub(crate) struct ChainPolicy<'a> {
     pub(crate) signer: &'a str,
     /// `message_signing.replay_window`, seconds.
     pub(crate) replay_window: u64,
-    /// `security.signature_chain.max_links`; incoming chains hold at most one less.
+    /// `security.signature_chain.max_links`; see [`ChainPurpose`].
     pub(crate) max_links: usize,
+    /// Forwarding or terminal verification.
+    pub(crate) purpose: ChainPurpose,
 }
 
 /// This gateway's persistent Ed25519 chain identity.
@@ -254,28 +265,53 @@ pub(crate) fn strip_chain(result: &mut Value) {
     }
 }
 
-/// Sign this gateway's origin link over `result` and insert it as a one-link
-/// chain in `result._meta`. Refuses an unhashable result or a link over the
-/// per-link cap; `result` is unchanged on refusal.
-pub(crate) fn attach_origin_link(
+/// What this gateway's link follows: the verified upstream links it
+/// preserves, and what it records about them (design D5).
+pub(crate) struct Hop<'a> {
+    /// Verified upstream links, delivered unchanged before this gateway's.
+    pub(crate) prefix: &'a [Value],
+    /// `none` for an origin, `verified` or `unverified` after an upstream.
+    pub(crate) up: Upstream,
+    /// `H(raw upstream result)`: what this gateway consumed.
+    pub(crate) input: Option<String>,
+}
+
+/// Sign this gateway's link after `hop` over the final `result` and insert the
+/// chain. Refuses an unhashable result, an oversized link or chain, or more
+/// than `max_links` links; `result` is unchanged on refusal.
+pub(crate) fn attach_link(
     signer: &ChainSigner,
     result: &mut Value,
+    hop: &Hop<'_>,
     src: LinkSource,
     nonce: Option<&str>,
     ts: u64,
+    max_links: usize,
 ) -> std::result::Result<(), ChainRefusal> {
     let out = content_digest(result)?;
+    let prev = match hop.prefix.last() {
+        Some(last) => Some(link_hash(
+            &ChainLink::deserialize(last).map_err(|_| ChainRefusal::Schema)?,
+        )),
+        None => None,
+    };
     let link = signer.sign(LinkFields {
-        up: Upstream::None,
+        up: hop.up,
         src,
-        input: None,
+        input: hop.input.clone(),
         out: Some(out),
-        prev: None,
+        prev,
         nonce: nonce.map(str::to_owned),
         ts,
     });
     let link = serde_json::to_value(link).map_err(|_| ChainRefusal::Schema)?;
-    if exceeds(&link, MAX_LINK_BYTES) {
+    if exceeds(&link, MAX_LINK_BYTES) || hop.prefix.len() + 1 > max_links {
+        return Err(ChainRefusal::Size);
+    }
+    let mut links = hop.prefix.to_vec();
+    links.push(link);
+    let chain = Value::Array(links);
+    if exceeds(&chain, MAX_CHAIN_BYTES) {
         return Err(ChainRefusal::Size);
     }
     let members = result.as_object_mut().ok_or(ChainRefusal::Unhashable)?;
@@ -283,7 +319,7 @@ pub(crate) fn attach_origin_link(
         .entry("_meta")
         .or_insert_with(|| Value::Object(serde_json::Map::new()));
     let meta = meta.as_object_mut().ok_or(ChainRefusal::Schema)?;
-    meta.insert(CHAIN_META.to_owned(), Value::Array(vec![link]));
+    meta.insert(CHAIN_META.to_owned(), chain);
     Ok(())
 }
 
@@ -336,7 +372,12 @@ pub(crate) fn verify_chain(
         return Err(ChainRefusal::Size);
     }
     let items = chain.as_array().ok_or(ChainRefusal::Schema)?;
-    if items.len() >= policy.max_links {
+    // A forwarding gateway needs room for its own link; a client does not.
+    let room = match policy.purpose {
+        ChainPurpose::Forward => 1,
+        ChainPurpose::Terminal => 0,
+    };
+    if items.len() + room > policy.max_links {
         return Err(ChainRefusal::Size);
     }
     if items.iter().any(|item| exceeds(item, MAX_LINK_BYTES)) {

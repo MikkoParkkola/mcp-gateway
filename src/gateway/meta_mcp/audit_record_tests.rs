@@ -367,3 +367,7 @@ async fn response_hash_covers_returned_value() {
         "{record}"
     );
 }
+
+// MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
+#[cfg(feature = "firewall")]
+mod tenants;

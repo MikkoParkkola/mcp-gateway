@@ -1029,9 +1029,12 @@ impl Gateway {
                 signing.require_nonce,
             );
         }
-        if let Some(chain) = &self.config.security.signature_chain {
-            let signer = chain.resolve_with_env(&self.env.get())?;
-            meta_mcp_builder.set_chain_signer(signer, chain.emit);
+        let security = &self.config.security;
+        if let Some(chain) = &security.signature_chain {
+            meta_mcp_builder.set_chain_signer(chain.resolve_with_env(&self.env.get())?, chain.emit);
+            let keys = security.remote_server_signing.trusted_keys.clone();
+            let window = security.message_signing.replay_window;
+            meta_mcp_builder.set_chain_trust(chain.max_links, keys, window);
         }
 
         let mut meta_mcp = Arc::new(meta_mcp_builder);
@@ -1402,13 +1405,9 @@ impl Gateway {
             // scan is also the ADMISSION GATE that rejects a capability whose
             // `auth.account` names no declared descriptor or whose `auth.key`
             // is not that descriptor's `oauth:<provider>`
-            // (`CapabilityBackend::register_capability`). Running that gate
-            // concurrently with serving would mean the first requests are
-            // answered while the catalogue is still partial — a tool that the
-            // gate is about to refuse could be absent, and a tool it will admit
-            // could be missing. So an account-bound gateway completes the whole
-            // scan HERE, before `start` returns to bind and serve, and the
-            // strategies are installed further below, still before serving.
+            // (`CapabilityBackend::register_capability`). Run concurrently, the
+            // first requests would see a partial catalogue, so an account-bound
+            // gateway completes the whole scan HERE, before `start` serves.
             let accounts_configured = self.config.accounts.as_ref().is_some_and(|accounts| {
                 accounts.enabled
                     && accounts

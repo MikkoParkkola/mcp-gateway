@@ -1100,11 +1100,17 @@
     },
     {
       "id": "GH1944.CHAIN.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews). Increment 2 (#2381): origin-link emission and backend-chain strip only; CHAIN.1 itself (append and verify across hops) is increment 3. Known limits of increment 2, accepted into the reviewed design by amendment A3 r5 (delta review, both seats, 2026-09-30); neither is required by a literal AC and neither makes CHAIN.1 met: (1) direct-route idempotent replays are not linked (the direct store can hold gateway-authored side-effect notices and records no origin); (2) the gateway_invoke nonce is the fallback link nonce only while message_signing is enabled."
+      "evidence": [
+        "tests/signature_chain_hops.rs",
+        "tests/signature_chain_hops/rows_hops.rs",
+        "tests/signature_chain_hops/rows_policy.rs",
+        "src/security/signature_chain_tests.rs",
+        "src/gateway/meta_mcp/chain_receipt.rs"
+      ],
+      "note": "Met 2026-09-30 (#2483, squash 7406d020b). A backend set to signature_chain verify or require gets a fresh per-call challenge; the reply's chain is checked at raw receipt against trusted keys, pinned origin and last signer, link digests, content, the challenge and freshness, and this gateway appends its own link, so the client verifies the whole chain (tests/signature_chain_hops/rows_hops.rs:18). A tampered signature, wrong origin, wrong last signer, changed content, dropped middle hop, stale or foreign nonce is refused under require and marked up: unverified under verify (rows_hops.rs:47-110); reorder and re-signing break prev linkage (src/security/signature_chain_tests.rs:157,183,478). Green Tests, Windows and Clippy in CI run 36753302778 and feature combinations run 36753490334 on head b657a5b73. Scope, as designed and in UPGRADING-4.0 item 107: gateway_invoke and direct-route tools/call only; response cache bypassed and idempotent replays carry no chain; tasks, Code Mode, playbooks and capability backends are unchained. The OWASP ASI07 row stays PARTIAL.\n\n--- prior note follows ---\nPending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews). Increment 2 (#2381): origin-link emission and backend-chain strip only; CHAIN.1 itself (append and verify across hops) is increment 3. Known limits of increment 2, accepted into the reviewed design by amendment A3 r5 (delta review, both seats, 2026-09-30); neither is required by a literal AC and neither makes CHAIN.1 met: (1) direct-route idempotent replays are not linked (the direct store can hold gateway-authored side-effect notices and records no origin); (2) the gateway_invoke nonce is the fallback link nonce only while message_signing is enabled."
     },
     {
       "id": "GH1945.COLLUDE.1",
@@ -1197,11 +1203,14 @@
     },
     {
       "id": "MIK-7406.VERIFY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7406, \"[4.0] Wire and validate gateway response signing\"). MIK-7377.SIGNING.1 is met, but its own note (2026-09-12 correction) records that signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) checks signature shape only and never verifies the MAC; the validated conjunct rests on the stdio path. This row carries that residual for HTTP. #2369 added signing on cache hits and idempotent replays, which does not verify a MAC either."
+      "evidence": [
+        "tests/message_signing_delivery.rs",
+        "tests/common/signing_verifier.mjs"
+      ],
+      "note": "Met 2026-09-30 (#2500, squash fdc9000c2). signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:63) now reads the delivered HTTP body bytes. It passes them to the independent ECMAScript oracle (tests/common/signing_verifier.mjs), which recomputes the HMAC with the configured key and accepts. The same bytes with one changed body byte are refused (line 121). signing_6_required_nonce_leaves_other_surfaces_unsigned (line 273) covers MIK-7406 SIGNING.6: with require_nonce on, a surfaced tool, a playbook step and a Code Mode execute each succeed without a nonce and arrive unsigned, and a gateway_invoke control without a nonce is refused -32001. Red proof: mutant commit ad4d3bff8 (MAC domain changed, non-invoke calls refused) failed both tests at their assertions in CI run 36762530991. Green: CI run 36764277166 and feature combinations run 36764488232 on head 59001b63e. One review seat (GLM): SHIP.\n\n--- prior note follows ---\nAdded 2026-09-29 under operator chat ruling C1 (Linear MIK-7406, \"[4.0] Wire and validate gateway response signing\"). MIK-7377.SIGNING.1 is met, but its own note (2026-09-12 correction) records that signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) checks signature shape only and never verifies the MAC; the validated conjunct rests on the stdio path. This row carries that residual for HTTP. #2369 added signing on cache hits and idempotent replays, which does not verify a MAC either."
     },
     {
       "id": "MIK-7587.WINDOWS.1",

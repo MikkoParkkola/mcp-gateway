@@ -14,7 +14,6 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
-use crate::capability::validate_output;
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
     ContextIntegrityInput, ContextProvenance, ContextTrustBoundary,
@@ -89,6 +88,7 @@ impl std::fmt::Debug for CallerCredential {
 }
 
 mod guarded;
+use super::response_security::chain_receipt::ChainReceipt;
 use guarded::GuardedValue;
 
 use super::super::meta_mcp_helpers::{
@@ -102,7 +102,7 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
-mod audit;
+pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
@@ -120,6 +120,9 @@ use super::support::{
     idempotency_key_for, response_cache_key_for, strip_backend_provenance,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
+mod output_shape;
+pub(super) use output_shape::enforce_output_schema;
+use output_shape::{apply_validated_output, extract_output_validation_target};
 
 async fn call_capability_tool_with_identity(
     cap: &crate::capability::CapabilityBackend,
@@ -128,62 +131,6 @@ async fn call_capability_tool_with_identity(
     context: crate::capability::CapabilityExecutionContext,
 ) -> Result<crate::protocol::ToolsCallResult> {
     cap.call_tool_with_context(tool, arguments, context).await
-}
-
-pub(super) fn enforce_output_schema(
-    server: &str,
-    tool: &str,
-    result: Value,
-    output_schema: Option<&Value>,
-) -> Value {
-    let Some(schema) = output_schema else {
-        return result;
-    };
-
-    if result
-        .get("isError")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return result;
-    }
-
-    // No inner payload, no validation. The schema describes the tool's output,
-    // not the MCP envelope carrying it, so falling back to the envelope
-    // validates the wrong document and then republishes it under
-    // `structuredContent` — carrying the backend's own `requestState` past the
-    // mint that exists to replace it (MIK-7212.MRTR.2a), and overwriting a
-    // single plain-text item with a dump of its own wrapper.
-    // `apply_capability_projection` refuses this same case as bug #167; the
-    // schema path refuses it here.
-    let validation_target = match extract_output_validation_target(&result) {
-        Some(target) => target,
-        // A bare payload is its own validation target: no envelope to unwrap,
-        // and `apply_validated_output` returns the coerced value directly.
-        None if !is_mcp_envelope(&result) => result.clone(),
-        None => return result,
-    };
-    let validation = validate_output(&validation_target, schema);
-    if validation.is_valid() {
-        apply_validated_output(&result, validation.coerced)
-    } else {
-        // Output-schema mismatch is ADVISORY, not fatal, for proxied tools.
-        // Upstream APIs (e.g. open-meteo, travel providers) legitimately return
-        // more fields than a hand-authored capability schema declares; hard-
-        // rejecting would break a working tool and surface as an opaque error in
-        // clients. We log the mismatch and pass the result through, still
-        // populating `structuredContent` from the actual payload so spec-
-        // compliant clients (Open WebUI) receive structured output. The gateway
-        // does not author these fields — it proxies them — so extra keys are not
-        // a trust-boundary concern here.
-        tracing::warn!(
-            server,
-            tool,
-            mismatch = %validation.format_output_error(schema),
-            "tool output did not match its declared output schema; passing through (advisory)"
-        );
-        apply_validated_output(&result, validation_target)
-    }
 }
 
 /// Strip and parse the MIK-6914 Option B claim-under-test (`_claim`) directive
@@ -198,62 +145,6 @@ fn extract_client_claim(arguments: &mut Value, call_id: &str) -> Option<crate::t
     let raw = arguments.as_object_mut()?.remove("_claim")?;
     let claim = serde_json::from_value::<crate::trust::provenance_eval::Claim>(raw).ok()?;
     Some(crate::trust::ClientClaim::untrusted(call_id, claim))
-}
-
-fn extract_output_validation_target(result: &Value) -> Option<Value> {
-    if let Some(structured) = result.get("structuredContent") {
-        return Some(structured.clone());
-    }
-
-    let content = result.get("content")?.as_array()?;
-    if content.len() != 1 {
-        return None;
-    }
-    let text = content[0].get("text")?.as_str()?;
-    serde_json::from_str::<Value>(text).ok()
-}
-
-/// Whether a value is an MCP tool-result envelope rather than a bare payload.
-///
-/// The two are validated differently: an envelope's schema describes what it
-/// CARRIES, so an envelope with nothing extractable has nothing to validate,
-/// while a bare payload is its own target. [`apply_validated_output`] keys its
-/// re-wrap on the same two fields, so the answer stays consistent across both.
-fn is_mcp_envelope(result: &Value) -> bool {
-    result.as_object().is_some_and(|obj| {
-        // `content` must be an ARRAY, which is the shape
-        // `extract_output_validation_target` consumes and the specification
-        // requires. Keying on the bare presence of the name would classify a
-        // payload that merely has a `content` field as an envelope and return
-        // it unvalidated — failing the schema gate open on exactly the values
-        // it exists to check.
-        obj.get("content").is_some_and(Value::is_array) || obj.contains_key("structuredContent")
-    })
-}
-
-fn apply_validated_output(result: &Value, validated: Value) -> Value {
-    if !is_mcp_envelope(result) {
-        return validated;
-    }
-    let Some(obj) = result.as_object() else {
-        return validated;
-    };
-
-    let mut obj = obj.clone();
-    obj.insert("structuredContent".to_owned(), validated.clone());
-    if let Some(content) = obj.get_mut("content").and_then(Value::as_array_mut)
-        && content.len() == 1
-        && let Some(text_obj) = content[0].as_object_mut()
-        && text_obj.get("type").and_then(Value::as_str) == Some("text")
-    {
-        text_obj.insert(
-            "text".to_owned(),
-            Value::String(
-                serde_json::to_string_pretty(&validated).unwrap_or_else(|_| validated.to_string()),
-            ),
-        );
-    }
-    Value::Object(obj)
 }
 
 /// Apply a capability's canonical [`ProjectionSpec`](crate::projection::schema::ProjectionSpec)
@@ -1008,6 +899,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.protocol_revision,
                 self.routing_profile,
                 self.scope,
+                &super::response_security::chain_receipt::ChainSlot::default(),
             )
             .await;
         let error = match dispatched {
@@ -1295,16 +1187,17 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let sourced = self.invoke_tool_sourced(args, session_id, caller).await;
-        sourced.map(|(value, _)| value)
+        sourced.map(|sourced| sourced.0)
     }
 
-    /// [`Self::invoke_tool`] plus the result's chain eligibility (A3).
+    /// [`Self::invoke_tool`] plus the result's chain eligibility (A3) and its
+    /// upstream chain outcome (inc3 D4).
     pub(super) async fn invoke_tool_sourced(
         &self,
         args: &Value,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<(Value, crate::protocol::ChainSource)> {
+    ) -> Result<super::response_security::Sourced> {
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
         if let Some(log) = &self.transparency_logger {
             log.admit().await?;
@@ -1316,22 +1209,16 @@ impl MetaMcp {
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
-            let (result, dispatch_failure) = audit::with_dispatch_scope(traced).await;
+            let (result, notes) = audit::with_dispatch_scope(traced).await;
             // Single delivery boundary: unwrap the guard-sealed result.
-            let (result, source) = match result.map(GuardedValue::into_parts) {
-                Ok((value, source)) => (Ok(value), source),
-                Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible),
+            let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
+                Ok((value, source, upstream)) => (Ok(value), source, upstream),
+                Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible, None),
             };
             // One record per call, refusals and failures included (D1-d).
-            let audited = self.audit_invocation(
-                args,
-                session_id,
-                caller,
-                &trace_id_clone,
-                result,
-                dispatch_failure,
-            );
-            audited.await.map(|value| (value, source))
+            let audited =
+                self.audit_invocation(args, session_id, caller, &trace_id_clone, result, notes);
+            audited.await.map(|value| (value, source, upstream))
         })
         .await
     }
@@ -1453,6 +1340,7 @@ impl MetaMcp {
         mut result: Value,
     ) -> Result<(Value, super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
+        let mut result = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -1645,7 +1533,7 @@ impl MetaMcp {
         let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
-        let provenance = CallerProvenance::classify(caller.credential_principal);
+        let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
 
         // Capture once, before any authorization input is read. A bump after
@@ -1806,7 +1694,7 @@ impl MetaMcp {
             dispatch_binding.as_deref(),
             verified_identity,
             caller.grant_subject.as_ref(),
-            caller.credential_principal,
+            caller.owner_principal(),
             caller.authentication,
         );
 
@@ -1849,6 +1737,7 @@ impl MetaMcp {
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
+                    audit::note_cached();
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
                     // it would skip the delivery-refusal projection and count
@@ -1962,7 +1851,10 @@ impl MetaMcp {
         if !want_full && protocol_revision.is_some() && self.cache.is_some() {
             super::support::note_cache_bypass(&caller_principal, "meta");
         }
+        // A chained backend's answer is bound to one challenge: no cache (D7).
+        let chained = self.chain_mode_of(server) != crate::config::ChainMode::Off;
         if !want_full
+            && !chained
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
             && let Some(cache_key) = response_cache_key_for(
@@ -2114,6 +2006,7 @@ impl MetaMcp {
         // `clippy::large_futures` at every call site.
         // #1962: a drop during the dispatch settles the key as uncertain.
         arm_for_dispatch(idem_reservation.as_mut());
+        let chain_slot = super::response_security::chain_receipt::ChainSlot::default();
         // A3 R1: only an MCP backend's own answer can be chain-eligible; a
         // capability's `Ok` also covers its local refusals and inner cache.
         let mcp_backend = self.get_capabilities().is_none_or(|cap| server != cap.name);
@@ -2137,9 +2030,21 @@ impl MetaMcp {
             protocol_revision,
             &profile.name,
             caller.scope(),
+            &chain_slot,
         ))
         .await;
 
+        // A raw-receipt chain refusal is the answer, not a tool failure (D3).
+        let receipt = std::mem::take(&mut *chain_slot.lock());
+        if matches!(receipt, ChainReceipt::Refused)
+            && let Err(error) = dispatch_result
+        {
+            let message = super::signing::wire_error_message(&error);
+            if let Some(reservation) = idem_reservation.as_mut() {
+                reservation.fail(&json!({"code": error.to_rpc_code(), "message": message}));
+            }
+            return Err(error);
+        }
         let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
             Ok(value) => {
@@ -2547,7 +2452,13 @@ impl MetaMcp {
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
-        answered &= effect == super::response_security::GateEffect::PassedThrough;
+        // A chained backend is eligible only with a checked upstream outcome.
+        let (source, upstream) = super::response_security::chain_after_gates(
+            effect,
+            receipt.eligibility(),
+            receipt.into_upstream(),
+        );
+        answered &= source == crate::protocol::ChainSource::Backend;
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -2599,6 +2510,7 @@ impl MetaMcp {
         // not answers either.
         if !want_full
             && !stopped_to_ask
+            && !chained
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
             && let Some(cache_key) = response_cache_key_for(
@@ -2669,7 +2581,11 @@ impl MetaMcp {
         // since then add only gateway-authored metadata. Seal at the delivery
         // boundary so the return type proves the guard ran.
         let sealed = GuardedValue::sealed_by_guard(final_result);
-        Ok(if answered { sealed.backend() } else { sealed })
+        Ok(if answered {
+            sealed.backend(upstream)
+        } else {
+            sealed
+        })
     }
 
     /// Record an outcome against both backend and per-capability error budgets.
@@ -2798,7 +2714,7 @@ impl MetaMcp {
             ContextActionRisk::Medium
         };
 
-        let evaluation = self.context_integrity_kernel.read().evaluate(input);
+        let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {
@@ -3389,6 +3305,7 @@ impl MetaMcp {
         protocol_revision: Option<&str>,
         routing_profile: &str,
         scope: super::InvokeScope<'_>,
+        chain: &super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
         let dispatch_result = self
@@ -3410,6 +3327,7 @@ impl MetaMcp {
                 protocol_revision,
                 routing_profile,
                 scope,
+                chain,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -3499,6 +3417,7 @@ impl MetaMcp {
         protocol_revision: Option<&str>,
         routing_profile: &str,
         scope: super::InvokeScope<'_>,
+        chain: &super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -3632,6 +3551,9 @@ impl MetaMcp {
             map.insert("_meta".to_string(), meta);
         }
         outbound_retry.apply(&mut params);
+        // ASI07 inc3: a chained backend gets this dispatch's own challenge.
+        let chained = backend.chain_policy();
+        let challenge = self.chain_challenge(chained.0, &mut params)?;
 
         // End-user identity propagation (MIK-6704 / ADR-007) and per-identity
         // upstream session partitioning (MIK-6784). The per-user credential was
@@ -3695,7 +3617,9 @@ impl MetaMcp {
             });
         }
 
-        let result = response.result.unwrap_or(json!(null));
+        let mut result = response.result.unwrap_or(json!(null));
+        // Raw receipt (inc3 R1): verify before anything reads the reply.
+        self.chain_receive(chained, &mut result, challenge.as_deref(), chain)?;
         // The RAW reply, here and nowhere else: this value has not been through
         // projection, the contract gate or any shaping, so a `resultType:
         // "task"` in it is the peer's own envelope and never one this gateway
