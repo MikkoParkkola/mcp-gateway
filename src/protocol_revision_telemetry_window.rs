@@ -345,7 +345,8 @@ fn gate(
     span: Option<&SealedSpan>,
 ) -> Result<Vec<String>, WindowBlocked> {
     // RED STUB: certifies everything; replaced by the implementation commit.
-    let _ = (window, declaration, span);
+    let _ = (window, declaration, span, RESTART_BUDGET_SECONDS);
+    let _ = [WindowBlocked::ConcurrentHttpWriters, WindowBlocked::NoSealedSegment];
     Ok(Vec::new())
 }
 
