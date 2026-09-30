@@ -58,12 +58,9 @@ pub struct JsonRpcResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     /// Internal marker: this response answered a destructive call without
-    /// running it — the confirmation could not be obtained, the operator
-    /// declined, or the caller was asked in band and has not answered yet.
-    ///
-    /// `#[serde(skip)]` in both directions: it is never written to the wire,
-    /// and a wire key of this name can never set it. Read only by the
-    /// dispatcher, to keep a refusal out of client failure accounting.
+    /// running it (confirmation unobtainable, declined, or still pending).
+    /// Never on the wire in either direction; read only by the dispatcher, to
+    /// keep a refusal out of client failure accounting.
     #[serde(skip)]
     pub confirmation_refusal: bool,
     /// Server-owned response security refusal. Never accepted from wire data
@@ -72,13 +69,15 @@ pub struct JsonRpcResponse {
     pub(crate) delivery_refusal: bool,
     /// Server-owned: a discovery handler inspected this result's canonical
     /// value before it was serialised (MIK-7407.RESPONSE.3), so no later pass
-    /// scans the served copy. Never read from or written to the wire, so a
-    /// backend or a retried call under a discovery name cannot set it.
+    /// scans the served copy. Never on the wire, so no caller can set it.
     #[serde(skip)]
     pub(crate) discovery_inspected: bool,
     /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
+    /// The upstream chain outcome for a chained backend; never on the wire.
+    #[serde(skip)]
+    pub(crate) chain_upstream: Option<std::sync::Arc<super::UpstreamChain>>,
 }
 
 #[path = "messages_response_de.rs"]
@@ -96,6 +95,7 @@ impl JsonRpcResponse {
             delivery_refusal: false,
             discovery_inspected: false,
             chain_source: super::ChainSource::NotEligible,
+            chain_upstream: None,
         }
     }
 

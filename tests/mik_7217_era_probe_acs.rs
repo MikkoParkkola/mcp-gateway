@@ -134,6 +134,9 @@ impl Fixture {
             runtime_profile: None,
             identity_propagation: None,
             account: None,
+            signature_chain: mcp_gateway::config::ChainMode::default(),
+            chain_origins: Vec::new(),
+            chain_signer: None,
         };
         Backend::new(
             name,

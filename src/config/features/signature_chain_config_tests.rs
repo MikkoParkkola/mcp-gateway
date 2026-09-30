@@ -82,3 +82,79 @@ fn signature_chain_reload_refused() {
         None
     );
 }
+
+/// C1 (inc3 D1): a gateway with one backend under `mode`, `origins` and
+/// `signer`, the upstream key `gw-u` trusted, and its own chain identity.
+fn chained_gateway(
+    mode: super::ChainMode,
+    origins: &[&str],
+    signer: Option<&str>,
+) -> crate::config::Config {
+    use crate::security::remote_provenance::{
+        RemoteServerSignatureAlgorithm, TrustedRemoteServerKeyConfig,
+    };
+    let mut gateway = crate::config::Config::default();
+    gateway.security.signature_chain = Some(config(&seed(32), "gw-d"));
+    gateway.security.remote_server_signing.trusted_keys.insert(
+        "gw-u".to_owned(),
+        TrustedRemoteServerKeyConfig {
+            algorithm: RemoteServerSignatureAlgorithm::Ed25519,
+            public_key: seed(32),
+        },
+    );
+    let backend = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "http://127.0.0.1:9/mcp".to_owned(),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        signature_chain: mode,
+        chain_origins: origins.iter().map(|o| (*o).to_owned()).collect(),
+        chain_signer: signer.map(str::to_owned),
+        ..crate::config::BackendConfig::default()
+    };
+    gateway.backends.insert("upstream".to_owned(), backend);
+    gateway
+}
+
+fn chain_refusal(config: &crate::config::Config) -> Option<String> {
+    match config.validate_with_env(&EnvOverlay::none()) {
+        Err(crate::Error::ConfigValidation(message)) => Some(message),
+        _ => None,
+    }
+}
+
+#[test]
+fn chain_backend_config_validation() {
+    use super::ChainMode::{Off, Require, Verify};
+    let valid = chained_gateway(Verify, &["gw-u"], Some("gw-u"));
+    assert_eq!(
+        chain_refusal(&valid),
+        None,
+        "a complete verify config loads"
+    );
+    assert_eq!(crate::config::BackendConfig::default().signature_chain, Off);
+    assert_eq!(chain_refusal(&chained_gateway(Off, &[], None)), None);
+    for (config, field) in [
+        (chained_gateway(Require, &[], Some("gw-u")), "chain_origins"),
+        (chained_gateway(Verify, &["gw-u"], None), "chain_signer"),
+        (
+            chained_gateway(Verify, &["gw-missing"], Some("gw-u")),
+            "chain_origins",
+        ),
+        (
+            chained_gateway(Verify, &["gw-u"], Some("gw-missing")),
+            "chain_signer",
+        ),
+    ] {
+        let message = chain_refusal(&config).unwrap_or_else(|| panic!("{field} must refuse"));
+        assert!(
+            message.contains(&format!("backends.upstream.{field}")),
+            "{message}"
+        );
+    }
+    let mut no_identity = chained_gateway(Verify, &["gw-u"], Some("gw-u"));
+    no_identity.security.signature_chain = None;
+    let message = chain_refusal(&no_identity).expect("no own identity must refuse");
+    assert!(message.contains("security.signature_chain"), "{message}");
+}
