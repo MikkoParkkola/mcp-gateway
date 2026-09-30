@@ -219,7 +219,17 @@ async fn meta_error_replay_after_block_is_refused() {
 /// idempotency cache in `invoke_tool`.
 #[tokio::test]
 async fn meta_layer_replay_after_block_is_refused() {
-    let fx = fixture(false).await;
+    meta_layer_cell(false).await;
+}
+
+/// R3e. The meta layer's own stored error (`CachedError` in `invoke_tool`).
+#[tokio::test]
+async fn meta_layer_error_replay_after_block_is_refused() {
+    meta_layer_cell(true).await;
+}
+
+async fn meta_layer_cell(fail: bool) {
+    let fx = fixture(fail).await;
     let retry = RetryFields::from_params(Some(&json!({"_meta": {IDEMPOTENCY_KEY_META: "k3"}})));
     let invoke = |id| {
         let caller = MetaMcpCallerContext {
