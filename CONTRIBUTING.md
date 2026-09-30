@@ -40,6 +40,31 @@ cargo kani setup
 cargo kani --output-format=terse
 ```
 
+### Windows test coverage
+
+The `Windows check` job runs `cargo test --all-features --tests --no-fail-fast`: the
+library, the binary and every integration target under `tests/`, with no `--skip`
+filters. It also runs the privileged owner-only rows (`win_privileged::`, `--ignored`).
+Nothing else is counted as Windows coverage, and no met release criterion cites Windows
+execution evidence (`scripts/release/test_windows_job_scope.py`).
+
+Every test that does not run on Windows carries a `#[cfg(unix)]` or `#[cfg(not(windows))]`
+gate. Each gate is class (c), unix-only by design, and is one of:
+
+- POSIX mode bits and umask (`0600`, group/world-readable refusal, `chmod` failure
+  injection). Windows enforces owner-only through DACLs, tested in `win_acl` and the
+  privileged rows instead.
+- File ownership by uid, and a symlink's own permissions. Windows has neither.
+- Process reaping, pid liveness and zombie states (`/proc`, `kill(0)`, `waitpid`).
+- Read-only directories as a way to force a write error; Windows directory attributes
+  do not deny file creation.
+- Unix-only child environment and signal scenarios.
+
+Fix a Windows failure in the test (a wrong assumption) or the product (a defect, red
+first) before reaching for a gate. Add a gate only for a genuine unix-only behavior, with
+a comment naming why. User-facing limits: see `docs/UPGRADING-4.0.md`
+(items 68 and 99) and the README.
+
 ## Code Organization
 
 Source in `src/`, each module kept to **800 lines or fewer**. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full diagram.

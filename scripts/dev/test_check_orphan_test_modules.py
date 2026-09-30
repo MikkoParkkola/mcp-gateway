@@ -229,6 +229,28 @@ class OrphanGuard(unittest.TestCase):
         )
         self.assertEqual(found, [])
 
+    def test_a_raw_string_path_declares_its_file(self):
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": '#[path = r"actual.rs"]\nmod named;\n#[path = r#"other.rs"#]\nmod named2;\n',
+                "src/a/actual.rs": "",
+                "src/a/other.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_a_child_of_a_path_loaded_file_resolves_beside_it(self):
+        # rustc treats a `#[path]` file as mod-rs: `mod child;` inside
+        # `actual.rs` is `child.rs` next to it, not `actual/child.rs`.
+        found = self.orphans_of(
+            {
+                "src/a/mod.rs": '#[path = "actual.rs"]\nmod named;\n',
+                "src/a/actual.rs": "mod child;\n",
+                "src/a/child.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
     def test_the_real_tree_is_clean(self):
         # The guard must pass on the repository it ships in; a guard that is
         # red on arrival gets disabled rather than obeyed.

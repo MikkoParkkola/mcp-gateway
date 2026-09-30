@@ -30,7 +30,7 @@ CITED_PATH = re.compile(r"`((?:src|tests|docs|scripts|\.github)/[^`\s]*)`")
 # form this check cannot read fails rather than going unchecked.
 CARGO_LINE = re.compile(r"^\s*cargo\s+test\b.*$", re.M)
 # `--lib` is the only flag it reads; any other shape is reported, not skipped.
-CARGO_TEST = re.compile(r"^\s*cargo\s+test(?:\s+--lib)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
+CARGO_TEST = re.compile(r"^\s*cargo\s+test(\s+--lib)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
 # A test function: `#[test]` or `#[tokio::test(...)]`, then attributes, then `fn`.
 TEST_FN = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -45,11 +45,18 @@ def _rust_lexer():
     return module
 
 
-def test_names_defined(root: Path) -> set[str]:
-    """Every test function under src/ and tests/: a filter must match one of them."""
+def test_names_defined(root: Path, subs: tuple[str, ...] = ("src", "tests")) -> set[str]:
+    """Every test function under `subs`: a filter must match one of them.
+
+    `--lib` runs the library target only, which is what src/ minus src/bin and
+    src/main.rs compiles; callers pass ("src",) for it and skip the bin files.
+    """
     names: set[str] = set()
-    for sub in ("src", "tests"):
+    for sub in subs:
         for path in (root / sub).rglob("*.rs"):
+            rel = path.relative_to(root).parts
+            if subs == ("src",) and (rel[:2] == ("src", "bin") or rel == ("src", "main.rs")):
+                continue
             # A commented-out test is not a test. The orphan gate's lexer
             # blanks nested block comments and string contents correctly.
             text, _ = _rust_lexer().blank(path.read_text(encoding="utf-8", errors="replace"))
@@ -64,15 +71,19 @@ def problems(doc: Path, root: Path) -> list[str]:
         if not (root / cited.rstrip("/")).exists():
             found.append(f"cited path does not exist: {cited}")
     defined = test_names_defined(root)
+    defined_lib = test_names_defined(root, ("src",))
     for line in CARGO_LINE.findall(text):
         match = CARGO_TEST.match(line)
         if match is None:
             found.append(f"validation command form not checkable: {line.strip()}")
             continue
         # `cargo test NAME` is a substring filter; it must match at least one test.
-        name = match.group(1)
-        if not any(name in d for d in defined):
-            found.append(f"validation command matches no test: cargo test {name}")
+        # `--lib` narrows the target: a test that lives only under tests/ does
+        # not satisfy it, and `cargo test --lib` would run 0 tests and pass.
+        name = match.group(2)
+        pool = defined_lib if match.group(1) else defined
+        if not any(name in d for d in pool):
+            found.append(f"validation command matches no test: cargo test {'--lib ' if match.group(1) else ''}{name}")
     return found
 
 

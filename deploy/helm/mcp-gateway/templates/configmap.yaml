@@ -16,8 +16,8 @@ data:
       crash-looping pod.
     */}}
     {{- $mode := .Values.auth.mode }}
-    {{- if not (has $mode (list "credential" "mesh")) }}
-    {{- fail (printf "auth.mode must be \"credential\" or \"mesh\", got %q. A value neither template recognises used to render a credential block with no Secret behind it, which is a crash-looping pod rather than an install error." $mode) }}
+    {{- if not (has $mode (list "credential" "api_keys" "oidc" "mesh")) }}
+    {{- fail (printf "auth.mode must be \"credential\", \"api_keys\", \"oidc\" or \"mesh\", got %q. A value neither template recognises used to render a credential block with no Secret behind it, which is a crash-looping pod rather than an install error." $mode) }}
     {{- end }}
     {{- $cfg := deepCopy (.Values.config | default dict) }}
     {{- if not $cfg.server }}
@@ -27,7 +27,71 @@ data:
     {{- $_ := unset $cfg "auth" }}
     {{- $_ := set $cfg.server "allow_unauthenticated_network_bind" true }}
     {{- else }}
-    {{- $_ := set $cfg "auth" (dict "enabled" true "bearer_token" "env:MCP_GATEWAY_TOKEN" "public_paths" (list "/health")) }}
+    {{- $auth := dict "enabled" true "public_paths" (list "/health") }}
+    {{- /* CHART.2: each mode renders its own credential and nothing else; the
+           env names match mcp-gateway.authSecretEnv. */}}
+    {{- $refs := include "mcp-gateway.authRefs" . | fromJsonArray }}
+    {{- if eq $mode "credential" }}
+    {{- $_ := set $auth "bearer_token" (printf "env:%s" (index $refs 0).env) }}
+    {{- else if eq $mode "api_keys" }}
+    {{- if not .Values.auth.apiKeys }}
+    {{- fail "auth.mode api_keys needs at least one auth.apiKeys entry." }}
+    {{- end }}
+    {{- $keys := list }}
+    {{- range $i, $k := .Values.auth.apiKeys }}
+    {{- if not $k.backends }}
+    {{- fail (printf "auth.apiKeys[%d] (%s) needs backends: an empty list grants none. Use [\"*\"] for all." $i $k.name) }}
+    {{- end }}
+    {{- $key := dict "name" $k.name "key_sha256" (printf "env:%s" (index $refs $i).env) "backends" $k.backends }}
+    {{- if $k.admin }}{{- $_ := set $key "admin" true }}{{- end }}
+    {{- if $k.rateLimit }}{{- $_ := set $key "rate_limit" (int64 $k.rateLimit) }}{{- end }}
+    {{- if $k.allowedTools }}{{- $_ := set $key "allowed_tools" $k.allowedTools }}{{- end }}
+    {{- if $k.deniedTools }}{{- $_ := set $key "denied_tools" $k.deniedTools }}{{- end }}
+    {{- if $k.expiresAt }}{{- $_ := set $key "expires_at" $k.expiresAt }}{{- end }}
+    {{- $keys = append $keys $key }}
+    {{- end }}
+    {{- $_ := set $auth "api_keys" $keys }}
+    {{- else if eq $mode "oidc" }}
+    {{- $oidc := .Values.auth.oidc | default dict }}
+    {{- if not $oidc.providers }}
+    {{- fail "auth.mode oidc needs at least one auth.oidc.providers entry." }}
+    {{- end }}
+    {{- if not $oidc.policies }}
+    {{- fail "auth.mode oidc needs at least one auth.oidc.policies entry: a token exchange that matches no policy is refused." }}
+    {{- end }}
+    {{- $providers := list }}
+    {{- range $oidc.providers }}
+    {{- $prov := dict "issuer" .issuer }}
+    {{- if .audiences }}{{- $_ := set $prov "audiences" .audiences }}{{- end }}
+    {{- if .allowedDomains }}{{- $_ := set $prov "allowed_domains" .allowedDomains }}{{- end }}
+    {{- if .jwksUri }}{{- $_ := set $prov "jwks_uri" .jwksUri }}{{- end }}
+    {{- if .discoveryUrl }}{{- $_ := set $prov "discovery_url" .discoveryUrl }}{{- end }}
+    {{- $providers = append $providers $prov }}
+    {{- end }}
+    {{- $issuers := list }}
+    {{- range $oidc.providers }}{{- $issuers = append $issuers .issuer }}{{- end }}
+    {{- $policies := list }}
+    {{- range $oidc.policies }}
+    {{- if not (has .match.issuer $issuers) }}
+    {{- fail (printf "auth.oidc.policies match.issuer %q names no auth.oidc.providers issuer, so the policy can never match." .match.issuer) }}
+    {{- end }}
+    {{- $scopes := dict "backends" (.scopes.backends | default list) "tools" (.scopes.tools | default list) }}
+    {{- if .scopes.rateLimit }}{{- $_ := set $scopes "rate_limit" (int64 .scopes.rateLimit) }}{{- end }}
+    {{- $policies = append $policies (dict "match" .match "scopes" $scopes) }}
+    {{- end }}
+    {{- $ks := $cfg.key_server | default dict }}
+    {{- if hasKey $ks "admin_token" }}
+    {{- fail "config.key_server.admin_token is not allowed in oidc mode: set auth.oidc.adminTokenSecretKey, so the admin token comes from auth.existingSecret and never sits in the ConfigMap." }}
+    {{- end }}
+    {{- $_ := set $ks "enabled" true }}
+    {{- $_ := set $ks "oidc" $providers }}
+    {{- $_ := set $ks "policies" $policies }}
+    {{- if $oidc.adminTokenSecretKey }}
+    {{- $_ := set $ks "admin_token" (printf "env:%s" (index $refs 0).env) }}
+    {{- end }}
+    {{- $_ := set $cfg "key_server" $ks }}
+    {{- end }}
+    {{- $_ := set $cfg "auth" $auth }}
     {{- /* And the mesh override is REMOVED, not merely left unset. The two modes
            are described as mutually exclusive; a value carried over from
            config.server would leave a credential deployment with the escape
@@ -64,6 +128,13 @@ data:
            survive that. */}}
     {{- if .Values.metrics.existingSecret }}
     {{- $_ := set $cfg.server "metrics_token" "env:MCP_GATEWAY_METRICS_TOKEN" }}
+    {{- end }}
+    {{- /* F6/CHART.2: the control-plane store defaults next to the read-only
+           config; on a persistent claim it lives on the claim instead. */}}
+    {{- if .Values.persistence.enabled }}
+    {{- $cp := $cfg.control_plane | default dict }}
+    {{- $_ := set $cp "store_dir" "/var/lib/mcp-gateway/control-plane" }}
+    {{- $_ := set $cfg "control_plane" $cp }}
     {{- end }}
     {{- if not $cfg.server.public_url }}
     {{- $_ := set $cfg.server "public_url" (printf "http://%s.%s.svc.cluster.local:%v" (include "mcp-gateway.fullname" .) .Release.Namespace .Values.service.port) }}
