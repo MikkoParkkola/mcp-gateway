@@ -256,9 +256,9 @@ A bounded read helper collects frames for a fixed window (`ARRIVAL`, 5 s); every
 | L3 | `an_unknown_cancel_is_ignored` | Send `notifications/cancelled` for an id never sent; then a normal `gateway_list_servers` call. | The normal call is answered; no error frame for the unknown id. | green (pin) |
 | L4 | `initialize_is_not_cancelled` | Send `initialize` and a cancel naming its id in the same write. | The `initialize` response arrives. | green (pin; spec 2025-06-18 rule 2) |
 | L5 | `cancelling_a_finished_call_changes_nothing` | A plain call that completes; then a cancel naming it; then another call. | Both calls answered once each; nothing else written. | green (pin; spec rule 4) |
-| L6 | `a_cancelled_keyed_call_is_not_re_executed` | As L1 with the call keyed (legacy key in `_meta`); after the cancel, re-issue the same key and arguments. | Refused 409 "Secured execution result is unavailable" (settled as outcome-unknown, `admission.rs:333-336`); backend rounds stay 1 (settlement matrix, "held at the input bridge" row). | RED: the lease is still held, so the re-issue gets 409 "Execution is already in progress" (`:330-332`) |
+| L6 | `a_cancelled_keyed_call_is_not_re_executed` | As L1 with the call keyed (legacy key in `_meta`); after the cancel, re-issue the same key and arguments, retrying within `ARRIVAL` until the settled refusal appears (the aborted task settles its lease asynchronously, so a first re-issue may still see the in-flight refusal). | Refused 409 "Secured execution result is unavailable" (settled as outcome-unknown, `admission.rs:333-336`); backend rounds stay 1 (settlement matrix, "held at the input bridge" row). | RED: the lease is still held, so the re-issue gets 409 "Execution is already in progress" (`:330-332`) |
 | L7 | `a_batched_call_cannot_hold` | A batch holding one call to the asking tool. | The item's response is the bridge refusal (no session), and no outbound `elicitation/create` is written. | green (pin; D5 batch rule) |
-| L8 | `eof_is_bounded_when_the_client_stops_reading` | A held call; then the client stops reading stdout and fills it (a duplex with a small buffer that the test never drains), then closes stdin. | `run_stdio_on` returns within `STDIO_DRAIN_TIMEOUT` plus 10 s. | RED: `writer_task.await` is unbounded (`server/mod.rs:2718`) |
+| L8 | `eof_is_bounded_when_the_client_stops_reading` | Output is a `tokio::io::duplex(64)` whose read side the test never reads after the handshake. One held call suffices: its outbound `elicitation/create` frame is larger than 64 bytes, so the writer blocks on it. Then stdin closes. | `run_stdio_on` returns within `STDIO_DRAIN_TIMEOUT` (30 s) plus 10 s: the drain and the writer join share one deadline (D5 rev 4.1). | RED: `writer_task.await` is unbounded (`server/mod.rs:2718`) |
 
 L8 costs about 30 s of wall time (the drain bound). It stays one test, and it is the only slow
 row.
@@ -269,7 +269,7 @@ row.
 |---|---|
 | queued before dispatch | Not driven end to end: it needs 64 running dispatches to hold the permit. It is covered by the lease drop semantics already pinned in `idempotency/admission.rs` tests (`Lease::drop` abandons an undispatched lease). Named here so the gap is visible. |
 | held at the input bridge | L6 |
-| backend call in flight | L9 `a_cancel_during_the_backend_call_settles_unknown`: a fixture tool that sleeps 3 s; cancel mid-call; re-issue the same key → 409 "Secured execution result is unavailable"; backend rounds 1. RED for the same reason as L6 (today: "Execution is already in progress"). |
+| backend call in flight | L9 `a_cancel_during_the_backend_call_settles_unknown`: a fixture tool that sleeps 3 s; cancel mid-call; re-issue the same key, retrying within `ARRIVAL` as L6 does → 409 "Secured execution result is unavailable"; backend rounds 1. RED for the same reason as L6 (today: "Execution is already in progress"). |
 | result secured, waiting to be queued | Not forcible without a hook between securing and queueing; the replay-on-reissue behaviour for completed keys is `dispatcher_admission_arms.rs::a_replayed_key_returns...`. Named gap. |
 
 ## Mutant batch
@@ -277,7 +277,19 @@ row.
 | M | Mutation | Must kill |
 |---|---|---|
 | P1 | the cancel handler ignores every id | L1, L2, L6, L9 |
-| P2 | abort without recording the cancelled id (no frame suppression) | L2 (when the frame races the abort; kept only if the batch shows it deterministic, else recorded as a timing-dependent row) |
+| P2 | abort without recording the cancelled id | not killable at this level: the cancel line is always processed before EOF, so no frame can race it in a scripted test. The cancelled-id set is covered by design and review, not claimed as mutant-proven. |
 | P3 | the completion arm never removes map entries | L5 (a later cancel for a reused id aborts the wrong task; the test reuses the finished id) |
 | P4 | writer join unbounded again | L8 |
-| P5 | `initialize` inserted into the cancel map | L4 |
+| P5 | the cancel handler does not skip `initialize` (a cancel naming the in-progress `initialize` id is acted on) | L4 |
+
+### I3 review log
+
+- Test-plan review, one seat (`kimi-review`, content inline, SHIP-WITH-FIXES). Taken:
+  - the L6/L9 settlement race is handled with a bounded retry;
+  - P2 is recorded as not killable at this level;
+  - L8 gets one shared drain deadline (design D5), and its fill method is stated;
+  - P5 is restated.
+
+  Recorded here so it is not reopened: "its waiter gets a terminal answer" (the joined
+  `Cancelled` outcome) is not observable from outside the loop. It is covered through L1 (a late
+  answer resolves nothing) and L2 (the call is joined, and no frame appears).

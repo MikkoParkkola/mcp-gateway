@@ -385,7 +385,10 @@ EOF join (unchanged from rev 2). `channel.close()` fails held prompts; dispatche
 `STDIO_DRAIN_TIMEOUT`, then are aborted and joined (`:2687-2703`). `writer_task.await`
 (`:2718`) runs outside that bound, and the writer can block forever in `write_all`/`flush` when the
 client stops reading stdout (`server/stdio_writer.rs`). The fix joins the writer under the same
-bound and aborts it on timeout. The test uses a duplex whose read side is never drained.
+bound and aborts it on timeout. Rev 4.1: one deadline covers both waits. It is taken at EOF as
+`Instant::now() + STDIO_DRAIN_TIMEOUT`; the dispatch drain and the writer join each wait only
+until it, so `run_stdio_on` returns within one `STDIO_DRAIN_TIMEOUT` after EOF, not two. The test
+uses a duplex whose read side is never drained.
 
 Not done (tracked as #2495, 4.0.1): forwarding the cancel upstream as the backend's own `notifications/cancelled`. The
 backend call may keep running after the abort, as it does today when an HTTP client disconnects.
