@@ -119,6 +119,12 @@ impl Fixture {
 /// One API key, `k`, for backend `alpha`: a verified principal, so the meta
 /// route's admission lease applies to a keyed call as well as the cache.
 async fn fixture(answer: Answer) -> Fixture {
+    fixture_with(answer, false).await
+}
+
+/// `passthrough`: the trusted-internal mode, which skips the direct route's
+/// security gate.
+async fn fixture_with(answer: Answer, passthrough: bool) -> Fixture {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
@@ -141,7 +147,10 @@ async fn fixture(answer: Answer) -> Fixture {
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     let backend = Arc::new(Backend::new(
         "alpha",
-        BackendConfig::default(),
+        BackendConfig {
+            passthrough,
+            ..BackendConfig::default()
+        },
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
@@ -351,6 +360,22 @@ async fn meta_replay_without_a_block_is_still_deduplicated() {
     assert!(
         second.contains("\"id\":2"),
         "the re-issue's own id: {second}"
+    );
+    assert_eq!(fx.deliveries(), 1, "{second}");
+}
+
+/// R1p. Direct route, pass-through backend: the security gate is skipped by
+/// design, but the AX-010 block still comes before the cached replay.
+#[tokio::test]
+async fn passthrough_replay_after_block_is_refused() {
+    let fx = fixture_with(Answer::Done, true).await;
+    let first = post(&fx, "/mcp/alpha", &call(1, "t", &json!({}))).await;
+    assert!(first.contains("done"), "the first call must run: {first}");
+    fx.withhold_t();
+    let second = post(&fx, "/mcp/alpha", &call(2, "t", &json!({}))).await;
+    assert!(
+        second.contains("withheld") && !second.contains("done"),
+        "refused, not replayed: {second}"
     );
     assert_eq!(fx.deliveries(), 1, "{second}");
 }
