@@ -1,6 +1,8 @@
 # MIK-7116 4.0 slice: MIN.1 attribution, MIN.2 observe, MIN.4 measurement
 
-Status: v5 (pending lead ruling on round 3). Verdicts by version: v3 read by
+Status: v5, adopted by lead ruling (2026-09-30). Delta-only review of the two
+HIGH dispositions on a non-OpenAI seat (synthetic-review, GLM-5.3): SHIP,
+three improvements, no findings (disposition table). Verdicts by version: v3 read by
 seat 1 (gpt-6-astra): REWORK, MED/LOW only. v4 read by seat 2 (degraded:
 gpt-5.4, same vendor as seat 1; synthetic-review 429 on three attempts):
 REWORK, 2 HIGH + 1 MED, all verified and folded into v5. Earlier: v2 was reviewed by two seats (both SHIP-WITH-FIXES); a later
@@ -144,7 +146,7 @@ log_request` keeps its signature.
   H-b): `SyncAdmission::Replay` (`meta_mcp/admission.rs:210`) is served from
   the router (`handlers.rs:1673,1699`) without `invoke_tool`, so
   `audit_invocation` never runs, contrary to D1-d's "one record per call".
-  Pre-existing and outside MIN.1's diff: tracked as its own issue and fixed in
+  Pre-existing and outside MIN.1's diff: tracked as #2472 (4.0-gating) and fixed in
   its own PR, which increment 1 then extends with `tenants` +
   `attribution: "cached_delivery"` like the other hits. MIN.1 is not moved to
   met until that record exists.
@@ -197,6 +199,13 @@ Enforcement is a later switch, after MIN.KILL.
   cross-tenant read).
 - **Where:** in the meta and direct D1 writers, which hold the caller and
   the owned notes. Cache hits do not observe (§2).
+- **Criterion wording (lead condition on H-a):** the ledger says "A caller
+  that **has read** sensitive data attributed to tenant A is flagged (observe
+  mode) or, when blocking is switched on, blocked from **reading** sensitive
+  data attributed to tenant B" (`docs/requirements/RELEASE-4.0.0-scope-update.md:132`).
+  It says "read", not "delivered", so a fetch reading is within the text; its
+  lean toward delivery is why the move-after-delivery precondition binds
+  enforcement.
 - **What an observation means (v4 seat 2 H-a):** a *sensitive fetch* made
   for the principal, i.e. the backend returned it under their call. On
   `/mcp` the router's response-firewall pass (`handlers.rs:1716-1738`) runs
@@ -287,3 +296,6 @@ Enforcement is a later switch, after MIN.KILL.
 | v4 seat 2 H-a HIGH | MIN.2 observes content the later response firewall blocks | verified; observation defined as sensitive fetch, overcount bounded and measured, move-after-delivery set as an enforcement precondition (§7) |
 | v4 seat 2 H-b HIGH | meta replay bypasses attribution and audit | verified; pre-existing D1-d gap, split to its own issue/PR; MIN.1 extends it and waits for it (§4) |
 | v4 seat 2 M | `control_identity` ≠ raw `caller_key` | accepted; claim corrected, raw key used (§7) |
+| v5 delta (GLM-5.3) SHIP, impr 1 | enforcement precondition is prose only | taken: T30 pins today's fetch semantics, so a change that adds enforcement without moving the observation must rewrite T30 in the same diff |
+| v5 delta impr 2 | no test that a replay record carries `tenants` | taken: T31 |
+| v5 delta impr 3 | carry the firewall finding id on an overcounted observation | deferred to 4.0.1: the D1 record and the NDJSON line already share `session_id` and time; not needed for observe mode |

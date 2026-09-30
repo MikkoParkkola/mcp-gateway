@@ -97,6 +97,9 @@ pub(crate) mod rotation_fault {
 pub(crate) mod segments;
 #[path = "transparency_log_verify.rs"]
 mod verify;
+// MIK-7116.MIN.1: invocation records carrying tenant attribution.
+#[path = "transparency_log_attributed.rs"]
+mod attributed;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
@@ -744,6 +747,9 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "transparency_log_attributed_tests.rs"]
+mod attributed_tests;
 #[cfg(test)]
 #[path = "transparency_log_bounded_tests.rs"]
 mod bounded_tests;

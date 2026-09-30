@@ -825,6 +825,9 @@ mod verification {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "tenant_audit_tests.rs"]
+mod tenant_audit_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;

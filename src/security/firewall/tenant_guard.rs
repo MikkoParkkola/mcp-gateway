@@ -18,6 +18,7 @@
 //! The counting key is therefore the authenticated principal, and the span is
 //! an explicit window ([`crate::security::firewall::principal_window`]).
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -129,6 +130,33 @@ impl TenantGuard {
         verdict
     }
 
+    /// The tenants a request names, under the configured `arg_keys`. Pure: it
+    /// records nothing, so attribution never counts against the guard.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "MIK-7116.MIN.1 red stub; wired by the implementation"
+        )
+    )]
+    pub(crate) fn request_tenants(&self, _args: &Value) -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
+    /// The tenants a tool result names: the request walk over the result, plus
+    /// every `content[].text` block that parses as JSON. Pure, like
+    /// [`Self::request_tenants`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "MIK-7116.MIN.1 red stub; wired by the implementation"
+        )
+    )]
+    pub(crate) fn response_tenants(&self, _result: &Value) -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
     /// Gather every value under a configured tenant key, at any depth.
     ///
     /// Recursive because tenant identifiers arrive nested — a `customer_id`
@@ -169,3 +197,7 @@ impl TenantGuard {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tenant_attribution_tests.rs"]
+mod attribution_tests;

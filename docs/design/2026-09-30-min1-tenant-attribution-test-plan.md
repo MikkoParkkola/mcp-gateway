@@ -33,6 +33,7 @@ public helper, not from the implementation's wrapper.
 | T24 | unit, transparency log | `extra` containing `route` (a domain field) and `entry_hash` (a chain field) | both rejected with an error, nothing appended | no writer |
 | T25 | integration, meta D1 | as T7 with the response cache on; same call twice; then again with a context-integrity `withhold` policy | hit record: `tenants` from the delivered value, `attribution == "cached_delivery"`, no `data_classes`, no `cross_tenant`/`observer`; under `withhold` the hit record carries no response tenant (the delivered value holds none) | hits skip the gates |
 | T28 | integration, direct D1 | direct idempotent call twice (same key) whose reply names `cust-9` | second record: `tenants ∋ h(cust-9)`, `attribution == "cached_delivery"` | direct hit unscoped |
+| T31 | integration, router D1 | after #2472: a meta idempotent `gateway_invoke` replayed with the same key, reply naming `cust-9`, firewall `arg_keys` | the replay record carries `tenants ∋ h(cust-9)` and `attribution == "cached_delivery"` | lands with the increment that follows #2472 |
 | T26 | integration, direct D1 | as T12, response inspection in action mode with an `AKIA…` key in the reply | outcome ≠ `ok`; `tenants ∋ h(cust-9)`; no `data_classes` | no field |
 
 ### MIN.2 observe (design §7)
