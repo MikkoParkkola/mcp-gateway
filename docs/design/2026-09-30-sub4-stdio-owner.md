@@ -132,7 +132,7 @@ and each test fails when the property it guards is removed:
   and admission and cache namespace by the same string (`meta_mcp/admission.rs:112-116,182-189`;
   `meta_mcp/support.rs:163-193`, stdio → `cred:5:stdio`). Any future path that lets a string
   reach `credential_principal` (a persisted record, a header, a new auth kind) becomes the operator.
-- F5. Policy runs before replay on stdio: `admit_meta_sync` calls `check_invocation_policy`
+- F5. Policy runs before replay on stdio (rev 2: see D3 for the signing qualification): `admit_meta_sync` calls `check_invocation_policy`
   before `admit_sync` (`meta_mcp/admission.rs:~301`), documented at `invoke.rs:1137-1146`.
   Exception: skipped when `caller.signing.prepared_for(server, tool)`.
 - F6. The six management branches are the tools `mark_management_dispatch` covers
@@ -148,35 +148,59 @@ and each test fails when the property it guards is removed:
 
 ### D1 — `StdioLocalOperator`, the typed tag (OWNER.3, OWNER.5; enables OWNER.1/4 tests)
 
-A zero-sized `pub(crate) struct StdioLocalOperator(());` in `src/gateway/server/`, with the
-private field so only that module can construct it. `MetaMcpCallerContext` (crate-private: its
-module is private, `src/gateway/mod.rs:13`) gains `local_operator: Option<StdioLocalOperator>`.
-`build_stdio_caller_context` and the stdio catalogue context set `Some`; every other constructor
-sets `None`. No public API item is added.
+Framing (rev 2): preventive boundary hardening. F1-F3 mean no HTTP-to-stdio replay is reachable
+today; OWNER.3 removes the string as the thing that decides, so the next path that lets a string
+reach `credential_principal` does not become the operator. Its tests share one `MetaMcp` (one
+private service realm) so process isolation cannot make them pass vacuously.
 
-Decisions that read the operator switch from the string to the tag:
+A zero-sized `pub(crate) struct StdioLocalOperator(());` (`Clone, Copy`) in `src/gateway/server/`,
+with the private field so only that module can construct it.
 
-1. `CallerProvenance::classify` takes the tag: `LocalTransport` iff the tag is present. A
-   principal string `"stdio"` without the tag classifies as `Credential` (non-empty) — never the
-   operator. Its four callers (`router/backend_handlers.rs:546`, `meta_mcp/discovery_fetch.rs:79`,
-   `meta_mcp/invoke.rs:1658`, `meta_mcp/caller_forward.rs:39`) pass the caller's tag; the HTTP one
-   passes `None`.
+Where the tag travels (every stdio caller shape, not only `tools/call`):
+
+1. `MetaMcpCallerContext` (crate-private: its module is private, `src/gateway/mod.rs:13`) gains
+   `local_operator: Option<StdioLocalOperator>`. FRESH constructors for non-stdio transports set
+   `None`: HTTP (`router/handlers.rs:1599-1630`), task recovery (`router/handlers/tasks.rs:290-315`),
+   task worker (`task_service/execution/context.rs:121-170`). DERIVING constructors COPY it from
+   the caller they derive from: `with_retry` (`meta_mcp/mod.rs:261-300`, used by chain steps,
+   `meta_mcp/search.rs:526-534`) and any other `Self { .. }` rebuild. Stdio sets `Some` in
+   `build_stdio_caller_context` and in the `stdio_caller_context` test fixture.
+2. Catalogue requests (`prompts/*`, `resources/*`) have no caller context: stdio builds an
+   `AuthenticatedClient` (`server/stdio_catalogue.rs:36-70`). `AuthenticatedClient` is public API
+   (`pub mod auth`, all fields `pub`), so the tag does NOT go on it (C7). Instead the five
+   `MetaMcp` catalogue handlers (`handle_prompts_list/get`, `handle_resources_list/read/
+   templates_list`) and `handler_proof` (`meta_mcp/caller_forward.rs:34-39`) take an extra
+   crate-private `local_operator: Option<StdioLocalOperator>` argument; the HTTP router passes
+   `None`, `stdio_catalogue::dispatch` passes `Some`. The resource-owner lookups that classify
+   (`meta_mcp/protocol.rs:163,273`; `meta_mcp/resources.rs:307,408,458`) read it from there.
+
+Decisions that switch from the string to the tag:
+
+1. `CallerProvenance::classify(principal, local_operator)`: `LocalTransport` iff the tag is
+   present. An untagged `"stdio"` string classifies as `Credential`. Four production callers
+   (`router/backend_handlers.rs:546`, `meta_mcp/discovery_fetch.rs:79`, `meta_mcp/invoke.rs:1658`,
+   `meta_mcp/caller_forward.rs:39`) plus the twelve test calls (`caller_proof_tests.rs`,
+   `vault_tests.rs`, `server/tests/stdio_sole_operator.rs`) are migrated.
 2. Admission namespace: a tagged caller's admission identity is derived under its own domain
-   string (`mcp-gateway.execution-admission.local-operator.v1`), not from the principal string, so
-   an untagged `"stdio"` principal and the real operator hash into disjoint key spaces.
-3. Retained-output cache namespace: `caller_cache_principal` emits `local:` for the tag instead
-   of `cred:{len}:{digest}`, for the same reason.
+   string (`mcp-gateway.execution-admission.local-operator.v1`), so an untagged `"stdio"` principal
+   and the real operator hash into disjoint key spaces.
+3. Retained-output cache namespace: `caller_cache_principal` emits `local:` for the tag in the
+   branch that today yields `cred:{len}:{digest}` (`meta_mcp/support.rs:170-190`); higher-priority
+   bindings are unchanged.
 
 `STDIO_CREDENTIAL_PRINCIPAL` stays as the audit/display principal (no audit schema change, C6).
 
-Alternatives rejected: (a) keying off `CredentialKind::LocalTransport` — it is an audit enum that
-the task execution context carries as data (`task_service/execution/context.rs:42`), so a
-persisted or rebuilt context could carry it; the ticket asks for a tag only the transport
-creates. (b) Leaving it as is because F3 makes it unreachable today — OWNER.3 guards the next
-path, and F4 shows the failure mode is silent.
+Alternatives rejected: (a) keying off `CredentialKind::LocalTransport` — an audit enum the task
+execution context carries as data (`task_service/execution/context.rs:42`), so a rebuilt context
+could carry it; the ticket asks for a tag only the transport creates. (b) A field on
+`AuthenticatedClient` — public API widening. (c) Leaving it because F3 makes it unreachable today.
 
-Risk: a missed constructor leaves a stdio path untagged, which fails closed (the operator loses
-sole-operator account service, a visible refusal), never open. Tests pin the real stdio path.
+Risk (corrected in rev 2; rev 1 claimed a lost tag fails closed, which is false): a stdio path
+that loses the tag classifies as `Credential`, which still establishes the operator on a
+sole-operator deployment (`caller_proof.rs:87-94`, `vault.rs:210-226`). Accounts keep working and
+only the namespace separation silently disappears. So a lost tag is not self-revealing, and the
+guard is test coverage: I1 asserts the tag on each stdio shape (`tools/call`, a chain step through
+`with_retry`, each of the five catalogue methods).
 
 ### D2 — OWNER.1: tests over the real stdio loop, no product change expected
 
@@ -187,54 +211,97 @@ a counting backend (the `EchoBackend::tools_call_count` fixture,
 `server/tests/signing_nonce_allocations_support.rs:152,257-290`, adapted to the serve loop). If a
 test goes red on the current tree, the fix is scoped in the test-plan round, not here.
 
-### D3 — OWNER.4: policy before replay, including the signing-prepared skip
+### D3 — OWNER.4: current policy before replay
 
-Mechanism exists (F5). Tests: keyed call executes under a permitting policy; the policy is then
-changed to deny that target (live reload path stdio already wires, `server/mod.rs` reload context);
-the keyed replay is refused with the policy error, the retained output is not returned, the
-target's dispatch count stays at its pre-denial value (zero new dispatches); a permitted
-neighbouring target still executes. A second case covers the F5 exception: a replay whose signing
-was prepared must still be refused under the new policy. If `prepared_for` authorized against a
-stale policy, the fix is to re-run `check_invocation_policy` on the replay arm — decided at test
-red, reviewed in the final review.
+Rev 2 correction: there is no live ToolPolicy reload. Startup compiles one immutable
+`Arc<ToolPolicy>` (`server/mod.rs:929-931`), stdio borrows it for the life of the process, and
+config reload classifies `security` as restart-required (`config_reload/mod.rs:565-568,635-642`).
+"Current" therefore means the policy passed with the request being dispatched. Live policy
+publication is not designed here; it would be a feature (4.1 by the scope rule).
+
+Mechanism exists (F5). Tests at the dispatcher level, against ONE `MetaMcp` (one admission ledger
+and retained-output cache), calling the same `dispatch_single_with_sink` the stdio loop calls:
+
+1. Keyed call to target T under policy P1 (permits T) → executes, T count 1.
+2. Same key, same arguments, under P2 (denies T) → refused with the policy error, no retained
+   output in the response, T count still 1 (zero dispatches for the denied attempt).
+3. A neighbouring target U under P2 → executes, U count 1.
+4. With P2 in force from the start, a first call to T → refused, T count 0.
+
+Signing (rev 2 correction of F5's exception): each stdio frame builds a fresh signing context
+(`server/mod.rs:2887-2891,3024-3026`), and signing preparation checks policy before it records the
+target (`meta_mcp/signing.rs:169-213`); admission follows immediately (`server/mod.rs:3298-3320`).
+So the skip reuses a check made moments earlier in the same request, never one from an earlier
+request. Test 2 is repeated with signing enabled to pin that: the fresh preparation refuses under
+P2. No product change is planned for D3; a red test reopens design.
 
 ### D4 — OWNER.5: what the stdio context carries
 
-Test on the context the real stdio path builds (captured from `build_stdio_caller_context` via
-the dispatcher, not the `stdio_caller_context` test fixture): `local_operator` is `Some`,
-`verified_identity`, `grant_subject`, `api_key_name` are `None`. Account-dependent refusal: a
-backend configured for per-user identity propagation (`invoke.rs:3153-3154`, "the request carries
-no verified end-user identity") is refused over stdio; an ordinary local mutation succeeds in the
-same session. Boundary kept from the existing ruling: the sole-operator deployment account stays
-served on stdio (`server/account_bindings.rs:89-91`; test
-`stdio_run_path_serves_its_operator_the_managed_account`). "No personal-account identity" means
-no per-user account is resolved, not that the deployment's own account is withheld.
+Test on the context the real stdio path builds (captured through the dispatcher, not the
+`stdio_caller_context` fixture): `local_operator` is `Some`; `verified_identity`, `grant_subject`
+and `api_key_name` are `None`.
+
+Interpretation, stated as acceptance wording (rev 2): "no personal-account identity" means no
+request-carried or per-user identity. It does NOT mean no account resolves: stdio deliberately
+resolves `Principal::SoleOperator` for the deployment's managed account
+(`server/account_bindings.rs:89-91`; `personal_accounts/vault.rs:210-226`; test
+`stdio_run_path_serves_its_operator_the_managed_account`), and that ruling is preserved. The test
+asserts three things in one session:
+
+1. the resolved principal kind is `SoleOperator` (never a per-user principal);
+2. a backend configured for per-user identity propagation is refused with "the request carries no
+   verified end-user identity" (`meta_mcp/invoke.rs:3153-3154`);
+3. an ordinary local mutation succeeds (positive control).
 
 ### D5 — LIFE.1: cancel and join held stdio calls
 
-Read loop, before the spawn path: a `notifications/cancelled` frame whose `params.requestId` names
-an in-flight spawned dispatch aborts that task. Bookkeeping: `HashMap<RequestId, AbortHandle>`
-from `JoinSet::spawn`, plus the `tokio::task::Id` so `try_join_next_with_id` / `join_next_with_id`
-remove entries when tasks end. Unknown or finished ids are ignored (MCP spec: the receiver MAY
-ignore a cancellation for an unknown or completed request). `initialize` is inline and never in
-the map, so it cannot be cancelled (spec: MUST NOT).
+Cancel. The read loop, before the spawn path, handles `notifications/cancelled`: when
+`params.requestId` names an in-flight spawned dispatch, that task is aborted. Unknown or finished
+ids are ignored (the MCP spec lets the receiver ignore them). `initialize` runs inline, is never
+tracked, and cannot be cancelled (spec: MUST NOT).
 
-Outcome for a cancelled id: the task's future is dropped, so its `send_frame` never runs and no
-response is written for that id, unless the response was already queued (spec-permitted race).
-Held bridge prompts drop with it; F8 settles admission as outcome-unknown, so a re-issue with the
-same key is not re-executed. The abort is joined by the existing reap/drain, so no orphan.
+Bookkeeping (rev 2):
+- `HashMap<RequestId, (task::Id, AbortHandle)>`, keyed by the protocol `RequestId`, which keeps a
+  numeric id and a string id distinct (`protocol/messages.rs:200-207`).
+- Duplicate in-flight id (a client violating the spec's no-reuse rule): the first mapping is kept
+  and the second dispatch still runs, but it is not cancellable by id; a warning is logged. The
+  duplicate is not refused, because refusing it could break a lenient client in the operator's
+  live config (lane rule "Real-config compatibility").
+- An entry is removed on completion only when the completing `task::Id` still owns it, so a stale
+  completion cannot unmap a live dispatch.
+- Reaping is completion-driven: the read `select!` gains a
+  `join_next_with_id(), if !dispatches.is_empty()` arm. An aborted task is therefore joined as
+  soon as it ends, not when the next line or EOF arrives.
 
-EOF: unchanged mechanism (F7), which already cancels held prompts and joins every task before the
-loop returns. LIFE.1 adds the test that proves it: a call held at the bridge, then stdin EOF, then
-`run_stdio_on` returns with the backend dispatch joined and no frame for the held id beyond the
-bridge's failure response.
+Response race, stated rather than promised away: `abort()` does not stop a task that is already
+being polled, and producing a response and queueing it are separate steps
+(`server/mod.rs:2608-2631`). The guarantee is that once the aborted task has been joined, no
+further frame for that id is queued. A frame queued before the join may still be delivered, which
+the spec permits.
 
-Not done: a work-level cancel forwarded to the backend (`notifications/cancelled` upstream). The
-backend call may keep running after the abort; that is the existing behaviour for HTTP disconnects
-and a separate feature (4.1 by the lane scope rule), recorded, not silently dropped.
+Settlement matrix. Each row is asserted separately; one "cancel means unknown" test would encode
+the wrong contract.
 
-Risk: aborting between backend send and admission settlement leaves a dispatched lease settled as
-unknown; that is the intended conservative outcome (no double effect), and a test asserts it.
+| Cancelled while | Admission state after | Re-issue with same key |
+|---|---|---|
+| queued before dispatch (waiting for its admission permit) | lease abandoned (`idempotency/admission.rs:406-416`) | executes once |
+| held at the input bridge (`input_required` prompt) | outer lease settled unknown; inner reservation released, having been disarmed (`meta_mcp/invoke.rs:2266-2271`) | refused as outcome-unknown, no second dispatch |
+| backend call in flight | lease settled unknown | refused, no second dispatch |
+| result secured, waiting to be queued | retained completed result (`server/mod.rs:3008-3011`) | replays the stored result |
+
+EOF. Existing mechanism (F7): held prompts fail, dispatches drain for `STDIO_DRAIN_TIMEOUT`, then
+are aborted and joined. Rev 2 adds the part that is missing: `writer_task.await` runs outside
+that timeout (`server/mod.rs:2688-2721`), and the writer can block indefinitely in
+`write_all`/`flush` when the client stops reading stdout (`server/stdio_writer.rs:45-55`). A client
+that closes stdin while leaving stdout open and unread would then keep `run_stdio_on` from ever
+returning. Fix: join the writer under the same bound and abort it on timeout. The LIFE.1 test
+exercises that backpressure case (a duplex whose read side is never drained), not only a
+continuously drained stream.
+
+Not done: forwarding the cancel upstream to the backend as its own `notifications/cancelled`. The
+backend call may keep running after the abort, which matches today's behaviour when an HTTP client
+disconnects. That is a separate feature (4.1 by the lane scope rule); it is recorded here, not
+dropped silently.
 
 ### §P1b.OWNER.2 — STUB (after #2414)
 
@@ -259,3 +326,13 @@ separately.
 
 Each increment's test plan is written into `docs/design/test-plan.md` under a
 `MIK-7272.OWNER.*` / `MIK-7272.LIFE.1` heading and reviewed before its failing tests are written.
+
+## Review log
+
+- Rev 1 (`90ffd60e8`), seat 1: REVISE. Three HIGH findings, all confirmed at source and repaired in
+  rev 2: (1) the tag was dropped by `with_retry` and the claim that a lost tag fails closed was
+  false; (2) catalogue requests had no path for the tag; (3) there is no live ToolPolicy reload.
+  Five MEDIUM findings, also repaired: the signing skip (D3), D5 bookkeeping and the response race,
+  the settlement matrix, the unbounded writer join at EOF, and the D4 wording. One LOW: OWNER.3
+  reframed as preventive hardening (D1).
+- Rev 1, seat 2: pending at the time of writing.
