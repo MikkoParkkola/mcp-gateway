@@ -705,10 +705,6 @@ fn missing_revision_agent(client: &'static str, user_agent: Option<&str>) -> &'s
 }
 
 fn user_agent_family(user_agent: Option<&str>) -> &'static str {
-    let _ = user_agent;
-    if true {
-        return "other"; // RED STUB
-    }
     let Some(agent) = user_agent.map(str::trim).filter(|a| !a.is_empty()) else {
         return "absent";
     };

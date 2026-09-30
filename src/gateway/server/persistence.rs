@@ -369,7 +369,7 @@ pub(super) fn spawn_protocol_window_saver(
         loop {
             let close = tokio::select! {
                 _ = interval.tick() => false,
-                _ = shutdown.recv() => false, // RED STUB
+                _ = shutdown.recv() => true,
             };
             if close {
                 // ponytail: the listener stops accepting right after the same

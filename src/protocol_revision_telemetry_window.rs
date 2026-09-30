@@ -229,7 +229,10 @@ impl HttpSegmentSink {
         super::force_directory_owner_only(&directory)?;
         let _lock = lock(&lock_path)?;
         let mut window = read_or_create(&window_path, now)?;
-        let opened_while_another_was_open = false; // RED STUB
+        let opened_while_another_was_open = window
+            .http_segments
+            .last()
+            .is_some_and(|previous| !previous.closed_cleanly);
         window.http_segments.push(Segment {
             listen: identity.listen.clone(),
             exe: identity.exe.clone(),
@@ -344,10 +347,37 @@ fn gate(
     declaration: &Declaration,
     span: Option<&SealedSpan>,
 ) -> Result<Vec<String>, WindowBlocked> {
-    // RED STUB: certifies everything; replaced by the implementation commit.
-    let _ = (window, declaration, span, RESTART_BUDGET_SECONDS);
-    let _ = [WindowBlocked::ConcurrentHttpWriters, WindowBlocked::NoSealedSegment];
-    Ok(Vec::new())
+    if declaration.population != [Transport::Http] || window.stdio.total > 0 {
+        return Err(WindowBlocked::PopulationMismatch);
+    }
+    let segments = &window.http_segments;
+    if segments.iter().any(|segment| {
+        segment.listen != declaration.listen || !segment.exe.starts_with(&declaration.exe_prefix)
+    }) {
+        return Err(WindowBlocked::ForeignWriter);
+    }
+    if segments.iter().any(|segment| segment.opened_while_another_was_open) {
+        return Err(WindowBlocked::ConcurrentHttpWriters);
+    }
+    // Only the newest segment may be unclosed: it is outside the span.
+    let clean_prefix = segments.iter().take_while(|s| s.closed_cleanly).count();
+    if clean_prefix + 1 < segments.len() {
+        return Err(WindowBlocked::UncleanSegment);
+    }
+    if segments.windows(2).any(|pair| {
+        pair[1]
+            .process_started_at
+            .saturating_sub(pair[0].last_checkpoint_at)
+            > RESTART_BUDGET_SECONDS
+    }) {
+        return Err(WindowBlocked::CoverageGap);
+    }
+    let span = span.ok_or(WindowBlocked::NoSealedSegment)?;
+    if span.snapshot.total == 0 {
+        return Err(WindowBlocked::PopulationMismatch);
+    }
+    let elapsed = std::time::Duration::from_secs(span.ended_at.saturating_sub(span.started_at));
+    super::retire_revisions(&span.snapshot, elapsed).map_err(WindowBlocked::Retirement)
 }
 
 fn add_saturating(target: &mut Snapshot, delta: &Snapshot) {
