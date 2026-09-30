@@ -440,10 +440,10 @@ only raise it.
   - `mcp_auth_failures_total{kind}`: `missing_credential`, `invalid_credential`,
     `expired_api_key`, `session_expired`, `bootstrap_refused`,
     `token_exchange_denied`, `token_exchange_invalid`.
-  - `mcp_authz_denials_total{route, reason}`: route `meta`, `direct`, `admin` or
-    `ui`; reason `backend_scope`, `account_not_usable`, `identity_grant`,
-    `gateway_refusal`, `response_firewall`, `request_policy`, `admin_required`
-    or `other`.
+  - `mcp_authz_denials_total{route, reason}`: route `meta`, `direct`, `admin`,
+    `ui` or `control_plane`; reason `backend_scope`, `account_not_usable`,
+    `identity_grant`, `gateway_refusal`, `response_firewall`, `request_policy`,
+    `admin_required`, `rbac` or `other`.
   - `mcp_audit_degraded` and `mcp_audit_append_failures_total{cause}` for the log.
 
   ```yaml

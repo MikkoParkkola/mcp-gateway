@@ -36,21 +36,23 @@ async fn admin_action_layer(
     request: Request,
     next: Next,
 ) -> Response {
-    // Control-plane pages are counted by their own route (AUDIT.3), never as `ui`.
+    // Control-plane pages are refused by their RBAC, and are their own route.
     let control_plane = request
         .extensions()
         .get::<MatchedPath>()
         .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
     let run = |request| async move {
         let response = next.run(request).await;
-        if !control_plane
-            && matches!(
-                response.status(),
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-            )
-        {
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
             use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
-            denied(DenialRoute::Ui, DenialReason::AdminRequired);
+            if control_plane {
+                denied(DenialRoute::ControlPlane, DenialReason::Rbac);
+            } else {
+                denied(DenialRoute::Ui, DenialReason::AdminRequired);
+            }
         }
         response
     };

@@ -39,7 +39,7 @@ impl AuthFailureKind {
     }
 }
 
-/// Where a call was refused. `control_plane` arrives with AUDIT.3 (D3).
+/// Where a call was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DenialRoute {
     Meta,
@@ -48,6 +48,9 @@ pub(crate) enum DenialRoute {
     /// The admin UI exists only with the `webui` feature.
     #[cfg(feature = "webui")]
     Ui,
+    /// The control-plane pages of the admin UI, refused by their RBAC.
+    #[cfg(feature = "webui")]
+    ControlPlane,
 }
 
 impl DenialRoute {
@@ -58,6 +61,8 @@ impl DenialRoute {
             Self::Admin => "admin",
             #[cfg(feature = "webui")]
             Self::Ui => "ui",
+            #[cfg(feature = "webui")]
+            Self::ControlPlane => "control_plane",
         }
     }
 }
@@ -73,6 +78,8 @@ pub(crate) enum DenialReason {
     ResponseFirewall,
     RequestPolicy,
     AdminRequired,
+    #[cfg(feature = "webui")]
+    Rbac,
     Other,
 }
 
@@ -86,6 +93,8 @@ impl DenialReason {
             Self::ResponseFirewall => "response_firewall",
             Self::RequestPolicy => "request_policy",
             Self::AdminRequired => "admin_required",
+            #[cfg(feature = "webui")]
+            Self::Rbac => "rbac",
             Self::Other => "other",
         }
     }

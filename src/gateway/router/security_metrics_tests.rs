@@ -281,11 +281,11 @@ async fn admin_gate_refusal_counted_without_a_log() {
     );
 }
 
-/// An admin UI mutation by a non-admin is a `ui` denial. The control-plane
-/// pages are not counted as `ui`: that route arrives with AUDIT.3.
+/// An admin UI mutation by a non-admin is a `ui` denial; a control-plane
+/// refusal is its own route, never also `ui`.
 #[cfg(feature = "webui")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admin_ui_denial_counted_and_control_plane_is_not_ui() {
+async fn admin_ui_and_control_plane_denials_counted_by_route() {
     let fx = fixture(Setup::default()).await;
     let ((reload, grants), text) = scrape(async {
         (
@@ -297,12 +297,21 @@ async fn admin_ui_denial_counted_and_control_plane_is_not_ui() {
         matches!(reload, StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED),
         "{reload}"
     );
-    assert!(grants.is_client_error(), "{grants}");
+    assert!(
+        matches!(grants, StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED),
+        "{grants}"
+    );
     assert_eq!(
         series(&text, DENY, r#"reason="admin_required",route="ui""#),
         1,
         "{text}"
     );
+    assert_eq!(
+        series(&text, DENY, r#"reason="rbac",route="control_plane""#),
+        1,
+        "{text}"
+    );
+    assert_eq!(sum_where(&text, DENY, ""), 2, "each refusal once: {text}");
 }
 
 /// D4-T7. Labels are constants: no key name, backend, tool or path.
