@@ -440,12 +440,20 @@ public API or config change.
    (`tasks/*` answers -32601 as today), and leaves Tasks out of its discover answer for the life
    of the process. The advertisement then matches the surface in both outcomes (item 5). A test
    covers the leased-directory case.
+   **Invariant I-OWN (shared store on disk).** Stdio and HTTP never share a process, but after I4
+   they can share the task store directory on disk, one after the other: whichever opens
+   `tasks.store_dir` first holds the lease, and stdio falls back only while HTTP holds it. From
+   then on, the only thing that keeps a stdio-owned task unreadable to an HTTP principal is the
+   owner digest's domain separation: `[LOCAL_OPERATOR_TAG]` against `[PRINCIPAL_TAG, principal]`.
+   No text an HTTP caller presents can produce the stdio owner, and the store keeps no other owner
+   field that a lookup could match on instead.
 3. Route. The three `tasks/*` arms and task-augmented `tools/call` take a crate-private
    `TaskRoute { service, executor, owner }` instead of `&AppState`, extracted from the arms as
    they stand. HTTP builds it from `route_task_owner`; stdio builds it from (1).
 4. Tests (store integration): the stdio operator creates a task; the store is closed and reopened
    at the same path and at a moved path, and the operator retrieves it. From a different store
-   the id is absent. On the same store, HTTP-shaped owners (`"stdio"`, `local:auth-disabled:…`,
+   the id is absent. I-OWN test, named for the invariant: stdio writes a task into a store
+   directory, the store is closed, the HTTP route opens the same directory, and HTTP owners (`"stdio"`, `local:auth-disabled:…`,
    a credential digest) get the not-found answer and cannot cancel or update it. The
    independent functional gate runs the binary over real pipes.
 5. Advertisement honesty. Stdio's `server/discover` declares the Tasks extension today
