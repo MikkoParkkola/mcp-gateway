@@ -29,6 +29,24 @@ pub(super) const UPSTREAM_VERSION: u32 = 3;
 /// only a row that holds a continuation it could not honour.
 pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 
+/// The record version that introduced [`Record::targets`]. Written only on a row
+/// that carries at least one target; every other row keeps its version and its
+/// bytes. A beta loader (`1..=3`) refuses such a row, which UPGRADING-4.0 states.
+pub(super) const TARGET_VERSION: u32 = 5;
+
+/// The highest record version the loader accepts: the newest field's version.
+pub(super) const MAX_LOADABLE_VERSION: u32 = TARGET_VERSION;
+
+/// One backend call a task's result was produced by: names only, never
+/// arguments. No current invocation policy reads `ToolTarget.arguments`; a
+/// policy that did would have to revisit replay authorization.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Target {
+    pub(crate) server: String,
+    pub(crate) tool: String,
+}
+
 /// An open input round's continuation: what a resume needs and nothing else.
 ///
 /// Gateway state, never part of the wire task. `request_state` is the
@@ -151,6 +169,11 @@ pub(super) struct Record {
     /// with no round outstanding, so such a row serializes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) input_round: Option<InputRound>,
+    /// The backend calls this task made or will make, for re-authorizing a
+    /// stored result before it is delivered. Absent on rows written before
+    /// [`TARGET_VERSION`] and on rows that dispatched nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) targets: Vec<Target>,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -190,13 +213,20 @@ impl PreparedTask {
         binding: &crate::idempotency::admission::TaskBinding,
         publication: crate::idempotency::admission::TaskPublication,
         backend: &str,
+        targets: Vec<Target>,
     ) -> Self {
+        let version = if targets.is_empty() {
+            RECORD_VERSION
+        } else {
+            TARGET_VERSION
+        };
         Self {
             record: Record {
-                version: RECORD_VERSION,
+                version,
                 dispatched: false,
                 upstream: None,
                 input_round: None,
+                targets,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -221,6 +251,7 @@ impl PreparedTask {
                 dispatched: false,
                 upstream: None,
                 input_round: None,
+                targets: Vec::new(),
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),
@@ -263,4 +294,27 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
+    /// The backend label the task was admitted under: an aggregate label for
+    /// a plan, so never proof of what a plan called.
+    pub(crate) backend: String,
+    /// The calls that produced this snapshot's result; empty on a legacy row.
+    pub(crate) targets: Vec<Target>,
+    /// Whether the row was written by a gateway that records targets. An empty
+    /// list on such a row means nothing was dispatched; on an older row it
+    /// means the provenance is unavailable.
+    pub(crate) targets_recorded: bool,
+}
+
+impl CommittedTask {
+    /// The committed view of `record`, read in one piece so a caller that
+    /// authorizes delivery checks the snapshot it returns.
+    pub(super) fn of(task: Task, record: &Record) -> Self {
+        Self {
+            task,
+            revision: record.revision,
+            backend: record.backend.clone(),
+            targets: record.targets.clone(),
+            targets_recorded: record.version >= TARGET_VERSION,
+        }
+    }
 }

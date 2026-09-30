@@ -222,6 +222,52 @@ pub(super) struct RecoveryCaller<'a> {
     pub session_id: Option<&'a str>,
 }
 
+/// Run `check` against THIS request's live policy caller context.
+///
+/// Every field is the request's own; nothing is restored from a record: a
+/// record supplies the target, and the target is then judged against the caller
+/// in front of us. Shared by the recovery read and the delivery check so the
+/// two cannot build different callers. No prepared-signing context is carried,
+/// which is what keeps `check_invocation_policy` running.
+fn with_policy_caller<R>(
+    state: &Arc<AppState>,
+    caller: &RecoveryCaller<'_>,
+    check: impl FnOnce(&crate::gateway::meta_mcp::MetaMcpCallerContext<'_>) -> R,
+) -> R {
+    let router_authorizer = OwnedRouterAuthorizer::capture(
+        caller.client,
+        caller.oauth_agent_identity,
+        caller.cert_identity,
+    );
+    let borrowed = router_authorizer.borrow(state);
+    let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
+    let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        is_modern: true,
+        // This context checks authorization only; it never accesses a cache.
+        protocol_revision: None,
+        credential_principal: caller.client.map(|client| client.principal.as_str()),
+        authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
+        credential_kind: crate::security::audit::CredentialKind::of(caller.client),
+        execution: None,
+        signing: None,
+        authorizer,
+        api_key_name: caller.api_key_name,
+        agent_id: caller.agent_id,
+        agent_declared: None,
+        grant_subject: caller.grant_subject.clone(),
+        stdio_nonce: None,
+        verified_identity: caller.verified_identity,
+        is_admin: caller.is_admin,
+        input_capabilities: caller.input_capabilities,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        task: None,
+        era: crate::protocol::meta::Era::Modern,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+    };
+    check(&policy_caller)
+}
+
 pub(super) async fn tasks_get(
     state: &Arc<AppState>,
     owner: &str,
@@ -243,10 +289,24 @@ pub(super) async fn tasks_get(
     if committed.task.status() == crate::protocol::tasks::TaskStatus::Working {
         recover_from_upstream(state, owner, task_id, params, caller).await;
     }
-    // Re-read: recovery may have committed a terminal outcome, and this read
-    // serves whatever is durably committed now.
+    // ONE read after recovery: the snapshot that is authorized is the snapshot
+    // returned, so a task that turned terminal during recovery or through a
+    // concurrent worker is checked too.
     match state.tasks.get(owner, task_id) {
-        Ok(current) => JsonRpcResponse::success(id, task_envelope(&current.task, "complete")),
+        Ok(current) => {
+            let refusal = with_policy_caller(state, caller, |policy_caller| {
+                state.meta_mcp.refuse_stored_delivery(
+                    &id,
+                    &current,
+                    crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                    caller.session_id,
+                    policy_caller,
+                )
+            });
+            refusal.unwrap_or_else(|| {
+                JsonRpcResponse::success(id, task_envelope(&current.task, "complete"))
+            })
+        }
         Err(ServiceError::NotFound) => missing_task_error(id),
         Err(_) => store_unavailable(id),
     }
@@ -276,44 +336,9 @@ async fn recover_from_upstream(
         return;
     };
 
-    // Scoped: the rebuilt authorizer and caller context exist only for the
-    // verdict, and are gone before the query's await. Nothing about this
-    // caller is carried into the upstream call.
-    let authorized = {
-        let router_authorizer = OwnedRouterAuthorizer::capture(
-            caller.client,
-            caller.oauth_agent_identity,
-            caller.cert_identity,
-        );
-        let borrowed = router_authorizer.borrow(state);
-        let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
-        let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
-            is_modern: true,
-            // This context checks authorization only; it never accesses a cache.
-            protocol_revision: None,
-            credential_principal: caller.client.map(|client| client.principal.as_str()),
-            authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
-            credential_kind: crate::security::audit::CredentialKind::of(caller.client),
-            execution: None,
-            // No saved prepared-signing context: `None` is what keeps
-            // `check_invocation_policy` running on this read, which is the point.
-            signing: None,
-            authorizer,
-            api_key_name: caller.api_key_name,
-            agent_id: caller.agent_id,
-            agent_declared: None,
-            grant_subject: caller.grant_subject.clone(),
-            stdio_nonce: None,
-            verified_identity: caller.verified_identity,
-            is_admin: caller.is_admin,
-            input_capabilities: caller.input_capabilities,
-            confirmation:
-                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-            retry: &crate::protocol::mrtr::NO_RETRY,
-            task: None,
-            era: crate::protocol::meta::Era::Modern,
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-        };
+    // Scoped inside the helper: the rebuilt authorizer and caller context exist
+    // only for the verdict, and are gone before the query's await.
+    let authorized = with_policy_caller(state, caller, |policy_caller| {
         // A fresh token for THIS read, from the gateway-namespaced recovery
         // field. Missing or expired denies before any query; nothing spent is
         // restored, and no saved prepared-signing context is reconstructed.
@@ -325,9 +350,9 @@ async fn recover_from_upstream(
         );
         state
             .meta_mcp
-            .check_invocation_policy(&policy_args, caller.session_id, &policy_caller)
+            .check_invocation_policy(&policy_args, caller.session_id, policy_caller)
             .is_ok()
-    };
+    });
     if !authorized {
         tracing::info!(
             task_id,

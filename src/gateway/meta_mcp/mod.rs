@@ -83,6 +83,7 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
+pub(crate) mod dispatch_log;
 mod dispatch_names;
 pub(crate) mod grant_audit;
 mod interim_promotion;
@@ -102,6 +103,7 @@ mod spec_preview;
 mod support;
 mod surfaced;
 mod task_confirmation;
+mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
 
@@ -2230,18 +2232,22 @@ impl MetaMcp {
             tool: tool_name.to_owned(),
             arguments,
         };
+        use crate::gateway::task_service::execution::BeginOutcome;
         match executor.begin(intent, task, backend, call).await {
-            Ok(outcome @ crate::gateway::task_service::execution::BeginOutcome::Existing(_)) => {
-                let policy = self.check_task_admission_policy(
+            Ok(BeginOutcome::Existing(stored)) => {
+                // The request's own policy, then the calls that produced the
+                // stored result (R3.2): both must hold before it goes out.
+                if let Err(error) = self.check_task_admission_policy(
                     caller,
                     tool_name,
                     &policy_arguments,
                     session_id,
-                );
-                match policy {
-                    Ok(()) => outcome.into_response(id),
-                    Err(error) => error_response_preserving_status(id, &error),
+                ) {
+                    return error_response_preserving_status(id, &error);
                 }
+                let attestation = caller.retry.attestation.as_deref();
+                self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
+                    .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
             }
             Ok(outcome) => outcome.into_response(id),
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),

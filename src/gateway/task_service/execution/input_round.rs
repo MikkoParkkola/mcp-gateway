@@ -21,7 +21,7 @@ use super::settlement::{
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcome};
 use crate::gateway::router::AppState;
-use crate::gateway::task_service::record::InputRound;
+use crate::gateway::task_service::record::{InputRound, Target};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::input::ProvideOutcome;
 use crate::protocol::mrtr::{InputRequired, RetryFields};
@@ -108,7 +108,47 @@ impl<'a> Settling<'a> {
         }
     }
 
+    /// Record the calls a plan actually made, in the row, before it settles or
+    /// parks. `false` only when they do not fit the record budget (#2450).
+    async fn persist_targets(&self) -> bool {
+        if !matches!(
+            self.call.tool.as_str(),
+            "gateway_execute" | "gateway_run_playbook"
+        ) {
+            return true;
+        }
+        let targets: Vec<Target> = self
+            .owned
+            .dispatch_log()
+            .snapshot()
+            .into_iter()
+            .map(|(server, tool)| Target { server, tool })
+            .collect();
+        let Ok(owner) = self.executor.service.owner(self.principal) else {
+            return true;
+        };
+        let stored = self
+            .executor
+            .service
+            .store
+            .add_targets(owner.as_digest(), self.id, self.revision, targets)
+            .await;
+        !matches!(stored, Err(StoreError::Capacity))
+    }
+
     async fn settle(&self, event: TaskTransition) {
+        // A result whose targets cannot be recorded could never be re-authorized:
+        // the task fails, explicitly, rather than store an empty list.
+        let event = if !self.persist_targets().await && matches!(event, TaskTransition::Complete(_))
+        {
+            TaskTransition::Fail(JsonRpcError {
+                code: -32603,
+                message: "the task's backend calls exceed the record size limit".to_owned(),
+                data: None,
+            })
+        } else {
+            event
+        };
         self.executor
             .settle_cas(self.principal, self.id, self.revision, event)
             .await;
@@ -117,6 +157,11 @@ impl<'a> Settling<'a> {
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
     async fn park(&self, round: InputRequired) {
+        if !self.persist_targets().await {
+            return self
+                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .await;
+        }
         let Ok(owner) = self.executor.service.owner(self.principal) else {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()))
@@ -197,6 +242,10 @@ async fn dispatch(
         call.arguments.clone(),
         owned.session_id(),
         &caller,
+    );
+    let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+        Arc::clone(owned.dispatch_log()),
+        dispatched,
     );
     tokio::select! {
         biased;

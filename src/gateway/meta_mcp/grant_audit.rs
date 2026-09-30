@@ -335,7 +335,12 @@ impl super::MetaMcp {
         // invocation), and a concrete type here overflows auto-trait checks.
         let future: Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> =
             Box::pin(self.invoke_tool_in_slot(args, session_id, caller));
-        slot_result(logger, future).await
+        let outcome = slot_result(logger, future).await;
+        // #2450: a step that produced output is a target of the task's result.
+        if outcome.is_ok() {
+            super::dispatch_log::note_completed(args);
+        }
+        outcome
     }
 
     /// The dispatch check, unless signing prepared this call: then only

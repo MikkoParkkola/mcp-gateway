@@ -33,7 +33,7 @@ pub(crate) use upstream::UpstreamCapture;
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
 
-use super::record::CommittedTask;
+use super::record::{CommittedTask, Target};
 use super::service::{CreateOutcome, ServiceError, TaskService};
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
@@ -99,6 +99,8 @@ pub(crate) enum TaskWrite<'a> {
         request: &'a OwnedAdmissionRequest,
         task: &'a Task,
         backend: &'a str,
+        /// The single backend call the task makes, when it makes exactly one.
+        targets: Vec<Target>,
     },
     Settle {
         principal: &'a str,
@@ -376,11 +378,12 @@ impl TaskExecutor {
                 request,
                 task,
                 backend,
+                targets,
             } => {
                 let workers = Arc::clone(&self.workers);
                 let created = self
                     .service
-                    .create(request.borrow(), task, backend, move || {
+                    .create_targeted(request.borrow(), task, (backend, targets), move || {
                         workers.try_acquire_owned().ok()
                     })
                     .await

@@ -129,6 +129,7 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
+| 105 | `tasks/get` and a repeated task call re-check a finished task against current policy before returning its result; a task record now names the backend calls that produced it (record version 5), and a finished plan task from a beta store is refused | Nothing to do on upgrade; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2934,6 +2935,37 @@ no subject keep the 3.x behaviour.
 
 **Action:** a client that proves a subject and renews its bearer token mid-session must
 re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
+
+## 105. A finished task's result is re-checked against current policy
+
+**Startup:** no notice
+
+In 3.x and the betas, `tasks/get` returned a finished task's stored result with no invocation
+policy, and a repeated task call with the same key answered from the stored task. A tool that was
+withheld, a backend that was killed, or a grant that was revoked after the task finished did not
+stop either. In 4.0 both paths run the policy for the calls that produced the result before
+returning it: the identity grants, the caller's backend scope, the active profile, the kill
+switch, capability disable and withheld tools, plus the recovery attestation when enforcement is
+on. A refused read returns the policy error and no result.
+
+The task record now lists those calls (server and tool names, never arguments). A
+`gateway_invoke` or surfaced-tool task records its call at creation; a playbook or `gateway_execute`
+task records the calls it actually dispatched when it settles. A row written by a beta has no
+list: a finished playbook or `gateway_execute` row is refused, and any other legacy row is
+checked at the backend level only. Only beta task stores contain such plan rows.
+
+**Rollback:** a record that carries calls is written as version 5, and a version 4 or 5 row makes
+a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
+4.0.0 does not keep those rows readable by the betas. The task store is the directory
+`tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
+start a beta is destructive: it abandons every task and every task idempotency key, it is not a
+migration, and a repeated call then runs again. Restoring an older backup can lose completion and
+idempotency knowledge and replay external effects that already completed. 3.5.x has no task store
+and is not affected.
+
+**Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
+`_meta["io.mcp-gateway/recovery"].attestation` to read a finished task, as it already does for a
+working one.
 
 ## Upgrading from 3.5.x: a walkthrough
 

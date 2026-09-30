@@ -52,6 +52,7 @@ pub(crate) use execution::{
 /// name has to be reachable from outside the crate.
 pub use service::ServiceError;
 pub use service::TaskService;
+pub(crate) use record::{CommittedTask, Target};
 pub use store::StoreLimits;
 
 pub use crate::protocol::tasks::Task;

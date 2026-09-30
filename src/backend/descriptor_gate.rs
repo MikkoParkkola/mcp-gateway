@@ -314,7 +314,7 @@ impl Backend {
     }
 
     /// Whether the blocked-name map overflowed (sticky until restart).
-    fn gate_saturated(&self) -> bool {
+    pub(crate) fn gate_saturated(&self) -> bool {
         self.descriptor_gate
             .saturated
             .load(std::sync::atomic::Ordering::SeqCst)
