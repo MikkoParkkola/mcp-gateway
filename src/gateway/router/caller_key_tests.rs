@@ -147,3 +147,20 @@ fn u4_the_grant_subject_still_falls_back_to_the_display_name() {
         "shown"
     );
 }
+
+// GH1942.HARDEN.1 row 9: the bucket half of `CallerKey`.
+#[test]
+fn caller_key_separates_subjects() {
+    let shared = credential("one-key-for-everyone");
+    let a = caller_key(Some(&subject("agent_oauth", "a")), None, Some(&shared));
+    let b = caller_key(Some(&subject("agent_oauth", "b")), None, Some(&shared));
+    assert_ne!(a, b, "two subjects behind one key shared a bucket");
+}
+
+#[test]
+fn token_exchange_keeps_bucket() {
+    let who = subject("oidc:https://idp.example", "alice");
+    let before = caller_key(Some(&who), None, Some(&credential("token-1")));
+    let after = caller_key(Some(&who), None, Some(&credential("token-2")));
+    assert_eq!(before, after, "a new token split one subject's bucket");
+}

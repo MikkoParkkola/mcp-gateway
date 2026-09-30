@@ -128,6 +128,7 @@ backend" and "fails a capability file" first.**
 | 101 | A restart that finds the audit log's `.hwm` missing, on a log that went through segment handling, writes an `audit_segment_hwm_missing` record; `audit verify` then fails the log for as long as it is kept | Investigate how the mark went missing; archive the log and start a new one to clear the failure |
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
+| 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2948,6 +2949,23 @@ public or shared capabilities write none. Under `FailClosed`, a record that cann
 answers the call with `-32005`, as an invocation record does.
 
 **Action:** where a SIEM rule or script counts audit records per call, filter on `kind`.
+
+## 104. A session belongs to its subject and credential
+
+**Startup:** no notice
+
+In 3.x, a streaming session belonged to the credential that opened it. Callers that proved
+different subjects (an agent JWT `sub`, a trusted identity header, Cloudflare Access, an mTLS
+certificate) behind one shared API key or bearer token, or with authentication off, could resume
+and delete each other's sessions and read each other's notifications by presenting the session
+id. In 4.0 a session belongs to the subject and the credential together, on POST, GET and DELETE
+alike. A different subject, or the same subject under another credential, is given a new session.
+The credential half is what the caller presented, so a renewed token is another credential: in 3.x
+a delegated OIDC bearer kept its session across a refresh, and now it does not. Callers that prove
+no subject keep the 3.x behaviour.
+
+**Action:** a client that proves a subject and renews its bearer token mid-session must
+re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
 
 ## Upgrading from 3.5.x: a walkthrough
 

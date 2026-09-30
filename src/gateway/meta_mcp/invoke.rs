@@ -1118,7 +1118,13 @@ impl MetaMcp {
             session_id,
             api_key_name: None,
             trace_id: "",
-        })
+        })?;
+        // #2445: a withheld tool is refused here, ahead of every replay layer.
+        let backend = self.backends.get(server);
+        match backend.and_then(|b| b.blocked_tool_refusal(None, tool)) {
+            Some(refusal) => Err(Error::Protocol(refusal)),
+            None => Ok(()),
+        }
     }
 
     pub(super) fn authorize_invocation(

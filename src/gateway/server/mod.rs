@@ -68,9 +68,9 @@ use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
+use crate::security::{ToolPolicy, posture};
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -579,17 +579,14 @@ impl Gateway {
     ) -> Result<Self> {
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
-        crate::security::posture::resolve(
-            &mut config,
-            crate::security::posture::FirewallBuild::CURRENT,
-        )?;
+        posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
         {
             // A cheap snapshot, dropped here: nothing environmental is held
             // while the gateway is built or awaited on.
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
         }
-        crate::security::posture::log_startup(&config);
+        posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
 

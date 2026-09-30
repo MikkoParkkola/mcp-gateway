@@ -35,6 +35,7 @@ pub(crate) mod response_policy;
 pub mod response_scanner;
 pub mod sanitize;
 pub mod scope_collision;
+pub(crate) mod security_metrics;
 // Emission and strip are wired (ASI07 increment 2); chain verification has
 // no caller until increment 3, which removes this `expect`.
 #[cfg_attr(

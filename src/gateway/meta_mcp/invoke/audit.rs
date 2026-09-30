@@ -74,6 +74,11 @@ impl MetaMcp {
         result: Result<Value>,
         dispatch_failure: Option<i32>,
     ) -> Result<Value> {
+        // D4: counted before the log check, so auth off still counts.
+        if let Some(reason) = crate::security::security_metrics::meta_denial(&result) {
+            use crate::security::security_metrics::{DenialRoute, denied};
+            denied(DenialRoute::Meta, reason);
+        }
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
