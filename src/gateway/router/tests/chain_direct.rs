@@ -102,7 +102,7 @@ async fn origin_link_emitted_direct_route() {
         Some(json!(NONCE)),
     )
     .await;
-    let chain = chain_of(&json["result"]).expect("chain emitted");
+    let chain = chain_of(&json["result"]).unwrap_or_else(|| panic!("chain emitted: {json}"));
     let digest = content_digest(&ok_body()).expect("digest");
     std::assert_eq!(
         verify_self(chain, &digest, NONCE).expect("verifies").len(),
@@ -133,7 +133,7 @@ async fn backend_chain_stripped_without_emission_direct() {
         forged["_meta"] = json!({CHAIN_KEY: [{"gw": "attacker"}], "keep": 1});
         let json = post_direct(success(forged), None, provenance, Some(json!(NONCE))).await;
         assert!(!carries_chain(&json["result"]), "provenance={provenance}");
-        std::assert_eq!(json["result"]["_meta"]["keep"], 1);
+        std::assert_eq!(json["result"]["_meta"]["keep"], 1, "{json}");
         let mut only = ok_body();
         only["_meta"] = json!({CHAIN_KEY: []});
         let json = post_direct(success(only), None, false, None).await;
@@ -155,7 +155,7 @@ async fn is_error_backend_result_chained_direct() {
         Some(json!(NONCE)),
     )
     .await;
-    assert!(chain_of(&json["result"]).is_some());
+    assert!(chain_of(&json["result"]).is_some(), "{json}");
 }
 
 #[tokio::test]
@@ -170,7 +170,7 @@ async fn unhashable_final_content_refused_direct() {
     let mut unhashable = ok_body();
     unhashable["structuredContent"] = json!({"n": 9_007_199_254_740_993_u64});
     let json = post_direct(success(unhashable), Some(ChainEmit::Always), false, None).await;
-    std::assert_eq!(json["error"]["code"], -32001);
+    std::assert_eq!(json["error"]["code"], -32001, "{json}");
     assert!(!json.to_string().contains(CHAIN_KEY));
 }
 
@@ -184,7 +184,7 @@ async fn oversized_outgoing_link_refused_direct() {
         Some(control_nonce),
     )
     .await;
-    std::assert_eq!(json["error"]["code"], -32001);
+    std::assert_eq!(json["error"]["code"], -32001, "{json}");
 }
 
 #[tokio::test]
@@ -206,7 +206,10 @@ async fn chain_nonce_invalid_refused_direct() {
         Some(json!("n".repeat(256))),
     )
     .await;
-    assert!(chain_of(&json["result"]).is_some(), "256 bytes accepted");
+    assert!(
+        chain_of(&json["result"]).is_some(),
+        "256 bytes accepted: {json}"
+    );
 }
 
 #[test]
