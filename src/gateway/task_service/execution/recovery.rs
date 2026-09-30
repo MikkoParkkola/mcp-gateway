@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use super::settlement::interrupted_result;
 use super::{CommitFailure, CommitStage, TaskExecutor, TaskWrite, WriteOutcome};
+use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::ServiceError;
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::tasks::TaskTransition;
@@ -93,12 +94,12 @@ impl TaskExecutor {
         owner_digest: &str,
         id: &str,
         revision: u64,
-        event: TaskTransition,
+        (event, targets): (TaskTransition, Option<Vec<Target>>),
     ) -> Result<(WriteOutcome, bool, CommitStage, String), CommitFailure> {
         match self
             .service
             .store
-            .transition(owner_digest, id, revision, event, Utc::now())
+            .settle_bounded(owner_digest, id, revision, (event, targets), Utc::now())
             .await
         {
             Ok(committed) => {

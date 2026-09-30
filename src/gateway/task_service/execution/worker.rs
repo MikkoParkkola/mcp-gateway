@@ -588,12 +588,27 @@ impl TaskExecutor {
         revision: u64,
         event: TaskTransition,
     ) {
+        self.settle_cas_with(principal, id, revision, (event, None))
+            .await;
+    }
+
+    /// [`Self::settle_cas`] committing a plan's dispatched `targets` in the same
+    /// write as the outcome. A settlement that does not fit the record budget
+    /// becomes a bounded `Failed` with no output (see `settle_bounded`).
+    pub(super) async fn settle_cas_with(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
+        (event, targets): (TaskTransition, Option<Vec<Target>>),
+    ) {
         match self
             .commit(TaskWrite::Settle {
                 principal,
                 id,
                 revision,
                 event: event.clone(),
+                targets: targets.clone(),
             })
             .await
         {
@@ -620,6 +635,7 @@ impl TaskExecutor {
                 id,
                 revision: current.revision,
                 event,
+                targets,
             })
             .await
             .is_err()

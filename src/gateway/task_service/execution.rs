@@ -107,6 +107,9 @@ pub(crate) enum TaskWrite<'a> {
         id: &'a str,
         revision: u64,
         event: TaskTransition,
+        /// A plan's dispatched calls, committed in the same write as its
+        /// outcome. `None` for a call whose target was recorded at creation.
+        targets: Option<Vec<Target>>,
     },
     Cancel {
         principal: &'a str,
@@ -407,8 +410,9 @@ impl TaskExecutor {
                 id,
                 revision,
                 event,
+                targets,
             } => {
-                self.transition_write(principal, id, revision, event)
+                self.transition_write(principal, id, revision, (event, targets))
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -420,7 +424,7 @@ impl TaskExecutor {
                 revision,
                 event,
             } => {
-                self.transition_digest_write(owner_digest, id, revision, event)
+                self.transition_digest_write(owner_digest, id, revision, (event, None))
                     .await?
             }
             TaskWrite::Cancel {
@@ -428,7 +432,7 @@ impl TaskExecutor {
                 id,
                 revision,
             } => {
-                self.transition_write(principal, id, revision, TaskTransition::Cancel)
+                self.transition_write(principal, id, revision, (TaskTransition::Cancel, None))
                     .await?
             }
         };
@@ -448,13 +452,13 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        event: TaskTransition,
+        outcome: (TaskTransition, Option<Vec<Target>>),
     ) -> Result<(WriteOutcome, bool, CommitStage, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, event)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome)
             .await
     }
 
