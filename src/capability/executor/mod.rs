@@ -135,13 +135,12 @@ pub(super) async fn send_with_retry(
                     health.record_success(started.elapsed());
                     Ok(resp)
                 }
-                Err(e) => {
-                    health.record_failure();
-                    Err(Error::Transport(format!(
-                        "{label} failed: {}",
-                        redact_url(e)
-                    )))
-                }
+                Err(e) => Err(
+                    crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
+                        health.record_failure();
+                        Error::Transport(format!("{label} failed: {}", redact_url(e)))
+                    }),
+                ),
             };
         };
         match attempt_req.send().await {
@@ -150,6 +149,10 @@ pub(super) async fn send_with_retry(
                 return Ok(resp);
             }
             Err(e) => {
+                // A refused destination is refused again: one attempt, no health mark.
+                if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+                    return Err(refused);
+                }
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
                 let e = redact_url(e);
                 if transient && attempt < MAX_SEND_ATTEMPTS {
@@ -803,7 +806,7 @@ impl Default for CapabilityExecutor {
 }
 
 #[cfg(test)]
+mod ssrf_denial_tests;
+#[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;
-#[cfg(test)]
-mod ssrf_denial_tests;

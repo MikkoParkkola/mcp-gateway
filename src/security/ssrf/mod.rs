@@ -113,6 +113,7 @@ use ranges::{is_private_ipv4, is_private_ipv6};
 use crate::{Error, Result};
 use std::net::IpAddr;
 
+pub(crate) use resolver::ssrf_denial;
 pub use resolver::{HostResolver, PinningResolver, SystemResolver, resolve_and_validate_host};
 
 pub use redirect::validate_redirect_chain;
@@ -211,7 +212,7 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
 // Internal dispatch
 // ============================================================================
 
-fn is_private_or_reserved(addr: IpAddr) -> bool {
+pub(crate) fn is_private_or_reserved(addr: IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => is_private_ipv4(v4),
         IpAddr::V6(v6) => is_private_ipv6(v6),

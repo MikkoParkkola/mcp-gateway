@@ -252,7 +252,7 @@ pub struct WebSocketTransport {
     protocol_version: Option<String>,
     /// Shared inner state (also held by the I/O task).
     inner: Arc<Inner>,
-    /// Where the upgrade may connect (`hardened` pins it; see [`pinned`]).
+    /// Where the upgrade may connect (`hardened` pins it; see `websocket_pinned.rs`).
     destination: DestinationPolicy,
 }
 
@@ -278,23 +278,6 @@ impl WebSocketTransport {
         )
     }
 
-    fn build(
-        url: &str,
-        headers: HashMap<String, String>,
-        timeout: Duration,
-        protocol_version: Option<String>,
-        destination: DestinationPolicy,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            url: url.to_string(),
-            headers,
-            timeout,
-            protocol_version,
-            inner: Inner::new(),
-            destination,
-        })
-    }
-
     /// Build and connect a backend transport (the `ws_url` arm of
     /// `Backend::start_entry`).
     ///
@@ -315,21 +298,6 @@ impl WebSocketTransport {
             DestinationPolicy::Configured,
         )
         .await
-    }
-
-    /// [`Self::start`] under a backend destination policy.
-    pub(crate) async fn start_with_destination(
-        url: &str,
-        headers: &HashMap<String, String>,
-        timeout: Duration,
-        protocol_version: Option<String>,
-        destination: DestinationPolicy,
-    ) -> Result<Arc<dyn Transport>> {
-        let transport = Self::build(url, headers.clone(), timeout, protocol_version, destination);
-        // Boxed: the TLS upgrade future is large, and inlining it would grow
-        // every future that can start a backend (clippy::large_futures).
-        Box::pin(transport.connect()).await?;
-        Ok(transport)
     }
 
     /// Connect to the WebSocket server and initialise the MCP session.

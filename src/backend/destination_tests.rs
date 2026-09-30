@@ -104,3 +104,46 @@ async fn hardened_backend_pins_private_hostname() {
         assert!(accepted > 0, "{template}: standard reaches the listener");
     }
 }
+
+/// T8 through the backend: an OAuth backend's discovery runs on the client
+/// `create_oauth_client` builds, so under `Public` its first request is pinned
+/// and never reaches a name that resolves to loopback. Discovery fails before
+/// any token is read or written; the storage directory is the default one.
+#[tokio::test]
+async fn hardened_backend_oauth_discovery_is_pinned() {
+    for (policy, reaches) in [
+        (DestinationPolicy::Public, false),
+        (DestinationPolicy::Configured, true),
+    ] {
+        let (port, accepted) = counting_listener().await;
+        let registry = BackendRegistry::new();
+        registry.enforce_destination(policy);
+        let config = BackendConfig {
+            transport: transport("http://localhost:{port}/mcp", port),
+            timeout: Duration::from_secs(2),
+            oauth: Some(crate::config::OAuthConfig {
+                enabled: true,
+                scopes: vec![],
+                client_id: None,
+                client_secret: None,
+                callback_host: None,
+                callback_port: None,
+                callback_path: None,
+                token_refresh_buffer_secs: 300,
+                shared_account: false,
+            }),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "oauth",
+            config,
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        assert!(registry.register(Arc::clone(&backend)));
+        let started = backend.ensure_started().await;
+        assert!(started.is_err(), "{policy:?}: nothing serves discovery");
+        let seen = accepted.load(Ordering::SeqCst);
+        assert_eq!(seen > 0, reaches, "{policy:?}: {seen} connections");
+    }
+}

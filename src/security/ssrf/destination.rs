@@ -39,8 +39,10 @@ impl DestinationPolicy {
     ///
     /// `Error::Protocol("SSRF blocked: ...")` (-32600).
     pub(crate) fn check_literal(self, url: &url::Url) -> Result<()> {
-        let _ = url;
-        Ok(())
+        match (self, url.host_str()) {
+            (Self::Public, Some(host)) => super::check_host_not_ssrf(host),
+            _ => Ok(()),
+        }
     }
 }
 

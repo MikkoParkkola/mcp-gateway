@@ -76,24 +76,36 @@ async fn pinned_websocket_keeps_sni() {
     assert_eq!(resolver.lookups.load(Ordering::SeqCst), 1, "resolved once");
 }
 
+/// Sends the upgrade request's `Host` header once the handshake reads it.
+struct HostCapture(oneshot::Sender<Option<String>>);
+
+impl tokio_tungstenite::tungstenite::handshake::server::Callback for HostCapture {
+    fn on_request(
+        self,
+        request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+        response: tokio_tungstenite::tungstenite::handshake::server::Response,
+    ) -> std::result::Result<
+        tokio_tungstenite::tungstenite::handshake::server::Response,
+        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+    > {
+        let host = request
+            .headers()
+            .get("host")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let _ = self.0.send(host);
+        Ok(response)
+    }
+}
+
 #[tokio::test]
 async fn pinned_websocket_keeps_host() {
-    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let (host_tx, host_rx) = oneshot::channel();
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let callback = |request: &Request, response: Response| {
-            let host = request
-                .headers()
-                .get("host")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned);
-            let _ = host_tx.send(host);
-            Ok(response)
-        };
-        let _ = tokio_tungstenite::accept_hdr_async(stream, callback).await;
+        let _ = tokio_tungstenite::accept_hdr_async(stream, HostCapture(host_tx)).await;
     });
     let resolver = Loopback::default();
     let request = format!("ws://sni.test:{port}/")

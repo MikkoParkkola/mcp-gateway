@@ -26,7 +26,10 @@ const MAX_HOPS: usize = 10;
 ///
 /// `Error::OAuth` if the client cannot be built.
 pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
-    let builder = Client::builder();
+    let builder = match destination {
+        DestinationPolicy::Configured => Client::builder(),
+        DestinationPolicy::Public => crate::security::ssrf::pinned_client_builder(),
+    };
     builder
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| match hop(
@@ -34,7 +37,8 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
             attempt.previous().len(),
             attempt.url(),
         ) {
-            Hop::Stop => attempt.stop(),
+            // As reqwest's default policy: too many redirects is an error.
+            Hop::Stop => attempt.error("too many redirects"),
             Hop::Refuse(reason) => attempt.error(reason),
             Hop::Follow => attempt.follow(),
         }))
@@ -45,7 +49,7 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
 /// What to do with one redirect hop.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Hop {
-    /// Past the hop budget: stop and surface the response.
+    /// Past the hop budget: refuse, as reqwest's default policy does.
     Stop,
     /// The target is a literal the policy refuses.
     Refuse(String),
@@ -55,11 +59,13 @@ pub(super) enum Hop {
 
 /// Decide one redirect hop to `target` after `previous` hops.
 pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url::Url) -> Hop {
-    let _ = (destination, target);
     if previous >= MAX_HOPS {
         return Hop::Stop;
     }
-    Hop::Follow
+    match destination.check_literal(target) {
+        Ok(()) => Hop::Follow,
+        Err(refused) => Hop::Refuse(refused.to_string()),
+    }
 }
 
 impl OAuthClient {
@@ -87,8 +93,12 @@ impl OAuthClient {
 
     /// Refuse `url` when the policy denies its literal host.
     pub(super) fn check_destination(&self, url: &str) -> Result<()> {
-        let _ = (url, self.destination);
-        Ok(())
+        if self.destination == DestinationPolicy::Configured {
+            return Ok(());
+        }
+        let parsed =
+            url::Url::parse(url).map_err(|e| Error::OAuth(format!("Invalid OAuth URL: {e}")))?;
+        self.destination.check_literal(&parsed)
     }
 
     /// Refuse a discovered document whose token or registration endpoint the
@@ -97,8 +107,11 @@ impl OAuthClient {
         &self,
         meta: &AuthorizationServerMetadata,
     ) -> Result<()> {
-        let _ = meta;
-        Ok(())
+        self.check_destination(&meta.token_endpoint)?;
+        match &meta.registration_endpoint {
+            Some(registration) => self.check_destination(registration),
+            None => Ok(()),
+        }
     }
 }
 

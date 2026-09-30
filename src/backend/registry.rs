@@ -284,7 +284,11 @@ impl BackendRegistry {
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
     pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
-        let _ = policy;
+        let _stopping = self.stopping.lock();
+        let policy = *self.destination.get_or_init(|| policy);
+        for backend in &self.backends {
+            backend.stamp_destination(policy);
+        }
     }
 
     /// Route every membership change to one consumer (F24). Set once, by the HTTP server.

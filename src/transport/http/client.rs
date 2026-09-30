@@ -24,8 +24,10 @@ pub(super) fn build(
     destination: DestinationPolicy,
     redirects_followed: Arc<AtomicU64>,
 ) -> Result<Client> {
-    let _ = destination;
-    let builder = Client::builder();
+    let builder = match destination {
+        DestinationPolicy::Configured => Client::builder(),
+        DestinationPolicy::Public => crate::security::ssrf::pinned_client_builder(),
+    };
     builder
         .timeout(timeout)
         .pool_max_idle_per_host(10)
