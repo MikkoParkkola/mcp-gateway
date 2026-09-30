@@ -33,5 +33,6 @@ pub(super) fn hardened_identity_refusal(
         api_key.map(NamedApiKey::is_personal),
     );
     // Red-first stub: the gate lands in the next commit.
+    let _ = (StatusCode::FORBIDDEN, REFUSAL);
     None
 }
