@@ -787,8 +787,6 @@ mod tests {
         );
     }
 
-    // Unix-only: a read-only descriptor makes the write fail with EBADF; Windows reports a different error.
-    #[cfg(unix)]
     #[test]
     fn write_secret_tmp_removes_leaked_temp_on_write_failure() {
         // GIVEN: a temp file opened read-only, so writing through it fails
@@ -1196,6 +1194,7 @@ mod tests {
     /// for the whole write. A fresh inode is the observable proof that the
     /// bytes never entered the old file: `rename` gives the destination the
     /// scratch file's identity, an in-place write keeps the old one.
+    // Unix-only: compares (dev, ino) file identity via MetadataExt, which Windows std metadata does not expose.
     #[cfg(unix)]
     #[test]
     fn saving_a_token_replaces_the_file_rather_than_writing_into_it() {

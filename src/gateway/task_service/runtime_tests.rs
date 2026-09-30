@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-// POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
+// Used only by the 0755-rejection test, which is Unix-only (POSIX mode bits).
 #[cfg(unix)]
 use super::ServiceError;
 use super::{StoreLimits, open_runtime};
@@ -214,6 +214,7 @@ mod expiry;
 /// writable `HOME` kept every chart pod from starting. The control proves the
 /// same path opens once the parent is writable, so the refusal is about the
 /// parent and nothing else.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[tokio::test]
 async fn task_store_under_readonly_home_is_fatal() {

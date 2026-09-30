@@ -1717,6 +1717,7 @@ fn absolute_watch_path_resolves_relative_paths() {
 /// Resolving the final component aims the watcher at the symlink target's
 /// directory, so a deploy that retargets the symlink writes nowhere the
 /// watcher is looking and the gateway keeps serving the superseded config.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
@@ -2383,6 +2384,7 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
 /// comparison of final values are silent. A restart would expand the entry
 /// against the process home instead of the moved one. Only startup's OWN
 /// assignment records that the expansion base was ever moved. Unix only: no process HOME on Windows.
+// Unix-only: moves and restores HOME; Windows resolves the home directory from USERPROFILE.
 #[cfg(unix)]
 #[tokio::test]
 async fn envfile_19j_deleting_the_move_still_reports_when_the_restored_value_is_the_process_home() {

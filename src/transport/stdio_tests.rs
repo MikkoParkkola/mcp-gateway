@@ -243,6 +243,7 @@ async fn request_cleans_pending_entry_when_write_fails() {
 /// entry — the RAII `PendingRequestGuard` must. A real child that answers
 /// `initialize` but never answers `prompts/list` holds the request open so
 /// the drop happens mid-await.
+// Unix-only: the fake MCP server is a `sh` script, which Windows does not provide.
 #[cfg(unix)]
 #[tokio::test]
 async fn cancelled_request_does_not_strand_pending_entry() {

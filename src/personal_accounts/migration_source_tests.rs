@@ -94,6 +94,7 @@ fn an_absent_source_refuses_naming_the_path_and_the_override() {
 /// principal's account. `symlink_metadata` is what makes this detectable:
 /// plain `metadata` reports the target's type and mode and would call this a
 /// private regular file.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn a_symlink_at_the_resolved_path_refuses_even_to_a_valid_record() {
@@ -119,6 +120,7 @@ fn a_symlink_at_the_resolved_path_refuses_even_to_a_valid_record() {
 /// 0644 is the mode a file acquires when something other than
 /// `TokenStorage::save` wrote it, and a credential readable by anyone else is
 /// not the file 3.x left behind.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[test]
 fn a_group_readable_source_refuses() {
@@ -254,6 +256,7 @@ fn wt10i_foreign_owner_repair_order() {
 /// #2250: a 0600 file owned by ANOTHER user is not the operator's credential.
 /// A migration run as root (or with `CAP_DAC_READ_SEARCH`) can read it, so the
 /// read succeeding proves nothing about who wrote it.
+// Unix-only: needs a file owned by another uid (POSIX ownership); Windows ownership is an ACL.
 #[cfg(unix)]
 #[test]
 fn a_private_file_owned_by_another_user_is_refused() {

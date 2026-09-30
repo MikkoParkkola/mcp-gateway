@@ -344,7 +344,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
                 path.strip_prefix(root).unwrap().to_owned(),
                 EntrySnapshot {
                     contents: value,
-                    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+                    // Unix-only: `identity` is the (dev, ino) file identity above; it is not collected on Windows.
                     #[cfg(unix)]
                     identity,
                 },

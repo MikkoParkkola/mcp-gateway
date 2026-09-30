@@ -341,8 +341,6 @@ mod tests {
     }
 
     #[test]
-    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
-    #[cfg(unix)]
     fn personal_accounts_try_lock_refuses_contention_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".personal-account-authority.lock");

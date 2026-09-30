@@ -166,6 +166,7 @@ fn message_signing_file_key_resolves() {
 /// (Group read on a file another uid owns, the `fsGroup` mount, is allowed;
 /// that branch is `secret_file_refusal`'s own unit test, since a test cannot
 /// create a file another uid owns.)
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[test]
 fn file_ref_group_readable_own_file_refused() {
