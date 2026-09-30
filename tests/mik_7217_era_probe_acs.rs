@@ -533,6 +533,8 @@ async fn discover_5b_method_not_found_on_an_ordinary_method_does_not_re_probe() 
 /// cap the answer arrives after the probe gave up, so the era stays unset; this is what a
 /// stalled CI runner does to a shell-script peer. The debug-only cap override
 /// (`MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`) is what lets the probe wait for it.
+// The override exists in debug builds only; a release build keeps the 2 s cap.
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn discover_4_a_slow_but_answering_peer_is_classified() {
     let arm = format!(r#"sleep 3; printf '{{"jsonrpc":"2.0","id":%s,{LEGACY_DISCOVER}}}\n' "$id""#);
