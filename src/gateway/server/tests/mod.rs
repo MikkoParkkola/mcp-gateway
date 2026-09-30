@@ -54,3 +54,6 @@ mod owner5_stdio_context;
 mod owner1_stdio_management;
 mod owner1_stdio_reload;
 mod owner4_stdio_policy;
+
+// #2480: a stdio idempotent replay writes its invocation record.
+mod stdio_replay_audit;
