@@ -453,8 +453,26 @@ public API or config change.
    at the same path and at a moved path, and the operator retrieves it. From a different store
    the id is absent. I-OWN test, named for the invariant: stdio writes a task into a store
    directory, the store is closed, the HTTP route opens the same directory, and HTTP owners (`"stdio"`, `local:auth-disabled:…`,
-   a credential digest) get the not-found answer and cannot cancel or update it. The
-   independent functional gate runs the binary over real pipes.
+   a credential digest) get the not-found answer and cannot cancel or update it.
+
+   **Acceptance has two legs** (the lead's definition, from "independent functional acceptance",
+   `docs/design/issue-462-config-preservation.md:702`):
+   - (a) Store integration: an integration test in `tests/` that spawns the built binary over
+     stdio pipes, runs the reopen, relocate, second-store and HTTP-owner steps, and runs in CI.
+   - (b) Independent functional drive: a separate fresh agent that is not the implementer. It gets
+     only the OWNER.2 ledger text and public launch instructions, drives the CI-built image
+     `ghcr.io/mikkoparkkola/mcp-gateway`, pinned by the digest from the post-merge
+     release-line `docker.yml` run (recorded in the report), with `docker run -i` over stdio, and
+     records every request and observation. It writes a report with N/N public assertions and an
+     evidence JSONL under `.git/`. Anything without a public surface is marked
+     N/A-to-public-drive and covered by leg (a).
+
+     Conditions:
+     - free disk is checked before pulling (`duf`), and below 5 GB the drive stops and reports;
+     - the image is never pulled by tag;
+     - afterwards the driver removes only its own containers and volumes, never the image cache.
+
+   Leg (b) runs after I4 merges, before OWNER.2 is graded.
 5. Advertisement honesty. Stdio's `server/discover` declares the Tasks extension today
    (`ExtensionSet::gateway_declares`) while stdio serves no `tasks/*`: a shipped claim the code
    does not honour. I4 makes it true and adds a test that every extension stdio's discover answer
