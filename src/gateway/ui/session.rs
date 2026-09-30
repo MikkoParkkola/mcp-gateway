@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
 
@@ -30,8 +30,45 @@ pub const LOGOUT_PATH: &str = "/dashboard/logout";
 /// `POST /dashboard/logout`, unauthenticated by design: holding a handle is
 /// the right to revoke it. POST only, so a link or an image cannot log anyone
 /// out; the origin guard and `SameSite=Strict` keep it same-site.
+///
+/// It also carries the dashboard handoff (#2130), unauthenticated for the same
+/// reason: the posted code is the credential, and a session cookie the browser
+/// already holds, live or dead, must not decide it.
 pub fn logout_router() -> Router<Arc<AppState>> {
-    Router::new().route(LOGOUT_PATH, post(logout))
+    // Every answer on the handoff path, including a router 405 or an
+    // extractor 413, is neither cached nor sent onward as a `Referer`.
+    let handoff = Router::new()
+        .route(
+            crate::gateway::auth::HANDOFF_PATH,
+            get(handoff_form).post(handoff_code),
+        )
+        .layer(axum::middleware::map_response(handoff_private));
+    Router::new()
+        .route(LOGOUT_PATH, post(logout))
+        .merge(handoff)
+}
+
+async fn handoff_private(response: Response) -> Response {
+    crate::gateway::auth::handoff_private(response)
+}
+
+async fn handoff_form() -> Response {
+    crate::gateway::auth::handoff_form()
+}
+
+/// The body is read by the extractor, under the router's configured limit.
+async fn handoff_code(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    crate::gateway::auth::redeem_handoff(
+        &state.dashboard_bootstrap,
+        &state.live_config,
+        origin,
+        &body,
+    )
 }
 
 /// Revoke the presented session server-side, clear the cookie and send the
@@ -114,17 +151,6 @@ pub(super) async fn dashboard_link(
     } else {
         None
     };
-    if cookies_are_secure(&state.live_config) && !state.live_config.running().mtls.enabled {
-        // The session cookie would be `Secure` over a plain-HTTP loopback
-        // listener, and a browser discards it: the link would be spent for
-        // nothing. Same refusal as the startup banner's.
-        return flat_error(
-            StatusCode::CONFLICT,
-            "server.public_url is HTTPS but this listener is plain HTTP, so the \
-             session cookie would be discarded. Enable mtls or remove public_url.",
-        )
-        .into_response();
-    }
     // Host, port and TLS are restart-only: the running listener's values, not
     // a reloaded file's, say where a browser can reach this process.
     let running = state.live_config.running();

@@ -299,6 +299,7 @@ async fn seed_row(
                         tool: "write".to_owned(),
                         arguments: json!({}),
                         accepted_inputs: serde_json::Map::new(),
+                        continuation_deadline: None,
                     },
                     chrono::Utc::now(),
                 )

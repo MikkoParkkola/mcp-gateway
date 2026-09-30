@@ -1848,6 +1848,7 @@ async fn meta_mcp_dispatch(
                 // An AUTHORIZATION context, not an attribution record: the
                 // proven principal, never the declared label.
                 agent_id: agent_identity.proven_agent_id(),
+                agent_declared: agent_identity.declared_agent_label(),
                 grant_subject: grant_subject.clone(),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|client| client.admin),
